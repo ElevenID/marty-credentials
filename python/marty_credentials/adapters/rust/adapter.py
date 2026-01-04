@@ -1,8 +1,8 @@
 """
-SpruceID Adapter Implementation
+Rust Adapter Implementation
 
-This module provides adapters implementing the credential ports using SpruceID's SSI library
-via Rust FFI bindings (marty-rs).
+Credential adapters using marty-rs Rust library via PyO3 bindings.
+Provides high-performance OID4VCI/OID4VP operations.
 """
 
 import json
@@ -30,19 +30,23 @@ def _get_marty_rs():
         return _marty_rs
     except ImportError:
         raise RuntimeError(
-            "SpruceID bindings not available. "
-            "Install with: pip install marty-credentials[ffi]"
+            "marty-rs bindings not available. "
+            "Install with: pip install marty-credentials[ffi] "
+            "or build with: cd rust && maturin develop"
         )
 
 
-class SpruceIDKeyManager:
-    """Key manager implementation using SpruceID's SSI library."""
+class RustKeyManager:
+    """Key manager implementation using marty-rs Rust library.
+    
+    Uses SSI library for high-performance key generation.
+    """
 
     def __init__(self) -> None:
         self._keys: dict[str, KeyPair] = {}
 
     def generate_key(self, algorithm: KeyAlgorithm = KeyAlgorithm.ES256) -> KeyPair:
-        """Generate a new key pair using SpruceID."""
+        """Generate a new key pair using Rust crypto."""
         marty_rs = _get_marty_rs()
 
         if algorithm == KeyAlgorithm.ES256:
@@ -79,8 +83,8 @@ class SpruceIDKeyManager:
         return False
 
 
-class SpruceIDCredentialIssuer:
-    """Credential issuer implementation using SpruceID's SSI library."""
+class RustCredentialIssuer:
+    """Credential issuer implementation using marty-rs Rust library."""
 
     def create_credential(
         self,
@@ -89,13 +93,11 @@ class SpruceIDCredentialIssuer:
         subject: CredentialSubject,
         expiration_seconds: int | None = None,
     ) -> CredentialData:
-        """Create and sign a verifiable credential."""
+        """Create and sign a verifiable credential using Rust."""
         marty_rs = _get_marty_rs()
 
-        # Convert claims to JSON
         claims_json = json.dumps(subject.claims)
 
-        # Call Rust function
         jwt, credential_id = marty_rs.create_verifiable_credential(
             issuer_did=issuer_key.did,
             issuer_jwk_json=issuer_key.jwk_json,
@@ -134,7 +136,6 @@ class SpruceIDCredentialIssuer:
         offer_id = str(uuid4())
         pre_auth_code = secrets.token_urlsafe(32) if pre_authorized else None
 
-        # Generate offer JSON
         offer_json = marty_rs.create_credential_offer(
             issuer_url=issuer_url,
             credential_types=credential_types,
@@ -142,7 +143,6 @@ class SpruceIDCredentialIssuer:
             user_pin_required=user_pin_required,
         )
 
-        # Generate offer URI
         offer_uri = marty_rs.generate_offer_uri(
             issuer_url=issuer_url,
             offer_id=offer_id,
@@ -175,8 +175,8 @@ class SpruceIDCredentialIssuer:
         )
 
 
-class SpruceIDCredentialWallet:
-    """Credential wallet implementation using SpruceID's SSI library."""
+class RustCredentialWallet:
+    """Credential wallet implementation using marty-rs Rust library."""
 
     def __init__(self) -> None:
         self._credentials: dict[str, CredentialData] = {}
@@ -210,7 +210,7 @@ class SpruceIDCredentialWallet:
         audience: str,
         nonce: str | None = None,
     ) -> str:
-        """Create a verifiable presentation."""
+        """Create a verifiable presentation using Rust."""
         marty_rs = _get_marty_rs()
 
         credential_jwts = [c.jwt for c in credentials if c.jwt]
@@ -224,12 +224,15 @@ class SpruceIDCredentialWallet:
         )
 
     def redeem_offer(self, offer_uri: str, holder_key: KeyPair) -> CredentialData:
-        """Redeem a credential offer from an issuer."""
+        """Redeem a credential offer from an issuer.
+        
+        Note: This method requires network access and is implemented in Python
+        since the HTTP client logic is wallet-specific.
+        """
         from urllib.parse import parse_qs, urlparse
 
         import httpx
 
-        # Parse offer URI
         parsed = urlparse(offer_uri)
         params = parse_qs(parsed.query)
 
@@ -238,14 +241,12 @@ class SpruceIDCredentialWallet:
 
         offer_endpoint = params["credential_offer_uri"][0]
 
-        # Fetch offer details
         with httpx.Client() as client:
             try:
                 resp = client.get(offer_endpoint)
                 resp.raise_for_status()
                 offer_data = resp.json()
             except Exception:
-                # Fallback for demo if offer endpoint is not reachable
                 issuer_url = offer_endpoint.split("/offers/")[0]
                 offer_data = {
                     "credential_issuer": issuer_url,
@@ -258,7 +259,6 @@ class SpruceIDCredentialWallet:
         if not credential_configuration_ids:
             credential_configuration_ids = ["UniversityDegreeCredential"]
 
-        # Get issuer metadata to find endpoints
         try:
             with httpx.Client() as client:
                 resp = client.get(f"{issuer_url}/api/issuer/metadata")
@@ -275,13 +275,9 @@ class SpruceIDCredentialWallet:
         except Exception:
             credential_endpoint = f"{issuer_url}/api/issuer/credential"
 
-        # Get Token (Mock)
         access_token = "mock_access_token"
-
-        # Request Credential
         cred_type = credential_configuration_ids[0]
 
-        # Create proof
         proof_jwt = self.create_presentation(
             holder_key=holder_key,
             credentials=[],
@@ -308,8 +304,7 @@ class SpruceIDCredentialWallet:
         if not credential_jwt:
             raise ValueError("No credential received")
 
-        # Verify and store
-        verifier = SpruceIDCredentialVerifier()
+        verifier = RustCredentialVerifier()
         result = verifier.verify_credential(credential_jwt)
 
         if not result.valid:
@@ -328,15 +323,15 @@ class SpruceIDCredentialWallet:
         return credential
 
 
-class SpruceIDCredentialVerifier:
-    """Credential verifier implementation using SpruceID's SSI library."""
+class RustCredentialVerifier:
+    """Credential verifier implementation using marty-rs Rust library."""
 
     def verify_credential(
         self,
         credential_jwt: str,
         expected_issuer: str | None = None,
     ) -> VerificationResult:
-        """Verify a credential JWT."""
+        """Verify a credential JWT using Rust."""
         marty_rs = _get_marty_rs()
 
         valid, payload_json, error = marty_rs.verify_jwt(
@@ -346,15 +341,11 @@ class SpruceIDCredentialVerifier:
         )
 
         if not valid:
-            return VerificationResult(
-                valid=False,
-                error=error,
-            )
+            return VerificationResult(valid=False, error=error)
 
         payload = json.loads(payload_json)
         issuer = payload.get("iss")
 
-        # Extract claims from VC
         vc = payload.get("vc", {})
         subject = vc.get("credentialSubject", {})
 
@@ -370,7 +361,7 @@ class SpruceIDCredentialVerifier:
         expected_audience: str,
         expected_nonce: str | None = None,
     ) -> VerificationResult:
-        """Verify a presentation JWT."""
+        """Verify a presentation JWT using Rust."""
         marty_rs = _get_marty_rs()
 
         valid, payload_json, error = marty_rs.verify_jwt(
@@ -380,21 +371,16 @@ class SpruceIDCredentialVerifier:
         )
 
         if not valid:
-            return VerificationResult(
-                valid=False,
-                error=error,
-            )
+            return VerificationResult(valid=False, error=error)
 
         payload = json.loads(payload_json)
 
-        # Check nonce if provided
         if expected_nonce and payload.get("nonce") != expected_nonce:
             return VerificationResult(
                 valid=False,
                 error=f"Nonce mismatch: expected {expected_nonce}",
             )
 
-        # Extract claims from VP
         vp = payload.get("vp", {})
         holder = vp.get("holder")
         credentials = vp.get("verifiableCredential", [])
@@ -424,61 +410,40 @@ class SpruceIDCredentialVerifier:
         )
 
 
-# Factory function to create all adapters
-def create_spruceid_adapters() -> tuple[
-    SpruceIDKeyManager,
-    SpruceIDCredentialIssuer,
-    SpruceIDCredentialWallet,
-    SpruceIDCredentialVerifier,
-]:
-    """
-    Create all SpruceID adapters.
-
-    Returns:
-        Tuple of (key_manager, issuer, wallet, verifier)
-    """
-    return (
-        SpruceIDKeyManager(),
-        SpruceIDCredentialIssuer(),
-        SpruceIDCredentialWallet(),
-        SpruceIDCredentialVerifier(),
-    )
+# Singleton instances
+_key_manager: RustKeyManager | None = None
+_issuer: RustCredentialIssuer | None = None
+_wallet: RustCredentialWallet | None = None
+_verifier: RustCredentialVerifier | None = None
 
 
-# Singleton instances for easy access
-_key_manager: SpruceIDKeyManager | None = None
-_issuer: SpruceIDCredentialIssuer | None = None
-_wallet: SpruceIDCredentialWallet | None = None
-_verifier: SpruceIDCredentialVerifier | None = None
-
-
-def get_key_manager() -> SpruceIDKeyManager:
+def get_key_manager() -> RustKeyManager:
     """Get or create the key manager singleton."""
     global _key_manager
     if _key_manager is None:
-        _key_manager = SpruceIDKeyManager()
+        _key_manager = RustKeyManager()
     return _key_manager
 
 
-def get_issuer() -> SpruceIDCredentialIssuer:
+def get_issuer() -> RustCredentialIssuer:
     """Get or create the issuer singleton."""
     global _issuer
     if _issuer is None:
-        _issuer = SpruceIDCredentialIssuer()
+        _issuer = RustCredentialIssuer()
     return _issuer
 
 
-def get_wallet() -> SpruceIDCredentialWallet:
+def get_wallet() -> RustCredentialWallet:
     """Get or create the wallet singleton."""
     global _wallet
     if _wallet is None:
-        _wallet = SpruceIDCredentialWallet()
+        _wallet = RustCredentialWallet()
     return _wallet
 
 
-def get_verifier() -> SpruceIDCredentialVerifier:
+def get_verifier() -> RustCredentialVerifier:
     """Get or create the verifier singleton."""
     global _verifier
     if _verifier is None:
-        _verifier = SpruceIDCredentialVerifier()
+        _verifier = RustCredentialVerifier()
     return _verifier
