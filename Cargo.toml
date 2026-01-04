@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = ["rust/marty-rs"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.75"
+repository = "https://github.com/adamburdett/marty-credentials"
+
+[workspace.dependencies]
+# Core crates from marty-core (git reference for now)
+marty-crypto = { git = "https://github.com/adamburdett/marty-core.git", branch = "main" }
+marty-verification = { git = "https://github.com/adamburdett/marty-core.git", branch = "main" }
+marty-secure-storage = { git = "https://github.com/adamburdett/marty-core.git", branch = "main" }
+
+# PyO3 for Python bindings
+pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
+
+# SSI ecosystem
+ssi = { version = "0.9.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1", "rsa"] }
+ssi-status = { version = "0.1.2", default-features = false }
+isomdl = { version = "0.0.31" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
+ciborium = { version = "0.2" }
+
+# Crypto
+bs58 = { version = "0.5" }
+base64 = { version = "0.22" }
+
+# Async
+tokio = { version = "1.42", features = ["rt", "rt-multi-thread", "sync", "macros"] }
+
+# Utilities
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = { version = "2.0" }
+flate2 = { version = "1.0" }
+
+# Logging
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-error = { version = "0.2" }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
