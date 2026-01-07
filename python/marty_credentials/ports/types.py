@@ -21,11 +21,24 @@ class CredentialFormat(Enum):
 class KeyAlgorithm(Enum):
     """Supported key algorithms."""
 
+    # ECDSA algorithms
     ES256 = "ES256"  # P-256
     ES256K = "ES256K"  # secp256k1
     ES384 = "ES384"  # P-384
     ES512 = "ES512"  # P-521
+    
+    # EdDSA
     EDDSA = "EdDSA"  # Ed25519
+    
+    # RSA PKCS#1 v1.5 algorithms
+    RS256 = "RS256"  # RSA 2048-bit with SHA-256
+    RS384 = "RS384"  # RSA 3072-bit with SHA-384
+    RS512 = "RS512"  # RSA 4096-bit with SHA-512
+    
+    # RSA-PSS algorithms
+    PS256 = "PS256"  # RSA-PSS 2048-bit with SHA-256
+    PS384 = "PS384"  # RSA-PSS 3072-bit with SHA-384
+    PS512 = "PS512"  # RSA-PSS 4096-bit with SHA-512
 
 
 @dataclass

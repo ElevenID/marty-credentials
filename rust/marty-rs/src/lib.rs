@@ -120,6 +120,92 @@ mod python_bindings {
         Ok((did, jwk_str))
     }
 
+    /// Generates a new P-384 key and returns (did, jwk_json) - for ES384
+    #[pyfunction]
+    pub fn generate_p384_key() -> PyResult<(String, String)> {
+        let jwk = JWK::generate_p384();
+        let jwk_str = serde_json::to_string(&jwk)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_str.as_bytes());
+        let did = format!("did:jwk:{}", encoded);
+        Ok((did, jwk_str))
+    }
+
+    /// Generates a new RSA key and returns (did, jwk_json)
+    /// key_size: RSA key size in bits (2048, 3072, or 4096). Default is 2048 (fastest).
+    /// use_pss: If true, marks the key for RSA-PSS (PS256/384/512). If false, PKCS#1 v1.5 (RS256/384/512).
+    #[pyfunction]
+    #[pyo3(signature = (key_size=2048, use_pss=false))]
+    pub fn generate_rsa_key(key_size: Option<u32>, use_pss: Option<bool>) -> PyResult<(String, String)> {
+        use ssi::jwk::{Algorithm, RSAParams};
+        use rsa::{RsaPrivateKey, traits::PublicKeyParts, traits::PrivateKeyParts};
+        use rand::rngs::OsRng;
+
+        let bits = key_size.unwrap_or(2048);
+        if bits != 2048 && bits != 3072 && bits != 4096 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "key_size must be 2048, 3072, or 4096",
+            ));
+        }
+
+        let private_key = RsaPrivateKey::new(&mut OsRng, bits as usize)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("RSA key generation failed: {}", e)))?;
+
+        // Convert to JWK format (SSI 0.12 uses descriptive field names)
+        let n = private_key.n().to_bytes_be();
+        let e = private_key.e().to_bytes_be();
+        let d = private_key.d().to_bytes_be();
+        let primes = private_key.primes();
+        let p = primes.first().map(|p| p.to_bytes_be()).unwrap_or_default();
+        let q = primes.get(1).map(|q| q.to_bytes_be()).unwrap_or_default();
+
+        let rsa_params = RSAParams {
+            modulus: Some(ssi::jwk::Base64urlUInt(n)),
+            exponent: Some(ssi::jwk::Base64urlUInt(e)),
+            private_exponent: Some(ssi::jwk::Base64urlUInt(d)),
+            first_prime_factor: Some(ssi::jwk::Base64urlUInt(p)),
+            second_prime_factor: Some(ssi::jwk::Base64urlUInt(q)),
+            first_prime_factor_crt_exponent: None,
+            second_prime_factor_crt_exponent: None,
+            first_crt_coefficient: None,
+            other_primes_info: None,
+        };
+
+        let alg = if use_pss.unwrap_or(false) {
+            match bits {
+                2048 => Algorithm::PS256,
+                3072 => Algorithm::PS384,
+                4096 => Algorithm::PS512,
+                _ => Algorithm::PS256,
+            }
+        } else {
+            match bits {
+                2048 => Algorithm::RS256,
+                3072 => Algorithm::RS384,
+                4096 => Algorithm::RS512,
+                _ => Algorithm::RS256,
+            }
+        };
+
+        let jwk = JWK {
+            params: ssi::jwk::Params::RSA(rsa_params),
+            public_key_use: None,
+            key_operations: None,
+            algorithm: Some(alg),
+            key_id: None,
+            x509_url: None,
+            x509_certificate_chain: None,
+            x509_thumbprint_sha1: None,
+            x509_thumbprint_sha256: None,
+        };
+
+        let jwk_str = serde_json::to_string(&jwk)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_str.as_bytes());
+        let did = format!("did:jwk:{}", encoded);
+        Ok((did, jwk_str))
+    }
+
     /// Extract SecretKey from JWK for signing
     fn jwk_to_secret_key(jwk: &JWK) -> Result<SecretKey, String> {
         match &jwk.params {
@@ -181,6 +267,7 @@ mod python_bindings {
 
     /// Creates a verifiable credential and signs it as a JWT
     #[pyfunction]
+    #[pyo3(signature = (issuer_did, issuer_jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None))]
     pub fn create_verifiable_credential(
         issuer_did: String,
         issuer_jwk_json: String,
@@ -272,6 +359,7 @@ mod python_bindings {
 
     /// Creates an OID4VCI credential offer
     #[pyfunction]
+    #[pyo3(signature = (issuer_url, credential_types, pre_authorized_code=None, user_pin_required=false))]
     pub fn create_credential_offer(
         issuer_url: String,
         credential_types: Vec<String>,
@@ -331,6 +419,7 @@ mod python_bindings {
 
     /// Creates a verifiable presentation from credentials
     #[pyfunction]
+    #[pyo3(signature = (holder_did, holder_jwk_json, credential_jwts, audience, nonce=None))]
     pub fn create_presentation(
         holder_did: String,
         holder_jwk_json: String,
@@ -396,6 +485,7 @@ mod python_bindings {
 
     /// Verifies a JWT structure and claims
     #[pyfunction]
+    #[pyo3(signature = (jwt, expected_issuer=None, expected_audience=None))]
     pub fn verify_jwt(
         jwt: String,
         expected_issuer: Option<String>,
@@ -514,6 +604,10 @@ mod python_bindings {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
+    // SD-JWT support is planned but requires proper integration with jsonwebtoken EncodingKey
+    // For now, use standard JWT signing through create_verifiable_credential
+    // TODO: Implement create_sd_jwt when proper JWK to EncodingKey conversion is available
+
     #[pymodule]
     pub fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // Initialize tracing for structured logging
@@ -524,6 +618,8 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(check_isomdl, m)?)?;
         m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
         m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
         m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
         m.add_function(wrap_pyfunction!(create_credential_offer, m)?)?;
         m.add_function(wrap_pyfunction!(generate_offer_uri, m)?)?;
@@ -534,7 +630,8 @@ mod python_bindings {
         // Status list classes and functions for credential revocation
         crate::status_list::register_status_list_module(m)?;
 
-        // Add marty-verification module for trust chain verification
+        // marty-verification module requires the python feature
+        #[cfg(feature = "marty-verification-python")]
         marty_verification::bindings::register_marty_verification(m)?;
 
         Ok(())
