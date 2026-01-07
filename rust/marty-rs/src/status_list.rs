@@ -473,7 +473,7 @@ pub fn create_bitstring_credential_subject(
 
 /// Register status list module with parent.
 pub fn register_status_list_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
-    let status_list_module = PyModule::new(parent.py(), "status_list")?;
+    let status_list_module = PyModule::new_bound(parent.py(), "status_list")?;
 
     status_list_module.add_class::<TokenStatusList>()?;
     status_list_module.add_class::<BitstringStatusList>()?;
