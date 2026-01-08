@@ -1,0 +1,130 @@
+name: Auto-Update Dependencies
+
+on:
+  repository_dispatch:
+    types: [marty-core-released]
+  workflow_dispatch:
+    inputs:
+      marty_core_tag:
+        description: 'marty-core tag to update to (e.g., v0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  update-dependencies:
+    name: Update marty-core Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get marty-core version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.marty_core_tag }}"
+          else
+            TAG="${{ github.event.client_payload.tag }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Update Cargo.toml dependencies
+        working-directory: rust/marty-rs
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          
+          # Update path dependencies to git tag dependencies
+          sed -i.bak "s|marty-crypto = { path = \"../../../marty-core/marty-crypto\"|marty-crypto = { git = \"https://github.com/ElevenID/marty-core\", tag = \"$TAG\"|g" Cargo.toml
+          sed -i.bak "s|marty-verification = { path = \"../../../marty-core/marty-verification\"|marty-verification = { git = \"https://github.com/ElevenID/marty-core\", tag = \"$TAG\"|g" Cargo.toml
+          sed -i.bak "s|marty-secure-storage = { path = \"../../../marty-core/marty-secure-storage\"|marty-secure-storage = { git = \"https://github.com/ElevenID/marty-core\", tag = \"$TAG\"|g" Cargo.toml
+          
+          # Also update any existing git references
+          sed -i.bak "s|tag = \"v[0-9.]*\"|tag = \"$TAG\"|g" Cargo.toml
+          
+          rm -f Cargo.toml.bak
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.lock
+        working-directory: rust/marty-rs
+        run: cargo update -p marty-crypto -p marty-verification -p marty-secure-storage
+
+      - name: Run tests
+        id: tests
+        continue-on-error: true
+        working-directory: rust/marty-rs
+        run: cargo test --all-features
+
+      - name: Auto-bump version
+        if: steps.tests.outcome == 'success'
+        run: |
+          CURRENT_VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          
+          MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
+          MINOR=$(echo $CURRENT_VERSION | cut -d. -f2)
+          PATCH=$(echo $CURRENT_VERSION | cut -d. -f3)
+          
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+          
+          # Update workspace version
+          sed -i.bak "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          
+          # Update marty-rs version
+          cd rust/marty-rs
+          sed -i.bak "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          cd ../..
+          
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "Updated version from $CURRENT_VERSION to $NEW_VERSION"
+
+      - name: Commit and push changes
+        if: steps.tests.outcome == 'success'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml rust/marty-rs/Cargo.toml rust/marty-rs/Cargo.lock
+          git commit -m "chore(deps): update marty-core to ${{ steps.version.outputs.tag }} and bump to v$NEW_VERSION"
+          git push
+
+      - name: Create release tag
+        if: steps.tests.outcome == 'success'
+        run: |
+          git tag "v$NEW_VERSION"
+          git push origin "v$NEW_VERSION"
+
+      - name: Create GitHub Issue on failure
+        if: steps.tests.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Failed to auto-update marty-core to ${{ steps.version.outputs.tag }}`,
+              body: `## Auto-Update Failed
+              
+              The automated dependency update from marty-core ${{ steps.version.outputs.tag }} failed during testing.
+              
+              **marty-core version:** ${{ steps.version.outputs.tag }}
+              **Workflow run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              
+              ### Action Required
+              
+              1. Review test failures in the workflow run
+              2. Manually update dependencies in rust/marty-rs/Cargo.toml
+              3. Run: \`cargo update -p marty-crypto -p marty-verification -p marty-secure-storage\`
+              4. Run tests: \`cargo test --all-features\`
+              5. Once fixed, manually bump version and create release tag
+              
+              Check workflow logs for detailed test failure information.
+              `,
+              labels: ['dependencies', 'automated', 'needs-investigation']
+            });
