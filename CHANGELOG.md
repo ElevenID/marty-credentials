@@ -1,3 +1,26 @@
+## [unreleased] - 2026-01-10
+
+### 🚀 Features
+
+- *(rust)* Add mDoc/mDL issuance and presentation adapters
+- *(crypto)* Add RSA key algorithm support (RS256/384/512, PS256/384/512)
+- Add automated release pipeline for Python/WASM packages
+
+### 🐛 Bug Fixes
+
+- *(status-list)* Use PyModule::new_bound for PyO3 0.22 compatibility
+- Checkout marty-core in CI for path dependencies
+
+### 💼 Other
+
+- *(deps)* Upgrade to SSI 0.12 and update dependencies
+
+### ⚙️ Miscellaneous Tasks
+
+- Remove Multipaz adapter
+- Update CHANGELOG.md
+- Update CHANGELOG.md
+- Add comprehensive security and quality checks
 ## [unreleased] - 2026-01-08
 
 ### 🚀 Features
