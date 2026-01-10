@@ -13,6 +13,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write  # Required for attestations
+  attestations: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -80,6 +82,11 @@ jobs:
           tar -czf marty-rs-wasm.tar.gz wasm/
           sha256sum marty-rs-wasm.tar.gz > checksums-wasm.txt
 
+      - name: Generate SBOM
+        run: |
+          cargo install cargo-cyclonedx
+          cargo cyclonedx --format json --output-cdx ../../dist/marty-rs-sbom.json
+
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -87,6 +94,7 @@ jobs:
           path: |
             dist/marty-rs-wasm.tar.gz
             dist/checksums-wasm.txt
+            dist/marty-rs-sbom.json
 
   build-source-dist:
     name: Build Python Source Distribution
@@ -172,6 +180,11 @@ jobs:
         run: |
           cargo install git-cliff
           git cliff --tag ${{ steps.version.outputs.tag }} --unreleased --strip all > RELEASE_NOTES.md
+
+      - name: Generate attestations
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: 'final-release/*.tar.gz'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
