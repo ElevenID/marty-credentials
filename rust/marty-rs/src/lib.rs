@@ -10,6 +10,14 @@ mod error;
 #[cfg(feature = "python")]
 mod status_list;
 
+// mDoc issuance and presentation module (only for python)
+#[cfg(feature = "python")]
+pub mod mdoc;
+
+// SD-JWT module (only for python - has PyO3 and sd-jwt-rs dependencies)
+#[cfg(feature = "python")]
+mod sd_jwt;
+
 // WASM module (only compiled with wasm feature)
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -629,6 +637,12 @@ mod python_bindings {
 
         // Status list classes and functions for credential revocation
         crate::status_list::register_status_list_module(m)?;
+
+        // mDoc classes and functions for ISO 18013-5 mobile driver's license
+        crate::mdoc::register_mdoc_module(m)?;
+
+        // SD-JWT classes and functions for Selective Disclosure JWT
+        crate::sd_jwt::register_sd_jwt_module(m)?;
 
         // marty-verification module requires the python feature
         #[cfg(feature = "marty-verification-python")]

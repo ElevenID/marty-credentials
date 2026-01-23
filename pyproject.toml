@@ -29,6 +29,9 @@ keywords = ["credentials", "verifiable-credentials", "mdl", "identity", "cryptog
 
 dependencies = [
     "pydantic>=2.0",
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29.0",
+    "fastapi>=0.104.0",
 ]
 
 [project.optional-dependencies]
@@ -62,7 +65,7 @@ Issues = "https://github.com/adamburdett/marty-credentials/issues"
 source = "vcs"
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/marty_credentials"]
+packages = ["python/marty_credentials", "python/status_list"]
 
 [tool.hatch.build.targets.sdist]
 include = [
