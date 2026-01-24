@@ -644,9 +644,8 @@ mod python_bindings {
         // SD-JWT classes and functions for Selective Disclosure JWT
         crate::sd_jwt::register_sd_jwt_module(m)?;
 
-        // marty-verification module requires the python feature
-        #[cfg(feature = "marty-verification-python")]
-        marty_verification::bindings::register_marty_verification(m)?;
+        // Note: marty-verification functions are now available in the separate
+        // marty-verification-py package. Install both packages to access all functionality.
 
         Ok(())
     }

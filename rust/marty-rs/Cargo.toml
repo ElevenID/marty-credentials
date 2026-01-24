@@ -42,6 +42,10 @@ wasm = [
     "console_error_panic_hook",
     "getrandom/js"
 ]
+wasm-full = [
+    "wasm",
+    # Include additional features for web wallet testing with Open Badges
+]
 
 [dependencies]
 # Python bindings (optional)
