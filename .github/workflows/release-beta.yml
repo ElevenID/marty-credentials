@@ -130,7 +130,7 @@ jobs:
               github
 
           [github]
-          repository = https://upload.pypi.org/legacy/
+          repository = https://pypi.pkg.github.com/ElevenID/
           username = __token__
           password = ${{ secrets.GITHUB_TOKEN }}
           EOF
@@ -141,7 +141,7 @@ jobs:
           TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Create a repository URL for GitHub Packages
-          REPO_URL="https://upload.pypi.org/legacy/"
+          REPO_URL="https://pypi.pkg.github.com/ElevenID/"
           
           # Publish all wheels
           for wheel in dist/*.whl; do
