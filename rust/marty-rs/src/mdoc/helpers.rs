@@ -61,15 +61,39 @@ pub fn create_mobile_security_object(
         expected_update: None,
     };
 
-    // Parse device key if provided (for now, create minimal DeviceKeyInfo)
-    let device_key_info = DeviceKeyInfo {
-        device_key: CoseKey::EC2 {
-            crv: EC2Curve::P256,
-            x: vec![0; 32], // Placeholder - in production, parse from device_key parameter
-            y: EC2Y::Value(vec![0; 32]),
-        },
-        key_authorizations: None,
-        key_info: None,
+    // Parse device key if provided
+    let device_key_info = if let Some(key_bytes) = device_key {
+        // Parse CBOR-encoded COSE_Key
+        let cose_key: CoseKey = ciborium::de::from_reader(&key_bytes[..])
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Failed to parse device key CBOR: {}. Expected COSE_Key structure.", e
+                ))
+            })?;
+        
+        // Validate that it's an EC2 key with P-256 curve
+        if let CoseKey::EC2 { crv, .. } = &cose_key {
+            if *crv != EC2Curve::P256 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    format!("Only P-256 curve supported, got: {:?}", crv)
+                ));
+            }
+        } else {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Device key must be EC2 type"
+            ));
+        }
+        
+        DeviceKeyInfo {
+            device_key: cose_key,
+            key_authorizations: None,
+            key_info: None,
+        }
+    } else {
+        // If no device key provided, error - device key is required for mDoc
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "Device key is required for mDoc creation"
+        ));
     };
 
     // Parse digest algorithm enum

@@ -1,22 +1,44 @@
 """Issuance service for creating digital identity credentials"""
 import json
+import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 # Import Rust bindings
 import _marty_rs
+try:
+    from marty_verification_py import (
+        open_badge_ob2_issue,
+        open_badge_ob3_issue,
+    )
+    OPEN_BADGES_AVAILABLE = True
+except ImportError:
+    OPEN_BADGES_AVAILABLE = False
 
 from marty_credentials.adapters.persistence.models import (
     Credential, CredentialType, CredentialStatus, Holder
 )
+from marty_credentials.infrastructure.observability.metrics import (
+    credentials_issued_total,
+    credential_issuance_duration_seconds,
+)
+
+# Optional status list service
+try:
+    from status_list.application.services.credential_status_service import CredentialStatusService
+    STATUS_LIST_AVAILABLE = True
+except ImportError:
+    CredentialStatusService = None
+    STATUS_LIST_AVAILABLE = False
 
 
 class IssuanceService:
     """Service for issuing various types of digital identity credentials"""
     
-    def __init__(self, db_session: Session):
+    def __init__(self, db_session: Session, credential_status_service: Optional[CredentialStatusService] = None):
         self.db = db_session
+        self.credential_status_service = credential_status_service
         
     def _generate_keys(self) -> tuple[str, str]:
         """Generate a P-256 key pair for signing"""
@@ -146,6 +168,8 @@ class IssuanceService:
         expiry_hours: int = 24
     ) -> Dict[str, Any]:
         """Issue a W3C Verifiable Credential"""
+        start_time = time.time()
+        
         # Generate issuer keys
         private_jwk, public_jwk = self._generate_keys()
         
@@ -201,6 +225,18 @@ class IssuanceService:
         
         self.db.add(credential)
         self.db.commit()
+        
+        # Record metrics
+        duration = time.time() - start_time
+        credential_issuance_duration_seconds.labels(
+            credential_type=credential_type,
+            format="w3c_vc"
+        ).observe(duration)
+        credentials_issued_total.labels(
+            credential_type=credential_type,
+            format="w3c_vc",
+            issuer_id=issuer_did
+        ).inc()
         
         return {
             "credential": vc,
@@ -311,7 +347,7 @@ class IssuanceService:
         )
         
         # Create mDoc using Rust binding with correct parameters
-        mdoc_result = _marty_rs.create_mdoc(
+        mdoc_cbor_bytes = _marty_rs.create_mdoc(
             doc_type=doc_type,
             namespaces=namespaces,  # Pass dict directly, not JSON string
             validity={
@@ -323,6 +359,18 @@ class IssuanceService:
             device_key_der=None,
             digest_algorithm=None  # Use default
         )
+        
+        # The Rust function returns raw CBOR bytes
+        # Wrap in dict with cbor_base64 for consistent handling
+        import base64
+        mdoc_result = {
+            "cbor_base64": base64.b64encode(bytes(mdoc_cbor_bytes)).decode('utf-8'),
+            "doc_type": doc_type,
+            "format": "mdoc"
+        }
+        
+        # Store as JSON to preserve the structure
+        mdoc_stored = json.dumps(mdoc_result)
         
         # Store in database
         holder = self._find_or_create_holder(subject_did)
@@ -338,7 +386,7 @@ class IssuanceService:
             issuer_did=issuer_did,
             holder=holder,
             claims=flat_claims,
-            raw_credential=mdoc_result if isinstance(mdoc_result, str) else json.dumps(mdoc_result),
+            raw_credential=mdoc_stored,
             status=CredentialStatus.ACTIVE,
             issued_at=datetime.utcnow(),
             expires_at=valid_until
@@ -408,3 +456,211 @@ class IssuanceService:
             self.db.commit()
             return True
         return False
+    
+    def issue_open_badge_ob2(
+        self,
+        issuer_did: str,
+        recipient_email: str,
+        badge_class: Dict[str, Any],
+        verification_method: str = "Ed25519",
+        include_status_list: bool = False,
+        issuer_jwk: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Issue an Open Badge v2 credential with JWS signature"""
+        if not OPEN_BADGES_AVAILABLE:
+            raise RuntimeError("Open Badges support not available")
+        
+        # Generate P-256 keys (Ed25519 not available in _marty_rs yet)
+        if issuer_jwk:
+            jwk_str = json.dumps(issuer_jwk)
+        else:
+            jwk_str, _ = self._generate_keys()
+        issuer_jwk = json.loads(jwk_str)
+        
+        # Build assertion
+        assertion = {
+            "@context": "https://w3id.org/openbadges/v2",
+            "type": "Assertion",
+            "recipient": {"type": "email", "identity": recipient_email, "hashed": False},
+            "badge": {
+                **badge_class,
+                "issuer": {"id": issuer_did, "type": "Profile", "name": "Test Issuer"}
+            },
+            "issuedOn": datetime.utcnow().isoformat() + "Z",
+            "verification": {"type": "JsonWebKey2020"}  # Use P-256 instead
+        }
+        
+        # Add status list entries if requested
+        if include_status_list and self.credential_status_service:
+            import asyncio
+            # Allocate status entries for this credential
+            status_entries = asyncio.run(
+                self.credential_status_service.allocate_credential_status(
+                    credential_id=f"urn:credential:{recipient_email}:{datetime.utcnow().isoformat()}",
+                    issuer_id=issuer_did,
+                    include_revocation=True,
+                    include_suspension=False,  # OB2 typically only uses revocation
+                )
+            )
+            credential_status_entries = self.credential_status_service.build_credential_status_field(status_entries)
+            
+            # Add to assertion
+            if credential_status_entries:
+                assertion["credentialStatus"] = credential_status_entries
+        
+        # Issue via Rust
+        issue_request = {
+            "assertion": assertion, 
+            "signing": {
+                "jwk": issuer_jwk,
+                "kid": f"{issuer_did}#key-1"
+            }
+        }
+        result = json.loads(open_badge_ob2_issue(json.dumps(issue_request)))
+        
+        # Get or create holder
+        holder = self.db.query(Holder).filter_by(did=recipient_email).first()
+        if not holder:
+            holder = Holder(did=recipient_email)
+            self.db.add(holder)
+            self.db.flush()
+        
+        # Store
+        cred = Credential(
+            type=CredentialType.OPEN_BADGE_V2,
+            issuer_did=issuer_did,
+            holder_id=holder.id,
+            claims={"badge": badge_class},
+            raw_credential=json.dumps(result["credential"]),
+            status=CredentialStatus.ACTIVE,
+            issued_at=datetime.utcnow()
+        )
+        self.db.add(cred)
+        self.db.commit()
+        
+        return {"credential": result["credential"], "credential_id": cred.id}
+    
+    def issue_open_badge_ob3(
+        self,
+        issuer_did: str,
+        recipient_did: str,
+        badge_name: str,
+        badge_description: str,
+        verification_method_type: str = "JsonWebKey2020",
+        include_status_list: bool = False,
+        issuer_jwk: Optional[Dict[str, Any]] = None,
+        x509_cert_pem: Optional[str] = None,
+        x509_key_pem: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Issue an Open Badge v3 credential"""
+        if not OPEN_BADGES_AVAILABLE:
+            raise RuntimeError("Open Badges support not available")
+        
+        # Get or generate signing material
+        if x509_cert_pem and x509_key_pem:
+            # Use X509 certificate - convert RSA key to JWK format for signing
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.backends import default_backend
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            import base64
+            
+            # Load the private key
+            private_key = serialization.load_pem_private_key(
+                x509_key_pem.encode('utf-8'),
+                password=None,
+                backend=default_backend()
+            )
+            
+            # Extract RSA components for JWK
+            public_key = private_key.public_key()
+            public_numbers = public_key.public_numbers()
+            private_numbers = private_key.private_numbers()
+            
+            # Convert to base64url encoding
+            def int_to_base64url(n):
+                byte_length = (n.bit_length() + 7) // 8
+                return base64.urlsafe_b64encode(n.to_bytes(byte_length, 'big')).rstrip(b'=').decode('ascii')
+            
+            issuer_jwk = {
+                "kty": "RSA",
+                "n": int_to_base64url(public_numbers.n),
+                "e": int_to_base64url(public_numbers.e),
+                "d": int_to_base64url(private_numbers.d),
+                "p": int_to_base64url(private_numbers.p),
+                "q": int_to_base64url(private_numbers.q),
+                "dp": int_to_base64url(private_numbers.dmp1),
+                "dq": int_to_base64url(private_numbers.dmq1),
+                "qi": int_to_base64url(private_numbers.iqmp)
+            }
+        elif issuer_jwk:
+            issuer_jwk_str = json.dumps(issuer_jwk)
+            issuer_jwk = json.loads(issuer_jwk_str)
+        else:
+            _, issuer_jwk_str = self._generate_keys()
+            issuer_jwk = json.loads(issuer_jwk_str)
+        
+        # Build credential
+        credential_data = {
+            "@context": ["https://www.w3.org/ns/credentials/v2", 
+                        "https://purl.imsglobal.org/spec/ob/v3p0/context.json"],
+            "type": ["VerifiableCredential", "OpenBadgeCredential"],
+            "issuer": {"id": issuer_did, "type": "Profile"},
+            "credentialSubject": {
+                "id": recipient_did,
+                "type": "AchievementSubject",
+                "achievement": {
+                    "id": f"https://example.com/achievements/{badge_name.lower().replace(' ', '-')}",
+                    "type": "Achievement",
+                    "name": badge_name,
+                    "description": badge_description
+                }
+            }
+        }
+        
+        # Add status list entries if requested
+        if include_status_list and self.credential_status_service:
+            import asyncio
+            # Allocate status entries for this credential
+            status_entries = asyncio.run(
+                self.credential_status_service.allocate_credential_status(
+                    credential_id=f"urn:credential:{recipient_did}:{datetime.utcnow().isoformat()}",
+                    issuer_id=issuer_did,
+                    include_revocation=True,
+                    include_suspension=True,  # OB3 supports both revocation and suspension
+                )
+            )
+            credential_status_entries = self.credential_status_service.build_credential_status_field(status_entries)
+            
+            # Add to credential
+            if credential_status_entries:
+                credential_data["credentialStatus"] = credential_status_entries
+        
+        # Issue via Rust
+        issue_request = {
+            "credential": credential_data,
+            "signing": {"jwk": issuer_jwk, "verification_method": f"{issuer_did}#key-1"}
+        }
+        result = json.loads(open_badge_ob3_issue(json.dumps(issue_request)))
+        
+        # Get or create holder
+        holder = self.db.query(Holder).filter_by(did=recipient_did).first()
+        if not holder:
+            holder = Holder(did=recipient_did)
+            self.db.add(holder)
+            self.db.flush()
+        
+        # Store
+        cred = Credential(
+            type=CredentialType.OPEN_BADGE_V3,
+            issuer_did=issuer_did,
+            holder_id=holder.id,
+            claims={"badge_name": badge_name},
+            raw_credential=json.dumps(result["credential"]),
+            status=CredentialStatus.ACTIVE,
+            issued_at=datetime.utcnow()
+        )
+        self.db.add(cred)
+        self.db.commit()
+        
+        return {"credential": result["credential"], "credential_id": cred.id}
+

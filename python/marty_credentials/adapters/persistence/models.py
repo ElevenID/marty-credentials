@@ -19,6 +19,8 @@ class CredentialType(PyEnum):
     MDOC = "mdoc"
     OPENID4VP = "openid4vp"
     JWT = "jwt"
+    OPEN_BADGE_V2 = "open_badge_v2"
+    OPEN_BADGE_V3 = "open_badge_v3"
 
 
 class CredentialStatus(PyEnum):

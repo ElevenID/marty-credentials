@@ -78,7 +78,7 @@ Feature: Digital Identity Credential Issuance and Verification
       | license_number | DL123456      |
 
   Scenario: Cross-format credential interoperability
-    Given I have issued credentials in all formats:
+    When I have issued credentials in all formats:
       | format | identifier          |
       | W3C-VC | did:example:vc1     |
       | SD-JWT | did:example:sdjwt1  |
@@ -104,3 +104,89 @@ Feature: Digital Identity Credential Issuance and Verification
     When I attempt to verify an SD-JWT with incorrect disclosure
     Then the verification should fail
     And the error should indicate "invalid disclosure"
+
+  @open_badge
+  Scenario: Issue and verify Open Badge v2 with Ed25519
+    Given an Open Badge issuer with "Ed25519" key
+    And a badge class for "Python Programming Certificate"
+    When I issue an Open Badge OB2 with recipient "alice@learner.edu"
+    Then the credential should be stored in the database
+    And the credential type should be "open_badge_v2"
+    When I verify the Open Badge OB2
+    Then the verification should succeed
+    And the verified claims should contain:
+      | claim_name     | claim_value       |
+      | recipient.identity | alice@learner.edu |
+
+  @open_badge
+  Scenario: Issue and verify Open Badge v3 with JsonWebKey2020
+    Given an Open Badge issuer with "JsonWebKey2020" key
+    And a badge class for "Data Science Achievement"
+    When I issue an Open Badge OB3 with recipient "bob@learner.edu"
+    Then the credential should be stored in the database
+    And the credential type should be "open_badge_v3"
+    When I verify the Open Badge OB3
+    Then the verification should succeed
+    And the verified claims should contain:
+      | claim_name | claim_value                |
+      | recipient  | bob@learner.edu            |
+      | name       | Data Science Achievement   |
+
+  @open_badge
+  Scenario: Open Badge v2 with status list integration
+    Given an Open Badge issuer with "Ed25519" key
+    And a status list endpoint is configured
+    When I issue an Open Badge OB2 with status list entry
+    Then the credential should have a status list credential URL
+    And the status list index should be allocated
+    When I verify the Open Badge OB2
+    Then the verification should succeed
+    And the status should be checked against the status list
+    And the credential should not be revoked
+
+  @open_badge
+  Scenario: Open Badge v3 with status list and revocation
+    Given an Open Badge issuer with "JsonWebKey2020" key
+    And a status list endpoint is configured
+    When I issue an Open Badge OB3 with status list entry
+    And I revoke the Open Badge credential
+    When I verify the Open Badge OB3
+    Then the verification should fail
+    And the error should indicate "credential revoked"
+
+  @open_badge
+  Scenario: Open Badge v3 with X509 certificate verification
+    Given an Open Badge issuer with "X509VerificationKey2021" certificate
+    And the X509 certificate is signed by a trusted CA
+    And a CRL is available for revocation checking
+    When I issue an Open Badge OB3 with X509 signature
+    Then the credential type should be "open_badge_v3"
+    When I verify the Open Badge OB3 with X509
+    Then the verification should succeed
+    And the X509 certificate chain should be validated
+    And the CRL should show the certificate is not revoked
+
+  @open_badge
+  Scenario: Open Badge endorsement chain validation
+    Given an Open Badge issuer with "Ed25519" key
+    And an endorsing organization with "Ed25519" key
+    And a second-level endorser with "JsonWebKey2020" key
+    When I issue an Open Badge OB3 for "Web Development Expert"
+    And I add a first-level endorsement from the organization
+    And I add a second-level endorsement from the endorser
+    When I verify the Open Badge with endorsements
+    Then the verification should succeed
+    And the endorsement chain should be validated to depth 2
+    And all endorsements should be verified
+    And endorsement chain depth should not exceed 5
+
+  @open_badge
+  Scenario: Open Badge with fail-closed trust policy
+    Given an Open Badge issuer with "Ed25519" key
+    And the trust policy is set to "fail-closed"
+    And the issuer verification method is NOT in the trust store
+    When I issue an Open Badge OB3
+    And I verify the Open Badge with strict trust
+    Then the verification should fail
+    And the error should indicate "verification method not trusted"
+

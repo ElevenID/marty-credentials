@@ -6,11 +6,19 @@ Provides high-performance OID4VCI/OID4VP operations.
 """
 
 import json
+import logging
 import secrets
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from marty_credentials.config import get_config
+from marty_credentials.infrastructure.auth.token_validator import (
+    CredentialVerificationError,
+    TokenValidator,
+)
+
+logger = logging.getLogger(__name__)
 from marty_credentials.ports import (
     CredentialData,
     CredentialOffer,
@@ -275,7 +283,21 @@ class RustCredentialWallet:
         except Exception:
             credential_endpoint = f"{issuer_url}/api/issuer/credential"
 
-        access_token = "mock_access_token"
+        # Validate OAuth2 token from issuer
+        # TODO: Token should be obtained from proper OAuth2 flow with issuer
+        config = get_config()
+        if not config.oauth_client_id or not config.oauth_client_secret:
+            raise ValueError(
+                "OAuth2 credentials not configured. Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET"
+            )
+        
+        # For now, raise an error indicating this flow requires proper OAuth2 implementation
+        raise NotImplementedError(
+            "Credential request requires OAuth2 access token from issuer. "
+            "This should be obtained via proper OAuth2 authorization code flow or client credentials flow. "
+            "Mock token usage has been removed for security."
+        )
+
         cred_type = credential_configuration_ids[0]
 
         proof_jwt = self.create_presentation(
@@ -308,7 +330,18 @@ class RustCredentialWallet:
         result = verifier.verify_credential(credential_jwt)
 
         if not result.valid:
-            print(f"Warning: Credential verification failed: {result.error}")
+            logger.error(
+                "Credential verification failed",
+                extra={
+                    "credential_type": cred_type,
+                    "issuer": issuer_url,
+                    "error": result.error,
+                },
+            )
+            raise CredentialVerificationError(
+                f"Credential verification failed: {result.error}",
+                details={"issuer": issuer_url, "credential_type": cred_type},
+            )
 
         credential = CredentialData(
             id=f"urn:uuid:{uuid4()}",

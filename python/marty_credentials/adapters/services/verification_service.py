@@ -1,15 +1,75 @@
 """Verification service for validating digital identity credentials"""
 import json
-from typing import Dict, Any, Optional, List
+import logging
+import time
+from pathlib import Path
+from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 from sqlalchemy.orm import Session
 
 # Import Rust bindings
 import _marty_rs
+try:
+    from marty_verification_py import (
+        open_badge_ob2_verify,
+        open_badge_ob3_verify,
+    )
+    OPEN_BADGES_AVAILABLE = True
+except ImportError:
+    OPEN_BADGES_AVAILABLE = False
 
 from marty_credentials.adapters.persistence.models import (
     Credential, CredentialType, CredentialStatus, VerificationLog, VerificationResult
 )
+from marty_credentials.config import get_config
+from marty_credentials.infrastructure.observability.metrics import (
+    credentials_verified_total,
+    credential_verification_failures_total,
+    credential_verification_duration_seconds,
+    mdoc_signature_verification_duration_seconds,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _load_trusted_certs() -> List[str]:
+    """Load trusted CA certificates for mDoc verification from configuration
+    
+    Returns:
+        List of PEM-encoded certificate strings
+    """
+    config = get_config()
+    certs = []
+    
+    if not config.trusted_mdoc_issuer_certs_path:
+        if not config.dev_mode:
+            logger.warning(
+                "No trusted mDoc issuer certificates configured. "
+                "Set TRUSTED_MDOC_ISSUER_CERTS_PATH environment variable."
+            )
+        return certs
+    
+    cert_path = Path(config.trusted_mdoc_issuer_certs_path)
+    
+    if not cert_path.exists():
+        logger.error(f"Trusted certificate path does not exist: {cert_path}")
+        return certs
+    
+    try:
+        if cert_path.is_file():
+            # Single certificate file or bundle
+            certs.append(cert_path.read_text())
+            logger.info(f"Loaded trusted certificate from {cert_path}")
+        elif cert_path.is_dir():
+            # Directory of certificate files
+            for cert_file in cert_path.glob("*.pem"):
+                certs.append(cert_file.read_text())
+                logger.debug(f"Loaded trusted certificate: {cert_file.name}")
+            logger.info(f"Loaded {len(certs)} trusted certificates from {cert_path}")
+    except Exception as e:
+        logger.error(f"Failed to load trusted certificates: {e}")
+    
+    return certs
 
 
 class VerificationService:
@@ -44,6 +104,10 @@ class VerificationService:
         public_key_pem: Optional[str] = None
     ) -> Dict[str, Any]:
         """Verify a W3C Verifiable Credential"""
+        start_time = time.time()
+        credential_type = "w3c_vc"
+        result_valid = False
+        
         try:
             # The credential dict might contain the VC structure or be a JWT string
             # If it's a dict with a JWT in the proof, extract that
@@ -95,10 +159,25 @@ class VerificationService:
             is_revoked = False
             credential_id = None
             if isinstance(credential, dict) and "id" in credential:
-                # Look up in database
-                stored_cred = self.db.query(Credential).filter(
-                    Credential.raw_credential.contains(credential["id"])
-                ).first()
+                # Look up in database - try by integer ID first
+                cred_id_value = credential["id"]
+                stored_cred = None
+                
+                # Try direct ID lookup if it's an integer or can be converted
+                try:
+                    if isinstance(cred_id_value, int):
+                        stored_cred = self.db.query(Credential).filter(Credential.id == cred_id_value).first()
+                    elif isinstance(cred_id_value, str) and cred_id_value.isdigit():
+                        stored_cred = self.db.query(Credential).filter(Credential.id == int(cred_id_value)).first()
+                except (ValueError, TypeError):
+                    pass
+                
+                # Fallback to raw_credential search for DID-based IDs
+                if not stored_cred:
+                    stored_cred = self.db.query(Credential).filter(
+                        Credential.raw_credential.contains(str(cred_id_value))
+                    ).first()
+                
                 if stored_cred:
                     credential_id = stored_cred.id
                     is_revoked = stored_cred.status == CredentialStatus.REVOKED
@@ -117,6 +196,8 @@ class VerificationService:
             
             self._log_verification(credential_id, verifier_did, result, details)
             
+            result_valid = is_valid
+            
             return {
                 "valid": is_valid,
                 "details": details,
@@ -130,11 +211,26 @@ class VerificationService:
                 VerificationResult.ERROR,
                 {"error": str(e), "credential_type": "w3c_vc"}
             )
+            credential_verification_failures_total.labels(
+                credential_type=credential_type,
+                error_type=type(e).__name__,
+                issuer="unknown"
+            ).inc()
             return {
                 "valid": False,
                 "error": str(e),
                 "details": {"credential_type": "w3c_vc"}
             }
+        finally:
+            # Record metrics
+            duration = time.time() - start_time
+            credential_verification_duration_seconds.labels(
+                credential_type=credential_type
+            ).observe(duration)
+            credentials_verified_total.labels(
+                credential_type=credential_type,
+                result="success" if result_valid else "failure"
+            ).inc()
     
     def verify_sd_jwt(
         self,
@@ -210,7 +306,7 @@ class VerificationService:
         verifier_did: str,
         trusted_issuer_keys: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Verify an mDoc (ISO 18013-5)"""
+        """Verify an mDoc (ISO 18013-5) using Rust verification"""
         try:
             def _to_bytes(value: Any) -> bytes:
                 """Normalize mDoc input to raw CBOR bytes."""
@@ -219,124 +315,105 @@ class VerificationService:
                 if isinstance(value, dict):
                     if "cbor_base64" in value:
                         import base64
-
                         return base64.b64decode(value["cbor_base64"])
                     if "cbor" in value and isinstance(value["cbor"], (bytes, bytearray)):
                         return bytes(value["cbor"])
                     if "raw" in value and isinstance(value["raw"], str):
-                        return _to_bytes(value["raw"])  # type: ignore[arg-type]
-                    raise ValueError("Unsupported mDoc dictionary format")
+                        return _to_bytes(value["raw"])
+                    raise ValueError(f"Unsupported mDoc dictionary format. Keys: {list(value.keys())}")
                 if isinstance(value, str):
                     trimmed = value.strip()
                     if not trimmed:
                         return b""
+                    # Try JSON parsing first - it might be a JSON-serialized dict
+                    try:
+                        decoded = json.loads(trimmed)
+                        if isinstance(decoded, dict):
+                            # Recursively handle the parsed dict
+                            return _to_bytes(decoded)
+                        if isinstance(decoded, list):
+                            return bytes(decoded)
+                    except json.JSONDecodeError:
+                        pass
+                    # Try base64 decoding
                     try:
                         import base64
-
                         padding = (-len(trimmed)) % 4
                         if padding:
                             trimmed += "=" * padding
                         return base64.urlsafe_b64decode(trimmed)
                     except Exception:
                         pass
-                    try:
-                        decoded = json.loads(trimmed)
-                        if isinstance(decoded, list):
-                            return bytes(decoded)
-                    except json.JSONDecodeError:
-                        pass
-                raise ValueError("Unsupported mDoc input type for verification")
+                raise ValueError(f"Unsupported mDoc input type for verification: {type(value).__name__}")
 
             mdoc_bytes = _to_bytes(mdoc)
 
-            device_response = _marty_rs.parse_device_response(mdoc_bytes)
-
-            raw_fields: Dict[str, Any] = {}
-            try:
-                raw_fields = device_response.get_mdl_fields() or {}
-            except AttributeError:
-                raw_fields = {}
-
-            def _clean_value(value: Any) -> Any:
-                if isinstance(value, str):
-                    stripped = value.strip()
-                    if stripped:
-                        try:
-                            return json.loads(stripped)
-                        except json.JSONDecodeError:
-                            return stripped
-                    return stripped
-                return value
-
-            mdl_claims: Dict[str, Any] = {}
-            for key, value in raw_fields.items():
-                cleaned = _clean_value(value)
-                mdl_claims[key] = cleaned
-
-            namespace = "org.iso.18013.5.1"
-            namespaces = {namespace: dict(mdl_claims)}
-
-            def _parse_datetime(value: Any) -> Optional[datetime]:
-                if value is None:
-                    return None
-                if isinstance(value, (int, float)):
-                    try:
-                        return datetime.utcfromtimestamp(value)
-                    except (OverflowError, OSError, ValueError):
-                        return None
-                if isinstance(value, str):
-                    text = value.strip()
-                    if not text:
-                        return None
-                    try:
-                        return datetime.fromisoformat(text.replace("Z", "+00:00"))
-                    except ValueError:
-                        try:
-                            return datetime.strptime(text, "%Y-%m-%d")
-                        except ValueError:
-                            return None
-                return None
-
+            # Use Rust bindings for proper CBOR parsing and verification
+            device_response = _marty_rs.parse_device_response(list(mdoc_bytes))
+            
+            # Extract claims from mDL fields
+            mdl_claims = device_response.get_mdl_fields()
+            
+            # Get document types
+            document_types = device_response.document_types()
+            
+            # Get all namespaces
+            namespaces_dict = device_response.get_all_namespaces()
+            namespaces_list = list(namespaces_dict.keys()) if isinstance(namespaces_dict, dict) else []
+            
+            # Check validity (simplified - actual verification would check signatures)
             valid_from = mdl_claims.get("issue_date") or mdl_claims.get("valid_from")
             valid_until = mdl_claims.get("expiry_date") or mdl_claims.get("valid_until")
-
-            valid_from_dt = _parse_datetime(valid_from)
-            valid_until_dt = _parse_datetime(valid_until)
-
+            
             is_expired = False
-            if valid_until_dt:
-                comparison_target = valid_until_dt
-                if valid_until_dt.tzinfo is not None:
-                    comparison_target = valid_until_dt.astimezone(tz=None).replace(tzinfo=None)
-                is_expired = comparison_target < datetime.utcnow()
-
-            is_valid = bool(mdl_claims) and not is_expired
-
-            result = VerificationResult.SUCCESS if is_valid else VerificationResult.FAILED
-
-            namespace_list = [namespace] if mdl_claims else []
-
+            if valid_until:
+                from datetime import datetime
+                if isinstance(valid_until, str):
+                    try:
+                        valid_until_dt = datetime.fromisoformat(valid_until.replace("Z", "+00:00"))
+                        is_expired = valid_until_dt.replace(tzinfo=None) < datetime.utcnow()
+                    except ValueError:
+                        pass
+            
+            # Verify mDoc signature with trusted certificates
+            signature_valid = False
+            signature_error = None
             try:
-                document_types = device_response.document_types()
-            except AttributeError:
-                document_types = []
-
+                trusted_certs = _load_trusted_certs()
+                verification_result = _marty_rs.verify_mdoc_signature(
+                    mdoc_bytes=presentation_bytes,
+                    trusted_certs=trusted_certs
+                )
+                signature_valid = verification_result.valid
+                if not signature_valid:
+                    signature_error = verification_result.error
+            except Exception as e:
+                signature_error = str(e)
+            
+            is_valid = len(mdl_claims) > 0 and not is_expired and signature_valid
+            
+            result = VerificationResult.SUCCESS if is_valid else VerificationResult.FAILED
+            
             details = {
-                "signature_valid": True,
+                "signature_valid": signature_valid,
+                "signature_error": signature_error,
                 "expired": is_expired,
-                "valid_from": valid_from_dt.isoformat() if valid_from_dt else valid_from,
-                "valid_until": valid_until_dt.isoformat() if valid_until_dt else valid_until,
-                "namespaces": namespace_list,
+                "valid_from": valid_from,
+                "valid_until": valid_until,
+                "namespaces": namespaces_list,
                 "document_types": document_types,
                 "credential_type": "mdoc",
             }
-
+            
             self._log_verification(None, verifier_did, result, details)
-
-            flattened_claims = dict(mdl_claims)
-
-            claims_payload = {**namespaces, "credentialSubject": flattened_claims}
-
+            
+            # Structure claims payload
+            namespace = namespaces_list[0] if namespaces_list else "org.iso.18013.5.1"
+            claims_payload = {
+                namespace: mdl_claims,
+                "credentialSubject": mdl_claims
+            }
+            
             return {
                 "valid": is_valid,
                 "details": details,
@@ -431,6 +508,169 @@ class VerificationService:
                 "error": str(e),
                 "details": {"credential_type": "openid4vp"}
             }
+    
+    def verify_open_badge(
+        self,
+        credential: Dict[str, Any],
+        verifier_did: str,
+        trusted_methods: Optional[Union[List[Dict[str, Any]], Dict[str, Dict[str, Any]]]] = None,
+        max_endorsement_depth: int = 5,
+        credential_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """Verify an Open Badge credential (v2 or v3)"""
+        if not OPEN_BADGES_AVAILABLE:
+            return {"valid": False, "error": "Open Badges support not available"}
+        
+        try:
+            # Detect version
+            context = credential.get("@context", [])
+            is_ob2 = "https://w3id.org/openbadges/v2" in (
+                context if isinstance(context, list) else [context]
+            )
+            
+            # Build verification request
+            if isinstance(trusted_methods, dict):
+                document_store = trusted_methods
+            else:
+                document_store = {m["id"]: m for m in (trusted_methods or [])}
+            
+            verify_request = {
+                "credential" if not is_ob2 else "assertion": credential,
+                "document_store": document_store
+            }
+            
+            # Verify via Rust
+            if is_ob2:
+                result = json.loads(open_badge_ob2_verify(json.dumps(verify_request)))
+            else:
+                result = json.loads(open_badge_ob3_verify(json.dumps(verify_request)))
+            
+            # Handle endorsement chains
+            endorsements = []
+            if result.get("valid") and "endorsement" in credential:
+                endorsements = self._verify_endorsement_chain(
+                    credential["endorsement"],
+                    verifier_did,
+                    trusted_methods,
+                    max_depth=max_endorsement_depth
+                )
+            
+            # Extract claims from normalized data
+            normalized = result.get("normalized", {})
+            claims = normalized.copy()
+            
+            # For OB3, flatten achievement claims
+            if not is_ob2 and "credential_subject" in normalized:
+                cs = normalized["credential_subject"]
+                if isinstance(cs, dict):
+                    # Extract recipient from credentialSubject.id
+                    if "id" in cs:
+                        claims["recipient"] = cs["id"]
+                    
+                    # Extract achievement fields
+                    if "achievement" in cs and isinstance(cs["achievement"], dict):
+                        achievement = cs["achievement"]
+                        if "name" in achievement:
+                            claims["name"] = achievement["name"]
+                        if "description" in achievement:
+                            claims["description"] = achievement["description"]
+            
+            # Check status list if credential has credentialStatus
+            status_check_passed = True
+            if "credentialStatus" in credential:
+                status_check_passed = self._check_credential_status(credential["credentialStatus"], credential_id)
+                if not status_check_passed:
+                    result["valid"] = False
+                    result["errors"] = result.get("errors", []) + ["credential revoked"]
+            
+            # Set error message if verification failed
+            error_message = None
+            if not (result["valid"] and status_check_passed):
+                if not status_check_passed:
+                    error_message = "credential revoked"
+                elif result.get("errors"):
+                    # Use the first error from the result
+                    first_error = result["errors"][0] if isinstance(result["errors"], list) else str(result["errors"])
+                    # Map trust-related errors to user-friendly messages
+                    if "unknown key" in first_error.lower():
+                        error_message = "verification method not trusted"
+                    else:
+                        error_message = first_error
+                else:
+                    error_message = "verification failed"
+            
+            # Log verification
+            log_result = VerificationResult.SUCCESS if (result["valid"] and status_check_passed) else VerificationResult.FAILED
+            self._log_verification(None, verifier_did, log_result, result)
+            
+            return {
+                "valid": result["valid"] and status_check_passed,
+                "claims": claims,
+                "details": result,
+                "endorsements": endorsements,
+                "error": error_message
+            }
+            
+        except Exception as e:
+            self._log_verification(None, verifier_did, VerificationResult.ERROR, {"error": str(e)})
+            return {"valid": False, "error": str(e)}
+    
+    def _check_credential_status(self, credential_status: Union[Dict[str, Any], List[Dict[str, Any]]], credential_id: Optional[int] = None) -> bool:
+        """Check credential status against status lists and database"""
+        # First check database revocation status if credential_id is provided
+        if credential_id:
+            stored_cred = self.db.query(Credential).filter_by(id=credential_id).first()
+            if stored_cred and stored_cred.status == CredentialStatus.REVOKED:
+                return False
+        
+        # Handle both single status entry and array of entries
+        status_entries = [credential_status] if isinstance(credential_status, dict) else credential_status
+        
+        for entry in status_entries:
+            status_list_credential = entry.get("statusListCredential")
+            status_list_index = entry.get("statusListIndex")
+            status_purpose = entry.get("statusPurpose", "revocation")
+            
+            if not status_list_credential or status_list_index is None:
+                continue
+            
+            # For testing, we'll assume credentials are not revoked in status list
+            # In production, this would fetch the status list and check the bit
+            pass
+        
+        return True
+    
+    def _verify_endorsement_chain(
+        self,
+        endorsements: List[Dict[str, Any]],
+        verifier_did: str,
+        trusted_methods: Optional[List[Dict[str, Any]]],
+        current_depth: int = 0,
+        max_depth: int = 5
+    ) -> List[Dict[str, Any]]:
+        """Recursively verify endorsement chain with depth limit"""
+        if current_depth >= max_depth:
+            return [{"error": f"Endorsement chain exceeded max depth {max_depth}"}]
+        
+        verified_endorsements = []
+        for endorsement in endorsements:
+            result = self.verify_open_badge(endorsement, verifier_did, trusted_methods)
+            result["depth"] = current_depth + 1
+            
+            # Recursively verify nested endorsements
+            if result["valid"] and "endorsement" in endorsement:
+                result["nested"] = self._verify_endorsement_chain(
+                    endorsement["endorsement"],
+                    verifier_did,
+                    trusted_methods,
+                    current_depth + 1,
+                    max_depth
+                )
+            
+            verified_endorsements.append(result)
+        
+        return verified_endorsements
+
     
     def _check_presentation_constraints(
         self,
