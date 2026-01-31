@@ -6,7 +6,7 @@ Interface for credential verification operations (verifier role in OID4VCI/OID4V
 
 from typing import Protocol, runtime_checkable
 
-from marty_credentials.ports.types import PresentationRequest, VerificationResult
+from marty_credentials.ports.types import PresentationRequest, VerificationResult, ZkChallengeSession
 
 
 @runtime_checkable
@@ -63,5 +63,43 @@ class ICredentialVerifier(Protocol):
 
         Returns:
             Presentation request with nonce
+        """
+        ...
+
+    # ZK Proof Methods (Longfellow/LibZK integration)
+    
+    def create_zk_challenge(
+        self,
+        doctype: str,
+        verifier_id: str | None = None,
+    ) -> ZkChallengeSession:
+        """
+        Create a ZK proof challenge session.
+
+        Args:
+            doctype: mDoc document type (e.g., 'org.iso.18013.5.1.mDL')
+            verifier_id: Optional verifier identifier
+
+        Returns:
+            Challenge session with nonce and expiry
+        """
+        ...
+
+    def verify_zk_proof(
+        self,
+        session_id: str,
+        proof: bytes,
+        mso: bytes,
+    ) -> VerificationResult:
+        """
+        Verify a ZK proof against a challenge session.
+
+        Args:
+            session_id: Challenge session ID from create_zk_challenge
+            proof: ZK proof bytes (Ligero proof)
+            mso: Mobile Security Object bytes
+
+        Returns:
+            Verification result with verification_method='zk_ligero'
         """
         ...

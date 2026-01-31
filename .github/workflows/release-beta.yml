@@ -1,17 +1,22 @@
-name: Release Beta
+name: Release Beta (DISABLED - Use Local Builds)
 
+# ZERO-COST STRATEGY: All builds happen locally
+# This workflow is disabled to eliminate expensive cross-platform builds
+# See ../Marty/docs/LOCAL_BUILD_SETUP.md for local build instructions
+#
+# Cost savings: ~$15-30/month (macOS runner costs)
 on:
-  push:
-    branches:
-      - dev
-      - main
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
   workflow_dispatch:
     inputs:
       version:
         description: 'Beta version to release (e.g., 0.2.0-beta.1)'
         required: true
+  # push:
+  #   branches:
+  #     - dev
+  #     - main
+  #   tags:
+  #     - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
 
 permissions:
   contents: write

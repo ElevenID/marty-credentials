@@ -21,6 +21,7 @@ class CredentialType(PyEnum):
     JWT = "jwt"
     OPEN_BADGE_V2 = "open_badge_v2"
     OPEN_BADGE_V3 = "open_badge_v3"
+    LONGFELLOW_ZK = "longfellow_zk"
 
 
 class CredentialStatus(PyEnum):
@@ -36,6 +37,7 @@ class VerificationResult(PyEnum):
     SUCCESS = "success"
     FAILED = "failed"
     ERROR = "error"
+    ZK_PROOF_VALID = "zk_proof_valid"
 
 
 class Holder(Base):
@@ -106,3 +108,18 @@ class TrustRegistry(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+
+
+class ZkChallenge(Base):
+    """ZK proof challenge session for interactive verification"""
+    __tablename__ = "zk_challenges"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(255), unique=True, nullable=False, index=True)
+    nonce = Column(Text, nullable=False)  # Base64 encoded nonce
+    doctype = Column(String(255), nullable=False)
+    verifier_id = Column(String(255), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    used = Column(Boolean, default=False, nullable=False)

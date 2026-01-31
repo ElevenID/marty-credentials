@@ -156,3 +156,32 @@ class VerificationResult:
 
     issuer: str | None = None
     """Verified issuer if available."""
+    
+    verification_method: str | None = None
+    """Verification method used (e.g., 'zk_ligero', 'ecdsa_p256')."""
+
+
+@dataclass
+class ZkChallengeSession:
+    """ZK proof challenge session for interactive verification."""
+
+    session_id: str
+    """Unique session identifier."""
+
+    nonce: bytes
+    """Cryptographic nonce for the proof."""
+
+    doctype: str
+    """mDoc document type (e.g., 'org.iso.18013.5.1.mDL')."""
+
+    expires_at: datetime
+    """When this challenge session expires."""
+
+    verifier_id: str | None = None
+    """Verifier who initiated the challenge."""
+
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    """When the session was created."""
+
+    used: bool = False
+    """Whether the nonce has been consumed."""
