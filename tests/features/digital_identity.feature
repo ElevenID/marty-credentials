@@ -190,3 +190,108 @@ Feature: Digital Identity Credential Issuance and Verification
     Then the verification should fail
     And the error should indicate "verification method not trusted"
 
+  @revocation_profile
+  @revocation_profile
+  Scenario: Create and activate a RevocationProfile
+    Given a fresh database
+    And a test issuer with DID "did:example:issuer123"
+    And a test subject with DID "did:example:subject456"
+    Given an organization with ID "org-456"
+    When I create a revocation profile named "Standard Revocation"
+    Then the revocation profile should be created
+    When I activate the revocation profile
+    Then the revocation profile should be active
+
+  @revocation_profile
+  Scenario: Issue credential with RevocationProfile and revoke it
+    Given a fresh database
+    And a test issuer with DID "did:example:issuer123"
+    And a test subject with DID "did:example:subject456"
+    Given an organization with ID "org-456"
+    And I create a revocation profile named "Standard Revocation"
+    And I activate the revocation profile
+    When I allocate a status list index for "sd_jwt_vc"
+    Then I should receive a status list index
+    When I issue an SD-JWT with the following claims:
+      | claim_name | claim_value     | disclosable |
+      | given_name | Alice           | true        |
+      | age        | 25              | true        |
+    And I link the revocation profile to the trust profile
+    Then the credential should be stored in the database
+    When I revoke the credential via revocation profile
+    Then the credential should be marked as revoked
+
+  @revocation_profile
+  Scenario: Multi-format revocation with single RevocationProfile
+    Given a fresh database
+    And a test issuer with DID "did:example:issuer123"
+    And a test subject with DID "did:example:subject456"
+    Given an organization with ID "org-456"
+    And I create a revocation profile named "Multi-Format Revocation"
+    And I activate the revocation profile
+    When I allocate a status list index for "sd_jwt_vc"
+    And I allocate a status list index for "mdoc"
+    And I allocate a status list index for "jwt_vc"
+    Then I should receive a status list index
+
+  @zk_predicate
+  Scenario: Create presentation policy with ZK predicate specifications
+    Given an organization with ID "org-789"
+    When I create a presentation policy with ZK predicate specs
+      | predicate_type | handling_policy   | acceptable_circuits                      | params                          |
+      | range_proof    | require_predicate | ligero_age_over_18,ligero_age_over_21   | {"threshold": 21, "comparison": "gte"} |
+      | membership     | accept_raw        | bbs_range                                | {"set": ["US", "CA", "MX"]}     |
+    Then the presentation policy should include ZK circuit requirements
+
+  @zk_predicate
+  Scenario: Verify mDoc with ZK age predicate using Ligero circuit
+    Given an organization with ID "org-789"
+    And I create a presentation policy with ZK predicate specs
+      | predicate_type | handling_policy   | acceptable_circuits     | params                          |
+      | range_proof    | require_predicate | ligero_age_over_21      | {"threshold": 21, "comparison": "gte"} |
+    When I issue an mDoc with doc_type "org.iso.18013.5.1.mDL" and claims:
+      | namespace        | element_name | element_value |
+      | org.iso.18013.5.1| given_name   | Bob           |
+      | org.iso.18013.5.1| birth_date   | 1995-03-15    |
+      | org.iso.18013.5.1| issue_date   | 2024-01-01    |
+    And I create a ZK proof for "age_over_21" using circuit "ligero_age_over_21"
+    When I verify the ZK proof against the presentation policy
+    Then the verification should succeed
+    And the disclosed claims should contain:
+      | claim_name   | claim_value |
+      | age_over_21  | true        |
+    And the raw age should not be disclosed
+
+  @zk_predicate
+  Scenario: ZK predicate fallback to raw value disclosure
+    Given an organization with ID "org-789"
+    And I create a presentation policy with ZK predicate specs
+      | predicate_type | handling_policy | acceptable_circuits     | params                          |
+      | range_proof    | accept_raw      | ligero_age_over_18      | {"threshold": 18, "comparison": "gte"} |
+    When I issue an mDoc with doc_type "org.iso.18013.5.1.mDL" and claims:
+      | namespace        | element_name | element_value |
+      | org.iso.18013.5.1| given_name   | Carol         |
+      | org.iso.18013.5.1| birth_date   | 2000-06-20    |
+    And the holder wallet does not support ZK circuits
+    When I create a standard presentation disclosing "birth_date"
+    And I verify the presentation against the policy
+    Then the verification should succeed
+    And the disclosed claims should contain:
+      | claim_name  | claim_value |
+      | birth_date  | 2000-06-20  |
+
+  @zk_predicate
+  Scenario: Reject presentation when ZK predicate is required but not provided
+    Given an organization with ID "org-789"
+    And I create a presentation policy with ZK predicate specs
+      | predicate_type | handling_policy   | acceptable_circuits     | params                          |
+      | range_proof    | require_predicate | ligero_age_over_18      | {"threshold": 18, "comparison": "gte"} |
+    When I issue an mDoc with doc_type "org.iso.18013.5.1.mDL" and claims:
+      | namespace        | element_name | element_value |
+      | org.iso.18013.5.1| birth_date   | 2005-08-10    |
+    And the holder wallet does not support ZK circuits
+    When I create a standard presentation disclosing "birth_date"
+    And I verify the presentation against the policy
+    Then the verification should fail
+    And the error should indicate "ZK predicate required but not provided"
+

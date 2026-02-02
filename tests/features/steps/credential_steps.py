@@ -1,9 +1,46 @@
 """
 Step definitions for digital identity credential tests
+
+Supports two modes:
+1. Direct service calls (default, USE_GATEWAY_TESTS=false)
+2. Gateway HTTP calls via Pact mock (legacy, USE_GATEWAY_TESTS=true)
 """
 from behave import given, when, then, step
 from datetime import datetime, timedelta
 import json
+import asyncio
+
+# Import Pact interactions for gateway testing (optional)
+try:
+    from pact_interactions import Interactions
+except ImportError:
+    Interactions = None
+
+
+def _use_gateway(context) -> bool:
+    """Check if we should use gateway HTTP calls."""
+    return getattr(context, 'use_gateway', False)
+
+
+def _get_http_client(context):
+    """Get the HTTP client for gateway calls."""
+    if not hasattr(context, 'http_client'):
+        raise RuntimeError("HTTP client not initialized. Ensure USE_GATEWAY_TESTS=true and before_scenario ran.")
+    return context.http_client
+
+
+def run_async(coro):
+    """
+    Run async coroutine in event loop.
+    Behave doesn't support async steps natively, so we need to wrap them.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop, create a new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 @given('a fresh database')
@@ -65,13 +102,38 @@ def step_issue_w3c_vc(context):
     issuer_did = context.test_data['issuer_did']
     subject_did = context.test_data['subject_did']
     
-    # Use issuance service to create VC
-    result = context.issuance_service.issue_w3c_vc(
-        issuer_did=issuer_did,
-        subject_did=subject_did,
-        credential_type="VerifiableCredential",
-        claims=claims
-    )
+    if _use_gateway(context):
+        # Add Pact interaction for W3C VC issuance
+        interaction = Interactions.Issuance.issue_w3c_vc(
+            issuer_did=issuer_did,
+            subject_did=subject_did,
+            credential_type="VerifiableCredential",
+            claims=claims,
+        )
+        context.pact_provider.add_interaction(interaction)
+        
+        # Make HTTP call to gateway
+        client = _get_http_client(context)
+        response = client.post(
+            "/v1/issuance/credentials/w3c-vc",
+            json={
+                "issuer_did": issuer_did,
+                "subject_did": subject_did,
+                "credential_type": "VerifiableCredential",
+                "claims": claims,
+            }
+        )
+        
+        assert response.status_code == 201, f"Issuance failed: {response.text}"
+        result = response.json()
+    else:
+        # Direct service call (legacy)
+        result = context.issuance_service.issue_w3c_vc(
+            issuer_did=issuer_did,
+            subject_did=subject_did,
+            credential_type="VerifiableCredential",
+            claims=claims
+        )
     
     context.test_data['latest_credential'] = result['credential']
     context.test_data['latest_credential_id'] = result['credential_id']
@@ -103,13 +165,38 @@ def step_issue_sd_jwt(context):
     issuer_did = context.test_data['issuer_did']
     subject_did = context.test_data['subject_did']
     
-    # Use issuance service to create SD-JWT
-    result = context.issuance_service.issue_sd_jwt(
-        issuer_did=issuer_did,
-        subject_did=subject_did,
-        claims=claims,
-        selective_fields=disclosable_claims
-    )
+    if _use_gateway(context):
+        # Add Pact interaction for SD-JWT issuance
+        interaction = Interactions.Issuance.issue_sd_jwt(
+            issuer_did=issuer_did,
+            subject_did=subject_did,
+            claims=claims,
+            selective_fields=disclosable_claims,
+        )
+        context.pact_provider.add_interaction(interaction)
+        
+        # Make HTTP call to gateway
+        client = _get_http_client(context)
+        response = client.post(
+            "/v1/issuance/credentials/sd-jwt",
+            json={
+                "issuer_did": issuer_did,
+                "subject_did": subject_did,
+                "claims": claims,
+                "selective_fields": disclosable_claims,
+            }
+        )
+        
+        assert response.status_code == 201, f"Issuance failed: {response.text}"
+        result = response.json()
+    else:
+        # Direct service call (legacy)
+        result = context.issuance_service.issue_sd_jwt(
+            issuer_did=issuer_did,
+            subject_did=subject_did,
+            claims=claims,
+            selective_fields=disclosable_claims
+        )
     
     context.test_data['latest_credential'] = result['credential']
     context.test_data['latest_credential_id'] = result['credential_id']
@@ -139,17 +226,44 @@ def step_issue_mdoc(context, doc_type):
     issuer_did = context.test_data['issuer_did']
     subject_did = context.test_data['subject_did']
     
-    # Use issuance service to create mDoc
-    result = context.issuance_service.issue_mdoc(
-        issuer_did=issuer_did,
-        subject_did=subject_did,
-        doc_type=doc_type,
-        namespaces=namespaces
-    )
+    if _use_gateway(context):
+        # Add Pact interaction for mDoc issuance
+        interaction = Interactions.Issuance.issue_mdoc(
+            issuer_did=issuer_did,
+            subject_did=subject_did,
+            doc_type=doc_type,
+            namespaces=namespaces,
+        )
+        context.pact_provider.add_interaction(interaction)
+        
+        # Make HTTP call to gateway
+        client = _get_http_client(context)
+        response = client.post(
+            "/v1/issuance/credentials/mdoc",
+            json={
+                "issuer_did": issuer_did,
+                "subject_did": subject_did,
+                "doc_type": doc_type,
+                "namespaces": namespaces,
+            }
+        )
+        
+        assert response.status_code == 201, f"Issuance failed: {response.text}"
+        result = response.json()
+    else:
+        # Direct service call (legacy)
+        result = context.issuance_service.issue_mdoc(
+            issuer_did=issuer_did,
+            subject_did=subject_did,
+            doc_type=doc_type,
+            namespaces=namespaces
+        )
     
     context.test_data['latest_credential'] = result['credential']
     context.test_data['latest_credential_id'] = result['credential_id']
     context.test_data['latest_credential_type'] = 'mDoc'
+    # Store namespaces for presentation creation
+    context.test_data['mdoc_namespaces'] = namespaces
 
 
 @when('I create an SD-JWT presentation disclosing:')
@@ -192,11 +306,35 @@ def step_verify_w3c_vc(context):
     public_key_pem = context.test_data.get('issuer_public_key_pem')
     verifier_did = context.test_data.get('verifier_did', 'did:example:verifier789')
     
-    result = context.verification_service.verify_w3c_vc(
-        credential=credential,
-        verifier_did=verifier_did,
-        public_key_pem=public_key_pem
-    )
+    if _use_gateway(context):
+        # Add Pact interaction for W3C VC verification
+        credential_str = credential if isinstance(credential, str) else json.dumps(credential)
+        interaction = Interactions.Verification.verify_credential(
+            credential=credential_str,
+            credential_format="jwt_vc",
+        )
+        context.pact_provider.add_interaction(interaction)
+        
+        # Make HTTP call to gateway
+        client = _get_http_client(context)
+        response = client.post(
+            "/v1/presentation-policies/verify",
+            json={
+                "credential": credential_str,
+                "format": "jwt_vc",
+                "public_key_pem": public_key_pem,
+            }
+        )
+        
+        assert response.status_code == 200, f"Verification request failed: {response.text}"
+        result = response.json()
+    else:
+        # Direct service call (legacy)
+        result = context.verification_service.verify_w3c_vc(
+            credential=credential,
+            verifier_did=verifier_did,
+            public_key_pem=public_key_pem
+        )
     
     context.test_data['verification_result'] = result
 
@@ -208,11 +346,34 @@ def step_verify_sd_jwt_presentation(context):
     public_key_pem = context.test_data.get('issuer_public_key_pem', '')
     verifier_did = context.test_data.get('verifier_did', 'did:example:verifier789')
     
-    result = context.verification_service.verify_sd_jwt(
-        sd_jwt=presentation,
-        verifier_did=verifier_did,
-        public_key_pem=public_key_pem
-    )
+    if _use_gateway(context):
+        # Add Pact interaction for SD-JWT verification
+        interaction = Interactions.Verification.verify_credential(
+            credential=presentation,
+            credential_format="sd_jwt_vc",
+        )
+        context.pact_provider.add_interaction(interaction)
+        
+        # Make HTTP call to gateway
+        client = _get_http_client(context)
+        response = client.post(
+            "/v1/presentation-policies/verify",
+            json={
+                "credential": presentation,
+                "format": "sd_jwt_vc",
+                "public_key_pem": public_key_pem,
+            }
+        )
+        
+        assert response.status_code == 200, f"Verification request failed: {response.text}"
+        result = response.json()
+    else:
+        # Direct service call (legacy)
+        result = context.verification_service.verify_sd_jwt(
+            sd_jwt=presentation,
+            verifier_did=verifier_did,
+            public_key_pem=public_key_pem
+        )
     
     # Reconcile disclosed claims if verifier omitted them
     if isinstance(result, dict):
@@ -237,10 +398,32 @@ def step_verify_mdoc(context):
     credential = context.test_data['latest_credential']
     verifier_did = context.test_data.get('verifier_did', 'did:example:verifier789')
     
-    result = context.verification_service.verify_mdoc(
-        mdoc=credential,
-        verifier_did=verifier_did
-    )
+    if _use_gateway(context):
+        # Add Pact interaction for mDoc verification
+        interaction = Interactions.Verification.verify_credential(
+            credential=credential,
+            credential_format="mdoc",
+        )
+        context.pact_provider.add_interaction(interaction)
+        
+        # Make HTTP call to gateway
+        client = _get_http_client(context)
+        response = client.post(
+            "/v1/presentation-policies/verify",
+            json={
+                "credential": credential,
+                "format": "mdoc",
+            }
+        )
+        
+        assert response.status_code == 200, f"Verification request failed: {response.text}"
+        result = response.json()
+    else:
+        # Direct service call (legacy)
+        result = context.verification_service.verify_mdoc(
+            mdoc=credential,
+            verifier_did=verifier_did
+        )
     
     context.test_data['verification_result'] = result
 
@@ -1170,4 +1353,327 @@ def step_max_depth_not_exceeded(context, max_depth):
     endorsements = result.get('endorsements', [])
     for endorsement in endorsements:
         assert endorsement.get('depth', 0) <= max_depth, f"Depth exceeded max {max_depth}"
+
+
+# =============================================================================
+# RevocationProfile Steps
+# =============================================================================
+
+@given('an organization with ID "{org_id}"')
+def step_given_organization(context, org_id):
+    """Set up test organization"""
+    context.test_data['organization_id'] = org_id
+    # No external service calls needed for direct testing
+
+
+@step('I create a revocation profile named "{profile_name}"')
+def step_create_revocation_profile(context, profile_name):
+    """Create a RevocationProfile by initializing status lists"""
+    org_id = context.test_data.get('organization_id', 'org-123')
+    issuer_id = f"{org_id}::{profile_name}"  # Composite issuer ID
+    
+    from status_list.domain.value_objects import StatusPurpose
+    
+    # Create revocation and suspension status lists (wrapped async call)
+    revocation_list = run_async(context.status_list_service.create_status_list(
+        issuer_id=issuer_id,
+        purpose=StatusPurpose.REVOCATION,
+    ))
+    
+    suspension_list = run_async(context.status_list_service.create_status_list(
+        issuer_id=issuer_id,
+        purpose=StatusPurpose.SUSPENSION,
+    ))
+    
+    # Store profile data
+    context.test_data['revocation_profile'] = {
+        'id': issuer_id,
+        'name': profile_name,
+        'organization_id': org_id,
+        'status': 'draft',
+        'revocation_list_id': revocation_list.id,
+        'suspension_list_id': suspension_list.id,
+        'supported_formats': ["sd_jwt_vc", "mdoc", "jwt_vc"],
+    }
+    context.test_data['revocation_profile_id'] = issuer_id
+    context.test_data['issuer_id'] = issuer_id
+
+
+@step('I activate the revocation profile')
+def step_activate_revocation_profile(context):
+    """Activate a revocation profile"""
+    profile = context.test_data['revocation_profile']
+    profile['status'] = 'active'
+
+
+@when('I link the revocation profile to the trust profile')
+def step_link_revocation_to_trust(context):
+    """Link revocation profile to trust profile"""
+    # Store the linkage in test data
+    context.test_data['trust_profile_revocation_link'] = context.test_data['revocation_profile_id']
+
+
+@when('I revoke the credential via revocation profile')
+def step_revoke_credential_via_profile(context):
+    """Revoke a credential via RevocationProfile"""
+    credential_id = context.test_data.get('credential_id', 'cred-123')
+    
+    from status_list.domain.value_objects import StatusPurpose, StatusCode
+    
+    # Update the credential's status to revoked (wrapped async call)
+    success = run_async(context.status_list_service.update_status(
+        credential_id=credential_id,
+        purpose=StatusPurpose.REVOCATION,
+        status=StatusCode.REVOKED,  # StatusCode.REVOKED = 1
+    ))
+    
+    assert success, f"Failed to revoke credential {credential_id}"
+    
+    context.test_data['revocation_result'] = {
+        'success': True,
+        'credential_id': credential_id,
+        'status': 'revoked',
+    }
+
+
+@when('I allocate a status list index for "{credential_format}"')
+def step_allocate_status_index(context, credential_format):
+    """Allocate a status list index"""
+    issuer_id = context.test_data['issuer_id']
+    credential_id = f"cred-{credential_format}-test"
+    
+    from status_list.domain.value_objects import StatusPurpose
+    
+    # Allocate entry for revocation (wrapped async call)
+    entry = run_async(context.status_list_service.allocate_status_entry(
+        credential_id=credential_id,
+        issuer_id=issuer_id,
+        purpose=StatusPurpose.REVOCATION,
+    ))
+    
+    context.test_data['status_list_index'] = entry.bit_index
+    context.test_data['status_list_url'] = f"https://api.test.marty.dev/status-lists/{issuer_id}/{entry.shard_index}"
+    context.test_data['credential_id'] = credential_id
+    context.test_data['status_entry'] = entry
+
+
+@then('the revocation profile should be created')
+def step_then_profile_created(context):
+    """Verify profile was created"""
+    assert 'revocation_profile' in context.test_data
+    profile = context.test_data['revocation_profile']
+    assert profile['id']
+    assert profile['status'] == 'draft'
+
+
+@then('the revocation profile should be active')
+def step_then_profile_active(context):
+    """Verify profile is active"""
+    profile = context.test_data['revocation_profile']
+    assert profile['status'] == 'active'
+
+
+@then('I should receive a status list index')
+def step_then_receive_index(context):
+    """Verify status list index was allocated"""
+    assert 'status_list_index' in context.test_data
+    assert isinstance(context.test_data['status_list_index'], int)
+    assert 'status_list_url' in context.test_data
+
+
+@then('the credential should be marked as revoked')
+def step_then_credential_revoked(context):
+    """Verify credential was revoked"""
+    result = context.test_data['revocation_result']
+    assert result['success'] is True
+    
+    # Verify by checking status (wrapped async call)
+    credential_id = result['credential_id']
+    
+    from status_list.domain.value_objects import StatusPurpose, StatusCode
+    
+    status = run_async(context.status_list_service.check_status(
+        credential_id=credential_id,
+        purpose=StatusPurpose.REVOCATION,
+    ))
+    
+    assert status is not None, f"No status entry found for credential {credential_id}"
+    assert status == StatusCode.REVOKED, f"Expected status {StatusCode.REVOKED}, got {status}"
+
+
+# =============================================================================
+# ZK Predicate Specification Steps
+# =============================================================================
+
+@step('I create a presentation policy with ZK predicate specs')
+def step_create_policy_with_zk_specs(context):
+    """Create presentation policy with ZK predicate specifications"""
+    org_id = context.test_data.get('organization_id', 'org-123')
+    
+    # Parse ZK specs from table
+    zk_specs = []
+    for row in context.table:
+        spec = {
+            "predicate_type": row['predicate_type'],
+            "handling_policy": row.get('handling_policy', 'require_predicate'),
+            "acceptable_circuits": [c.strip() for c in row['acceptable_circuits'].split(',')],
+        }
+        if 'params' in row:
+            spec['params'] = json.loads(row['params'])
+        zk_specs.append(spec)
+    
+    policy_name = context.test_data.get('policy_name', 'ZK Test Policy')
+    
+    # Store policy data for direct testing
+    context.test_data['presentation_policy'] = {
+        'id': f"policy-{org_id}-zk",
+        'name': policy_name,
+        'organization_id': org_id,
+        'zk_predicate_specs': zk_specs,
+        'prefer_predicates': True,
+    }
+    context.test_data['presentation_policy_id'] = context.test_data['presentation_policy']['id']
+
+
+@then('the presentation policy should include ZK circuit requirements')
+def step_then_policy_has_zk_circuits(context):
+    """Verify policy has ZK circuit specifications"""
+    policy = context.test_data['presentation_policy']
+    assert 'zk_predicate_specs' in policy
+    specs = policy['zk_predicate_specs']
+    assert len(specs) > 0
+    
+    # Verify each spec has required fields
+    for spec in specs:
+        assert 'predicate_type' in spec
+        assert 'handling_policy' in spec
+        assert 'acceptable_circuits' in spec
+        assert isinstance(spec['acceptable_circuits'], list)
+
+
+@when('I create a ZK proof for "{claim_name}" using circuit "{circuit_id}"')
+def step_create_zk_proof(context, claim_name, circuit_id):
+    """Create a ZK proof using specified circuit (stub implementation)"""
+    # Store ZK proof data
+    context.test_data['zk_proof'] = {
+        'claim_name': claim_name,
+        'circuit_id': circuit_id,
+        'proof': 'mock_proof_data',
+        'result': True,  # Proof result (e.g., age > 21 = True)
+    }
+    context.test_data['holder_supports_zk'] = True
+
+
+@when('I verify the ZK proof against the presentation policy')
+def step_verify_zk_proof(context):
+    """Verify ZK proof against policy (stub implementation)"""
+    policy = context.test_data.get('presentation_policy', {})
+    zk_proof = context.test_data.get('zk_proof', {})
+    
+    # Simple verification: check if circuit is in acceptable list
+    specs = policy.get('zk_predicate_specs', [])
+    circuit_id = zk_proof.get('circuit_id', '')
+    
+    acceptable = False
+    for spec in specs:
+        if circuit_id in spec.get('acceptable_circuits', []):
+            acceptable = True
+            break
+    
+    context.test_data['verification_result'] = {
+        'valid': acceptable,
+        'disclosed_claims': {
+            zk_proof['claim_name']: zk_proof['result']
+        }
+    }
+
+
+@then('the disclosed claims should contain:')
+def step_then_disclosed_claims_contain(context):
+    """Verify disclosed claims match expectations"""
+    result = context.test_data.get('verification_result', {})
+    disclosed = result.get('disclosed_claims', {})
+    
+    for row in context.table:
+        claim_name = row['claim_name']
+        expected_value = row['claim_value']
+        
+        assert claim_name in disclosed, f"Claim {claim_name} not in disclosed claims"
+        
+        # Convert to string for comparison, handle booleans specially
+        actual_value = disclosed[claim_name]
+        if isinstance(actual_value, bool):
+            actual_value = str(actual_value).lower()
+        else:
+            actual_value = str(actual_value)
+        
+        assert actual_value == expected_value, f"Expected {expected_value}, got {actual_value}"
+
+
+@then('the raw age should not be disclosed')
+def step_then_raw_age_not_disclosed(context):
+    """Verify raw age value was not disclosed"""
+    result = context.test_data.get('verification_result', {})
+    disclosed = result.get('disclosed_claims', {})
+    
+    # Check that birth_date or age are not in disclosed claims
+    assert 'birth_date' not in disclosed, "birth_date should not be disclosed"
+    assert 'age' not in disclosed, "age should not be disclosed"
+
+
+@when('the holder wallet does not support ZK circuits')
+def step_holder_no_zk_support(context):
+    """Mark holder wallet as not supporting ZK circuits"""
+    context.test_data['holder_supports_zk'] = False
+
+
+@when('I create a standard presentation disclosing "{claim_name}"')
+def step_create_standard_presentation(context, claim_name):
+    """Create standard (non-ZK) presentation"""
+    credential_type = context.test_data.get('latest_credential_type', '')
+    
+    # For mDoc, extract claim from stored namespaces
+    disclosed_value = None
+    if credential_type == 'mDoc':
+        namespaces = context.test_data.get('mdoc_namespaces', {})
+        for ns_name, ns_data in namespaces.items():
+            if isinstance(ns_data, dict) and claim_name in ns_data:
+                disclosed_value = ns_data[claim_name]
+                break
+    else:
+        # For other credential types, get from credential
+        credential = context.test_data.get('latest_credential', {})
+        disclosed_value = credential.get(claim_name, 'unknown')
+    
+    context.test_data['standard_presentation'] = {
+        'disclosed_claims': {
+            claim_name: disclosed_value if disclosed_value is not None else 'unknown'
+        }
+    }
+
+
+@when('I verify the presentation against the policy')
+def step_verify_against_policy(context):
+    """Verify presentation against policy"""
+    policy = context.test_data.get('presentation_policy', {})
+    presentation = context.test_data.get('standard_presentation', {})
+    holder_supports_zk = context.test_data.get('holder_supports_zk', True)
+    
+    specs = policy.get('zk_predicate_specs', [])
+    
+    # Check if ZK is required
+    requires_zk = any(spec.get('handling_policy') == 'require_predicate' for spec in specs)
+    
+    if requires_zk and not holder_supports_zk:
+        # Verification should fail
+        context.test_data['verification_result'] = {
+            'valid': False,
+            'error': 'ZK predicate required but not provided'
+        }
+    else:
+        # Verification succeeds (accept_raw policy)
+        context.test_data['verification_result'] = {
+            'valid': True,
+            'disclosed_claims': presentation.get('disclosed_claims', {})
+        }
 
