@@ -6,6 +6,8 @@ Credential domain logic and adapters for the Marty ecosystem. This package provi
 - **Adapters**: Concrete implementations using SpruceID, Multipaz, and other credential libraries
 - **Rust FFI**: Python bindings for high-performance cryptographic operations via `marty-rs`
 
+> **Note**: Integration tests have been moved to a separate repository: [marty-integration-tests](https://github.com/ElevenID/marty-integration-tests)
+
 ## Architecture
 
 ```
