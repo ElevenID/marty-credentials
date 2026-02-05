@@ -1,0 +1,110 @@
+"""
+Issuance Service Migration Management
+
+This module provides migration management for the issuance service using
+the MMF framework's migration infrastructure.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Add parent directories to path for imports
+service_root = Path(__file__).parent
+sys.path.insert(0, str(service_root.parent.parent))
+
+from mmf.framework.infrastructure.migration import (
+    AlembicMigrationAdapter,
+    MigrationError,
+)
+from services.issuance.infrastructure.models import metadata
+
+
+def get_migration_adapter() -> AlembicMigrationAdapter:
+    """Create and return configured migration adapter."""
+    database_url = os.getenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials",
+    )
+    
+    # Convert asyncpg URL to sync for Alembic
+    sync_url = database_url.replace("+asyncpg", "")
+    
+    adapter = AlembicMigrationAdapter(
+        database_url=sync_url,
+        metadata=metadata,
+    )
+    
+    migrations_dir = service_root / "infrastructure" / "migrations"
+    adapter.set_migrations_directory(str(migrations_dir))
+    
+    return adapter
+
+
+def upgrade() -> None:
+    """Run all pending migrations."""
+    try:
+        adapter = get_migration_adapter()
+        adapter.upgrade("head")
+        print("✓ Issuance service migrations completed")
+    except MigrationError as e:
+        print(f"✗ Migration failed: {e}")
+        sys.exit(1)
+
+
+def downgrade(revision: str = "-1") -> None:
+    """Rollback to a specific revision."""
+    try:
+        adapter = get_migration_adapter()
+        adapter.downgrade(revision)
+        print(f"✓ Rolled back to {revision}")
+    except MigrationError as e:
+        print(f"✗ Rollback failed: {e}")
+        sys.exit(1)
+
+
+def current() -> None:
+    """Show current revision."""
+    try:
+        adapter = get_migration_adapter()
+        adapter.current()
+    except MigrationError as e:
+        print(f"✗ Failed to get current revision: {e}")
+        sys.exit(1)
+
+
+def history() -> None:
+    """Show migration history."""
+    try:
+        adapter = get_migration_adapter()
+        adapter.history()
+    except MigrationError as e:
+        print(f"✗ Failed to get history: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Manage issuance service migrations")
+    parser.add_argument(
+        "command",
+        choices=["upgrade", "downgrade", "current", "history"],
+        help="Migration command to execute",
+    )
+    parser.add_argument(
+        "--revision",
+        default="-1",
+        help="Revision for downgrade (default: -1)",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "upgrade":
+        upgrade()
+    elif args.command == "downgrade":
+        downgrade(args.revision)
+    elif args.command == "current":
+        current()
+    elif args.command == "history":
+        history()

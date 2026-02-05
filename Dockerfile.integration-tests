@@ -1,0 +1,38 @@
+# Dockerfile for running gateway integration tests
+# Based on Python 3.11 with all test dependencies
+
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY pyproject.toml ./
+COPY README.md ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    pytest \
+    pytest-asyncio \
+    pytest-cov \
+    httpx
+
+# Copy test code
+COPY tests/ ./tests/
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV GATEWAY_URL=http://gateway:8000
+
+# Wait for gateway to be ready before running tests
+COPY tests/integration/gateway/wait-for-gateway.sh /wait-for-gateway.sh
+RUN chmod +x /wait-for-gateway.sh
+
+# Default command: wait for gateway then run tests
+CMD ["/bin/bash", "-c", "/wait-for-gateway.sh && pytest tests/integration/gateway/ -v --tb=short"]
