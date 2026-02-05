@@ -1,0 +1,45 @@
+# Ignore build artifacts and caches
+**/target/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
+
+# Ignore git
+.git/
+.gitignore
+
+# Ignore IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore logs
+*.log
+logs/
+
+# Ignore docs (except key ones)
+docs/
+*.md
+!services/issuance/MIGRATION_SUMMARY.md
+
+# Ignore test artifacts
+**/test_results/
+**/coverage/
+
+# Ignore CI/CD
+.github/
+.gitlab-ci.yml
+
+# Ignore Docker files themselves
+Dockerfile
+docker-compose*.yml
+.dockerignore

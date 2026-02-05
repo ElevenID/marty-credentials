@@ -198,19 +198,48 @@ async def initiate_issuance(
 ) -> IssuanceResponse:
     """Initiate a credential issuance transaction."""
     
-    # Fetch credential type from template
+    # Validate organization exists
+    try:
+        org_url = f"http://organization-service:8002/v1/organizations/{request.organization_id}"
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            org_response = await client.get(org_url)
+            if org_response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Organization not found: {request.organization_id}")
+            org_response.raise_for_status()
+    except HTTPException:
+        raise  # Re-raise FastAPI HTTPException
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Organization not found: {request.organization_id}")
+        logger.error(f"Error validating organization: {e}")
+        raise HTTPException(status_code=500, detail="Organization validation failed")
+    except Exception as e:
+        logger.error(f"Error connecting to organization service: {e}")
+        raise HTTPException(status_code=500, detail="Organization service unavailable")
+    
+    # Fetch and validate credential template
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
     if request.credential_template_id:
         try:
             template_url = f"http://credential-template-service:8003/v1/credential-templates/{request.credential_template_id}"
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(template_url)
-                if response.status_code == 200:
-                    template = response.json()
-                    credential_type = template.get("credential_type", credential_type)
-                    logger.info(f"Fetched credential type from template: {credential_type}")
+                if response.status_code == 404:
+                    raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
+                response.raise_for_status()
+                template = response.json()
+                credential_type = template.get("credential_type", credential_type)
+                logger.info(f"Fetched credential type from template: {credential_type}")
+        except HTTPException:
+            raise  # Re-raise FastAPI HTTPException
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
+            logger.error(f"Error fetching template: {e}")
+            raise HTTPException(status_code=500, detail="Template validation failed")
         except Exception as e:
-            logger.warning(f"Could not fetch template, using default: {e}")
+            logger.error(f"Error connecting to template service: {e}")
+            raise HTTPException(status_code=500, detail="Template service unavailable")
     
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
@@ -222,7 +251,25 @@ async def initiate_issuance(
     )
     await repo.save_transaction(tx)
     
-    offer_uri = f"openid-credential-offer://?credential_offer_uri={ISSUER_BASE_URL}/v1/issuance/offers/{tx.id}"
+    # OID4VCI: Pass credential offer inline for better wallet compatibility
+    # Some wallets (like Walt.ID) have issues fetching by reference
+    import json
+    from urllib.parse import quote
+    
+    offer_data = {
+        "credential_issuer": ISSUER_BASE_URL,
+        "credential_configuration_ids": ["default"],
+        "grants": {
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                "pre-authorized_code": tx.pre_auth_code,
+                "tx_code": None,
+            }
+        },
+    }
+    
+    # Encode offer as inline JSON in openid-credential-offer URI
+    offer_json = quote(json.dumps(offer_data))
+    offer_uri = f"openid-credential-offer://?credential_offer={offer_json}"
     
     return IssuanceResponse(
         id=tx.id,

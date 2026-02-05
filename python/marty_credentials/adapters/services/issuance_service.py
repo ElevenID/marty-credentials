@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 
 # Import Rust bindings
 import _marty_rs
+
+# Import Open Badges from marty_verification_py
 try:
     from marty_verification_py import (
         open_badge_ob2_issue,
@@ -15,6 +17,8 @@ try:
     OPEN_BADGES_AVAILABLE = True
 except ImportError:
     OPEN_BADGES_AVAILABLE = False
+    open_badge_ob2_issue = None
+    open_badge_ob3_issue = None
 
 from marty_credentials.adapters.persistence.models import (
     Credential, CredentialType, CredentialStatus, Holder
