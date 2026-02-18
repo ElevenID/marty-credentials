@@ -1,3 +1,47 @@
+## [unreleased] - 2026-02-18
+
+### 🚀 Features
+
+- *(rust)* Add mDoc/mDL issuance and presentation adapters
+- *(crypto)* Add RSA key algorithm support (RS256/384/512, PS256/384/512)
+- Add automated release pipeline for Python/WASM packages
+- Add beta release workflow with multi-platform marty-rs wheels
+- Comprehensive credential management enhancements
+- Add zero-knowledge proof verification infrastructure
+- Add walt.id integration tests with Rust crypto signing (9/10 tests passing)
+- Add issuance events table, required checks migrations, and update issuance domain
+
+### 🐛 Bug Fixes
+
+- *(status-list)* Use PyModule::new_bound for PyO3 0.22 compatibility
+- Checkout marty-core in CI for path dependencies
+- Correct GitHub Packages URL in beta workflow
+
+### 💼 Other
+
+- *(deps)* Upgrade to SSI 0.12 and update dependencies
+
+### 🚜 Refactor
+
+- Migrate behave tests from Pact HTTP mocking to direct service testing
+- Remove integration tests (moved to marty-integration-tests repo)
+
+### 📚 Documentation
+
+- Integration tests moved to marty-integration-tests repo
+
+### ⚙️ Miscellaneous Tasks
+
+- Remove Multipaz adapter
+- Update CHANGELOG.md
+- Update CHANGELOG.md
+- Add comprehensive security and quality checks
+- Update CHANGELOG.md
+- Make security checks non-blocking to prevent repeated failures
+- Update CHANGELOG.md
+- Update CHANGELOG.md
+- Update CHANGELOG.md
+- Update CHANGELOG.md
 ## [unreleased] - 2026-02-05
 
 ### 🚀 Features
