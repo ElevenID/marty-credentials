@@ -21,6 +21,8 @@ from issuance.domain.entities import (
     ApplicationStatus,
     ApplicationTemplate,
     CredentialStatus,
+    EventType,
+    IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
 )
@@ -87,6 +89,8 @@ class ApplicationTemplateCreate(BaseModel):
     form_fields: list[dict[str, Any]] = []
     evidence_requirements: list[str] = []
     claim_collection_rules: list[dict[str, Any]] = []
+    # Pluggable vetting checks: {check_type, custom_name, is_required, order, config, external_provider, webhook_url}
+    required_checks: list[dict[str, Any]] = []
     approval_strategy: str = "auto"
     application_validity_days: int = 30
     auto_approval_rules: list[dict[str, Any]] = []
@@ -103,6 +107,7 @@ class ApplicationTemplateResponse(BaseModel):
     form_fields: list[dict[str, Any]]
     evidence_requirements: list[str]
     claim_collection_rules: list[dict[str, Any]]
+    required_checks: list[dict[str, Any]]
     approval_strategy: str
     application_validity_days: int
     auto_approval_rules: list[dict[str, Any]]
@@ -360,7 +365,14 @@ async def issue_credential(
         
         tx.complete()
         await repo.save_transaction(tx)
-        
+
+        await repo.save_event(IssuanceEvent(
+            transaction_id=tx.id,
+            application_id=tx.application_id,
+            event_type=EventType.CREDENTIAL_ISSUED,
+            metadata={"credential_id": credential_id, "credential_type": credential_type},
+        ))
+
         logger.info(f"Credential issued via Rust: {credential_id}")
         return CredentialResponse(credential=jwt_credential, format="jwt_vc_json")
         

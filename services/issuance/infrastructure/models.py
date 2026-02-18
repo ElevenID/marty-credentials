@@ -76,6 +76,7 @@ application_templates_table = Table(
     Column("form_fields", JSON, nullable=False, default=list),
     Column("evidence_requirements", JSON, nullable=False, default=list),
     Column("claim_collection_rules", JSON, nullable=False, default=list),
+    Column("required_checks", JSON, nullable=False, default=list),
     Column("approval_strategy", String, nullable=False, default="auto"),
     Column("application_validity_days", Integer, nullable=False, default=30),
     Column("auto_approval_rules", JSON, nullable=False, default=list),
@@ -115,5 +116,21 @@ applications_table = Table(
     Index("ix_applications_status", "status"),
     Index("ix_applications_template_id", "application_template_id"),
     Index("ix_applications_applicant_identifier", "applicant_identifier"),
+    schema="issuance_service"
+)
+
+# Issuance Events table — append-only audit/lifecycle log
+issuance_events_table = Table(
+    "issuance_events",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("transaction_id", String, nullable=True),
+    Column("application_id", String, nullable=True),
+    Column("event_type", String, nullable=False),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_issuance_events_application_id", "application_id"),
+    Index("ix_issuance_events_transaction_id", "transaction_id"),
+    Index("ix_issuance_events_event_type", "event_type"),
     schema="issuance_service"
 )

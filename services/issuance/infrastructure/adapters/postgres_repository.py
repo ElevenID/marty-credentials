@@ -9,16 +9,19 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
     CredentialStatus,
+    EventType,
 )
 from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.models import (
     application_templates_table,
     applications_table,
     issued_credentials_table,
+    issuance_events_table,
     issuance_transactions_table,
 )
 
@@ -291,6 +294,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "form_fields": template.form_fields,
                 "evidence_requirements": template.evidence_requirements,
                 "claim_collection_rules": template.claim_collection_rules,
+                "required_checks": template.required_checks,
                 "approval_strategy": template.approval_strategy,
                 "application_validity_days": template.application_validity_days,
                 "auto_approval_rules": template.auto_approval_rules,
@@ -334,6 +338,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 form_fields=row.form_fields or [],
                 evidence_requirements=row.evidence_requirements or [],
                 claim_collection_rules=row.claim_collection_rules or [],
+                required_checks=row.required_checks or [],
                 approval_strategy=row.approval_strategy,
                 application_validity_days=row.application_validity_days,
                 auto_approval_rules=row.auto_approval_rules or [],
@@ -465,3 +470,40 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     applications.append(app)
             
             return applications
+
+    # Lifecycle event methods
+    async def save_event(self, event: IssuanceEvent) -> None:
+        async with self._session_factory() as session:
+            stmt = issuance_events_table.insert().values(
+                id=event.id,
+                transaction_id=event.transaction_id,
+                application_id=event.application_id,
+                event_type=event.event_type.value,
+                metadata=event.metadata,
+                created_at=event.created_at,
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def list_events_for_application(
+        self, application_id: str
+    ) -> list[IssuanceEvent]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(issuance_events_table)
+                .where(issuance_events_table.c.application_id == application_id)
+                .order_by(issuance_events_table.c.created_at)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return [
+                IssuanceEvent(
+                    id=row.id,
+                    transaction_id=row.transaction_id,
+                    application_id=row.application_id,
+                    event_type=EventType(row.event_type),
+                    metadata=row.metadata or {},
+                    created_at=row.created_at,
+                )
+                for row in rows
+            ]

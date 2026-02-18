@@ -4,6 +4,7 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
 )
@@ -18,6 +19,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._credentials: dict[str, IssuedCredential] = {}
         self._applications: dict[str, Application] = {}
         self._application_templates: dict[str, ApplicationTemplate] = {}
+        self._events: list[IssuanceEvent] = []
     
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
         self._transactions[tx.id] = tx
@@ -85,3 +87,15 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             apps = [a for a in apps if a.application_template_id == template_id]
         
         return apps
+
+    # Lifecycle event methods
+    async def save_event(self, event: IssuanceEvent) -> None:
+        self._events.append(event)
+
+    async def list_events_for_application(
+        self, application_id: str
+    ) -> list[IssuanceEvent]:
+        return sorted(
+            [e for e in self._events if e.application_id == application_id],
+            key=lambda e: e.created_at,
+        )

@@ -71,6 +71,34 @@ class IssuanceTransaction:
         return datetime.now(timezone.utc) > self.expires_at
 
 
+class EventType(str, Enum):
+    """Issuance lifecycle event types."""
+    OFFER_GENERATED = "offer_generated"
+    OFFER_VIEWED = "offer_viewed"
+    OFFER_EXPIRED = "offer_expired"
+    CREDENTIAL_ISSUED = "credential_issued"
+    CREDENTIAL_ACKNOWLEDGED = "credential_acknowledged"
+
+
+@dataclass
+class IssuanceEvent:
+    """
+    Immutable lifecycle event recorded for audit and analytics.
+
+    Created at key points in the issuance flow:
+      - offer_generated  : admin calls POST …/issuance-offer
+      - offer_viewed     : applicant calls GET  …/issuance-offer
+      - offer_expired    : offer TTL passed when applicant views it
+      - credential_issued: wallet completes OID4VCI exchange
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    transaction_id: str | None = None
+    application_id: str | None = None
+    event_type: EventType = EventType.OFFER_GENERATED
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class CredentialStatus(str, Enum):
     """Credential lifecycle status."""
     ACTIVE = "active"
@@ -128,6 +156,9 @@ class ApplicationTemplate:
     form_fields: list[dict[str, Any]] = field(default_factory=list)
     evidence_requirements: list[str] = field(default_factory=list)
     claim_collection_rules: list[dict[str, Any]] = field(default_factory=list)
+    # Pluggable vetting checks required for this application template.
+    # Each entry: { check_type, custom_name, is_required, order, config, external_provider, webhook_url }
+    required_checks: list[dict[str, Any]] = field(default_factory=list)
     
     # Workflow configuration
     approval_strategy: str = "auto"

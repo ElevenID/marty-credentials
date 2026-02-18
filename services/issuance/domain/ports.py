@@ -8,6 +8,7 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
 )
@@ -98,4 +99,15 @@ class IIssuanceRepository(ABC):
         template_id: str | None = None,
     ) -> list[Application]:
         """List applications with optional filters."""
+        pass
+
+    # Lifecycle event methods
+    @abstractmethod
+    async def save_event(self, event: IssuanceEvent) -> None:
+        """Append an immutable lifecycle event to the audit log."""
+        pass
+
+    @abstractmethod
+    async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
+        """Return all events recorded for a given application, oldest first."""
         pass
