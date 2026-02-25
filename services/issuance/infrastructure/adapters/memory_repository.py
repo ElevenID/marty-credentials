@@ -99,3 +99,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             [e for e in self._events if e.application_id == application_id],
             key=lambda e: e.created_at,
         )
+
+    async def get_credential_types_for_org(self, org_id: str) -> list[str]:
+        seen: set[str] = set()
+        for tx in self._transactions.values():
+            if tx.organization_id == org_id and tx.credential_type:
+                seen.add(tx.credential_type)
+        return sorted(seen)

@@ -1,8 +1,9 @@
 """
 Credential Ports
 
-This module defines the interfaces for OID4VC credential operations following hexagonal architecture.
-These ports define the boundary between the application core and external adapters (like SpruceID).
+Re-exported from mmf.core.credentials — MMF is the single source of truth
+for port interfaces and domain types. This module provides backward compatibility
+for existing imports from marty_credentials.ports.
 """
 
 from marty_credentials.ports.types import (
@@ -14,6 +15,7 @@ from marty_credentials.ports.types import (
     KeyPair,
     PresentationRequest,
     VerificationResult,
+    ZkChallengeSession,
 )
 from marty_credentials.ports.issuer import ICredentialIssuer
 from marty_credentials.ports.key_manager import IKeyManager
@@ -30,6 +32,7 @@ __all__ = [
     "KeyPair",
     "PresentationRequest",
     "VerificationResult",
+    "ZkChallengeSession",
     # Ports
     "ICredentialIssuer",
     "ICredentialVerifier",

@@ -2,13 +2,14 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, distinct
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    AuthorizationSession,
     IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
@@ -20,6 +21,7 @@ from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.models import (
     application_templates_table,
     applications_table,
+    authorization_sessions_table,
     issued_credentials_table,
     issuance_events_table,
     issuance_transactions_table,
@@ -51,9 +53,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "status": tx.status.value,
                 "pre_auth_code": tx.pre_auth_code,
                 "access_token": tx.access_token,
-                "c_nonce": tx.c_nonce,
+                "c_nonce": tx.nonce,
                 "claims": tx.claims,
                 "credential_type": tx.credential_type,
+                "zk_predicate_claims": tx.zk_predicate_claims or [],
+                "credential_payload_format": tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+                "wallet_configs": tx.wallet_configs or [],
                 "expires_at": tx.expires_at,
                 "issued_at": tx.issued_at,
             }
@@ -93,9 +98,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 status=IssuanceStatus(row.status),
                 pre_auth_code=row.pre_auth_code,
                 access_token=row.access_token,
-                c_nonce=row.c_nonce,
+                nonce=row.c_nonce,
                 claims=row.claims or {},
                 credential_type=row.credential_type,
+                zk_predicate_claims=list(row.zk_predicate_claims or []),
+                credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+                wallet_configs=list(row.wallet_configs or []),
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 issued_at=row.issued_at,
@@ -122,9 +130,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 status=IssuanceStatus(row.status),
                 pre_auth_code=row.pre_auth_code,
                 access_token=row.access_token,
-                c_nonce=row.c_nonce,
+                nonce=row.c_nonce,
                 claims=row.claims or {},
                 credential_type=row.credential_type,
+                zk_predicate_claims=list(row.zk_predicate_claims or []),
+                credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+                wallet_configs=list(row.wallet_configs or []),
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 issued_at=row.issued_at,
@@ -151,9 +162,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 status=IssuanceStatus(row.status),
                 pre_auth_code=row.pre_auth_code,
                 access_token=row.access_token,
-                c_nonce=row.c_nonce,
+                nonce=row.c_nonce,
                 claims=row.claims or {},
                 credential_type=row.credential_type,
+                zk_predicate_claims=list(row.zk_predicate_claims or []),
+                credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+                wallet_configs=list(row.wallet_configs or []),
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 issued_at=row.issued_at,
@@ -174,7 +188,27 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     transactions.append(tx)
             
             return transactions
-    
+
+    async def get_credential_types_for_org(self, org_id: str) -> list[str]:
+        """Return distinct non-null credential_type values for an organisation.
+
+        Used to build ``credential_configurations_supported`` in the per-org
+        OID4VCI issuer metadata entirely from the local issuance DB — no
+        cross-service calls required.
+        """
+        async with self._session_factory() as session:
+            stmt = (
+                select(distinct(issuance_transactions_table.c.credential_type))
+                .where(
+                    and_(
+                        issuance_transactions_table.c.organization_id == org_id,
+                        issuance_transactions_table.c.credential_type.isnot(None),
+                    )
+                )
+            )
+            result = await session.execute(stmt)
+            return [row[0] for row in result.all()]
+
     # Credential methods
     async def save_credential(self, cred: IssuedCredential) -> None:
         async with self._session_factory() as session:
@@ -507,3 +541,82 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 )
                 for row in rows
             ]
+
+    # Authorization session methods
+    async def save_authorization_session(self, auth_session: AuthorizationSession) -> None:
+        async with self._session_factory() as session:
+            stmt = select(authorization_sessions_table).where(
+                authorization_sessions_table.c.id == auth_session.id
+            )
+            result = await session.execute(stmt)
+            existing = result.first()
+
+            data = {
+                "id": auth_session.id,
+                "code": auth_session.code,
+                "client_id": auth_session.client_id,
+                "redirect_uri": auth_session.redirect_uri,
+                "scope": auth_session.scope,
+                "state": auth_session.state,
+                "issuer_state": auth_session.issuer_state,
+                "credential_configuration_ids": auth_session.credential_configuration_ids,
+                "organization_id": auth_session.organization_id,
+                "code_challenge": auth_session.code_challenge,
+                "code_challenge_method": auth_session.code_challenge_method,
+                "access_token": auth_session.access_token,
+                "c_nonce": auth_session.nonce,
+                "status": auth_session.status,
+                "created_at": auth_session.created_at,
+                "expires_at": auth_session.expires_at,
+            }
+
+            if existing:
+                stmt = (
+                    authorization_sessions_table.update()
+                    .where(authorization_sessions_table.c.id == auth_session.id)
+                    .values(**data)
+                )
+            else:
+                stmt = authorization_sessions_table.insert().values(**data)
+
+            await session.execute(stmt)
+            await session.commit()
+
+    def _row_to_auth_session(self, row) -> AuthorizationSession:
+        """Map a DB row to an AuthorizationSession entity."""
+        return AuthorizationSession(
+            id=row.id,
+            code=row.code,
+            client_id=row.client_id,
+            redirect_uri=row.redirect_uri,
+            scope=row.scope,
+            state=row.state,
+            issuer_state=row.issuer_state,
+            credential_configuration_ids=row.credential_configuration_ids or [],
+            organization_id=row.organization_id,
+            code_challenge=row.code_challenge,
+            code_challenge_method=row.code_challenge_method,
+            access_token=row.access_token,
+            nonce=row.c_nonce,
+            status=row.status,
+            created_at=row.created_at,
+            expires_at=row.expires_at,
+        )
+
+    async def get_authorization_session_by_code(self, code: str) -> AuthorizationSession | None:
+        async with self._session_factory() as session:
+            stmt = select(authorization_sessions_table).where(
+                authorization_sessions_table.c.code == code
+            )
+            result = await session.execute(stmt)
+            row = result.first()
+            return self._row_to_auth_session(row) if row else None
+
+    async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
+        async with self._session_factory() as session:
+            stmt = select(authorization_sessions_table).where(
+                authorization_sessions_table.c.access_token == token
+            )
+            result = await session.execute(stmt)
+            row = result.first()
+            return self._row_to_auth_session(row) if row else None

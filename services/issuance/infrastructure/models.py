@@ -28,6 +28,9 @@ issuance_transactions_table = Table(
     Column("c_nonce", String, nullable=True),
     Column("claims", JSON, nullable=False, default=dict),
     Column("credential_type", String, nullable=True),
+    Column("zk_predicate_claims", JSON, nullable=True, default=list),
+    Column("credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"),
+    Column("wallet_configs", JSON, nullable=True, server_default="[]"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("issued_at", DateTime(timezone=True), nullable=True),
@@ -132,5 +135,31 @@ issuance_events_table = Table(
     Index("ix_issuance_events_application_id", "application_id"),
     Index("ix_issuance_events_transaction_id", "transaction_id"),
     Index("ix_issuance_events_event_type", "event_type"),
+    schema="issuance_service"
+)
+
+# Authorization Sessions table — OID4VCI authorization code flow (§5)
+authorization_sessions_table = Table(
+    "authorization_sessions",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("code", String, nullable=False, unique=True),
+    Column("client_id", String, nullable=False),
+    Column("redirect_uri", String, nullable=True),
+    Column("scope", String, nullable=True),
+    Column("state", String, nullable=True),
+    Column("issuer_state", String, nullable=True),
+    Column("credential_configuration_ids", JSON, nullable=False, default=list),
+    Column("organization_id", String, nullable=True),
+    Column("code_challenge", String, nullable=True),
+    Column("code_challenge_method", String, nullable=True),
+    Column("access_token", String, nullable=True),
+    Column("c_nonce", String, nullable=True),
+    Column("status", String, nullable=False, default="pending"),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Index("ix_authorization_sessions_code", "code"),
+    Index("ix_authorization_sessions_status", "status"),
+    Index("ix_authorization_sessions_issuer_state", "issuer_state"),
     schema="issuance_service"
 )

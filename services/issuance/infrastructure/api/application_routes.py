@@ -11,7 +11,7 @@ import httpx
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel
 
-ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "http://gateway:8000")
+ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
     "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://credential-template-service:8003"
 )
@@ -479,15 +479,23 @@ class IssuanceOfferResponse(BaseModel):
     status: str                 # active | expired
 
 
-def _build_offer_uri(pre_auth_code: str) -> str:
-    """Re-construct openid-credential-offer:// URI from a pre-auth code."""
+def _build_offer_uri(
+    pre_auth_code: str,
+    org_id: str,
+    credential_config_id: str = "default",
+) -> str:
+    """Build an openid-credential-offer:// URI with a per-org credential_issuer.
+
+    Per OID4VCI v1 \u00a712.2.2 the wallet uses credential_issuer to derive the
+    well-known metadata URL, so it must be org-scoped.
+    """
+    from issuance.infrastructure.api.routes import org_issuer_url
     offer_data = {
-        "credential_issuer": ISSUER_BASE_URL,
-        "credential_configuration_ids": ["default"],
+        "credential_issuer": org_issuer_url(org_id),
+        "credential_configuration_ids": [credential_config_id],
         "grants": {
             "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
                 "pre-authorized_code": pre_auth_code,
-                "tx_code": None,
             }
         },
     }
@@ -606,7 +614,13 @@ async def generate_issuance_offer(
         template = await repo.get_application_template(app.application_template_id)
 
     tx = await _get_or_refresh_transaction(app, repo, template)
-    offer_url = _build_offer_uri(tx.pre_auth_code)
+    # Resolve credential config id from the transaction's credential type
+    credential_config_id = tx.credential_type or "default"
+    offer_url = _build_offer_uri(
+        pre_auth_code=tx.pre_auth_code,
+        org_id=app.organization_id,
+        credential_config_id=credential_config_id,
+    )
 
     # Enrich with wallet deep links
     from urllib.parse import quote as url_quote
@@ -688,11 +702,16 @@ async def get_issuance_offer(
     if not tx:
         raise HTTPException(status_code=404, detail="Issuance transaction not found")
 
-    offer_url = _build_offer_uri(tx.pre_auth_code)
-
     template = None
     if app.application_template_id:
         template = await repo.get_application_template(app.application_template_id)
+
+    credential_config_id = tx.credential_type or "default"
+    offer_url = _build_offer_uri(
+        pre_auth_code=tx.pre_auth_code,
+        org_id=app.organization_id,
+        credential_config_id=credential_config_id,
+    )
 
     raw_wallets = await _fetch_wallets_for_template(
         template.credential_template_id if template else None

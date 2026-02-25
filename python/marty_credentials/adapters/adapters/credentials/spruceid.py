@@ -121,7 +121,10 @@ class SpruceIDKeyManager:
 
 
 class SpruceIDCredentialIssuer:
-    """Credential issuer implementation using SpruceID's SSI library."""
+    """Credential issuer implementation using the v2 marty-oid4vci engine.
+
+    Supports all credential formats: jwt_vc_json, vc+sd-jwt, mso_mdoc, zk_mdoc.
+    """
 
     def create_credential(
         self,
@@ -129,21 +132,42 @@ class SpruceIDCredentialIssuer:
         credential_type: str,
         subject: CredentialSubject,
         expiration_seconds: int | None = None,
+        credential_format: str = "jwt_vc_json",
+        selective_disclosure_claims: list[str] | None = None,
+        mdoc_namespace: str | None = None,
+        mdoc_doctype: str | None = None,
+        zk_predicate_claims: list[str] | None = None,
     ) -> CredentialData:
-        """Create and sign a verifiable credential."""
+        """Create and sign a verifiable credential using the v2 engine.
+
+        Args:
+            issuer_key: Key pair for signing.
+            credential_type: Type of credential (e.g. "UniversityDegreeCredential").
+            subject: Subject and claims for the credential.
+            expiration_seconds: Credential validity period in seconds.
+            credential_format: Output format – "jwt_vc_json", "vc+sd-jwt",
+                "mso_mdoc", or "zk_mdoc".
+            selective_disclosure_claims: Claim names for SD-JWT selective disclosure.
+            mdoc_namespace: Namespace for mDoc credentials.
+            mdoc_doctype: Document type for mDoc credentials.
+            zk_predicate_claims: Claim names for ZK predicate proofs.
+        """
         marty_rs = _get_marty_rs()
 
-        # Convert claims to JSON
         claims_json = json.dumps(subject.claims)
 
-        # Call Rust function
-        jwt, credential_id = marty_rs.create_verifiable_credential(
+        credential_str, credential_id = marty_rs.create_verifiable_credential(
             issuer_did=issuer_key.did,
             issuer_jwk_json=issuer_key.jwk_json,
             subject_id=subject.id,
             credential_type=credential_type,
             claims_json=claims_json,
+            format=credential_format,
             expiration_seconds=expiration_seconds,
+            selective_disclosure_claims=selective_disclosure_claims,
+            mdoc_namespace=mdoc_namespace,
+            mdoc_doctype=mdoc_doctype,
+            zk_predicate_claims=zk_predicate_claims,
         )
 
         now = datetime.utcnow()
@@ -160,7 +184,7 @@ class SpruceIDCredentialIssuer:
             subject=subject,
             issuance_date=now,
             expiration_date=expiration,
-            jwt=jwt,
+            jwt=credential_str,
         )
 
     def create_offer(
@@ -171,13 +195,12 @@ class SpruceIDCredentialIssuer:
         user_pin_required: bool = False,
         wallet_format: str = "standard",
     ) -> CredentialOffer:
-        """Create an OID4VCI credential offer."""
+        """Create an OID4VCI credential offer using the v2 engine."""
         marty_rs = _get_marty_rs()
 
         offer_id = str(uuid4())
         pre_auth_code = secrets.token_urlsafe(32) if pre_authorized else None
 
-        # Generate offer JSON
         offer_json = marty_rs.create_credential_offer(
             issuer_url=issuer_url,
             credential_types=credential_types,
@@ -185,7 +208,6 @@ class SpruceIDCredentialIssuer:
             user_pin_required=user_pin_required,
         )
 
-        # Generate offer URI
         offer_uri = marty_rs.generate_offer_uri(
             issuer_url=issuer_url,
             offer_id=offer_id,
@@ -208,7 +230,11 @@ class SpruceIDCredentialIssuer:
         issuer_name: str,
         supported_credentials: list[dict[str, Any]],
     ) -> str:
-        """Generate OID4VCI issuer metadata for discovery."""
+        """Generate OID4VCI issuer metadata using the v2 engine.
+
+        Supports multi-format metadata with per-credential-type format lists,
+        doctype/vct fields, and claim definitions.
+        """
         marty_rs = _get_marty_rs()
 
         return marty_rs.generate_issuer_metadata(

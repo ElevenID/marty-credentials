@@ -92,7 +92,11 @@ class RustKeyManager:
 
 
 class RustCredentialIssuer:
-    """Credential issuer implementation using marty-rs Rust library."""
+    """Credential issuer implementation using marty-rs Rust library.
+
+    Uses the v2 marty-oid4vci engine for all OID4VCI operations,
+    supporting jwt_vc_json, vc+sd-jwt, mso_mdoc, and zk_mdoc formats.
+    """
 
     def create_credential(
         self,
@@ -100,19 +104,42 @@ class RustCredentialIssuer:
         credential_type: str,
         subject: CredentialSubject,
         expiration_seconds: int | None = None,
+        credential_format: str = "jwt_vc_json",
+        selective_disclosure_claims: list[str] | None = None,
+        mdoc_namespace: str | None = None,
+        mdoc_doctype: str | None = None,
+        zk_predicate_claims: list[str] | None = None,
     ) -> CredentialData:
-        """Create and sign a verifiable credential using Rust."""
+        """Create and sign a verifiable credential using the v2 Rust engine.
+
+        Args:
+            issuer_key: Key pair for signing.
+            credential_type: Type of credential (e.g. "UniversityDegreeCredential").
+            subject: Subject and claims for the credential.
+            expiration_seconds: Credential validity period in seconds.
+            credential_format: Output format – "jwt_vc_json", "vc+sd-jwt",
+                "mso_mdoc", or "zk_mdoc".
+            selective_disclosure_claims: Claim names for SD-JWT selective disclosure.
+            mdoc_namespace: Namespace for mDoc credentials.
+            mdoc_doctype: Document type for mDoc credentials.
+            zk_predicate_claims: Claim names for ZK predicate proofs.
+        """
         marty_rs = _get_marty_rs()
 
         claims_json = json.dumps(subject.claims)
 
-        jwt, credential_id = marty_rs.create_verifiable_credential(
+        credential_str, credential_id = marty_rs.create_verifiable_credential(
             issuer_did=issuer_key.did,
             issuer_jwk_json=issuer_key.jwk_json,
             subject_id=subject.id,
             credential_type=credential_type,
             claims_json=claims_json,
+            format=credential_format,
             expiration_seconds=expiration_seconds,
+            selective_disclosure_claims=selective_disclosure_claims,
+            mdoc_namespace=mdoc_namespace,
+            mdoc_doctype=mdoc_doctype,
+            zk_predicate_claims=zk_predicate_claims,
         )
 
         now = datetime.utcnow()
@@ -127,7 +154,7 @@ class RustCredentialIssuer:
             subject=subject,
             issuance_date=now,
             expiration_date=expiration,
-            jwt=jwt,
+            jwt=credential_str,
         )
 
     def create_offer(
@@ -138,7 +165,7 @@ class RustCredentialIssuer:
         user_pin_required: bool = False,
         wallet_format: str = "standard",
     ) -> CredentialOffer:
-        """Create an OID4VCI credential offer."""
+        """Create an OID4VCI credential offer using the v2 engine."""
         marty_rs = _get_marty_rs()
 
         offer_id = str(uuid4())
@@ -173,7 +200,11 @@ class RustCredentialIssuer:
         issuer_name: str,
         supported_credentials: list[dict[str, Any]],
     ) -> str:
-        """Generate OID4VCI issuer metadata for discovery."""
+        """Generate OID4VCI issuer metadata using the v2 engine.
+
+        Supports multi-format metadata with per-credential-type format lists,
+        doctype/vct fields, and claim definitions.
+        """
         marty_rs = _get_marty_rs()
 
         return marty_rs.generate_issuer_metadata(

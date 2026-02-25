@@ -8,6 +8,7 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    AuthorizationSession,
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
@@ -110,4 +111,29 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         """Return all events recorded for a given application, oldest first."""
+        pass
+
+    @abstractmethod
+    async def get_credential_types_for_org(self, org_id: str) -> list[str]:
+        """Return distinct non-null credential_type values for an organisation.
+
+        Used to dynamically build ``credential_configurations_supported`` in the
+        per-org OID4VCI issuer metadata without querying an external service.
+        """
+        pass
+
+    # Authorization session methods (OID4VCI authorization code flow)
+    @abstractmethod
+    async def save_authorization_session(self, session: AuthorizationSession) -> None:
+        """Persist an authorization session (insert or update)."""
+        pass
+
+    @abstractmethod
+    async def get_authorization_session_by_code(self, code: str) -> AuthorizationSession | None:
+        """Look up a session by its authorization code."""
+        pass
+
+    @abstractmethod
+    async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
+        """Look up a session by its access token (post-exchange)."""
         pass

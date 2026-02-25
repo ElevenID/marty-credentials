@@ -28,6 +28,7 @@ COPY marty-core/marty-secure-storage ./marty-core/marty-secure-storage/
 COPY marty-core/marty-biometrics ./marty-core/marty-biometrics/
 COPY marty-core/marty-iso18013 ./marty-core/marty-iso18013/
 COPY marty-core/marty-zkp ./marty-core/marty-zkp/
+COPY marty-core/marty-oid4vci ./marty-core/marty-oid4vci/
 
 # Build marty-bindings Python wheel
 WORKDIR /build/marty-core/marty-bindings

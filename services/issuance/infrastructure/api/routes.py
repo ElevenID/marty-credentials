@@ -209,6 +209,21 @@ def org_issuer_url(org_id: str) -> str:
     return f"{ISSUER_BASE_URL}/org/{org_id}"
 
 
+def org_issuer_url_spruce(org_id: str) -> str:
+    """Return the SpruceID-compatible per-org OID4VCI credential_issuer URL.
+
+    SpruceID's ``oid4vci-rs @ e97b01e`` requires ``format: "spruce-vc+sd-jwt"`` for all
+    SD-JWT credential configurations.  Any ``vc+sd-jwt`` entry in the same metadata document
+    causes the entire metadata deserialisation to fail.  We therefore use a distinct issuer
+    path for SpruceID credential offers so the metadata endpoint can emit only the
+    ``spruce-vc+sd-jwt`` format without affecting Walt.id and other wallets.
+
+      credential_issuer = https://issuer.example.com/org/<id>/spruce
+      well-known URL   = https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>/spruce
+    """
+    return f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
+
+
 # ============================================================================
 # OID4VCI Endpoints
 # ============================================================================
@@ -292,14 +307,18 @@ async def initiate_issuance(
     credential_config_id = credential_type or "default"
 
     def _config_id_for_format_variant(base: str, variant: str | None) -> str:
-        """Return the credential_configuration_id for the given base type.
+        """Return the credential_configuration_id for the given base type and format variant.
 
-        All wallets (Walt.id, Marty native, etc.) use the standard vc+sd-jwt
-        entry keyed as "{base}#sd-jwt".  The 'variant' argument is accepted for
-        API compatibility but no longer changes the selected configuration.
+        - Standard wallets (Walt.id, Marty native, etc.): ``{base}#sd-jwt``
+          (``format: vc+sd-jwt`` in the standard metadata document).
+        - SpruceID mobile SDK (``variant == "spruce-vc+sd-jwt"``): ``{base}#spruce-sd-jwt``
+          which maps to the ``spruce-vc+sd-jwt`` entry in the ``/org/{id}/spruce``
+          metadata document.
         """
         if base == "default":
             return base
+        if variant == "spruce-vc+sd-jwt":
+            return f"{base}#spruce-sd-jwt"
         return f"{base}#sd-jwt"
 
     # Default offer uses the standard vc+sd-jwt config (works with Walt.id and
@@ -326,8 +345,16 @@ async def initiate_issuance(
         fmt_variant = wc.get("format_variant")
         if wid:
             wallet_config_id = _config_id_for_format_variant(credential_config_id, fmt_variant)
+            # SpruceID SDK requires a dedicated issuer URL whose metadata document
+            # emits only ``spruce-vc+sd-jwt`` entries.  All other wallets use the
+            # standard issuer URL with ``vc+sd-jwt`` format.
+            wallet_issuer_url = (
+                org_issuer_url_spruce(request.organization_id)
+                if fmt_variant == "spruce-vc+sd-jwt"
+                else org_issuer_url(request.organization_id)
+            )
             wallet_offer_json = oid4vci_create_credential_offer(
-                issuer_url=org_issuer_url(request.organization_id),
+                issuer_url=wallet_issuer_url,
                 credential_types=[wallet_config_id],
                 pre_authorized_code=tx.pre_auth_code,
                 user_pin_required=False,
@@ -668,7 +695,7 @@ async def issue_credential(
                 if auth_session.credential_configuration_ids
                 else "default"
             )
-            bare_ctype = raw_config_id.removesuffix("#sd-jwt")
+            bare_ctype = raw_config_id.split("#")[0]  # strips #sd-jwt, #spruce-sd-jwt, etc.
             tx = IssuanceTransaction(
                 organization_id=auth_session.organization_id or "",
                 status=IssuanceStatus.AUTHORIZED,

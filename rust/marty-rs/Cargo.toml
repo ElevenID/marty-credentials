@@ -16,6 +16,7 @@ default = ["python"]
 python = [
     "pyo3",
     "dep:marty-verification",
+    "dep:marty-oid4vci",
     "tokio",
     "isomdl",
     "coset",
@@ -95,3 +96,6 @@ serde_cbor = { version = "0.11", optional = true }
 
 # From marty-core (only for python feature - heavy verification not needed for WASM)
 marty-verification = { workspace = true, optional = true }
+
+# OID4VCI/OID4VP protocol engine from marty-core
+marty-oid4vci = { workspace = true, optional = true }

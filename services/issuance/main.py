@@ -144,6 +144,78 @@ def create_app() -> FastAPI:
     # wallets that probe without an org context.
     # ------------------------------------------------------------------
 
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
+    async def get_org_issuer_metadata_spruce(org_id: str) -> dict:
+        """Return per-org OID4VCI issuer metadata compatible with SpruceID mobile-sdk-rs.
+
+        SpruceID's ``oid4vci-rs @ e97b01e`` uses a custom ``ProfilesCredentialConfiguration``
+        untagged serde enum whose only SD-JWT variant requires ``format: "spruce-vc+sd-jwt"``.
+        Any ``vc+sd-jwt`` entry in the same document causes the entire metadata deserialisation
+        to fail, so SpruceID credential offers point to the ``/org/{id}/spruce`` issuer URL and
+        this endpoint emits *only* ``spruce-vc+sd-jwt`` (+ ``jwt_vc_json``) entries.
+
+        Walt.id and every other OID4VCI-conformant wallet use the normal ``/org/{id}`` path.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+
+        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
+        credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
+        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
+        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
+
+        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _binding = ["did:key", "jwk"]
+        _signing_algs = ["ES256", "EdDSA"]
+
+        repo = get_repo()
+        known_types = await repo.get_credential_types_for_org(org_id)
+
+        credential_configurations: dict = {}
+        for ctype in known_types:
+            # JWT-VC (Walt.id-style CoreProfilesCredentialConfiguration parses this fine)
+            credential_configurations[ctype] = {
+                "format": "jwt_vc_json",
+                "scope": ctype,
+                "cryptographic_binding_methods_supported": _binding,
+                "credential_signing_alg_values_supported": _signing_algs,
+                "proof_types_supported": _proof_types,
+                "credential_definition": {"type": ["VerifiableCredential"]},
+                "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+            }
+            # spruce-vc+sd-jwt: matches vc_sd_jwt::CredentialConfiguration in oid4vci-rs @ e97b01e.
+            # The `vct` field is REQUIRED (no serde default) and `format` MUST be "spruce-vc+sd-jwt".
+            credential_configurations[f"{ctype}#spruce-sd-jwt"] = {
+                "format": "spruce-vc+sd-jwt",
+                "vct": f"https://marty.example/credentials/{ctype}",
+                "scope": ctype,
+                "cryptographic_binding_methods_supported": _binding,
+                "credential_signing_alg_values_supported": _signing_algs,
+                "proof_types_supported": _proof_types,
+                "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+            }
+
+        if "default" not in credential_configurations:
+            credential_configurations["default"] = {
+                "format": "jwt_vc_json",
+                "scope": "default",
+                "cryptographic_binding_methods_supported": _binding,
+                "credential_signing_alg_values_supported": _signing_algs,
+                "proof_types_supported": _proof_types,
+                "credential_definition": {"type": ["VerifiableCredential"]},
+                "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
+            }
+
+        nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
+
+        return {
+            "credential_issuer": issuer_url,
+            "authorization_endpoint": authorization_endpoint,
+            "credential_endpoint": credential_endpoint,
+            "token_endpoint": token_endpoint,
+            "nonce_endpoint": nonce_endpoint,
+            "credential_configurations_supported": credential_configurations,
+        }
+
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}")
     async def get_org_issuer_metadata(org_id: str) -> dict:
         """Return per-org OID4VCI v1 issuer metadata (dynamic, org-scoped).

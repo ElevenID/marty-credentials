@@ -1,6 +1,4 @@
 use base64::Engine;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // Error module (only for python - has tracing dependencies)
 #[cfg(feature = "python")]
@@ -18,6 +16,10 @@ pub mod mdoc;
 #[cfg(feature = "python")]
 mod sd_jwt;
 
+// OID4VCI/OID4VP protocol engine bindings (only for python)
+#[cfg(feature = "python")]
+mod oid4vci;
+
 // WASM module (only compiled with wasm feature)
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -32,37 +34,6 @@ pub use marty_verification::{
     Jurisdiction, MdlVerificationResult, SignatureStatus, TrustAnchor, TrustPurpose, TrustRegistry,
 };
 
-/// High-level OID4VCI credential types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialSubject {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(flatten)]
-    pub claims: HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VerifiableCredentialData {
-    #[serde(rename = "@context")]
-    pub context: Vec<String>,
-    pub id: String,
-    #[serde(rename = "type")]
-    pub types: Vec<String>,
-    pub issuer: String,
-    #[serde(rename = "issuanceDate")]
-    pub issuance_date: String,
-    #[serde(rename = "expirationDate", skip_serializing_if = "Option::is_none")]
-    pub expiration_date: Option<String>,
-    #[serde(rename = "credentialSubject")]
-    pub credential_subject: CredentialSubject,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialOffer {
-    pub credential_issuer: String,
-    pub credential_configuration_ids: Vec<String>,
-    pub grants: HashMap<String, serde_json::Value>,
-}
 
 // =============================================================================
 // Python bindings (only compiled with python feature)
@@ -273,158 +244,6 @@ mod python_bindings {
         Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature))
     }
 
-    /// Creates a verifiable credential and signs it as a JWT
-    #[pyfunction]
-    #[pyo3(signature = (issuer_did, issuer_jwk_json, subject_id, credential_type, claims_json, expiration_seconds=None))]
-    pub fn create_verifiable_credential(
-        issuer_did: String,
-        issuer_jwk_json: String,
-        subject_id: Option<String>,
-        credential_type: String,
-        claims_json: String,
-        expiration_seconds: Option<i64>,
-    ) -> PyResult<(String, String)> {
-        use chrono::{Duration, Utc};
-
-        let jwk: JWK = serde_json::from_str(&issuer_jwk_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JWK: {}", e))
-        })?;
-
-        let claims: HashMap<String, serde_json::Value> = serde_json::from_str(&claims_json)
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Invalid claims JSON: {}",
-                    e
-                ))
-            })?;
-
-        let credential_id = format!("urn:uuid:{}", uuid::Uuid::new_v4());
-        let now = Utc::now();
-        let issuance_date = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-
-        let expiration_date = expiration_seconds.map(|secs| {
-            (now + Duration::seconds(secs))
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string()
-        });
-
-        let vc_data = VerifiableCredentialData {
-            context: vec![
-                "https://www.w3.org/2018/credentials/v1".to_string(),
-                "https://www.w3.org/2018/credentials/examples/v1".to_string(),
-            ],
-            id: credential_id.clone(),
-            types: vec!["VerifiableCredential".to_string(), credential_type],
-            issuer: issuer_did.clone(),
-            issuance_date,
-            expiration_date,
-            credential_subject: CredentialSubject {
-                id: subject_id,
-                claims,
-            },
-        };
-
-        let mut payload = serde_json::json!({
-            "iss": issuer_did,
-            "iat": now.timestamp(),
-            "vc": vc_data,
-        });
-
-        if let Some(exp_secs) = expiration_seconds {
-            payload["exp"] = serde_json::json!(now.timestamp() + exp_secs);
-        }
-
-        let (_, alg_str) = get_algorithm_for_jwk(&jwk)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
-
-        let header = serde_json::json!({ "alg": alg_str, "typ": "JWT" });
-
-        let header_str = serde_json::to_string(&header).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to serialize header: {}",
-                e
-            ))
-        })?;
-        let payload_str = serde_json::to_string(&payload).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to serialize payload: {}",
-                e
-            ))
-        })?;
-
-        let header_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_str.as_bytes());
-        let payload_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_str.as_bytes());
-
-        let message = format!("{}.{}", header_b64, payload_b64);
-        let signature = sign_message(&jwk, message.as_bytes())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
-
-        let jwt = format!("{}.{}", message, signature);
-        Ok((jwt, credential_id))
-    }
-
-    /// Creates an OID4VCI credential offer
-    #[pyfunction]
-    #[pyo3(signature = (issuer_url, credential_types, pre_authorized_code=None, user_pin_required=false))]
-    pub fn create_credential_offer(
-        issuer_url: String,
-        credential_types: Vec<String>,
-        pre_authorized_code: Option<String>,
-        user_pin_required: bool,
-    ) -> PyResult<String> {
-        let mut grants = HashMap::new();
-
-        if let Some(code) = pre_authorized_code {
-            let mut pre_auth_grant = HashMap::new();
-            pre_auth_grant.insert("pre-authorized_code".to_string(), serde_json::json!(code));
-            pre_auth_grant.insert(
-                "user_pin_required".to_string(),
-                serde_json::json!(user_pin_required),
-            );
-            grants.insert(
-                "urn:ietf:params:oauth:grant-type:pre-authorized_code".to_string(),
-                serde_json::json!(pre_auth_grant),
-            );
-        } else {
-            grants.insert(
-                "authorization_code".to_string(),
-                serde_json::json!({
-                    "issuer_state": uuid::Uuid::new_v4().to_string()
-                }),
-            );
-        }
-
-        let offer = CredentialOffer {
-            credential_issuer: issuer_url,
-            credential_configuration_ids: credential_types,
-            grants,
-        };
-
-        serde_json::to_string(&offer)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-    }
-
-    /// Generates a credential offer URI for QR code display
-    #[pyfunction]
-    pub fn generate_offer_uri(
-        issuer_url: String,
-        offer_id: String,
-        format: String,
-    ) -> PyResult<String> {
-        match format.as_str() {
-            "microsoft" => Ok(format!(
-                "openid-vc://?request_uri={}/issuance-requests/{}",
-                issuer_url, offer_id
-            )),
-            _ => Ok(format!(
-                "openid-credential-offer://?credential_offer_uri={}/offers/{}",
-                issuer_url, offer_id
-            )),
-        }
-    }
-
     /// Creates a verifiable presentation from credentials
     #[pyfunction]
     #[pyo3(signature = (holder_did, holder_jwk_json, credential_jwts, audience, nonce=None))]
@@ -560,62 +379,6 @@ mod python_bindings {
         Ok((true, payload_json, "".to_string()))
     }
 
-    /// Generates issuer metadata for OID4VCI discovery
-    #[pyfunction]
-    pub fn generate_issuer_metadata(
-        issuer_url: String,
-        issuer_name: String,
-        credential_types_json: String,
-    ) -> PyResult<String> {
-        let credential_types: Vec<serde_json::Value> = serde_json::from_str(&credential_types_json)
-            .map_err(|e| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JSON: {}", e))
-            })?;
-
-        let mut credential_configurations = serde_json::Map::new();
-
-        for cred_type in credential_types {
-            let type_id = cred_type
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("default");
-            let type_name = cred_type
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or(type_id);
-            let format = cred_type
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("jwt_vc_json");
-
-            credential_configurations.insert(type_id.to_string(), serde_json::json!({
-            "format": format,
-            "scope": type_id,
-            "cryptographic_binding_methods_supported": ["did:key", "did:jwk"],
-            "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
-            "proof_types_supported": { "jwt": { "proof_signing_alg_values_supported": ["ES256", "EdDSA"] } },
-            "credential_definition": { "type": ["VerifiableCredential", type_name] },
-            "display": [{ "name": type_name, "locale": "en-US" }]
-        }));
-        }
-
-        let metadata = serde_json::json!({
-            "credential_issuer": issuer_url,
-            "credential_endpoint": format!("{}/credential", issuer_url),
-            "token_endpoint": format!("{}/token", issuer_url),
-            "authorization_endpoint": format!("{}/authorize", issuer_url),
-            "credential_configurations_supported": credential_configurations,
-            "display": [{ "name": issuer_name, "locale": "en-US" }]
-        });
-
-        serde_json::to_string(&metadata)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-    }
-
-    // SD-JWT support is planned but requires proper integration with jsonwebtoken EncodingKey
-    // For now, use standard JWT signing through create_verifiable_credential
-    // TODO: Implement create_sd_jwt when proper JWK to EncodingKey conversion is available
-
     #[pymodule]
     pub fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // Initialize tracing for structured logging
@@ -628,12 +391,8 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
         m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
         m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
-        m.add_function(wrap_pyfunction!(create_verifiable_credential, m)?)?;
-        m.add_function(wrap_pyfunction!(create_credential_offer, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_offer_uri, m)?)?;
         m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
         m.add_function(wrap_pyfunction!(verify_jwt, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_issuer_metadata, m)?)?;
 
         // Status list classes and functions for credential revocation
         crate::status_list::register_status_list_module(m)?;
@@ -643,6 +402,9 @@ mod python_bindings {
 
         // SD-JWT classes and functions for Selective Disclosure JWT
         crate::sd_jwt::register_sd_jwt_module(m)?;
+
+        // OID4VCI/OID4VP protocol engine (from marty-oid4vci)
+        crate::oid4vci::register_oid4vci_module(m)?;
 
         // Note: marty-verification functions are now available in the separate
         // marty-verification-py package. Install both packages to access all functionality.

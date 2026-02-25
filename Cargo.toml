@@ -14,6 +14,7 @@ repository = "https://github.com/adamburdett/marty-credentials"
 marty-crypto = { path = "../marty-core/marty-crypto" }
 marty-verification = { path = "../marty-core/marty-verification" }
 marty-secure-storage = { path = "../marty-core/marty-secure-storage" }
+marty-oid4vci = { path = "../marty-core/marty-oid4vci" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }

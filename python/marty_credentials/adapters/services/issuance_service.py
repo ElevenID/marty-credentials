@@ -171,32 +171,29 @@ class IssuanceService:
         claims: Dict[str, Any],
         expiry_hours: int = 24
     ) -> Dict[str, Any]:
-        """Issue a W3C Verifiable Credential"""
+        """Issue a W3C Verifiable Credential using the v2 engine."""
         start_time = time.time()
         
         # Generate issuer keys
         private_jwk, public_jwk = self._generate_keys()
         
-        # Use Rust binding to create VC
-        # Note: create_verifiable_credential returns (jwt_token, credential_id)
-        vc_result = _marty_rs.create_verifiable_credential(
+        # Use v2 engine to create VC — supports all formats via a single entry point
+        credential_str, credential_id = _marty_rs.create_verifiable_credential(
             issuer_did=issuer_did,
             issuer_jwk_json=private_jwk,
             subject_id=subject_did,
             credential_type=credential_type,
             claims_json=json.dumps(claims),
-            expiration_seconds=expiry_hours * 3600  # Convert hours to seconds
+            format="jwt_vc_json",
+            expiration_seconds=expiry_hours * 3600,
         )
         
-        # Result is a tuple: (jwt_token, credential_id)
-        jwt_token, credential_id = vc_result
+        jwt_token = credential_str
         
         # Parse the JWT to extract the VC structure (for response)
-        # JWT format is: header.payload.signature
         import base64
         parts = jwt_token.split('.')
         if len(parts) == 3:
-            # Decode payload (add padding if needed)
             payload_b64 = parts[1]
             padding = 4 - len(payload_b64) % 4
             if padding != 4:
@@ -205,7 +202,6 @@ class IssuanceService:
             payload = json.loads(payload_json)
             vc = payload.get('vc', {})
         else:
-            # Fallback if JWT parsing fails
             vc = {
                 "id": credential_id,
                 "type": ["VerifiableCredential", credential_type],
@@ -257,36 +253,25 @@ class IssuanceService:
         selective_fields: Optional[List[str]] = None,
         expiry_hours: int = 24
     ) -> Dict[str, Any]:
-        """Issue an SD-JWT with selective disclosure"""
+        """Issue an SD-JWT with selective disclosure using the v2 engine."""
         # Generate issuer keys
         private_key_jwk, public_key = self._generate_keys()
         
-        # Convert JWK to PEM
-        private_key_pem = self._jwk_to_pem(private_key_jwk)
-        
         # Use selective_fields to determine which claims to make selectively disclosable
         if selective_fields is None:
-            # By default, make all claims except 'sub' and 'iss' selectively disclosable
             selective_fields = [k for k in claims.keys() if k not in ['sub', 'iss']]
         
-        # Create SD-JWT builder with issuer
-        builder = _marty_rs.SdJwtBuilder(issuer_did)
-        
-        # Set subject
-        builder.set_subject(subject_did)
-        
-        # Set expiration
-        builder.set_expiration(expiry_hours * 3600)  # Convert hours to seconds
-        
-        # Add claims with selective disclosure
-        for key, value in claims.items():
-            if key in selective_fields:
-                builder.add_disclosable_claim(key, value)
-            else:
-                builder.add_claim(key, value)
-        
-        # Build the SD-JWT with signing
-        sd_jwt_result = builder.build(private_key_pem)
+        # Use v2 engine to create SD-JWT
+        sd_jwt_result, credential_id = _marty_rs.create_verifiable_credential(
+            issuer_did=issuer_did,
+            issuer_jwk_json=private_key_jwk,
+            subject_id=subject_did,
+            credential_type="VerifiableCredential",
+            claims_json=json.dumps(claims),
+            format="vc+sd-jwt",
+            expiration_seconds=expiry_hours * 3600,
+            selective_disclosure_claims=selective_fields,
+        )
         
         # Store in database
         holder = self._find_or_create_holder(subject_did)
@@ -306,7 +291,8 @@ class IssuanceService:
         self.db.add(credential)
         self.db.commit()
         
-        # Derive public key PEM from private key for verification (avoids JWK PEM format issues)
+        # Derive public key PEM from JWK for verification
+        private_key_pem = self._jwk_to_pem(private_key_jwk)
         public_key_pem = self._private_pem_to_public_pem(private_key_pem)
         
         return {
@@ -325,65 +311,45 @@ class IssuanceService:
         namespaces: Dict[str, Dict[str, Any]],
         expiry_hours: int = 24 * 365  # mDocs typically valid for 1 year
     ) -> Dict[str, Any]:
-        """Issue an mDoc (ISO 18013-5 Mobile Document)"""
+        """Issue an mDoc (ISO 18013-5 Mobile Document) using the v2 engine."""
         # Generate issuer keys
         private_key_jwk, public_key = self._generate_keys()
         
-        # Convert JWK to PEM
-        private_key_pem = self._jwk_to_pem(private_key_jwk)
+        # Flatten namespaces into a single claims dict for the v2 engine
+        flat_claims: Dict[str, Any] = {}
+        for ns, ns_claims in namespaces.items():
+            for key, value in ns_claims.items():
+                flat_claims[f"{ns}.{key}"] = value
         
-        # Calculate validity period (RFC3339 with Z)
-        from datetime import timezone
-        valid_from = datetime.utcnow().replace(tzinfo=timezone.utc)
-        valid_until = valid_from + timedelta(hours=expiry_hours)
-        signed = valid_from
+        # Default namespace
+        namespace = next(iter(namespaces.keys()), f"{doc_type}")
         
-        # Convert PEM key to DER format
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.backends import default_backend
-        key_obj = serialization.load_pem_private_key(
-            private_key_pem.encode(), password=None, backend=default_backend()
-        )
-        signing_key_der = key_obj.private_bytes(
-            encoding=serialization.Encoding.DER,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
-        
-        # Create mDoc using Rust binding with correct parameters
-        mdoc_cbor_bytes = _marty_rs.create_mdoc(
-            doc_type=doc_type,
-            namespaces=namespaces,  # Pass dict directly, not JSON string
-            validity={
-                "signed": signed.isoformat().replace("+00:00", "Z"),
-                "valid_from": valid_from.isoformat().replace("+00:00", "Z"),
-                "valid_until": valid_until.isoformat().replace("+00:00", "Z")
-            },
-            signing_key_der=list(signing_key_der),  # Convert bytes to list
-            device_key_der=None,
-            digest_algorithm=None  # Use default
+        # Use v2 engine to create mDoc
+        mdoc_result_str, credential_id = _marty_rs.create_verifiable_credential(
+            issuer_did=issuer_did,
+            issuer_jwk_json=private_key_jwk,
+            subject_id=subject_did,
+            credential_type=doc_type,
+            claims_json=json.dumps(flat_claims),
+            format="mso_mdoc",
+            expiration_seconds=expiry_hours * 3600,
+            mdoc_namespace=namespace,
+            mdoc_doctype=doc_type,
         )
         
-        # The Rust function returns raw CBOR bytes
-        # Wrap in dict with cbor_base64 for consistent handling
-        import base64
+        # Wrap in dict for consistent handling
         mdoc_result = {
-            "cbor_base64": base64.b64encode(bytes(mdoc_cbor_bytes)).decode('utf-8'),
+            "cbor_base64": mdoc_result_str,
             "doc_type": doc_type,
             "format": "mdoc"
         }
-        
-        # Store as JSON to preserve the structure
         mdoc_stored = json.dumps(mdoc_result)
         
         # Store in database
         holder = self._find_or_create_holder(subject_did)
         
-        # Flatten namespaces for claims storage
-        flat_claims = {}
-        for ns, ns_claims in namespaces.items():
-            for key, value in ns_claims.items():
-                flat_claims[f"{ns}.{key}"] = value
+        from datetime import timezone
+        valid_until = datetime.utcnow().replace(tzinfo=timezone.utc) + timedelta(hours=expiry_hours)
         
         credential = Credential(
             type=CredentialType.MDOC,
