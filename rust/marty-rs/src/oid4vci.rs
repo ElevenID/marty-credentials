@@ -12,7 +12,7 @@ use marty_oid4vci::issuer::IssuanceEngine;
 use marty_oid4vci::metadata;
 use marty_oid4vci::types::{
     CredentialClaims, CredentialFormat, CredentialTypeConfig, ClaimDefinition,
-    IssuerConfig, IssuerKey, OfferConfig, SigningAlgorithm,
+    IssuerConfig, IssuerKey, OfferConfig, SigningAlgorithm, ZkPredicateBinding,
 };
 use marty_oid4vci::verifier::VerificationEngine;
 
@@ -75,6 +75,11 @@ pub fn create_verifiable_credential(
         algorithm,
     };
 
+    let zk_predicate_bindings = normalize_zk_predicate_claims(
+        &claims,
+        zk_predicate_claims.unwrap_or_default(),
+    );
+
     let cred_claims = CredentialClaims {
         subject_id,
         credential_type,
@@ -83,7 +88,7 @@ pub fn create_verifiable_credential(
         selective_disclosure_claims: selective_disclosure_claims.unwrap_or_default(),
         mdoc_namespace,
         mdoc_doctype,
-        zk_predicate_claims: zk_predicate_claims.unwrap_or_default(),
+        zk_predicate_claims: zk_predicate_bindings,
         credential_payload_format: Default::default(),
         w3c_context: vec![],
         w3c_types: vec![],
@@ -104,6 +109,82 @@ pub fn create_verifiable_credential(
     };
 
     Ok((credential_str, signed.credential_id().to_string()))
+}
+
+/// Normalize legacy Python input (`List[str]`) into typed ZK predicate bindings.
+///
+/// Backward-compatible input shapes:
+/// - ["birth_date", "age_over_18", "age_over_21"]
+/// - ["age_over_18", "age_over_21"] (binds to `birth_date` when present)
+/// - ["{\"claim_name\":\"birth_date\",\"supported_predicates\":[\"age_over_18\"]}"]
+fn normalize_zk_predicate_claims(
+    claims: &HashMap<String, serde_json::Value>,
+    raw: Vec<String>,
+) -> Vec<ZkPredicateBinding> {
+    if raw.is_empty() {
+        return vec![];
+    }
+
+    // New-style payload tunneled through the legacy List[str] API: each item is
+    // a JSON-encoded ZkPredicateBinding.
+    let mut json_bindings: Vec<ZkPredicateBinding> = Vec::new();
+    let mut all_json_bindings = true;
+    for item in &raw {
+        match serde_json::from_str::<ZkPredicateBinding>(item) {
+            Ok(binding) if !binding.claim_name.is_empty() && !binding.supported_predicates.is_empty() => {
+                json_bindings.push(binding);
+            }
+            _ => {
+                all_json_bindings = false;
+                break;
+            }
+        }
+    }
+    if all_json_bindings {
+        return json_bindings;
+    }
+
+    // Legacy mixed form: claim names + predicate names in one list.
+    let mut claim_names: Vec<String> = Vec::new();
+    let mut predicates: Vec<String> = Vec::new();
+
+    for item in &raw {
+        if claims.contains_key(item) {
+            claim_names.push(item.clone());
+        } else {
+            predicates.push(item.clone());
+        }
+    }
+
+    // If explicit claim names were provided, apply predicates to each claim.
+    if !claim_names.is_empty() {
+        let fallback_predicates = if predicates.is_empty() {
+            claim_names.clone()
+        } else {
+            predicates.clone()
+        };
+
+        return claim_names
+            .into_iter()
+            .map(|claim_name| ZkPredicateBinding::multi(claim_name, fallback_predicates.clone()))
+            .collect();
+    }
+
+    // Predicate-only legacy form: prefer birth_date for backward compatibility,
+    // otherwise bind to the first available claim when possible.
+    if !predicates.is_empty() {
+        if claims.contains_key("birth_date") {
+            return vec![ZkPredicateBinding::multi("birth_date", predicates)];
+        }
+        if let Some(first_claim_name) = claims.keys().next() {
+            return vec![ZkPredicateBinding::multi(first_claim_name.clone(), predicates)];
+        }
+    }
+
+    // Last-resort passthrough: maintain one-to-one mapping.
+    raw.into_iter()
+        .map(|name| ZkPredicateBinding::single(name.clone(), name))
+        .collect()
 }
 
 // ── Credential Offer ─────────────────────────────────────────────────

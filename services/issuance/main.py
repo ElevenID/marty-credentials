@@ -172,38 +172,24 @@ def create_app() -> FastAPI:
 
         credential_configurations: dict = {}
         for ctype in known_types:
-            # JWT-VC (Walt.id-style CoreProfilesCredentialConfiguration parses this fine)
-            credential_configurations[ctype] = {
-                "format": "jwt_vc_json",
-                "scope": ctype,
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _proof_types,
-                "credential_definition": {"type": ["VerifiableCredential"]},
-                "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
-            }
-            # spruce-vc+sd-jwt: matches vc_sd_jwt::CredentialConfiguration in oid4vci-rs @ e97b01e.
-            # The `vct` field is REQUIRED (no serde default) and `format` MUST be "spruce-vc+sd-jwt".
-            credential_configurations[f"{ctype}#spruce-sd-jwt"] = {
-                "format": "spruce-vc+sd-jwt",
-                "vct": f"https://marty.example/credentials/{ctype}",
-                "scope": ctype,
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _proof_types,
-                "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
-            }
-
-        if "default" not in credential_configurations:
-            credential_configurations["default"] = {
-                "format": "jwt_vc_json",
-                "scope": "default",
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _proof_types,
-                "credential_definition": {"type": ["VerifiableCredential"]},
-                "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
-            }
+            if ctype.startswith("org.iso.18013"):
+                # ISO 18013-5 mDoc — SpruceKit's ProfilesCredentialConfiguration supports
+                # mso_mdoc natively. Only emit the mso_mdoc entry; jwt_vc_json and
+                # spruce-vc+sd-jwt entries for other types cause the SpruceID SDK's
+                # untagged-enum deserialisation to fail for the whole metadata document.
+                credential_configurations[f"{ctype}#mdoc"] = {
+                    "format": "mso_mdoc",
+                    "doctype": ctype,
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                }
+            # Non-ISO types are intentionally omitted from the /spruce endpoint.
+            # SpruceKit is used exclusively for mso_mdoc issuance; any jwt_vc_json or
+            # spruce-vc+sd-jwt entry that does not match ProfilesCredentialConfiguration
+            # causes the entire metadata fetch to fail in the SpruceID Rust SDK.
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
 
@@ -256,20 +242,33 @@ def create_app() -> FastAPI:
                 # OID4VCI §11.2.3 — display is at the top level of the config object
                 "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
             }
-            # SD-JWT: use standard "vc+sd-jwt" (RFC 9596 §3.1) for all wallets.
-            # Both Walt.id and the Marty native wallet handle this format.
-            # NOTE: do NOT emit a "spruce-vc+sd-jwt" entry — Walt.id's
-            # CredentialFormatSerializer rejects any unknown format string in
-            # the entire metadata document, causing a 400 on all requests.
-            credential_configurations[f"{ctype}#sd-jwt"] = {
-                "format": "vc+sd-jwt",
-                "vct": f"https://marty.example/credentials/{ctype}",
-                "scope": ctype,
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _proof_types,
-                "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
-            }
+            if ctype.startswith("org.iso.18013"):
+                # ISO 18013-5 mDoc — emit mso_mdoc format entry.
+                # All OID4VCI-conformant wallets (including SpruceKit) use this entry.
+                credential_configurations[f"{ctype}#mdoc"] = {
+                    "format": "mso_mdoc",
+                    "doctype": ctype,
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                }
+            else:
+                # SD-JWT: use standard "vc+sd-jwt" (RFC 9596 §3.1) for all wallets.
+                # Both Walt.id and the Marty native wallet handle this format.
+                # NOTE: do NOT emit a "spruce-vc+sd-jwt" entry — Walt.id's
+                # CredentialFormatSerializer rejects any unknown format string in
+                # the entire metadata document, causing a 400 on all requests.
+                credential_configurations[f"{ctype}#sd-jwt"] = {
+                    "format": "vc+sd-jwt",
+                    "vct": f"https://marty.example/credentials/{ctype}",
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                }
 
         # Always include a generic "default" entry so that offer fallbacks work too.
         if "default" not in credential_configurations:
@@ -330,6 +329,34 @@ def create_app() -> FastAPI:
     # metadata the Credential Issuer itself acts as the AS and wallets
     # discover its metadata via the oauth-authorization-server well-known.
     # ------------------------------------------------------------------
+
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
+    async def get_org_spruce_as_metadata(org_id: str) -> dict:
+        """Per-org OAuth 2.0 AS metadata for SpruceID SDK (RFC 8414).
+
+        SpruceID's oid4vci-rs derives the AS metadata URL from the
+        ``credential_issuer`` field of the issuer metadata.  When
+        ``credential_issuer = https://host/org/{id}/spruce`` the SDK fetches:
+            /org/{id}/spruce/.well-known/oauth-authorization-server
+        nginx rewrites that to:
+            /.well-known/oauth-authorization-server/org/{id}/spruce
+        The ``issuer`` value MUST match ``credential_issuer`` exactly.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
+        return {
+            "issuer": issuer_url,
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "token_endpoint_auth_methods_supported": ["none"],
+            "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                "authorization_code",
+            ],
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "pre-authorized_grant_anonymous_access_supported": True,
+        }
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}")
     async def get_org_as_metadata(org_id: str) -> dict:

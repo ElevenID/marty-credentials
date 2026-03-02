@@ -81,7 +81,12 @@ class TokenResponse(BaseModel):
     # SpruceID kit wallet reads the legacy "nonce" field instead.
     # Emit both with the same value so all clients are satisfied.
     c_nonce: str
-    c_nonce_expires_in: int = 300
+    # c_nonce_expires_in intentionally omitted: the SpruceID mobile-sdk-rs
+    # ExtraResponseTokenFields has `c_nonce_expires_in: Option<Duration>` which
+    # uses serde's native Duration format `{"secs":N,"nanos":N}` — NOT a plain
+    # integer.  Sending `300` causes a deserialization error that manifests as
+    # "HTTP request error: failed to exchange code".  The field is Optional so
+    # absent == None == accepted by all clients (SpruceKit, Walt.id, etc.).
     nonce: str          # alias for c_nonce — SpruceID kit compatibility
 
 
@@ -260,6 +265,7 @@ async def initiate_issuance(
 
     # Resolve credential type from template — treat 4xx as hard failures.
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
+    credential_vct: str | None = None
     zk_predicate_claims: list[str] = []
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     wallet_configs: list[dict] = []
@@ -275,7 +281,14 @@ async def initiate_issuance(
                 response.raise_for_status()
                 template = response.json()
                 credential_type = template.get("credential_type", credential_type)
-                logger.info(f"Fetched credential type from template: {credential_type}")
+                # RFC 9596: vct MUST be a URI.  Prefer the template's explicit vct field;
+                # fall back to building a URI from the credential_type.
+                raw_vct = template.get("vct") or ""
+                credential_vct = (
+                    raw_vct if raw_vct.startswith("http")
+                    else f"https://marty.example/credentials/{credential_type}"
+                )
+                logger.info(f"Fetched credential type from template: {credential_type} vct={credential_vct}")
                 zk_predicate_claims = template.get("zk_predicate_claims") or []
                 credential_payload_format = template.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
                 wallet_configs = template.get("wallet_configs") or []
@@ -283,7 +296,15 @@ async def initiate_issuance(
             raise  # Hard fail — propagate to caller
         except Exception as e:
             logger.warning(f"Could not fetch credential template {request.credential_template_id} (using default type): {e}")
-    
+
+    # Derive vct fallback if not already resolved
+    if not credential_vct:
+        credential_vct = f"https://marty.example/credentials/{credential_type}"
+
+    # Store vct in claims under a reserved key so the credential endpoint can
+    # use it at signing time without a second template lookup.
+    merged_claims = {**request.claims, "_vct": credential_vct}
+
     # DB column is NOT NULL; when callers omit template id, persist a stable fallback.
     effective_credential_template_id = request.credential_template_id or "default"
 
@@ -292,7 +313,7 @@ async def initiate_issuance(
         credential_template_id=effective_credential_template_id,
         applicant_id=request.applicant_id,
         subject_did=request.subject_did,
-        claims=request.claims,
+        claims=merged_claims,
         credential_type=credential_type,
         zk_predicate_claims=zk_predicate_claims,
         credential_payload_format=credential_payload_format,
@@ -314,17 +335,22 @@ async def initiate_issuance(
         - SpruceID mobile SDK (``variant == "spruce-vc+sd-jwt"``): ``{base}#spruce-sd-jwt``
           which maps to the ``spruce-vc+sd-jwt`` entry in the ``/org/{id}/spruce``
           metadata document.
+        - ISO 18013-5 mDoc (``variant == "mso_mdoc"``): ``{base}#mdoc``
+          which maps to the ``mso_mdoc`` entry in the standard issuer metadata.
         """
         if base == "default":
             return base
         if variant == "spruce-vc+sd-jwt":
             return f"{base}#spruce-sd-jwt"
+        if variant == "mso_mdoc":
+            return f"{base}#mdoc"
         return f"{base}#sd-jwt"
 
     # Default offer uses the standard vc+sd-jwt config (works with Walt.id and
-    # most OID4VCI-compliant wallets).  The base credential_type is preserved in
-    # the transaction so signing picks up the correct payload format.
-    default_config_id = _config_id_for_format_variant(credential_config_id, None)
+    # most OID4VCI-compliant wallets).  For mso_mdoc templates, use the #mdoc
+    # config id so the default offer also resolves to the correct metadata entry.
+    default_fmt_variant = "mso_mdoc" if credential_payload_format == "mso_mdoc" else None
+    default_config_id = _config_id_for_format_variant(credential_config_id, default_fmt_variant)
     offer_json_str = oid4vci_create_credential_offer(
         issuer_url=org_issuer_url(request.organization_id),
         credential_types=[default_config_id],
@@ -346,11 +372,12 @@ async def initiate_issuance(
         if wid:
             wallet_config_id = _config_id_for_format_variant(credential_config_id, fmt_variant)
             # SpruceID SDK requires a dedicated issuer URL whose metadata document
-            # emits only ``spruce-vc+sd-jwt`` entries.  All other wallets use the
-            # standard issuer URL with ``vc+sd-jwt`` format.
+            # only emits formats its ProfilesCredentialConfiguration enum can parse.
+            # This applies to both spruce-vc+sd-jwt AND mso_mdoc — any unrecognised
+            # entry in the standard metadata causes the whole fetch to fail.
             wallet_issuer_url = (
                 org_issuer_url_spruce(request.organization_id)
-                if fmt_variant == "spruce-vc+sd-jwt"
+                if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
                 else org_issuer_url(request.organization_id)
             )
             wallet_offer_json = oid4vci_create_credential_offer(
@@ -656,7 +683,8 @@ async def nonce_endpoint(
                 auth_session.nonce = new_nonce
                 await repo.save_authorization_session(auth_session)
 
-    return {"nonce": new_nonce, "nonce_expires_in": 300}
+    # OID4VCI v1 §7.2 uses "c_nonce"; include "nonce" alias for draft wallets
+    return {"c_nonce": new_nonce, "nonce": new_nonce, "c_nonce_expires_in": 300}
 
 
 @issuance_router.post("/credential", response_model=CredentialResponse)
@@ -771,6 +799,7 @@ async def issue_credential(
     # applicant service and must never appear as credential subject attributes.
     _INTERNAL_CLAIM_FIELDS = {
         "credential_offer_uri",
+        "credential_offer_uris",
         "offer_expires_at",
         "issuance_transaction_id",
         "issuance_fallback",
@@ -779,23 +808,42 @@ async def issue_credential(
         "rejection_reason",
         "review_notes",
         "info_requests",
+        # Applicant system fields — internal identifiers, not credential attributes
+        "applicant_id",
+        # Reserved internal key for the vct URI used at signing time
+        "_vct",
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
     logger.info(f"[credential] rid={rid} claims={list(clean_claims.keys())} subject={holder_did or tx.subject_did or 'none'}")
 
+    # Use the stored vct URI for the SD-JWT `vct` claim (RFC 9596 §3.1).
+    # This ensures the wallet sees a proper URI (e.g. https://marty.example/credentials/open_badge)
+    # rather than the raw abbreviated credential_type (e.g. "open_badge").
+    vct_for_signing = (
+        tx.claims.get("_vct")
+        or (f"https://marty.example/credentials/{credential_type}" if credential_type and not credential_type.startswith("http") else credential_type)
+    )
+
     # Get Rust bindings and create signed credential
+    # For mso_mdoc templates, force the signing format regardless of what the
+    # wallet sends in the credential request — ensures CBOR mdoc output.
+    credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+    signing_format = "mso_mdoc" if credential_payload_fmt == "mso_mdoc" else request.format
+    # For mdoc, credential_type is the doctype; Rust defaults to org.iso.18013.5.1.mDL
+    # when mdoc_doctype is None, so tx.credential_type is passed through directly.
+    signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
     try:
         jwt_credential, credential_id = create_verifiable_credential_wrapper(
             issuer_did=issuer_key["did"],
             issuer_jwk_json="",  # Not used - kept for API compatibility
             subject_id=holder_did or tx.subject_did,
-            credential_type=credential_type,
+            credential_type=signing_credential_type,
             claims_json=json.dumps(clean_claims),
             expiration_seconds=31536000,  # 1 year
             organization_id=tx.organization_id,
-            format=request.format,
+            format=signing_format,
             zk_predicate_claims=tx.zk_predicate_claims or [],
-            credential_payload_format=tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+            credential_payload_format=credential_payload_fmt,
         )
         
         # Only update state and emit event on first issuance; allow idempotent

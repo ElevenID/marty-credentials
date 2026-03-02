@@ -115,10 +115,12 @@ class IIssuanceRepository(ABC):
 
     @abstractmethod
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
-        """Return distinct non-null credential_type values for an organisation.
+        """Return credential_type values for an org's active credential templates.
 
-        Used to dynamically build ``credential_configurations_supported`` in the
-        per-org OID4VCI issuer metadata without querying an external service.
+        Used to build ``credential_configurations_supported`` in the per-org
+        OID4VCI issuer metadata.  Implementations must source this from the
+        credential templates configuration (not from historical issuance data)
+        so that metadata reflects current issuer capability.
         """
         pass
 

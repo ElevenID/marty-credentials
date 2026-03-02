@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select, and_, distinct
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from issuance.domain.entities import (
@@ -190,23 +190,27 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             return transactions
 
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
-        """Return distinct non-null credential_type values for an organisation.
+        """Return distinct credential_type values for an org's active templates.
 
-        Used to build ``credential_configurations_supported`` in the per-org
-        OID4VCI issuer metadata entirely from the local issuance DB — no
-        cross-service calls required.
+        Reads from ``credential_template_service.credential_templates`` (same
+        PostgreSQL instance, different schema) so that issuer metadata reflects
+        what the org is *configured* to issue — not historical issuance data.
+        This means new templates appear in metadata immediately after creation
+        and deactivated templates are removed without any delay.
         """
+        from sqlalchemy import text
         async with self._session_factory() as session:
-            stmt = (
-                select(distinct(issuance_transactions_table.c.credential_type))
-                .where(
-                    and_(
-                        issuance_transactions_table.c.organization_id == org_id,
-                        issuance_transactions_table.c.credential_type.isnot(None),
-                    )
-                )
+            stmt = text(
+                """
+                SELECT DISTINCT credential_type
+                FROM credential_template_service.credential_templates
+                WHERE organization_id = :org_id
+                  AND status = 'active'
+                  AND credential_type IS NOT NULL
+                ORDER BY credential_type
+                """
             )
-            result = await session.execute(stmt)
+            result = await session.execute(stmt, {"org_id": org_id})
             return [row[0] for row in result.all()]
 
     # Credential methods

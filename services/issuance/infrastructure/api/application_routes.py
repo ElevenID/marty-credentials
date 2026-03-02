@@ -477,6 +477,7 @@ class IssuanceOfferResponse(BaseModel):
     expires_at: str
     transaction_id: str
     status: str                 # active | expired
+    credential_offer_uris: dict[str, str] = {}  # wallet_id → deep-link URI
 
 
 def _build_offer_uri(
@@ -500,6 +501,52 @@ def _build_offer_uri(
         },
     }
     return f"openid-credential-offer://?credential_offer={quote(json.dumps(offer_data))}"
+
+
+def _build_wallet_offer_uris(
+    pre_auth_code: str,
+    org_id: str,
+    credential_type: str,
+    wallet_configs: list[dict],
+) -> dict[str, str]:
+    """Build per-wallet credential_offer_uris from a transaction's wallet_configs.
+
+    Mirrors the logic in routes.initiate_issuance so that GET endpoints return
+    the same correctly-keyed deep-link URIs as the POST that created the offer.
+    SpruceKit (mso_mdoc / spruce-vc+sd-jwt) gets the /spruce issuer URL so its
+    ProfilesCredentialConfiguration enum can parse the metadata without error.
+    """
+    from issuance.infrastructure.api.routes import org_issuer_url, org_issuer_url_spruce
+    from issuance.application.rust_integration import oid4vci_create_credential_offer
+    uris: dict[str, str] = {}
+    for wc in wallet_configs:
+        wid = wc.get("wallet_id", "")
+        scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
+        fmt_variant = wc.get("format_variant")
+        if not wid:
+            continue
+        # Select credential_configuration_id suffix for this format variant
+        if fmt_variant == "spruce-vc+sd-jwt":
+            config_id = f"{credential_type}#spruce-sd-jwt"
+        elif fmt_variant == "mso_mdoc":
+            config_id = f"{credential_type}#mdoc"
+        else:
+            config_id = credential_type
+        # SpruceKit requires the /spruce issuer URL to avoid metadata parse errors
+        issuer_url = (
+            org_issuer_url_spruce(org_id)
+            if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
+            else org_issuer_url(org_id)
+        )
+        offer_json = oid4vci_create_credential_offer(
+            issuer_url=issuer_url,
+            credential_types=[config_id],
+            pre_authorized_code=pre_auth_code,
+            user_pin_required=False,
+        )
+        sep = "&" if "?" in scheme else "?"
+        uris[wid] = f"{scheme}{sep}credential_offer={quote(offer_json)}"
+    return uris
 
 
 async def _fetch_wallets_for_template(credential_template_id: str | None) -> list[IssuanceOfferWallet]:
@@ -622,6 +669,14 @@ async def generate_issuance_offer(
         credential_config_id=credential_config_id,
     )
 
+    # Build per-wallet deep-link URIs (with correct issuer URL per wallet type)
+    credential_offer_uris = _build_wallet_offer_uris(
+        pre_auth_code=tx.pre_auth_code,
+        org_id=app.organization_id,
+        credential_type=tx.credential_type or "default",
+        wallet_configs=list(tx.wallet_configs or []),
+    )
+
     # Enrich with wallet deep links
     from urllib.parse import quote as url_quote
     raw_wallets = await _fetch_wallets_for_template(
@@ -665,6 +720,7 @@ async def generate_issuance_offer(
         expires_at=tx.expires_at.isoformat(),
         transaction_id=tx.id,
         status="expired" if tx.is_expired else "active",
+        credential_offer_uris=credential_offer_uris,
     )
 
 
@@ -713,6 +769,14 @@ async def get_issuance_offer(
         credential_config_id=credential_config_id,
     )
 
+    # Build per-wallet deep-link URIs (with correct issuer URL per wallet type)
+    credential_offer_uris = _build_wallet_offer_uris(
+        pre_auth_code=tx.pre_auth_code,
+        org_id=app.organization_id,
+        credential_type=tx.credential_type or "default",
+        wallet_configs=list(tx.wallet_configs or []),
+    )
+
     raw_wallets = await _fetch_wallets_for_template(
         template.credential_template_id if template else None
     )
@@ -753,6 +817,7 @@ async def get_issuance_offer(
         expires_at=tx.expires_at.isoformat(),
         transaction_id=tx.id,
         status="expired" if tx.is_expired else "active",
+        credential_offer_uris=credential_offer_uris,
     )
 
 
