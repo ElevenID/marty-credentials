@@ -67,46 +67,47 @@ class RustCredentialVerifier:
         expected_audience: str,
         expected_nonce: str | None = None
     ) -> dict[str, Any]:
-        """Verify a JWT Verifiable Presentation."""
+        """Verify a JWT Verifiable Presentation using the marty-oid4vci VerificationEngine.
+
+        Validates nonce, audience, expiration, and JWT signature via the Rust
+        `verify_vp_token_jwt` binding.  The holder's public key must be embedded
+        in the JWT header (`jwk`) or in the payload (`cnf.jwk`).
+        """
         try:
-            # TODO: Add JWT verification via Rust bindings
-            # For now, parse JWT payload
+            nonce = expected_nonce or ""
+            result_json = self.marty_rs.verify_vp_token_jwt(
+                verifier_id=expected_audience,
+                response_uri=expected_audience,  # response_uri not relevant for verification
+                vp_token=presentation_jwt,
+                expected_nonce=nonce,
+            )
+            result = json.loads(result_json)
+
+            if not result.get("valid"):
+                errors = result.get("errors", [])
+                error_msg = errors[0] if errors else "VP token verification failed"
+                return {"valid": False, "error": error_msg}
+
+            # Decode payload to extract VP claims for the caller
             import base64
             parts = presentation_jwt.split(".")
-            if len(parts) != 3:
-                return {"valid": False, "error": "Invalid JWT format"}
-            
-            # Decode payload (base64url)
-            payload_b64 = parts[1]
-            # Add padding if needed
+            payload_b64 = parts[1] if len(parts) == 3 else ""
             padding = 4 - len(payload_b64) % 4
             if padding != 4:
                 payload_b64 += "=" * padding
-            
-            payload_json = base64.urlsafe_b64decode(payload_b64).decode("utf-8")
-            payload = json.loads(payload_json)
-            
-            # Check audience
-            aud = payload.get("aud")
-            if aud != expected_audience:
-                return {"valid": False, "error": f"Audience mismatch: expected {expected_audience}, got {aud}"}
-            
-            # Check nonce if provided
-            if expected_nonce:
-                nonce = payload.get("nonce")
-                if nonce != expected_nonce:
-                    return {"valid": False, "error": "Nonce mismatch"}
-            
-            # Extract claims from VP
+            try:
+                payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+            except Exception:
+                payload = {}
+
             vp = payload.get("vp", {})
-            
             return {
                 "valid": True,
                 "claims": vp.get("verifiableCredential", []),
-                "holder": vp.get("holder"),
-                "method": "jwt_vp"
+                "holder": payload.get("iss") or vp.get("holder"),
+                "method": "jwt_vp",
             }
-            
+
         except Exception as e:
             logger.error(f"JWT VP verification failed: {e}")
             return {"valid": False, "error": str(e)}
@@ -117,37 +118,65 @@ class RustCredentialVerifier:
         presentation_definition: dict[str, Any],
         verifier_did: str
     ) -> dict[str, Any]:
-        """Verify a presentation against a presentation definition."""
+        """Verify a presentation against a presentation definition.
+
+        Verifies each credential in the presentation and then validates the
+        presentation against the definition's descriptor constraints via
+        the Rust `verify_presentation_structure` binding.
+        """
         try:
-            # Extract credentials from presentation
+            # ── Step 1: Verify each embedded credential ───────────────
             credentials = presentation.get("verifiableCredential", [])
             if not isinstance(credentials, list):
                 credentials = [credentials]
-            
-            # Verify each credential
-            all_valid = True
-            verified_creds = []
-            all_claims = {}
-            
+
+            verified_creds: list[dict[str, Any]] = []
+            all_claims: dict[str, Any] = {}
+
             for cred in credentials:
-                result = await self.verify_w3c_vc(cred, verifier_did)
-                if not result.get("valid"):
-                    all_valid = False
-                    return {"valid": False, "error": f"Credential verification failed: {result.get('error')}"}
-                
-                verified_creds.append(result)
-                if result.get("claims"):
-                    all_claims.update(result["claims"])
-            
-            # TODO: Check presentation definition constraints
-            
+                cred_result = await self.verify_w3c_vc(cred, verifier_did)
+                if not cred_result.get("valid"):
+                    return {
+                        "valid": False,
+                        "error": f"Credential verification failed: {cred_result.get('error')}",
+                    }
+                verified_creds.append(cred_result)
+                if cred_result.get("claims"):
+                    all_claims.update(cred_result["claims"])
+
+            # ── Step 2: Validate presentation_definition constraints ──
+            # Extract presentation_submission from the presentation if present
+            submission = presentation.get("presentation_submission")
+            if submission and presentation_definition:
+                try:
+                    structure_result_json = self.marty_rs.verify_presentation_structure(
+                        verifier_id=verifier_did,
+                        response_uri=verifier_did,
+                        definition_json=json.dumps(presentation_definition),
+                        submission_json=json.dumps(submission),
+                    )
+                    structure_result = json.loads(structure_result_json)
+                    if not structure_result.get("valid"):
+                        errors = structure_result.get("errors", [])
+                        descriptor_errors = [
+                            r.get("error")
+                            for r in structure_result.get("descriptor_results", [])
+                            if not r.get("valid") and r.get("error")
+                        ]
+                        all_errors = errors + descriptor_errors
+                        error_msg = "; ".join(all_errors) if all_errors else "Presentation structure invalid"
+                        return {"valid": False, "error": error_msg}
+                except Exception as e:
+                    logger.warning(f"Presentation structure check failed: {e}")
+                    # Non-fatal: fall through without structure validation
+
             return {
-                "valid": all_valid,
+                "valid": True,
                 "verified_claims": all_claims,
                 "credentials_verified": len(verified_creds),
-                "method": "presentation"
+                "method": "presentation",
             }
-            
+
         except Exception as e:
             logger.error(f"Presentation verification failed: {e}")
             return {"valid": False, "error": str(e)}

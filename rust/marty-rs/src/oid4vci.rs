@@ -503,6 +503,29 @@ fn detect_algorithm_from_jwk(jwk_json: &str) -> PyResult<SigningAlgorithm> {
     }
 }
 
+/// Verify a JWT VP token cryptographically.
+///
+/// Validates nonce, audience, expiration, and JWT signature.
+/// The holder's public key must be present in the JWT header (`jwk`)
+/// or in the payload (`cnf.jwk`).
+///
+/// `verifier_id` is the verifier's DID (used to validate the `aud` claim).
+/// `response_uri` is the verifier's response endpoint (used to construct the engine).
+///
+/// Returns JSON-encoded `VerificationResult`.
+#[pyfunction]
+pub fn verify_vp_token_jwt(
+    verifier_id: String,
+    response_uri: String,
+    vp_token: String,
+    expected_nonce: String,
+) -> PyResult<String> {
+    let engine = VerificationEngine::new(verifier_id, response_uri);
+    let result = engine.verify_vp_token(&vp_token, &expected_nonce);
+    serde_json::to_string(&result)
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+}
+
 /// Register OID4VCI/OID4VP functions as a sub-module.
 pub fn register_oid4vci_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     parent.add_function(pyo3::wrap_pyfunction!(create_verifiable_credential, parent)?)?;
@@ -512,5 +535,6 @@ pub fn register_oid4vci_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     parent.add_function(pyo3::wrap_pyfunction!(create_presentation_definition, parent)?)?;
     parent.add_function(pyo3::wrap_pyfunction!(create_zk_age_verification, parent)?)?;
     parent.add_function(pyo3::wrap_pyfunction!(verify_presentation_structure, parent)?)?;
+    parent.add_function(pyo3::wrap_pyfunction!(verify_vp_token_jwt, parent)?)?;
     Ok(())
 }

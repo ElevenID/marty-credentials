@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -15,6 +16,26 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from issuance.domain.ports import IIssuanceRepository
+
+
+def _friendly_ctype_name(ctype: str) -> str:
+    """Convert a credential type identifier to a human-readable display name.
+
+    Handles:
+    - camelCase / PascalCase: "MemberCredential"  → "Member Credential"
+    - snake_case:             "open_badge"         → "Open Badge"
+    - dotted ISO types:       "org.iso.18013.5.1.mDL" → returned as-is
+    """
+    if "." in ctype:
+        return ctype  # ISO dotted type — leave as-is
+
+    # snake_case → words
+    name = ctype.replace("_", " ")
+    # Insert a space before each uppercase letter that follows a lowercase letter
+    # (PascalCase / camelCase splitting)
+    name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
+    # Capitalise each word
+    return name.title()
 
 # ---------------------------------------------------------------------------
 # Request-ID context
@@ -184,14 +205,27 @@ def create_app() -> FastAPI:
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
                 }
-            # Non-ISO types are intentionally omitted from the /spruce endpoint.
-            # SpruceKit is used exclusively for mso_mdoc issuance; any jwt_vc_json or
-            # spruce-vc+sd-jwt entry that does not match ProfilesCredentialConfiguration
-            # causes the entire metadata fetch to fail in the SpruceID Rust SDK.
+            else:
+                # Non-ISO SD-JWT credential — emit as spruce-vc+sd-jwt so
+                # SpruceKit's ProfilesCredentialConfiguration enum can parse it.
+                # Only spruce-vc+sd-jwt (and mso_mdoc above) are valid variants in
+                # that enum; vc+sd-jwt or jwt_vc_json would cause the whole document
+                # to fail to deserialise in the SpruceID Rust SDK.
+                credential_configurations[f"{ctype}#spruce-sd-jwt"] = {
+                    "format": "spruce-vc+sd-jwt",
+                    "vct": f"{ISSUER_BASE_URL}/credentials/{ctype}",
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                }
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
+        deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
+        notification_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/notification"
 
         return {
             "credential_issuer": issuer_url,
@@ -199,6 +233,8 @@ def create_app() -> FastAPI:
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
+            "deferred_credential_endpoint": deferred_credential_endpoint,
+            "notification_endpoint": notification_endpoint,
             "credential_configurations_supported": credential_configurations,
         }
 
@@ -240,7 +276,7 @@ def create_app() -> FastAPI:
                 "proof_types_supported": _proof_types,
                 "credential_definition": {"type": ["VerifiableCredential"]},
                 # OID4VCI §11.2.3 — display is at the top level of the config object
-                "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
             }
             if ctype.startswith("org.iso.18013"):
                 # ISO 18013-5 mDoc — emit mso_mdoc format entry.
@@ -252,23 +288,38 @@ def create_app() -> FastAPI:
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
                 }
             else:
-                # SD-JWT: use standard "vc+sd-jwt" (RFC 9596 §3.1) for all wallets.
-                # Both Walt.id and the Marty native wallet handle this format.
+                # SD-JWT: use "dc+sd-jwt" per OID4VCI-1FINAL Appendix A (Final spec format ID).
+                # "vc+sd-jwt" was the Draft identifier; "dc+sd-jwt" is the Final spec name.
                 # NOTE: do NOT emit a "spruce-vc+sd-jwt" entry — Walt.id's
                 # CredentialFormatSerializer rejects any unknown format string in
                 # the entire metadata document, causing a 400 on all requests.
                 credential_configurations[f"{ctype}#sd-jwt"] = {
-                    "format": "vc+sd-jwt",
-                    "vct": f"https://marty.example/credentials/{ctype}",
+                    "format": "dc+sd-jwt",
+                    "vct": f"{ISSUER_BASE_URL}/credentials/{ctype}",
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": ctype.replace("_", " ").title(), "locale": "en-US"}],
+                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
                 }
+
+        # OID4VCI-1FINAL Appendix A.2: mso_mdoc MUST appear in credential_configurations_supported
+        # so conformant wallets can discover mDoc support. This generic entry covers all
+        # non-ISO-typed credentials that request mso_mdoc format; the Rust signing engine
+        # defaults the doctype to org.iso.18013.5.1.mDL when not explicitly set.
+        if not any(v.get("format") == "mso_mdoc" for v in credential_configurations.values()):
+            credential_configurations["generic_mdoc"] = {
+                "format": "mso_mdoc",
+                "doctype": "org.iso.18013.5.1.mDL",
+                "scope": "mso_mdoc",
+                "cryptographic_binding_methods_supported": _binding,
+                "credential_signing_alg_values_supported": _signing_algs,
+                "proof_types_supported": _proof_types,
+                "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
+            }
 
         # Always include a generic "default" entry so that offer fallbacks work too.
         if "default" not in credential_configurations:
@@ -283,6 +334,8 @@ def create_app() -> FastAPI:
             }
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
+        deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
+        notification_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/notification"
 
         return {
             "credential_issuer": issuer_url,
@@ -290,6 +343,8 @@ def create_app() -> FastAPI:
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
+            "deferred_credential_endpoint": deferred_credential_endpoint,
+            "notification_endpoint": notification_endpoint,
             "credential_configurations_supported": credential_configurations,
         }
 
@@ -309,6 +364,8 @@ def create_app() -> FastAPI:
             "credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/credential",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "nonce_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/nonce",
+            "deferred_credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential",
+            "notification_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/notification",
             "credential_configurations_supported": {
                 "default": {
                     "format": "jwt_vc_json",

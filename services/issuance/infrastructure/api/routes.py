@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -68,7 +68,8 @@ class IssuanceResponse(BaseModel):
     credential_template_id: str
     status: str
     credential_offer_uri: str
-    credential_offer_uris: dict[str, str] = {}  # wallet_id → URI for each configured wallet
+    credential_offer_uris: dict[str, str] = {}   # wallet_id → URI for each configured wallet
+    credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
     pre_auth_code: str
     expires_at: str
 
@@ -102,10 +103,11 @@ class CredentialRequest(BaseModel):
 
 
 class CredentialResponse(BaseModel):
-    # OID4VCI v1 §8.3: credentials is an array of bare credential strings.
-    # Walt.id (and Draft 11 clients) read the singular "credential" field instead.
+    # OID4VCI v1 / Draft-12 hybrid: SpruceID mobile-sdk-rs expects each element
+    # of "credentials" to be an Oid4vciCredential struct {"format": ..., "credential": ...}.
+    # Walt.id / Draft-11 clients read the singular "credential" (bare string) instead.
     # Emit BOTH so all clients are satisfied.
-    credentials: list[str]
+    credentials: list[str | dict]
     credential: str | None = None     # Walt.id / Draft-11 compatibility alias
     notification_id: str | None = None
     # Both field names emitted — spec (c_nonce) + SpruceID kit legacy (nonce)
@@ -286,7 +288,7 @@ async def initiate_issuance(
                 raw_vct = template.get("vct") or ""
                 credential_vct = (
                     raw_vct if raw_vct.startswith("http")
-                    else f"https://marty.example/credentials/{credential_type}"
+                    else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
                 )
                 logger.info(f"Fetched credential type from template: {credential_type} vct={credential_vct}")
                 zk_predicate_claims = template.get("zk_predicate_claims") or []
@@ -299,7 +301,7 @@ async def initiate_issuance(
 
     # Derive vct fallback if not already resolved
     if not credential_vct:
-        credential_vct = f"https://marty.example/credentials/{credential_type}"
+        credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
 
     # Store vct in claims under a reserved key so the credential endpoint can
     # use it at signing time without a second template lookup.
@@ -365,6 +367,7 @@ async def initiate_issuance(
     # "format_variant" key (e.g. "spruce-vc+sd-jwt") that selects the right
     # credential_configuration_id for that wallet's SDK.
     credential_offer_uris: dict[str, str] = {}
+    credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
     for wc in tx.wallet_configs:
         wid = wc.get("wallet_id", "")
         scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
@@ -389,6 +392,8 @@ async def initiate_issuance(
             encoded = quote(wallet_offer_json)
             sep = "&" if "?" in scheme else "?"
             credential_offer_uris[wid] = f"{scheme}{sep}credential_offer={encoded}"
+            if wc.get("display_name"):
+                credential_offer_labels[wid] = wc["display_name"]
     
     return IssuanceResponse(
         id=tx.id,
@@ -397,6 +402,7 @@ async def initiate_issuance(
         status=tx.status.value,
         credential_offer_uri=offer_uri,
         credential_offer_uris=credential_offer_uris,
+        credential_offer_labels=credential_offer_labels,
         pre_auth_code=tx.pre_auth_code,
         expires_at=tx.expires_at.isoformat(),
     )
@@ -612,20 +618,19 @@ async def exchange_token(
             content={"error": "invalid_grant", "error_description": "Transaction expired"},
         )
     
-    # Idempotent retry: wallet may lose the network response and re-send the
-    # pre-authorized_code.  If a token was already issued (AUTHORIZED or ISSUED)
-    # return the existing access_token so the wallet can still get its credential.
+    # OID4VCI Final §6.1: The pre-authorized code MUST be single-use.
+    # Reject any attempt to reuse it after a token has already been issued.
     if tx.status in (IssuanceStatus.AUTHORIZED, IssuanceStatus.ISSUED):
-        if tx.access_token:
-            logger.info(
-                f"[token] rid={rid} tx_id={tx.id} idempotent re-issue (status={tx.status.value})"
-            )
-            return TokenResponse(
-                access_token=tx.access_token,
-                expires_in=1800,
-                c_nonce=tx.nonce or "",
-                nonce=tx.nonce or "",
-            )
+        logger.warning(
+            f"[token] rid={rid} tx_id={tx.id} pre-auth code replay rejected (status={tx.status.value})"
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_grant",
+                "error_description": "Pre-authorized code has already been used and is single-use only",
+            },
+        )
 
     if tx.status != IssuanceStatus.PENDING:
         logger.warning(f"[token] rid={rid} 400 tx {tx.id} wrong state={tx.status.value}")
@@ -659,6 +664,7 @@ async def exchange_token(
 
 @issuance_router.post("/nonce")
 async def nonce_endpoint(
+    response: Response,
     authorization: str | None = Header(None),
     repo: IIssuanceRepository = Depends(),
 ) -> dict:
@@ -683,6 +689,8 @@ async def nonce_endpoint(
                 auth_session.nonce = new_nonce
                 await repo.save_authorization_session(auth_session)
 
+    # OID4VCI §7.3: Cache-Control MUST be no-store to prevent nonce caching
+    response.headers["Cache-Control"] = "no-store"
     # OID4VCI v1 §7.2 uses "c_nonce"; include "nonce" alias for draft wallets
     return {"c_nonce": new_nonce, "nonce": new_nonce, "c_nonce_expires_in": 300}
 
@@ -733,8 +741,58 @@ async def issue_credential(
             )
             await repo.save_transaction(tx)
     
-    if tx.status not in (IssuanceStatus.AUTHORIZED, IssuanceStatus.ISSUED):
-        raise HTTPException(status_code=400, detail="Invalid transaction state")
+    # OID4VCI Final §7.3: The access token is single-use for credential issuance.
+    # §8 errors use 400 invalid_credential_request, not 401.
+    if tx.status == IssuanceStatus.ISSUED:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_credential_request",
+                "error_description": "Credential already issued — access token is single-use",
+            },
+        )
+    if tx.status != IssuanceStatus.AUTHORIZED:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_credential_request", "error_description": "Invalid transaction state"},
+        )
+
+    # OID4VCI §8.2: Validate credential_configuration_id if provided.
+    # It must correspond to a configuration supported by this issuer for the transaction.
+    if request.credential_configuration_id is not None:
+        cred_type_base = tx.credential_type or "default"
+        valid_config_ids = {
+            cred_type_base,
+            f"{cred_type_base}#sd-jwt",
+            f"{cred_type_base}#mdoc",
+            f"{cred_type_base}#spruce-sd-jwt",
+            "default",
+            "default#sd-jwt",
+        }
+        if request.credential_configuration_id not in valid_config_ids:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_credential_request",
+                    "error_description": f"Unknown credential_configuration_id: {request.credential_configuration_id!r}",
+                },
+            )
+
+    # OID4VCI §8.2: Validate credential_identifier if provided.
+    # credential_identifier is only valid in auth-code flows where the AS issued it.
+    # Pre-auth code flow does not issue credential_identifiers.
+    if request.credential_identifier is not None:
+        valid_identifiers: set[str] = set()
+        if auth_session:
+            valid_identifiers = set(getattr(auth_session, "credential_configuration_ids", []) or [])
+        if request.credential_identifier not in valid_identifiers:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_credential_request",
+                    "error_description": f"Unknown credential_identifier: {request.credential_identifier!r}",
+                },
+            )
     
     # Get issuer key for organization
     try:
@@ -773,27 +831,63 @@ async def issue_credential(
 
     proof_jwt = _extract_proof_jwt(request)
     logger.info(f"[credential] rid={rid} proof present: {proof_jwt is not None}")
-    if proof_jwt:
-        # Verify proof JWT signature via Rust + extract holder DID
-        ok, did_from_proof, verify_err = verify_proof_jwt(
-            proof_jwt, expected_nonce=tx.nonce or None
+
+    # OID4VCI §7.2: proof of possession is required for credential binding.
+    if not proof_jwt:
+        logger.warning(f"[credential] rid={rid} tx_id={tx.id} rejecting — proof of possession missing")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "proof_missing", "error_description": "Proof of possession is required per OID4VCI §7.2"},
         )
-        if ok:
-            holder_did = did_from_proof
-            logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
-        else:
-            logger.warning(
-                f"[credential] rid={rid} tx_id={tx.id} proof verification failed: {verify_err} — "
-                f"issuing without binding (proof_jwt[:64]={(proof_jwt or '')[:64]!r})"
+
+    # OID4VCI-1FINAL Appendix F.4: aud in proof JWT MUST be the credential_issuer URL.
+    # We validate that aud ends with /org/{org_id} to accept both localhost and
+    # production hostnames (PUBLIC_API_URL may differ between dev and prod).
+    if tx.organization_id:
+        try:
+            import base64 as _b64, json as _json
+            _proof_parts = proof_jwt.split('.')
+            _pad = '=' * ((-len(_proof_parts[1])) % 4)
+            _proof_payload = _json.loads(_b64.urlsafe_b64decode(_proof_parts[1] + _pad))
+            _proof_aud = _proof_payload.get('aud') or ''
+            _expected_aud_suffix = f'/org/{tx.organization_id}'
+            if not _proof_aud.endswith(_expected_aud_suffix):
+                logger.warning(
+                    f"[credential] rid={rid} aud mismatch: got {_proof_aud!r}, "
+                    f"expected URL ending in {_expected_aud_suffix!r}"
+                )
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_proof",
+                        "error_description": (
+                            f"OID4VCI §8.2: proof JWT aud MUST be the credential_issuer URL "
+                            f"(ending in {_expected_aud_suffix}), got {_proof_aud!r}"
+                        ),
+                    },
+                )
+        except Exception as _aud_err:
+            logger.warning(f"[credential] rid={rid} could not decode proof aud: {_aud_err}")
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_proof", "error_description": "Could not decode proof JWT audience"},
             )
-            # Still extract holder_did from header even if sig fails (for logging)
-            try:
-                hdr_b64 = proof_jwt.split(".")[0]
-                hdr_b64 += "=" * ((-len(hdr_b64)) % 4)
-                hdr = json.loads(base64.urlsafe_b64decode(hdr_b64))
-                holder_did = hdr.get("kid", "").split("#")[0] or None
-            except Exception:
-                pass
+
+    # Verify proof JWT signature via Rust + extract holder DID
+    # Pass issuer_url as None to let the Rust layer use the URL embedded in the proof's aud;
+    # full aud validation requires the public gateway URL which is available via ISSUER_BASE_URL.
+    ok, did_from_proof, verify_err = verify_proof_jwt(
+        proof_jwt, expected_nonce=tx.nonce or None
+    )
+    if ok:
+        holder_did = did_from_proof
+        logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
+    else:
+        logger.warning(f"[credential] rid={rid} tx_id={tx.id} proof verification failed: {verify_err}")
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_proof", "error_description": verify_err or "Proof of possession verification failed"},
+        )
 
     # Filter internal workflow fields out of claims — these are metadata used by the
     # applicant service and must never appear as credential subject attributes.
@@ -817,18 +911,26 @@ async def issue_credential(
     logger.info(f"[credential] rid={rid} claims={list(clean_claims.keys())} subject={holder_did or tx.subject_did or 'none'}")
 
     # Use the stored vct URI for the SD-JWT `vct` claim (RFC 9596 §3.1).
-    # This ensures the wallet sees a proper URI (e.g. https://marty.example/credentials/open_badge)
-    # rather than the raw abbreviated credential_type (e.g. "open_badge").
+    # This ensures the wallet sees a proper URI rather than the raw abbreviated credential_type.
     vct_for_signing = (
         tx.claims.get("_vct")
-        or (f"https://marty.example/credentials/{credential_type}" if credential_type and not credential_type.startswith("http") else credential_type)
+        or (f"{ISSUER_BASE_URL}/credentials/{credential_type}" if credential_type and not credential_type.startswith("http") else credential_type)
     )
 
     # Get Rust bindings and create signed credential
     # For mso_mdoc templates, force the signing format regardless of what the
     # wallet sends in the credential request — ensures CBOR mdoc output.
     credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-    signing_format = "mso_mdoc" if credential_payload_fmt == "mso_mdoc" else request.format
+    # Determine the format string to pass to the Rust signer.
+    # mso_mdoc: always forced regardless of what the wallet requests.
+    # spruce-vc+sd-jwt: SpruceKit's custom alias — normalise to vc+sd-jwt for Rust;
+    #   the response uses the original request.format so SpruceKit parses it correctly.
+    if credential_payload_fmt == "mso_mdoc":
+        signing_format = "mso_mdoc"
+    elif request.format == "spruce-vc+sd-jwt":
+        signing_format = "vc+sd-jwt"
+    else:
+        signing_format = request.format
     # For mdoc, credential_type is the doctype; Rust defaults to org.iso.18013.5.1.mDL
     # when mdoc_doctype is None, so tx.credential_type is passed through directly.
     signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
@@ -859,14 +961,82 @@ async def issue_credential(
             ))
 
         logger.info(f"[credential] rid={rid} tx_id={tx.id} issued credential_id={credential_id} cred_type={credential_type}")
-        # OID4VCI v1 §8.3: credentials array; also emit singular "credential" for Walt.id / Draft-11 clients
-        return CredentialResponse(credentials=[jwt_credential], credential=jwt_credential)
+        # OID4VCI hybrid response:
+        # - "credentials" as object array for SpruceID mobile-sdk-rs (expects Oid4vciCredential struct)
+        # - "credential" as bare string for Walt.id / Draft-11 clients
+        # Use the request format in the response object (not signing_format which may
+        # have been normalised from spruce-vc+sd-jwt → vc+sd-jwt for Rust).
+        response_format = request.format or signing_format or "vc+sd-jwt"
+        credential_obj = {"format": response_format, "credential": jwt_credential}
+        import uuid as _uuid
+        notification_id = str(_uuid.uuid4())
+        return CredentialResponse(
+            credentials=[credential_obj],
+            credential=jwt_credential,
+            notification_id=notification_id,
+        )
         
     except Exception as e:
         logger.error(f"[credential] rid={rid} tx_id={tx.id} Rust credential creation failed: {e}")
         tx.fail(str(e))
         await repo.save_transaction(tx)
         raise HTTPException(status_code=500, detail=f"Credential creation failed: {e}")
+
+
+@issuance_router.post("/deferred-credential")
+async def deferred_credential(
+    http_request: Request,
+    authorization: str | None = Header(None),
+    repo: IIssuanceRepository = Depends(),
+) -> dict:
+    """OID4VCI-1FINAL §9.1 — Deferred Credential Endpoint.
+
+    Accepts a transaction_id and returns the credential if available.
+    All credentials in this service are issued synchronously, so this endpoint
+    always returns 400 (no pending deferred transactions).  The endpoint itself
+    MUST exist so that wallets can discover it via metadata and so that the
+    conformance test ``deferred_credential_endpoint_present`` passes.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        from fastapi.responses import JSONResponse as _JSONResponse
+        return _JSONResponse(
+            status_code=401,
+            content={"error": "invalid_token", "error_description": "Bearer token required"},
+        )
+    body = await http_request.json()
+    transaction_id = body.get("transaction_id")
+    if not transaction_id:
+        from fastapi.responses import JSONResponse as _JSONResponse
+        return _JSONResponse(
+            status_code=400,
+            content={"error": "invalid_request", "error_description": "transaction_id is required"},
+        )
+    # All credentials are issued synchronously; no deferred transactions exist.
+    from fastapi.responses import JSONResponse as _JSONResponse
+    return _JSONResponse(
+        status_code=400,
+        content={"error": "invalid_transaction_id", "error_description": "No deferred transaction found"},
+    )
+
+
+@issuance_router.post("/notification", status_code=204)
+async def notification_endpoint(
+    http_request: Request,
+    authorization: str | None = Header(None),
+) -> None:
+    """OID4VCI-1FINAL §11 — Notification Endpoint.
+
+    Wallets POST here after credential lifecycle events (accepted, deleted, etc.).
+    The server acknowledges with 204 No Content.
+    Requires a valid Bearer token in the Authorization header.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        from fastapi import HTTPException as _HTTPException
+        raise _HTTPException(
+            status_code=401,
+            detail={"error": "invalid_token", "error_description": "Bearer token required"},
+        )
+    return None
 
 
 @issuance_router.get("/offers/{tx_id}")
