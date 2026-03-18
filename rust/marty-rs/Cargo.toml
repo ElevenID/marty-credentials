@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 default = ["python"]
 python = [
     "pyo3",
+    "dep:marty-crypto",
     "dep:marty-verification",
     "dep:marty-oid4vci",
     "tokio",
@@ -84,6 +85,9 @@ tracing-subscriber = { workspace = true, optional = true }
 tracing-error = { workspace = true, optional = true }
 ciborium = { workspace = true, optional = true }
 
+# PEM encoding
+pem-rfc7468 = { workspace = true, optional = false }
+
 # SD-JWT support
 sd-jwt-rs = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
@@ -94,7 +98,8 @@ ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
 sha2 = { version = "0.10", optional = true }
 serde_cbor = { version = "0.11", optional = true }
 
-# From marty-core (only for python feature - heavy verification not needed for WASM)
+# From marty-core
+marty-crypto = { workspace = true, optional = true }
 marty-verification = { workspace = true, optional = true }
 
 # OID4VCI/OID4VP protocol engine from marty-core

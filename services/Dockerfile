@@ -15,10 +15,12 @@ ARG MMF_PATH=../marty-microservices-framework
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
+    libzstd-dev \
     python3-dev \
     python3-pip \
     build-essential \
     g++ \
+    clang \
     && rm -rf /var/lib/apt/lists/*
 
 # Install maturin for building Python packages from Rust
@@ -41,9 +43,12 @@ COPY marty-core/marty-iso18013 ./marty-core/marty-iso18013/
 COPY marty-core/marty-zkp ./marty-core/marty-zkp/
 COPY marty-core/marty-oid4vci ./marty-core/marty-oid4vci/
 
+# Copy longfellow-zk C++ library (required by marty-zkp build.rs)
+COPY longfellow-zk/lib ./longfellow-zk/lib
+
 # Build marty-bindings Python wheel
 WORKDIR /build/marty-core/marty-bindings
-RUN maturin build --release --out /wheels
+RUN CXX=clang++ CC=clang maturin build --release --out /wheels
 
 # Clean up build artifacts to save space
 WORKDIR /build
@@ -89,7 +94,12 @@ RUN pip install --no-cache-dir \
     pydantic-settings==2.1.0 \
     httpx==0.26.0 \
     redis==5.0.1 \
-    python-multipart==0.0.6
+    python-multipart==0.0.6 \
+    grpcio>=1.62.0 \
+    grpcio-health-checking>=1.62.0 \
+    grpcio-reflection>=1.62.0 \
+    googleapis-common-protos>=1.63.0 \
+    protobuf>=4.25.0
 
 # Stage 3: Final service image
 FROM base as final
@@ -97,8 +107,11 @@ FROM base as final
 # Copy issuance service code
 COPY marty-credentials/services/issuance /app/services/issuance
 
+# Copy shared proto stubs
+COPY marty-credentials/packages /app/packages
+
 # Set Python path
-ENV PYTHONPATH=/app:/app/services
+ENV PYTHONPATH=/app:/app/services:/app/packages
 
 # Working directory
 WORKDIR /app/services/issuance

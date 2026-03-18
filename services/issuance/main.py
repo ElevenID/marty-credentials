@@ -99,6 +99,10 @@ def get_repo() -> IIssuanceRepository:
     return _repo
 
 
+ISSUANCE_GRPC_PORT = int(os.environ.get("ISSUANCE_GRPC_PORT", "9005"))
+ISSUANCE_GRPC_ENABLED = os.environ.get("ISSUANCE_GRPC_ENABLED", "true").lower() in ("1", "true", "yes")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle management."""
@@ -117,10 +121,27 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresIssuanceRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for issuance service")
+
+    # Start gRPC server
+    grpc_server = None
+    if ISSUANCE_GRPC_ENABLED:
+        import grpc.aio as grpc_aio
+        from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
+        from marty_proto.v1 import issuance_service_pb2_grpc
+
+        grpc_server = grpc_aio.server()
+        servicer = IssuanceServiceGrpc(get_repo_fn=get_repo)
+        issuance_service_pb2_grpc.add_IssuanceServiceServicer_to_server(servicer, grpc_server)
+        grpc_server.add_insecure_port(f"[::]:{ISSUANCE_GRPC_PORT}")
+        await grpc_server.start()
+        logger.info(f"gRPC server started on port {ISSUANCE_GRPC_PORT}")
     
     yield
     
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    if grpc_server:
+        await grpc_server.stop(grace=5)
+        logger.info("gRPC server stopped")
     await engine.dispose()
 
 

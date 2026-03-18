@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 REVOCATION_PROFILE_SERVICE_URL = os.environ.get(
     "REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"
 )
+CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
+    "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://localhost:8003"
+)
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
 # Routers
@@ -247,15 +250,19 @@ async def initiate_issuance(
     logged and allowed to proceed for internal service-to-service resilience.
     """
 
-    # Validate organization exists — treat any 4xx from the org service as a
-    # hard failure so that callers with invalid org IDs get a proper error
-    # rather than a silently created transaction.  Network / 5xx failures are
-    # logged and allowed to proceed (internal service-to-service resilience).
+    # Validate organization exists via gRPC
     try:
-        org_url = f"http://organization:8002/internal/v1/organizations/{request.organization_id}"
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            org_response = await client.get(org_url)
-            if org_response.status_code >= 400:
+        import grpc.aio as grpc_aio
+        from marty_proto.v1 import organization_service_pb2 as org_pb2
+        from marty_proto.v1 import organization_service_pb2_grpc as org_grpc
+
+        org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
+        async with grpc_aio.insecure_channel(org_grpc_target) as channel:
+            org_stub = org_grpc.OrganizationServiceStub(channel)
+            org_resp = await org_stub.GetOrganization(
+                org_pb2.GetOrganizationRequest(organization_id=request.organization_id)
+            )
+            if not org_resp.id:
                 raise HTTPException(
                     status_code=404,
                     detail=f"Organization not found: {request.organization_id}",
@@ -265,39 +272,71 @@ async def initiate_issuance(
     except Exception as e:
         logger.warning(f"Could not validate organization {request.organization_id} (proceeding): {e}")
 
-    # Resolve credential type from template — treat 4xx as hard failures.
+    # Resolve credential type from template via gRPC (preferred) with HTTP fallback.
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
     credential_vct: str | None = None
     zk_predicate_claims: list[str] = []
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     wallet_configs: list[dict] = []
     if request.credential_template_id:
+        _tmpl_resolved = False
+        # Try gRPC first
         try:
-            template_url = f"http://credential-template:8003/v1/credential-templates/{request.credential_template_id}"
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(template_url)
-                if response.status_code == 404:
-                    raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
-                if 400 <= response.status_code < 500:
-                    raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
-                response.raise_for_status()
-                template = response.json()
-                credential_type = template.get("credential_type", credential_type)
-                # RFC 9596: vct MUST be a URI.  Prefer the template's explicit vct field;
-                # fall back to building a URI from the credential_type.
-                raw_vct = template.get("vct") or ""
-                credential_vct = (
-                    raw_vct if raw_vct.startswith("http")
-                    else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            import grpc.aio as _grpc_aio
+            from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+            from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
+            ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
+            async with _grpc_aio.insecure_channel(ct_grpc_target) as channel:
+                ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
+                tmpl_resp = await ct_stub.GetTemplate(
+                    ct_pb2.GetTemplateRequest(template_id=request.credential_template_id)
                 )
-                logger.info(f"Fetched credential type from template: {credential_type} vct={credential_vct}")
-                zk_predicate_claims = template.get("zk_predicate_claims") or []
-                credential_payload_format = template.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
-                wallet_configs = template.get("wallet_configs") or []
+            if not tmpl_resp.id:
+                raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
+            credential_type = tmpl_resp.credential_type or credential_type
+            raw_vct = tmpl_resp.vct or ""
+            credential_vct = (
+                raw_vct if raw_vct.startswith("http")
+                else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            )
+            zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
+            credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+            wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
+            _tmpl_resolved = True
+            logger.info(f"Fetched credential type from template (gRPC): {credential_type} vct={credential_vct}")
         except HTTPException:
-            raise  # Hard fail — propagate to caller
-        except Exception as e:
-            logger.warning(f"Could not fetch credential template {request.credential_template_id} (using default type): {e}")
+            raise
+        except Exception as _grpc_err:
+            logger.warning(f"gRPC template fetch failed, falling back to HTTP: {_grpc_err}")
+
+        # HTTP fallback
+        if not _tmpl_resolved:
+            url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{request.credential_template_id}"
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.get(url)
+                if resp.status_code == 404:
+                    raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
+                if resp.status_code >= 400:
+                    raise HTTPException(status_code=resp.status_code, detail=resp.text)
+                tmpl = resp.json()
+            except HTTPException:
+                raise
+            except httpx.ConnectError:
+                raise HTTPException(status_code=503, detail="Credential template service unavailable")
+            except httpx.TimeoutException:
+                raise HTTPException(status_code=504, detail="Credential template service timeout")
+            credential_type = tmpl.get("credential_type") or credential_type
+            raw_vct = tmpl.get("vct") or ""
+            credential_vct = (
+                raw_vct if raw_vct.startswith("http")
+                else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            )
+            logger.info(f"Fetched credential type from template (HTTP): {credential_type} vct={credential_vct}")
+            zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
+            credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
+            wallet_configs = tmpl.get("wallet_configs") or []
 
     # Derive vct fallback if not already resolved
     if not credential_vct:
@@ -769,6 +808,17 @@ async def issue_credential(
             "default",
             "default#sd-jwt",
         }
+        # Also include org's published credential types so validation is
+        # consistent with GET /.well-known/openid-credential-issuer/org/{org_id}.
+        tx_own_ids = set(valid_config_ids)
+        if tx.organization_id:
+            for _ctype in await repo.get_credential_types_for_org(tx.organization_id):
+                valid_config_ids.update({
+                    _ctype,
+                    f"{_ctype}#sd-jwt",
+                    f"{_ctype}#mdoc",
+                    f"{_ctype}#spruce-sd-jwt",
+                })
         if request.credential_configuration_id not in valid_config_ids:
             return JSONResponse(
                 status_code=400,
@@ -777,6 +827,11 @@ async def issue_credential(
                     "error_description": f"Unknown credential_configuration_id: {request.credential_configuration_id!r}",
                 },
             )
+        # If the config ID was validated via org DB (not tx's stored type),
+        # fix credential_type on the transaction so signing uses the correct type.
+        if request.credential_configuration_id not in tx_own_ids:
+            tx.credential_type = request.credential_configuration_id.split("#")[0]
+            await repo.save_transaction(tx)
 
     # OID4VCI §8.2: Validate credential_identifier if provided.
     # credential_identifier is only valid in auth-code flows where the AS issued it.
@@ -1104,6 +1159,64 @@ async def get_transaction(
         "created_at": tx.created_at.isoformat(),
         "expires_at": tx.expires_at.isoformat(),
         "issued_at": tx.issued_at.isoformat() if tx.issued_at else None,
+        "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
+        "revocation_reason": tx.revocation_reason,
+    }
+
+
+class TransactionRevokeRequest(BaseModel):
+    reason: str | None = None
+
+
+@issuance_router.post("/transactions/{tx_id}/revoke")
+async def revoke_transaction(
+    tx_id: str,
+    request: TransactionRevokeRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> dict:
+    """Revoke an issuance transaction (and its associated credential if present)."""
+    tx = await repo.get_transaction(tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    if tx.status == IssuanceStatus.REVOKED:
+        # Idempotent — already revoked, return current state
+        return {
+            "id": tx.id,
+            "status": tx.status.value,
+            "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
+            "revocation_reason": tx.revocation_reason,
+        }
+
+    tx.revoke(reason=request.reason)
+    await repo.save_transaction(tx)
+
+    logger.info(f"Revoked issuance transaction {tx_id}: {request.reason}")
+    return {
+        "id": tx.id,
+        "status": tx.status.value,
+        "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
+        "revocation_reason": tx.revocation_reason,
+    }
+
+
+@issuance_router.get("/transactions/{tx_id}/revocation-status")
+async def get_transaction_revocation_status(
+    tx_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> dict:
+    """Get the revocation status of an issuance transaction."""
+    tx = await repo.get_transaction(tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+
+    is_revoked = tx.status == IssuanceStatus.REVOKED
+    return {
+        "id": tx.id,
+        "revoked": is_revoked,
+        "status": tx.status.value,
+        "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
+        "revocation_reason": tx.revocation_reason,
     }
 
 

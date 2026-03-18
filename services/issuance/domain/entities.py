@@ -21,6 +21,7 @@ class IssuanceStatus(str, Enum):
     ISSUED = "issued"
     FAILED = "failed"
     EXPIRED = "expired"
+    REVOKED = "revoked"
 
 
 @dataclass
@@ -56,6 +57,8 @@ class IssuanceTransaction:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=_OFFER_TTL_MINUTES))
     issued_at: datetime | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
     
     def complete(self) -> None:
         """Mark issuance as complete."""
@@ -65,6 +68,12 @@ class IssuanceTransaction:
     def fail(self, reason: str) -> None:
         """Mark issuance as failed."""
         self.status = IssuanceStatus.FAILED
+    
+    def revoke(self, reason: str | None = None) -> None:
+        """Mark issuance as revoked."""
+        self.status = IssuanceStatus.REVOKED
+        self.revoked_at = datetime.now(timezone.utc)
+        self.revocation_reason = reason
     
     @property
     def is_expired(self) -> bool:

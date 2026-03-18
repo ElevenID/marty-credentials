@@ -550,9 +550,83 @@ def _build_wallet_offer_uris(
 
 
 async def _fetch_wallets_for_template(credential_template_id: str | None) -> list[IssuanceOfferWallet]:
-    """Fetch wallet registry entries for a credential template."""
+    """Fetch wallet registry entries for a credential template.
+
+    Uses gRPC to CredentialTemplateService (ListWallets / GetWallet) with
+    HTTP fallback when the gRPC target is unreachable.
+    """
     if not credential_template_id:
         return []
+
+    # --- helper: try gRPC first -----------------------------------------------
+    async def _fetch_via_grpc() -> list[IssuanceOfferWallet] | None:
+        """Return wallets via gRPC, or None on failure (triggers HTTP fallback)."""
+        try:
+            import grpc as _grpc
+            import grpc.aio as grpc_aio
+            from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+            from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
+            ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
+            async with grpc_aio.insecure_channel(ct_grpc_target) as channel:
+                ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
+
+                # 1. Get template to check for supported_wallet_ids via wallet_configs_json
+                tmpl_resp = await ct_stub.GetTemplate(
+                    ct_pb2.GetTemplateRequest(template_id=credential_template_id)
+                )
+                if not tmpl_resp.id:
+                    return []
+
+                # Extract wallet IDs from wallet_configs_json
+                wallet_ids: list[str] = []
+                if tmpl_resp.wallet_configs_json:
+                    import json as _json
+                    wc_list = _json.loads(tmpl_resp.wallet_configs_json)
+                    wallet_ids = [wc.get("wallet_id", "") for wc in wc_list if wc.get("wallet_id")]
+
+                if not wallet_ids:
+                    # Fallback: return all active wallets from registry
+                    list_resp = await ct_stub.ListWallets(
+                        ct_pb2.ListWalletsRequest(active_only=True)
+                    )
+                    return [
+                        IssuanceOfferWallet(
+                            id=w.id,
+                            name=w.name,
+                            logo_url=w.logo_url or None,
+                            deep_link_url="",
+                            platforms=list(w.platforms),
+                        )
+                        for w in list_resp.wallets
+                    ]
+
+                # 2. Fetch each wallet by ID
+                wallets: list[IssuanceOfferWallet] = []
+                for wid in wallet_ids:
+                    try:
+                        w = await ct_stub.GetWallet(ct_pb2.GetWalletRequest(wallet_id=wid))
+                        if w.id:
+                            wallets.append(IssuanceOfferWallet(
+                                id=w.id,
+                                name=w.name,
+                                logo_url=w.logo_url or None,
+                                deep_link_url="",
+                                platforms=list(w.platforms),
+                            ))
+                    except _grpc.RpcError:
+                        continue
+                return wallets
+        except Exception as e:
+            logger.warning(f"gRPC wallet fetch failed, falling back to HTTP: {e}")
+            return None
+
+    # --- attempt gRPC ----------------------------------------------------------
+    result = await _fetch_via_grpc()
+    if result is not None:
+        return result
+
+    # --- HTTP fallback ---------------------------------------------------------
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             # 1. Get template to find supported_wallet_ids
@@ -574,7 +648,7 @@ async def _fetch_wallets_for_template(credential_template_id: str | None) -> lis
                         id=w["id"],
                         name=w["name"],
                         logo_url=w.get("logo_url"),
-                        deep_link_url="",  # placeholder – filled in caller
+                        deep_link_url="",
                         platforms=w.get("platforms", []),
                     )
                     for w in registry_resp.json()
@@ -589,7 +663,7 @@ async def _fetch_wallets_for_template(credential_template_id: str | None) -> lis
                         id=w["id"],
                         name=w["name"],
                         logo_url=w.get("logo_url"),
-                        deep_link_url="",  # filled in caller
+                        deep_link_url="",
                         platforms=w.get("platforms", []),
                     ))
             return wallets

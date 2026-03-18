@@ -12,6 +12,9 @@ mod status_list;
 #[cfg(feature = "python")]
 pub mod mdoc;
 
+// eMRTD (electronic Machine Readable Travel Document) issuance module
+pub mod emrtd;
+
 // SD-JWT module (only for python - has PyO3 and sd-jwt-rs dependencies)
 #[cfg(feature = "python")]
 mod sd_jwt;
@@ -19,6 +22,10 @@ mod sd_jwt;
 // OID4VCI/OID4VP protocol engine bindings (only for python)
 #[cfg(feature = "python")]
 mod oid4vci;
+
+// BBS+ signature bindings (only for python)
+#[cfg(feature = "python")]
+mod bbs;
 
 // WASM module (only compiled with wasm feature)
 #[cfg(feature = "wasm")]
@@ -400,11 +407,17 @@ mod python_bindings {
         // mDoc classes and functions for ISO 18013-5 mobile driver's license
         crate::mdoc::register_mdoc_module(m)?;
 
+        // eMRTD classes and functions for ICAO 9303 passport issuance
+        crate::emrtd::register_emrtd_module(m)?;
+
         // SD-JWT classes and functions for Selective Disclosure JWT
         crate::sd_jwt::register_sd_jwt_module(m)?;
 
         // OID4VCI/OID4VP protocol engine (from marty-oid4vci)
         crate::oid4vci::register_oid4vci_module(m)?;
+
+        // BBS+ signatures (from marty-crypto)
+        crate::bbs::register_bbs_module(m)?;
 
         // Note: marty-verification functions are now available in the separate
         // marty-verification-py package. Install both packages to access all functionality.

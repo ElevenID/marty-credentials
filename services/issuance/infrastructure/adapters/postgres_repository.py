@@ -61,6 +61,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "wallet_configs": tx.wallet_configs or [],
                 "expires_at": tx.expires_at,
                 "issued_at": tx.issued_at,
+                "revoked_at": tx.revoked_at,
+                "revocation_reason": tx.revocation_reason,
             }
             
             if existing:
@@ -107,6 +109,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 issued_at=row.issued_at,
+                revoked_at=getattr(row, 'revoked_at', None),
+                revocation_reason=getattr(row, 'revocation_reason', None),
             )
     
     async def get_by_pre_auth_code(self, code: str) -> IssuanceTransaction | None:
@@ -139,6 +143,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 issued_at=row.issued_at,
+                revoked_at=getattr(row, 'revoked_at', None),
+                revocation_reason=getattr(row, 'revocation_reason', None),
             )
     
     async def get_by_access_token(self, token: str) -> IssuanceTransaction | None:
@@ -171,6 +177,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 created_at=row.created_at,
                 expires_at=row.expires_at,
                 issued_at=row.issued_at,
+                revoked_at=getattr(row, 'revoked_at', None),
+                revocation_reason=getattr(row, 'revocation_reason', None),
             )
     
     async def list_transactions(self, org_id: str) -> list[IssuanceTransaction]:

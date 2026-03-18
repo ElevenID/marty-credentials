@@ -34,6 +34,8 @@ issuance_transactions_table = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("issued_at", DateTime(timezone=True), nullable=True),
+    Column("revoked_at", DateTime(timezone=True), nullable=True),
+    Column("revocation_reason", String, nullable=True),
     Index("ix_issuance_transactions_organization_id", "organization_id"),
     Index("ix_issuance_transactions_status", "status"),
     Index("ix_issuance_transactions_pre_auth_code", "pre_auth_code"),
