@@ -47,6 +47,12 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     
     async def get_credential(self, cred_id: str) -> IssuedCredential | None:
         return self._credentials.get(cred_id)
+
+    async def get_credential_by_transaction_id(self, transaction_id: str) -> IssuedCredential | None:
+        for cred in self._credentials.values():
+            if cred.transaction_id == transaction_id:
+                return cred
+        return None
     
     async def list_credentials(self, applicant_id: str) -> list[IssuedCredential]:
         return [c for c in self._credentials.values() if c.applicant_id == applicant_id]

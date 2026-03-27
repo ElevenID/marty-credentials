@@ -67,7 +67,7 @@ from issuance.infrastructure.api.application_routes import (
     application_router,
     application_template_router,
 )
-from issuance.infrastructure.api.routes import issuance_router
+from issuance.infrastructure.api.routes import issuance_router, issued_credential_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -165,6 +165,7 @@ def create_app() -> FastAPI:
 
     # Register routers
     app.include_router(issuance_router)
+    app.include_router(issued_credential_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
     

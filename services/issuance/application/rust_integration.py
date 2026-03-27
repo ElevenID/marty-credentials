@@ -138,7 +138,12 @@ def create_verifiable_credential_wrapper(
     )
     if issuer_key is None:
         # Pre-populate the cache via org_id lookup and try again
-        get_or_generate_issuer_key(organization_id or "default")
+        if not organization_id:
+            raise RuntimeError(
+                "organization_id is required to look up the issuer key. "
+                "Pass the caller's organization_id explicitly."
+            )
+        get_or_generate_issuer_key(organization_id)
         issuer_key = next(
             (k for k in _org_keys.values() if k["did"] == issuer_did), None
         )

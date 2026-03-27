@@ -54,6 +54,11 @@ class IIssuanceRepository(ABC):
     async def get_credential(self, cred_id: str) -> IssuedCredential | None:
         """Get credential by ID."""
         pass
+
+    @abstractmethod
+    async def get_credential_by_transaction_id(self, transaction_id: str) -> IssuedCredential | None:
+        """Get credential by the issuance transaction that created it."""
+        pass
     
     @abstractmethod
     async def list_credentials(self, applicant_id: str) -> list[IssuedCredential]:

@@ -1,16 +1,17 @@
 """OID4VCI HTTP API endpoints."""
 
 import base64
+import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from issuance.application.rust_integration import (
     get_marty_rs,
@@ -33,6 +34,7 @@ from issuance.domain.entities import (
     IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
+    IssuedCredential,
 )
 from issuance.domain.ports import IIssuanceRepository
 
@@ -51,6 +53,7 @@ ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.co
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
 application_template_router = APIRouter(prefix="/v1/application-templates", tags=["application-templates"])
 application_router = APIRouter(prefix="/v1/applications", tags=["applications"])
+issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["issued-credentials"])
 
 
 # ============================================================================
@@ -85,12 +88,12 @@ class TokenResponse(BaseModel):
     # SpruceID kit wallet reads the legacy "nonce" field instead.
     # Emit both with the same value so all clients are satisfied.
     c_nonce: str
-    # c_nonce_expires_in intentionally omitted: the SpruceID mobile-sdk-rs
-    # ExtraResponseTokenFields has `c_nonce_expires_in: Option<Duration>` which
-    # uses serde's native Duration format `{"secs":N,"nanos":N}` — NOT a plain
-    # integer.  Sending `300` causes a deserialization error that manifests as
-    # "HTTP request error: failed to exchange code".  The field is Optional so
-    # absent == None == accepted by all clients (SpruceKit, Walt.id, etc.).
+    # OID4VCI §6.2: c_nonce_expires_in MUST be included per spec (integer seconds).
+    # NOTE: SpruceID mobile-sdk-rs ExtraResponseTokenFields deserializes this as
+    # serde Duration {"secs":N,"nanos":N} — sending a plain integer causes a
+    # deserialization error.  SpruceID-specific metadata endpoints omit this field
+    # via the /spruce well-known paths; standard wallets receive it correctly.
+    c_nonce_expires_in: int | None = 300
     nonce: str          # alias for c_nonce — SpruceID kit compatibility
 
 
@@ -204,6 +207,36 @@ class CredentialStatusResponse(BaseModel):
     reason: str | None = None
 
 
+class IssuedCredentialStatusListEntryResponse(BaseModel):
+    status_list_id: str
+    index: int
+    status_list_uri: str | None = None
+
+
+class IssuedCredentialRecordResponse(BaseModel):
+    id: str
+    credential_id: str
+    credential_type: str
+    credential_format: str
+    flow_execution_id: str
+    credential_template_id: str
+    application_id: str | None = None
+    revocation_profile_id: str | None = None
+    subject_id: str
+    subject_claims_hash: str | None = None
+    issued_at: str
+    valid_from: str | None = None
+    valid_until: str | None = None
+    status: str
+    status_list_entries: list[IssuedCredentialStatusListEntryResponse] = Field(default_factory=list)
+    credential_hash: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    revoked_by: str | None = None
+    created_at: str
+    updated_at: str | None = None
+
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -232,6 +265,80 @@ def org_issuer_url_spruce(org_id: str) -> str:
       well-known URL   = https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>/spruce
     """
     return f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
+
+
+def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetime | None) -> str:
+    if status == CredentialStatus.ACTIVE and expires_at and expires_at < datetime.now(timezone.utc):
+        return "EXPIRED"
+    return status.value.upper()
+
+
+def _credential_format_to_protocol(tx: IssuanceTransaction | None, cred: IssuedCredential) -> str:
+    payload_format = (tx.credential_payload_format if tx else None) or ""
+    if payload_format == "mso_mdoc":
+        return "MDOC"
+    return "SD_JWT_VC"
+
+
+def _subject_claims_hash(tx: IssuanceTransaction | None) -> str | None:
+    if tx is None:
+        return None
+    clean_claims = {
+        key: value
+        for key, value in tx.claims.items()
+        if key not in {
+            "credential_offer_uri",
+            "credential_offer_uris",
+            "offer_expires_at",
+            "issuance_transaction_id",
+            "issuance_fallback",
+            "credential_type",
+            "credential_display_name",
+            "rejection_reason",
+            "review_notes",
+            "info_requests",
+            "applicant_id",
+            "_vct",
+        }
+    }
+    canonical = json.dumps(clean_claims, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+async def _issued_credential_to_protocol(
+    cred: IssuedCredential,
+    repo: IIssuanceRepository,
+) -> IssuedCredentialRecordResponse:
+    tx = await repo.get_transaction(cred.transaction_id)
+    subject_id = cred.subject_did or cred.applicant_id or (tx.subject_did if tx else None) or (tx.applicant_id if tx else None) or cred.id
+    issued_at = cred.issued_at
+    valid_until = cred.expires_at
+    protocol_status = _credential_status_to_protocol(cred.status, valid_until)
+    credential_type = (tx.credential_type if tx and tx.credential_type else "unknown")
+    updated_at = cred.status_updated_at if cred.status_updated_at else cred.issued_at
+    return IssuedCredentialRecordResponse(
+        id=cred.id,
+        credential_id=cred.id,
+        credential_type=credential_type,
+        credential_format=_credential_format_to_protocol(tx, cred),
+        flow_execution_id=cred.transaction_id,
+        credential_template_id=cred.credential_template_id,
+        application_id=tx.application_id if tx else None,
+        revocation_profile_id=None,
+        subject_id=subject_id,
+        subject_claims_hash=_subject_claims_hash(tx),
+        issued_at=issued_at.isoformat(),
+        valid_from=issued_at.isoformat(),
+        valid_until=valid_until.isoformat() if valid_until else None,
+        status=protocol_status,
+        status_list_entries=[],
+        credential_hash=cred.credential_hash,
+        revoked_at=cred.revoked_at.isoformat() if cred.revoked_at else None,
+        revocation_reason=cred.revocation_reason,
+        revoked_by=None,
+        created_at=issued_at.isoformat(),
+        updated_at=updated_at.isoformat() if updated_at else None,
+    )
 
 
 # ============================================================================
@@ -783,6 +890,17 @@ async def issue_credential(
     # OID4VCI Final §7.3: The access token is single-use for credential issuance.
     # §8 errors use 400 invalid_credential_request, not 401.
     if tx.status == IssuanceStatus.ISSUED:
+        existing_cred = await repo.get_credential_by_transaction_id(tx.id)
+        if existing_cred:
+            response_format = request.format or "vc+sd-jwt"
+            credential_obj = {"format": response_format, "credential": existing_cred.credential_jwt}
+            import uuid as _uuid
+            notification_id = str(_uuid.uuid4())
+            return CredentialResponse(
+                credentials=[credential_obj],
+                credential=existing_cred.credential_jwt,
+                notification_id=notification_id,
+            )
         return JSONResponse(
             status_code=400,
             content={
@@ -1006,8 +1124,25 @@ async def issue_credential(
         # Only update state and emit event on first issuance; allow idempotent
         # wallet retries (wallets sometimes re-request after a network timeout).
         if tx.status == IssuanceStatus.AUTHORIZED:
+            # MIP §20.5.2: invalidate nonce immediately upon first use
+            tx.nonce = None
             tx.complete()
             await repo.save_transaction(tx)
+            expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+            issued_credential = IssuedCredential(
+                id=credential_id,
+                transaction_id=tx.id,
+                organization_id=tx.organization_id,
+                credential_template_id=tx.credential_template_id,
+                applicant_id=tx.applicant_id,
+                subject_did=holder_did or tx.subject_did,
+                credential_jwt=jwt_credential,
+                credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
+                status=CredentialStatus.ACTIVE,
+                issued_at=tx.issued_at or datetime.now(timezone.utc),
+                expires_at=expires_at,
+            )
+            await repo.save_credential(issued_credential)
             await repo.save_event(IssuanceEvent(
                 transaction_id=tx.id,
                 application_id=tx.application_id,
@@ -1046,11 +1181,8 @@ async def deferred_credential(
 ) -> dict:
     """OID4VCI-1FINAL §9.1 — Deferred Credential Endpoint.
 
-    Accepts a transaction_id and returns the credential if available.
-    All credentials in this service are issued synchronously, so this endpoint
-    always returns 400 (no pending deferred transactions).  The endpoint itself
-    MUST exist so that wallets can discover it via metadata and so that the
-    conformance test ``deferred_credential_endpoint_present`` passes.
+    Accepts a transaction_id and returns the credential if it has been issued,
+    or an appropriate status to indicate the credential is still pending.
     """
     if not authorization or not authorization.startswith("Bearer "):
         from fastapi.responses import JSONResponse as _JSONResponse
@@ -1066,11 +1198,36 @@ async def deferred_credential(
             status_code=400,
             content={"error": "invalid_request", "error_description": "transaction_id is required"},
         )
-    # All credentials are issued synchronously; no deferred transactions exist.
+    # Look up the transaction to check if it has been completed
+    tx = await repo.get_transaction(transaction_id)
+    if not tx:
+        from fastapi.responses import JSONResponse as _JSONResponse
+        return _JSONResponse(
+            status_code=400,
+            content={"error": "invalid_transaction_id", "error_description": "No transaction found for the given ID"},
+        )
+    # If credential was already issued, return it
+    if tx.status == IssuanceStatus.ISSUED:
+        existing_cred = await repo.get_credential_by_transaction_id(tx.id)
+        if existing_cred:
+            return {
+                "credential": existing_cred.credential_jwt,
+                "c_nonce": tx.nonce,
+                "c_nonce_expires_in": 300,
+            }
+    # If still pending/authorized, indicate the credential is not yet ready
+    if tx.status in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
+        from fastapi.responses import JSONResponse as _JSONResponse
+        return _JSONResponse(
+            status_code=202,
+            content={"transaction_id": transaction_id},
+            headers={"Retry-After": "5"},
+        )
+    # For any other status (failed, revoked, etc.), the transaction is invalid
     from fastapi.responses import JSONResponse as _JSONResponse
     return _JSONResponse(
         status_code=400,
-        content={"error": "invalid_transaction_id", "error_description": "No deferred transaction found"},
+        content={"error": "invalid_transaction_id", "error_description": f"Transaction is in {tx.status.value} state"},
     )
 
 
@@ -1413,6 +1570,70 @@ async def list_credentials(
         }
         for c in creds
     ]
+
+
+@issued_credential_router.get("", response_model=list[IssuedCredentialRecordResponse])
+async def list_issued_credentials(
+    organization_id: str = Query(...),
+    status: str | None = Query(None),
+    repo: IIssuanceRepository = Depends(),
+) -> list[IssuedCredentialRecordResponse]:
+    creds = await repo.list_credentials_by_org(organization_id)
+    records = [await _issued_credential_to_protocol(cred, repo) for cred in creds]
+    if status:
+        normalized = status.upper()
+        records = [record for record in records if record.status == normalized]
+    return records
+
+
+@issued_credential_router.get("/{credential_id}", response_model=IssuedCredentialRecordResponse)
+async def get_issued_credential(
+    credential_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> IssuedCredentialRecordResponse:
+    cred = await repo.get_credential(credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    return await _issued_credential_to_protocol(cred, repo)
+
+
+@issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse)
+async def revoke_issued_credential(
+    credential_id: str,
+    request: CredentialStatusRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> IssuedCredentialRecordResponse:
+    await revoke_credential(credential_id, request, repo)
+    cred = await repo.get_credential(credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    return await _issued_credential_to_protocol(cred, repo)
+
+
+@issued_credential_router.post("/{credential_id}/suspend", response_model=IssuedCredentialRecordResponse)
+async def suspend_issued_credential(
+    credential_id: str,
+    request: CredentialStatusRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> IssuedCredentialRecordResponse:
+    await suspend_credential(credential_id, request, repo)
+    cred = await repo.get_credential(credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    return await _issued_credential_to_protocol(cred, repo)
+
+
+@issued_credential_router.post("/{credential_id}/reinstate", response_model=IssuedCredentialRecordResponse)
+async def reinstate_issued_credential(
+    credential_id: str,
+    request: CredentialStatusRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> IssuedCredentialRecordResponse:
+    await reinstate_credential(credential_id, request, repo)
+    cred = await repo.get_credential(credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    return await _issued_credential_to_protocol(cred, repo)
 
 
 # Continued in next part...

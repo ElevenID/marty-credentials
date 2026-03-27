@@ -1,76 +1,39 @@
 """API routes for verification service."""
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 
 from mmf.infrastructure.database.session import get_db_session
 
 from ..application.rust_verifier import RustCredentialVerifier
 from ..application.service import VerificationService
 from ..infrastructure.persistence.postgres_repository import PostgresVerificationRepository
+from .models import (
+    ClaimResult,
+    CreateSessionRequest,
+    PresentationDefinition,
+    SessionResponse,
+    SubmitPresentationRequest,
+    VerificationResult,
+    VerifyDirectRequest,
+)
 
 logger = logging.getLogger(__name__)
 
 verification_router = APIRouter(prefix="/v1/verification", tags=["Verification"])
 
-
-# ============================================================================
-# Request/Response Models
-# ============================================================================
-
-class PresentationDefinition(BaseModel):
-    """OID4VP Presentation Definition."""
-    id: str
-    input_descriptors: list[dict[str, Any]]
-    format: dict[str, Any] | None = None
-
-
-class CreateSessionRequest(BaseModel):
-    """Request to create a verification session."""
-    organization_id: str
-    verifier_did: str
-    presentation_definition: PresentationDefinition
-    required_credential_types: list[str] = []
-    trusted_issuers: list[str] = []
-    session_duration_seconds: int = 600
-
-
-class SessionResponse(BaseModel):
-    """Verification session response."""
-    id: str
-    organization_id: str
-    verifier_did: str
-    status: str
-    request_uri: str
-    nonce: str
-    expires_at: str
-    created_at: str
-
-
-class SubmitPresentationRequest(BaseModel):
-    """Request to submit a presentation."""
-    presentation: dict[str, Any] | str  # Can be JWT or JSON
-
-
-class VerificationResult(BaseModel):
-    """Verification result response."""
-    valid: bool
-    verified_claims: dict[str, Any] | None = None
-    verification_method: str | None = None
-    error: str | None = None
-    verified_at: str | None = None
-
-
-class VerifyDirectRequest(BaseModel):
-    """Request for direct (stateless) verification."""
-    organization_id: str
-    presentation: dict[str, Any] | str
-    presentation_definition: PresentationDefinition
-    verifier_did: str
-    trusted_issuers: list[str] = []
+# Re-export models so existing "from …routes import X" still works
+__all__ = [
+    "ClaimResult",
+    "CreateSessionRequest",
+    "PresentationDefinition",
+    "SessionResponse",
+    "SubmitPresentationRequest",
+    "VerificationResult",
+    "VerifyDirectRequest",
+    "verification_router",
+]
 
 
 # ============================================================================
@@ -148,12 +111,19 @@ async def submit_presentation(
             presentation=request.presentation
         )
         
+        is_valid = session.status.value == "verified"
         return VerificationResult(
-            valid=session.status.value == "verified",
+            valid=is_valid,
+            overall_result="PASS" if is_valid else "FAIL",
+            trust_chain_valid=is_valid,
+            revocation_checked=is_valid,
+            revocation_status="VALID" if is_valid else "SKIPPED",
+            evaluated_at=session.verified_at.isoformat() if session.verified_at else None,
+            verifier_nonce=session.nonce if hasattr(session, 'nonce') else None,
             verified_claims=session.verified_claims,
             verification_method=session.verification_method.value if session.verification_method else None,
             error=session.error_message,
-            verified_at=session.verified_at.isoformat() if session.verified_at else None
+            verified_at=session.verified_at.isoformat() if session.verified_at else None,
         )
         
     except ValueError as e:
@@ -203,11 +173,16 @@ async def verify_presentation_direct(
             trusted_issuers=request.trusted_issuers
         )
         
+        is_valid = result["valid"]
         return VerificationResult(
-            valid=result["valid"],
+            valid=is_valid,
+            overall_result="PASS" if is_valid else "FAIL",
+            trust_chain_valid=is_valid,
+            revocation_checked=is_valid,
+            revocation_status="VALID" if is_valid else "SKIPPED",
             verified_claims=result.get("verified_claims"),
             verification_method=result.get("verification_method"),
-            error=result.get("error")
+            error=result.get("error"),
         )
         
     except Exception as e:

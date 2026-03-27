@@ -289,6 +289,35 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 issued_at=row.issued_at,
                 expires_at=row.expires_at,
             )
+
+    async def get_credential_by_transaction_id(self, transaction_id: str) -> IssuedCredential | None:
+        async with self._session_factory() as session:
+            stmt = select(issued_credentials_table).where(
+                issued_credentials_table.c.transaction_id == transaction_id
+            )
+            result = await session.execute(stmt)
+            row = result.first()
+
+            if not row:
+                return None
+
+            return IssuedCredential(
+                id=row.id,
+                transaction_id=row.transaction_id,
+                organization_id=row.organization_id,
+                credential_template_id=row.credential_template_id,
+                applicant_id=row.applicant_id,
+                subject_did=row.subject_did,
+                credential_jwt=row.credential_jwt,
+                credential_hash=row.credential_hash,
+                status=CredentialStatus(row.status),
+                status_updated_at=row.status_updated_at,
+                revoked=row.revoked,
+                revoked_at=row.revoked_at,
+                revocation_reason=row.revocation_reason,
+                issued_at=row.issued_at,
+                expires_at=row.expires_at,
+            )
     
     async def list_credentials(self, applicant_id: str) -> list[IssuedCredential]:
         async with self._session_factory() as session:
