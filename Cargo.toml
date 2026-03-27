@@ -10,14 +10,14 @@ rust-version = "1.75"
 repository = "https://github.com/adamburdett/marty-credentials"
 
 [workspace.dependencies]
-# Core crates from marty-core (local path)
-marty-crypto = { path = "../marty-core/marty-crypto", features = ["sod-builder"] }
-marty-verification = { path = "../marty-core/marty-verification" }
+# Core crates from marty-core
+marty-crypto = { git = "https://github.com/ElevenID/marty-core.git", branch = "main", features = ["sod-builder"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }
 
 # PEM encoding
 pem-rfc7468 = { version = "0.7", features = ["alloc"] }
-marty-secure-storage = { path = "../marty-core/marty-secure-storage" }
-marty-oid4vci = { path = "../marty-core/marty-oid4vci" }
+marty-secure-storage = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core.git", branch = "main" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
