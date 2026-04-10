@@ -86,7 +86,7 @@ class ZkVerificationRouter:
                 )
             except Exception as e:
                 logger.error(f"Failed to create ZK challenge: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail="Failed to create ZK challenge")
 
         @self.router.post(
             "/verify",
@@ -100,7 +100,7 @@ class ZkVerificationRouter:
                 try:
                     proof_bytes = base64.b64decode(request.proof)
                     mso_bytes = base64.b64decode(request.mso)
-                except Exception:
+                except (ValueError, Exception) as exc:
                     raise HTTPException(status_code=400, detail="Invalid base64 encoding in proof or mso")
                 
                 result = self._verifier.verify_zk_proof(
@@ -119,7 +119,7 @@ class ZkVerificationRouter:
                 raise
             except Exception as e:
                 logger.error(f"ZK verification endpoint error: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail="ZK verification failed")
 
 
 def create_zk_verification_router(verifier_service: ICredentialVerifier) -> APIRouter:

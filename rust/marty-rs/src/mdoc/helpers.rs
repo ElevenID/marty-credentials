@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use ciborium::Value as CborValue;
-use isomdl::definitions::device_key::cose_key::{CoseKey, EC2Curve, EC2Y};
+use isomdl::definitions::device_key::cose_key::{CoseKey, EC2Curve};
 use isomdl::definitions::helpers::ByteStr;
 use isomdl::definitions::issuer_signed::IssuerSignedItem;
 use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, Mso, ValidityInfo};

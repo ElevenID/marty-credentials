@@ -34,8 +34,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         return None
     
     async def get_by_access_token(self, token: str) -> IssuanceTransaction | None:
+        import hmac as _hmac
         for tx in self._transactions.values():
-            if tx.access_token == token:
+            if tx.access_token and _hmac.compare_digest(tx.access_token, token):
                 return tx
         return None
     
@@ -112,3 +113,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             if tx.organization_id == org_id and tx.credential_type:
                 seen.add(tx.credential_type)
         return sorted(seen)
+
+    async def get_credential_type_formats_for_org(self, org_id: str) -> list[tuple[str, list[str]]]:
+        seen: set[str] = set()
+        for tx in self._transactions.values():
+            if tx.organization_id == org_id and tx.credential_type:
+                seen.add(tx.credential_type)
+        return [(ct, []) for ct in sorted(seen)]

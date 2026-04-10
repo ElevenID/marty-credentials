@@ -13,7 +13,7 @@ from sqlalchemy import JSON, Column, DateTime, String, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import declarative_base
 
-from mmf.core.credentials.ports import (
+from marty_credentials.ports.credential_ports import (
     CredentialData,
     CredentialSubject,
     ICredentialWallet,

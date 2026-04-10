@@ -1,9 +1,7 @@
 """
 Credential Ports
 
-Re-exported from mmf.core.credentials — MMF is the single source of truth
-for port interfaces and domain types. This module provides backward compatibility
-for existing imports from marty_credentials.ports.
+Port interfaces and domain types for credential operations.
 """
 
 from marty_credentials.ports.types import (

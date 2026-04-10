@@ -1,8 +1,12 @@
 """PostgreSQL adapter for Issuance Repository."""
 
+import hashlib
+import hmac
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import select, and_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from issuance.domain.entities import (
@@ -27,22 +31,53 @@ from issuance.infrastructure.models import (
     issuance_transactions_table,
 )
 
+# Key for HMAC-SHA256 token hashing.  Falls back to a deterministic
+# default so that existing rows remain queryable even when the env var
+# is absent (e.g. local dev), but production deployments MUST set this
+# to a securely-generated random value.
+_TOKEN_HMAC_KEY_RAW = os.environ.get("TOKEN_HMAC_KEY", "")
+if not _TOKEN_HMAC_KEY_RAW:
+    import warnings
+    warnings.warn(
+        "TOKEN_HMAC_KEY is not set — using insecure default. "
+        "Set TOKEN_HMAC_KEY to a securely-generated random value in production.",
+        stacklevel=1,
+    )
+    _TOKEN_HMAC_KEY_RAW = "marty-token-hmac-default-key"
+_TOKEN_HMAC_KEY: bytes = _TOKEN_HMAC_KEY_RAW.encode()
+
+
+def _hash_token(raw_token: str | None) -> str | None:
+    """Return the HMAC-SHA256 hex digest of *raw_token*, or None."""
+    if not raw_token:
+        return None
+    return hmac.new(_TOKEN_HMAC_KEY, raw_token.encode(), hashlib.sha256).hexdigest()
+
 
 class PostgresIssuanceRepository(IIssuanceRepository):
     """PostgreSQL implementation of issuance repository."""
     
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
+
+    @staticmethod
+    def _normalize_optional_template_id(value: str | None) -> str:
+        """Persist absent application-template credential links as empty strings.
+
+        The legacy issuance schema stores ``credential_template_id`` as NOT NULL,
+        while the application layer treats it as optional. Normalizing here keeps
+        omitted values from surfacing as 500s while preserving existing behavior.
+        """
+        return value or ""
+
+    @staticmethod
+    def _denormalize_optional_template_id(value: str | None) -> str | None:
+        """Return stored empty-string sentinels as ``None`` to callers."""
+        return value or None
     
     # Transaction methods
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
         async with self._session_factory() as session:
-            stmt = select(issuance_transactions_table).where(
-                issuance_transactions_table.c.id == tx.id
-            )
-            result = await session.execute(stmt)
-            existing = result.first()
-            
             tx_data = {
                 "id": tx.id,
                 "organization_id": tx.organization_id,
@@ -52,31 +87,31 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "subject_did": tx.subject_did,
                 "status": tx.status.value,
                 "pre_auth_code": tx.pre_auth_code,
-                "access_token": tx.access_token,
+                "access_token": _hash_token(tx.access_token),
                 "c_nonce": tx.nonce,
                 "claims": tx.claims,
                 "credential_type": tx.credential_type,
                 "zk_predicate_claims": tx.zk_predicate_claims or [],
+                "selective_disclosure_claims": tx.selective_disclosure_claims or [],
                 "credential_payload_format": tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
                 "wallet_configs": tx.wallet_configs or [],
+                "created_at": tx.created_at,
                 "expires_at": tx.expires_at,
                 "issued_at": tx.issued_at,
                 "revoked_at": tx.revoked_at,
                 "revocation_reason": tx.revocation_reason,
             }
-            
-            if existing:
-                stmt = (
-                    issuance_transactions_table.update()
-                    .where(issuance_transactions_table.c.id == tx.id)
-                    .values(**tx_data)
+
+            update_data = {k: v for k, v in tx_data.items() if k not in ("id", "created_at")}
+            stmt = (
+                pg_insert(issuance_transactions_table)
+                .values(**tx_data)
+                .on_conflict_do_update(
+                    index_elements=["id"],
+                    set_=update_data,
                 )
-                await session.execute(stmt)
-            else:
-                tx_data["created_at"] = tx.created_at
-                stmt = issuance_transactions_table.insert().values(**tx_data)
-                await session.execute(stmt)
-            
+            )
+            await session.execute(stmt)
             await session.commit()
     
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
@@ -104,6 +139,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 claims=row.claims or {},
                 credential_type=row.credential_type,
                 zk_predicate_claims=list(row.zk_predicate_claims or []),
+                selective_disclosure_claims=list(getattr(row, 'selective_disclosure_claims', None) or []),
                 credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
                 wallet_configs=list(row.wallet_configs or []),
                 created_at=row.created_at,
@@ -138,6 +174,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 claims=row.claims or {},
                 credential_type=row.credential_type,
                 zk_predicate_claims=list(row.zk_predicate_claims or []),
+                selective_disclosure_claims=list(getattr(row, 'selective_disclosure_claims', None) or []),
                 credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
                 wallet_configs=list(row.wallet_configs or []),
                 created_at=row.created_at,
@@ -150,7 +187,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     async def get_by_access_token(self, token: str) -> IssuanceTransaction | None:
         async with self._session_factory() as session:
             stmt = select(issuance_transactions_table).where(
-                issuance_transactions_table.c.access_token == token
+                issuance_transactions_table.c.access_token == _hash_token(token)
             )
             result = await session.execute(stmt)
             row = result.first()
@@ -172,6 +209,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 claims=row.claims or {},
                 credential_type=row.credential_type,
                 zk_predicate_claims=list(row.zk_predicate_claims or []),
+                selective_disclosure_claims=list(getattr(row, 'selective_disclosure_claims', None) or []),
                 credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
                 wallet_configs=list(row.wallet_configs or []),
                 created_at=row.created_at,
@@ -198,13 +236,19 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             return transactions
 
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
-        """Return distinct credential_type values for an org's active templates.
+        """Return distinct credential_type values for an org's issuable templates.
 
         Reads from ``credential_template_service.credential_templates`` (same
         PostgreSQL instance, different schema) so that issuer metadata reflects
         what the org is *configured* to issue — not historical issuance data.
         This means new templates appear in metadata immediately after creation
-        and deactivated templates are removed without any delay.
+        and deprecated templates are removed without any delay.
+
+        Both 'draft' and 'active' templates are included because the issuance
+        endpoint accepts both statuses.  OID4VCI wallets (e.g. Walt.id stable)
+        strictly validate that the credential_configuration_id in the offer
+        appears in the issuer metadata, so draft templates must be discoverable.
+        Only 'deprecated' templates are excluded.
         """
         from sqlalchemy import text
         async with self._session_factory() as session:
@@ -213,13 +257,45 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 SELECT DISTINCT credential_type
                 FROM credential_template_service.credential_templates
                 WHERE organization_id = :org_id
-                  AND status = 'active'
+                  AND status IN ('active', 'draft')
                   AND credential_type IS NOT NULL
                 ORDER BY credential_type
                 """
             )
             result = await session.execute(stmt, {"org_id": org_id})
             return [row[0] for row in result.all()]
+
+    async def get_credential_type_formats_for_org(self, org_id: str) -> list[tuple[str, list[str]]]:
+        """Return (credential_type, supported_formats) for an org's active templates.
+
+        Queries the credential_template_service schema for both the credential_type
+        and the supported_formats JSON array so that issuer metadata can emit
+        format-specific configuration entries for non-ISO-prefixed types that
+        support mDoc (e.g. ``com.icao.dtc`` with ``supported_formats=["mdoc"]``).
+        """
+        from sqlalchemy import text
+        async with self._session_factory() as session:
+            stmt = text(
+                """
+                SELECT credential_type, supported_formats
+                FROM credential_template_service.credential_templates
+                WHERE organization_id = :org_id
+                  AND status IN ('active', 'draft')
+                  AND credential_type IS NOT NULL
+                ORDER BY credential_type
+                """
+            )
+            result = await session.execute(stmt, {"org_id": org_id})
+            rows = result.all()
+            # Deduplicate: merge formats across templates with the same credential_type
+            type_formats: dict[str, set[str]] = {}
+            for ctype, formats in rows:
+                if ctype not in type_formats:
+                    type_formats[ctype] = set()
+                if formats:
+                    fmts = formats if isinstance(formats, list) else []
+                    type_formats[ctype].update(fmts)
+            return [(ct, sorted(fmts)) for ct, fmts in sorted(type_formats.items())]
 
     # Credential methods
     async def save_credential(self, cred: IssuedCredential) -> None:
@@ -365,7 +441,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "organization_id": template.organization_id,
                 "name": template.name,
                 "description": template.description,
-                "credential_template_id": template.credential_template_id,
+                "credential_template_id": self._normalize_optional_template_id(
+                    template.credential_template_id
+                ),
                 "form_fields": template.form_fields,
                 "evidence_requirements": template.evidence_requirements,
                 "claim_collection_rules": template.claim_collection_rules,
@@ -409,7 +487,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 organization_id=row.organization_id,
                 name=row.name,
                 description=row.description,
-                credential_template_id=row.credential_template_id,
+                credential_template_id=self._denormalize_optional_template_id(
+                    row.credential_template_id
+                ),
                 form_fields=row.form_fields or [],
                 evidence_requirements=row.evidence_requirements or [],
                 claim_collection_rules=row.claim_collection_rules or [],
@@ -604,7 +684,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "organization_id": auth_session.organization_id,
                 "code_challenge": auth_session.code_challenge,
                 "code_challenge_method": auth_session.code_challenge_method,
-                "access_token": auth_session.access_token,
+                "access_token": _hash_token(auth_session.access_token),
                 "c_nonce": auth_session.nonce,
                 "status": auth_session.status,
                 "created_at": auth_session.created_at,
@@ -656,7 +736,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
         async with self._session_factory() as session:
             stmt = select(authorization_sessions_table).where(
-                authorization_sessions_table.c.access_token == token
+                authorization_sessions_table.c.access_token == _hash_token(token)
             )
             result = await session.execute(stmt)
             row = result.first()

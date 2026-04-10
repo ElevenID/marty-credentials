@@ -1,5 +1,5 @@
-"""Credential Wallet Port — re-exported from MMF."""
+"""Credential Wallet Port."""
 
-from mmf.core.credentials.ports import ICredentialWallet  # noqa: F401
+from .credential_ports import ICredentialWallet  # noqa: F401
 
 __all__ = ["ICredentialWallet"]

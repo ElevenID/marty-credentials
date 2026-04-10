@@ -6,7 +6,7 @@
 
 # Stage 1: Build Rust bindings for Python (marty-bindings)
 # Using nightly because edition2024 is required by aligned-0.4.3 dependency
-FROM rustlang/rust:nightly-slim as rust-builder
+FROM rustlang/rust:nightly-slim AS rust-builder
 
 ARG MARTY_CORE_PATH=../marty-core
 ARG MMF_PATH=../marty-microservices-framework
@@ -24,7 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install maturin for building Python packages from Rust
-RUN pip3 install --break-system-packages maturin
+RUN pip3 install --break-system-packages maturin[patchelf]
 
 WORKDIR /build
 
@@ -42,6 +42,7 @@ COPY marty-core/marty-biometrics ./marty-core/marty-biometrics/
 COPY marty-core/marty-iso18013 ./marty-core/marty-iso18013/
 COPY marty-core/marty-zkp ./marty-core/marty-zkp/
 COPY marty-core/marty-oid4vci ./marty-core/marty-oid4vci/
+COPY marty-core/marty-didcomm ./marty-core/marty-didcomm/
 
 # Copy longfellow-zk C++ library (required by marty-zkp build.rs)
 COPY longfellow-zk/lib ./longfellow-zk/lib
@@ -55,7 +56,7 @@ WORKDIR /build
 RUN rm -rf marty-core
 
 # Stage 2: Python base with dependencies  
-FROM python:3.12-slim as base
+FROM python:3.12-slim AS base
 
 ARG MMF_PATH=../marty-microservices-framework
 
@@ -99,16 +100,21 @@ RUN pip install --no-cache-dir \
     grpcio-health-checking>=1.62.0 \
     grpcio-reflection>=1.62.0 \
     googleapis-common-protos>=1.63.0 \
-    protobuf>=4.25.0
+    protobuf>=4.25.0 \
+    cryptography>=41.0.0 \
+    cbor2>=5.6.0
 
 # Stage 3: Final service image
-FROM base as final
+FROM base AS final
 
 # Copy issuance service code
 COPY marty-credentials/services/issuance /app/services/issuance
 
 # Copy shared proto stubs
 COPY marty-credentials/packages /app/packages
+
+# Copy status_list (required by issuance for SymmetricEncryption)
+COPY marty-credentials/python/status_list /app/status_list
 
 # Set Python path
 ENV PYTHONPATH=/app:/app/services:/app/packages

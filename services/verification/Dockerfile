@@ -4,7 +4,7 @@
 # Build context: workspace root (parent of marty-credentials)
 
 # Stage 1: Build Rust bindings (reuse from issuance service)
-FROM rust:1.75-slim as rust-builder
+FROM rust:1.75-slim AS rust-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
@@ -29,13 +29,14 @@ COPY marty-core/marty-biometrics ./marty-core/marty-biometrics/
 COPY marty-core/marty-iso18013 ./marty-core/marty-iso18013/
 COPY marty-core/marty-zkp ./marty-core/marty-zkp/
 COPY marty-core/marty-oid4vci ./marty-core/marty-oid4vci/
+COPY marty-core/marty-didcomm ./marty-core/marty-didcomm/
 
 # Build marty-bindings Python wheel
 WORKDIR /build/marty-core/marty-bindings
 RUN maturin build --release --out /wheels
 
 # Stage 2: Python base
-FROM python:3.12-slim as base
+FROM python:3.12-slim AS base
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -73,7 +74,7 @@ RUN pip install --no-cache-dir \
     python-multipart==0.0.6
 
 # Stage 3: Final service
-FROM base as final
+FROM base AS final
 
 # Copy verification service code
 COPY marty-credentials/services/verification /app/services/verification

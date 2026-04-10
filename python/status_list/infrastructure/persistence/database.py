@@ -36,10 +36,12 @@ def get_database_url() -> str:
         return status_list_url
     
     # Fallback to subscription database (shared infrastructure)
-    return os.environ.get(
-        "DATABASE_URL",
-        "postgresql+asyncpg://marty:marty@localhost:5432/marty_applicants",
-    )
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "Neither STATUS_LIST_DATABASE_URL nor DATABASE_URL is set"
+        )
+    return url
 
 
 def get_engine() -> AsyncEngine:

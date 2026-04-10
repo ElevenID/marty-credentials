@@ -2,7 +2,6 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use std::collections::HashMap;
 
 /// Wrapper for marty_verification::mdoc::DeviceResponse
 #[pyclass]
@@ -182,7 +181,7 @@ impl MdocVerificationResult {
 #[pyfunction]
 pub fn verify_mdoc_signature(
     mdoc_bytes: Vec<u8>,
-    trusted_issuer_certs_pem: Vec<String>,
+    _trusted_issuer_certs_pem: Vec<String>,
 ) -> PyResult<MdocVerificationResult> {
     // Parse DeviceResponse
     let response = match marty_verification::mdoc::parse_device_response(&mdoc_bytes) {
@@ -247,8 +246,14 @@ pub fn verify_mdoc_signature(
                         // For now, just check direct match
                     }
                 } else {
-                    // No trusted certs provided, assume verified for testing
-                    issuer_verified = true;
+                    // No trusted certs configured — issuer trust CANNOT be established.
+                    // Signature may be valid but we cannot confirm the issuer is
+                    // in the trust list. Mark explicitly as unverified.
+                    issuer_verified = false;
+                    tracing::warn!(
+                        "mDOC issuer trust check skipped: no trusted certificates configured. \
+                         Issuer cert chain present but cannot be validated against a trust anchor."
+                    );
                 }
             }
             Err(e) => {

@@ -20,7 +20,7 @@ from marty_credentials.infrastructure.auth.token_validator import (
 )
 
 logger = logging.getLogger(__name__)
-from mmf.core.credentials.ports import (
+from marty_credentials.ports.credential_ports import (
     CredentialData,
     CredentialFormat,
     CredentialOffer,

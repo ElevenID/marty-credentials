@@ -1,22 +1,47 @@
-"""Auto-generated protobuf and gRPC stubs for marty-ui services."""
+"""Auto-generated protobuf and gRPC stubs for Marty services.
 
-from . import auth_service_pb2
-from . import auth_service_pb2_grpc
-from . import credential_template_service_pb2
-from . import credential_template_service_pb2_grpc
-from . import document_signer_pb2
-from . import document_signer_pb2_grpc
-from . import event_stream_service_pb2
-from . import event_stream_service_pb2_grpc
-from . import flow_service_pb2
-from . import flow_service_pb2_grpc
-from . import issuance_service_pb2
-from . import issuance_service_pb2_grpc
-from . import notification_service_pb2
-from . import notification_service_pb2_grpc
-from . import organization_service_pb2
-from . import organization_service_pb2_grpc
-from . import presentation_policy_service_pb2
-from . import presentation_policy_service_pb2_grpc
-from . import revocation_profile_service_pb2
-from . import revocation_profile_service_pb2_grpc
+The generated modules are imported lazily to avoid circular-import traps during
+service startup when a service requests one stub (for example
+``issuance_service_pb2``) but the package eagerly imports every other stub.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+
+_SUBMODULES = {
+	"auth_service_pb2",
+	"auth_service_pb2_grpc",
+	"credential_template_service_pb2",
+	"credential_template_service_pb2_grpc",
+	"document_signer_pb2",
+	"document_signer_pb2_grpc",
+	"event_stream_service_pb2",
+	"event_stream_service_pb2_grpc",
+	"flow_service_pb2",
+	"flow_service_pb2_grpc",
+	"issuance_service_pb2",
+	"issuance_service_pb2_grpc",
+	"notification_service_pb2",
+	"notification_service_pb2_grpc",
+	"organization_service_pb2",
+	"organization_service_pb2_grpc",
+	"presentation_policy_service_pb2",
+	"presentation_policy_service_pb2_grpc",
+	"revocation_profile_service_pb2",
+	"revocation_profile_service_pb2_grpc",
+}
+
+__all__ = sorted(_SUBMODULES)
+
+
+def __getattr__(name: str):
+	if name in _SUBMODULES:
+		module = import_module(f"{__name__}.{name}")
+		globals()[name] = module
+		return module
+	raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+	return sorted(list(globals().keys()) + list(_SUBMODULES))

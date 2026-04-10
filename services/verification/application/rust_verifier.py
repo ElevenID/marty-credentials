@@ -48,10 +48,16 @@ class RustCredentialVerifier:
             if trusted_issuers and issuer not in trusted_issuers:
                 return {"valid": False, "error": f"Issuer {issuer} not trusted"}
             
-            # For now, return basic validation
-            # TODO: Implement full Rust-based signature verification
+            # Signature verification not yet implemented — refuse to claim validity.
+            # TODO: Implement full Rust-based signature verification via marty-rs.
+            logger.warning(
+                "W3C VC signature verification not implemented — "
+                "returning unverified result for issuer %s",
+                issuer,
+            )
             return {
-                "valid": True,
+                "valid": False,
+                "error": "W3C VC signature verification not yet implemented",
                 "issuer": issuer,
                 "claims": credential.get("credentialSubject", {}),
                 "method": "w3c_vc"
@@ -97,7 +103,8 @@ class RustCredentialVerifier:
                 payload_b64 += "=" * padding
             try:
                 payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
-            except Exception:
+            except (ValueError, UnicodeDecodeError) as exc:
+                logger.warning("Failed to decode JWT VP payload: %s", exc)
                 payload = {}
 
             vp = payload.get("vp", {})

@@ -1,5 +1,5 @@
-"""Credential Issuer Port — re-exported from MMF."""
+"""Credential Issuer Port."""
 
-from mmf.core.credentials.ports import ICredentialIssuer  # noqa: F401
+from .credential_ports import ICredentialIssuer  # noqa: F401
 
 __all__ = ["ICredentialIssuer"]

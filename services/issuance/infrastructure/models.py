@@ -1,7 +1,7 @@
 """SQLAlchemy models for Issuance Service."""
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Boolean, JSON, Integer, Table, Index
+from sqlalchemy import Column, String, DateTime, Boolean, JSON, Integer, Table, Index, Text, ForeignKey
 from sqlalchemy.orm import registry
 
 mapper_registry = registry()
@@ -29,6 +29,7 @@ issuance_transactions_table = Table(
     Column("claims", JSON, nullable=False, default=dict),
     Column("credential_type", String, nullable=True),
     Column("zk_predicate_claims", JSON, nullable=True, default=list),
+    Column("selective_disclosure_claims", JSON, nullable=True, default=list),
     Column("credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"),
     Column("wallet_configs", JSON, nullable=True, server_default="[]"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
@@ -49,7 +50,7 @@ issued_credentials_table = Table(
     "issued_credentials",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("transaction_id", String, nullable=False),
+    Column("transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="CASCADE"), nullable=False),
     Column("organization_id", String, nullable=False),
     Column("credential_template_id", String, nullable=False),
     Column("applicant_id", String, nullable=True),
@@ -101,7 +102,7 @@ applications_table = Table(
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, nullable=False),
-    Column("application_template_id", String, nullable=False),
+    Column("application_template_id", String, ForeignKey("issuance_service.application_templates.id", ondelete="CASCADE"), nullable=False),
     Column("applicant_identifier", String, nullable=False),
     Column("form_data", JSON, nullable=False, default=dict),
     Column("submitted_evidence", JSON, nullable=False, default=list),
@@ -129,8 +130,8 @@ issuance_events_table = Table(
     "issuance_events",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("transaction_id", String, nullable=True),
-    Column("application_id", String, nullable=True),
+    Column("transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="SET NULL"), nullable=True),
+    Column("application_id", String, ForeignKey("issuance_service.applications.id", ondelete="SET NULL"), nullable=True),
     Column("event_type", String, nullable=False),
     Column("metadata", JSON, nullable=False, default=dict),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
@@ -164,4 +165,20 @@ authorization_sessions_table = Table(
     Index("ix_authorization_sessions_status", "status"),
     Index("ix_authorization_sessions_issuer_state", "issuer_state"),
     schema="issuance_service"
+)
+
+# Issuer Signing Keys table — encrypted Ed25519 JWKs per organization
+issuer_signing_keys_table = Table(
+    "issuer_signing_keys",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False, unique=True),
+    Column("issuer_did", String, nullable=False),
+    Column("key_algorithm", String, nullable=False, server_default="Ed25519"),
+    Column("encrypted_jwk_json", Text, nullable=False),
+    Column("public_key_b64", String, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_issuer_signing_keys_organization_id", "organization_id"),
+    schema="issuance_service",
 )

@@ -182,8 +182,8 @@ class VerificationService(ICredentialVerifier):
                         stored_cred = self.db.query(Credential).filter(Credential.id == cred_id_value).first()
                     elif isinstance(cred_id_value, str) and cred_id_value.isdigit():
                         stored_cred = self.db.query(Credential).filter(Credential.id == int(cred_id_value)).first()
-                except (ValueError, TypeError):
-                    pass
+                except (ValueError, TypeError) as exc:
+                    logger.warning("Credential ID lookup failed for %r: %s", cred_id_value, exc)
                 
                 # Fallback to raw_credential search for DID-based IDs
                 if not stored_cred:
@@ -524,7 +524,7 @@ class VerificationService(ICredentialVerifier):
                         if isinstance(decoded, list):
                             return bytes(decoded)
                     except json.JSONDecodeError:
-                        pass
+                        pass  # Expected: input may not be JSON; try base64 next
                     # Try base64 decoding
                     try:
                         import base64
@@ -532,8 +532,8 @@ class VerificationService(ICredentialVerifier):
                         if padding:
                             trimmed += "=" * padding
                         return base64.urlsafe_b64decode(trimmed)
-                    except Exception:
-                        pass
+                    except (ValueError, Exception) as exc:
+                        logger.debug("mDoc base64 decode failed: %s", exc)
                 raise ValueError(f"Unsupported mDoc input type for verification: {type(value).__name__}")
 
             mdoc_bytes = _to_bytes(mdoc)
@@ -562,8 +562,9 @@ class VerificationService(ICredentialVerifier):
                     try:
                         valid_until_dt = datetime.fromisoformat(valid_until.replace("Z", "+00:00"))
                         is_expired = valid_until_dt.replace(tzinfo=None) < datetime.utcnow()
-                    except ValueError:
-                        pass
+                    except ValueError as exc:
+                        logger.warning("Malformed mDoc expiry date %r, treating as expired: %s", valid_until, exc)
+                        is_expired = True
             
             # Verify mDoc signature with trusted certificates
             signature_valid = False

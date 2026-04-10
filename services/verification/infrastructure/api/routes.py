@@ -1,8 +1,10 @@
 """API routes for verification service."""
 
+import hmac as _hmac
 import logging
+import os
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from mmf.infrastructure.database.session import get_db_session
 
@@ -37,6 +39,26 @@ __all__ = [
 
 
 # ============================================================================
+# API Key Authentication
+# ============================================================================
+
+_VERIFICATION_API_KEY = os.environ.get("VERIFICATION_API_KEY", "")
+
+
+async def _verify_api_key(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> str:
+    """Verify X-API-Key header for verification management endpoints."""
+    if not _VERIFICATION_API_KEY:
+        raise HTTPException(status_code=503, detail="VERIFICATION_API_KEY not configured on server")
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="X-API-Key header is missing")
+    if not _hmac.compare_digest(x_api_key, _VERIFICATION_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return x_api_key
+
+
+# ============================================================================
 # Dependency Injection
 # ============================================================================
 
@@ -63,7 +85,7 @@ def get_verification_service(
 # Endpoints
 # ============================================================================
 
-@verification_router.post("/sessions", response_model=SessionResponse)
+@verification_router.post("/sessions", response_model=SessionResponse, dependencies=[Depends(_verify_api_key)])
 async def create_verification_session(
     request: CreateSessionRequest,
     service: VerificationService = Depends(get_verification_service)
@@ -94,7 +116,7 @@ async def create_verification_session(
         logger.error(f"Failed to create verification session: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail="Failed to create verification session"
         )
 
 
@@ -127,12 +149,12 @@ async def submit_presentation(
         )
         
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid presentation data")
     except Exception as e:
         logger.error(f"Failed to submit presentation: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail="Presentation submission failed"
         )
 
 
@@ -158,7 +180,7 @@ async def get_session(
     )
 
 
-@verification_router.post("/verify", response_model=VerificationResult)
+@verification_router.post("/verify", response_model=VerificationResult, dependencies=[Depends(_verify_api_key)])
 async def verify_presentation_direct(
     request: VerifyDirectRequest,
     service: VerificationService = Depends(get_verification_service)
@@ -189,7 +211,7 @@ async def verify_presentation_direct(
         logger.error(f"Direct verification failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail="Verification failed"
         )
 
 

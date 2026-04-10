@@ -1,5 +1,5 @@
-"""Key Manager Port — re-exported from MMF."""
+"""Key Manager Port."""
 
-from mmf.core.credentials.ports import IKeyManager  # noqa: F401
+from .credential_ports import IKeyManager  # noqa: F401
 
 __all__ = ["IKeyManager"]

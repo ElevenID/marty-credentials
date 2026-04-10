@@ -26,10 +26,9 @@ def get_migration_adapter() -> AlembicMigrationAdapter:
     """Create and return configured migration adapter."""
     from alembic.config import Config
 
-    database_url = os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://marty:marty_dev@localhost:5432/marty_credentials",
-    )
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
 
     # Convert asyncpg URL to sync for Alembic
     sync_url = database_url.replace("+asyncpg", "")

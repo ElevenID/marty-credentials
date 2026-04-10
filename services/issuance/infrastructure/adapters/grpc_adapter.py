@@ -186,7 +186,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             await repo.save_transaction(tx)
 
             credential_config_id = credential_type or "default"
-            default_fmt_variant = "mso_mdoc" if credential_payload_format == "mso_mdoc" else None
+            # credential_payload_format may be the enum value "MDOC", the alias
+            # "mso_mdoc", or the raw string "mdoc" depending on the code path that
+            # stored the template.  All three indicate an mso_mdoc offer.
+            _MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
+            default_fmt_variant = "mso_mdoc" if credential_payload_format in _MDOC_PAYLOAD_FORMATS else None
             default_config_id = _config_id_for_format_variant(credential_config_id, default_fmt_variant)
 
             offer_json_str = oid4vci_create_credential_offer(
@@ -209,6 +213,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     wallet_issuer_url = (
                         f"{ISSUER_BASE_URL}/org/{request.organization_id}/spruce"
                         if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
+                        else f"{ISSUER_BASE_URL}/org/{request.organization_id}/credential-manager"
+                        if fmt_variant == "credential-manager"
+                        else f"{ISSUER_BASE_URL}/org/{request.organization_id}/apple-wallet"
+                        if fmt_variant == "apple-wallet"
                         else _org_issuer_url(request.organization_id)
                     )
                     wallet_offer_json = oid4vci_create_credential_offer(
@@ -463,10 +471,15 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             # Get issuer key
             try:
-                issuer_key = get_or_generate_issuer_key(tx.organization_id)
+                issuer_key = await get_or_generate_issuer_key(tx.organization_id)
             except ImportError as e:
                 context.set_code(grpc.StatusCode.INTERNAL)
                 context.set_details("Credential signing service unavailable")
+                return pb2.IssueCredentialResponse()
+            except RuntimeError as e:
+                logger.error(f"Issuer key storage unavailable: {e}")
+                context.set_code(grpc.StatusCode.INTERNAL)
+                context.set_details("Credential issuer key unavailable")
                 return pb2.IssueCredentialResponse()
 
             credential_type = tx.credential_type or "org.iso.18013.5.1.mDL"
@@ -487,8 +500,15 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             fmt = request.format or "vc+sd-jwt"
+            _SD_JWT_PAYLOAD_FORMATS = {
+                "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
+                "SD_JWT_VC", "sd_jwt_vc",
+                "vc+sd-jwt", "dc+sd-jwt",
+            }
             if credential_payload_fmt == "mso_mdoc":
                 signing_format = "mso_mdoc"
+            elif credential_payload_fmt in _SD_JWT_PAYLOAD_FORMATS:
+                signing_format = "vc+sd-jwt"
             elif fmt == "spruce-vc+sd-jwt":
                 signing_format = "vc+sd-jwt"
             else:
@@ -522,7 +542,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             if jwt_credential is None:
                 jwt_credential, credential_id = create_verifiable_credential_wrapper(
                     issuer_did=issuer_key["did"],
-                    issuer_jwk_json="",
+                    issuer_jwk_json=issuer_key["jwk_json"],
                     subject_id=holder_did or tx.subject_did,
                     credential_type=signing_credential_type,
                     claims_json=json.dumps(clean_claims),
@@ -566,6 +586,184 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))
             return pb2.IssueCredentialResponse()
+
+    # ------------------------------------------------------------------ #
+    # DidcommDeliver — DIDComm v2 push delivery
+    # ------------------------------------------------------------------ #
+
+    async def DidcommDeliver(self, request, context):
+        """Deliver a credential to a holder via DIDComm v2 push.
+
+        Signs the credential, wraps it in a DIDComm v2 issue-credential/3.0
+        message, resolves the holder's DID Document, and POSTs the message
+        to the holder's DIDComm service endpoint.
+        """
+        try:
+            import hashlib
+            import httpx
+            from issuance.domain.entities import (
+                IssuanceStatus, IssuanceEvent, EventType,
+                IssuedCredential, CredentialStatus,
+            )
+            from issuance.application.rust_integration import (
+                get_or_generate_issuer_key,
+                create_verifiable_credential_wrapper,
+                didcomm_resolve_did,
+                didcomm_extract_endpoint,
+                didcomm_pack_credential,
+            )
+            from datetime import timedelta
+
+            repo = self._get_repo()
+
+            if not request.transaction_id:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("transaction_id is required")
+                return pb2.DidcommDeliverResponse()
+
+            if not request.holder_did:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("holder_did is required")
+                return pb2.DidcommDeliverResponse()
+
+            tx = await repo.get_transaction(request.transaction_id)
+            if not tx:
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details("Transaction not found")
+                return pb2.DidcommDeliverResponse()
+
+            if tx.status == IssuanceStatus.ISSUED:
+                context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                context.set_details("Credential already issued")
+                return pb2.DidcommDeliverResponse()
+
+            if tx.status not in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(f"Transaction in {tx.status.value} state")
+                return pb2.DidcommDeliverResponse()
+
+            issuer_key = await get_or_generate_issuer_key(tx.organization_id)
+
+            credential_type = tx.credential_type or "VerifiableCredential"
+            _INTERNAL_CLAIM_FIELDS = {
+                "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
+                "issuance_transaction_id", "issuance_fallback", "credential_type",
+                "credential_display_name", "rejection_reason", "review_notes",
+                "info_requests", "applicant_id", "_vct",
+            }
+            clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
+
+            ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "http://localhost:8080")
+            credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+            if credential_payload_fmt == "mso_mdoc":
+                signing_format = "mso_mdoc"
+            elif credential_payload_fmt in ("w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt"):
+                signing_format = "vc+sd-jwt"
+            else:
+                signing_format = "vc+sd-jwt"
+
+            vct_for_signing = (
+                tx.claims.get("_vct")
+                or (f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                    if credential_type and not credential_type.startswith("http")
+                    else credential_type)
+            )
+            signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+
+            jwt_credential, credential_id = create_verifiable_credential_wrapper(
+                issuer_did=issuer_key["did"],
+                issuer_jwk_json=issuer_key["jwk_json"],
+                subject_id=request.holder_did,
+                credential_type=signing_credential_type,
+                claims_json=json.dumps(clean_claims),
+                expiration_seconds=31536000,
+                organization_id=tx.organization_id,
+                format=signing_format,
+                zk_predicate_claims=tx.zk_predicate_claims or [],
+                credential_payload_format=credential_payload_fmt,
+            )
+
+            didcomm_message_json = didcomm_pack_credential(
+                credential=jwt_credential,
+                credential_format=credential_payload_fmt,
+                issuer_did=issuer_key["did"],
+                holder_did=request.holder_did,
+                credential_id=credential_id,
+            )
+            didcomm_msg = json.loads(didcomm_message_json)
+            didcomm_message_id = didcomm_msg.get("id", "")
+
+            did_doc = didcomm_resolve_did(
+                request.holder_did,
+                request.universal_resolver_url or None,
+            )
+            service_endpoint = didcomm_extract_endpoint(did_doc)
+            if not service_endpoint:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(f"Holder DID {request.holder_did} has no DIDComm service endpoint")
+                return pb2.DidcommDeliverResponse()
+
+            delivery_status = "delivered"
+            delivery_error = ""
+            try:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        service_endpoint,
+                        content=didcomm_message_json,
+                        headers={"Content-Type": "application/didcomm-plain+json"},
+                    )
+                    if resp.status_code >= 400:
+                        delivery_status = "delivery_failed"
+                        delivery_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            except Exception as e:
+                delivery_status = "delivery_failed"
+                delivery_error = str(e)
+
+            if delivery_status == "delivered" and tx.status != IssuanceStatus.ISSUED:
+                tx.nonce = None
+                tx.complete()
+                await repo.save_transaction(tx)
+                expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+                issued_credential = IssuedCredential(
+                    id=credential_id,
+                    transaction_id=tx.id,
+                    organization_id=tx.organization_id,
+                    credential_template_id=tx.credential_template_id,
+                    applicant_id=tx.applicant_id,
+                    subject_did=request.holder_did,
+                    credential_jwt=jwt_credential,
+                    credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
+                    status=CredentialStatus.ACTIVE,
+                    issued_at=tx.issued_at or datetime.now(timezone.utc),
+                    expires_at=expires_at,
+                )
+                await repo.save_credential(issued_credential)
+                await repo.save_event(IssuanceEvent(
+                    transaction_id=tx.id,
+                    application_id=tx.application_id,
+                    event_type=EventType.CREDENTIAL_ISSUED,
+                    metadata={
+                        "credential_id": credential_id,
+                        "credential_type": credential_type,
+                        "delivery_protocol": "didcomm_v2",
+                        "service_endpoint": service_endpoint,
+                    },
+                ))
+
+            return pb2.DidcommDeliverResponse(
+                transaction_id=tx.id,
+                credential_id=credential_id,
+                holder_did=request.holder_did,
+                service_endpoint=service_endpoint,
+                didcomm_message_id=didcomm_message_id,
+                status=delivery_status,
+                error=delivery_error,
+            )
+        except Exception as exc:
+            logger.exception("DidcommDeliver failed")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(exc))
+            return pb2.DidcommDeliverResponse()
 
     # ------------------------------------------------------------------ #
     # GetOffer
@@ -886,4 +1084,8 @@ def _config_id_for_format_variant(base: str, variant: str | None) -> str:
         return f"{base}#spruce-sd-jwt"
     if variant == "mso_mdoc":
         return f"{base}#mdoc"
+    if variant == "credential-manager":
+        return f"{base}#credential-manager"
+    if variant == "apple-wallet":
+        return f"{base}#apple-wallet"
     return f"{base}#sd-jwt"

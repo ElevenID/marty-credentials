@@ -86,10 +86,13 @@ class KafkaEventPublisher(EventPublisherPort):
         await self._ensure_producer()
         
         if self._producer is None:
-            # Fallback to logging if Kafka not available
-            logger.warning(
-                f"Kafka not available, logging event: {event.event_type}",
-                extra={"event": event.__dict__}
+            # Kafka unavailable — log at error level since events will be lost
+            logger.error(
+                "Kafka producer not available, event DROPPED: %s (event_id=%s). "
+                "Configure kafka_bootstrap_servers and ensure aiokafka is installed.",
+                event.event_type,
+                event.event_id,
+                extra={"event": event.__dict__},
             )
             return
         

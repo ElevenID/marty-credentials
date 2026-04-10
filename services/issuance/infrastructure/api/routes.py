@@ -1,12 +1,15 @@
 """OID4VCI HTTP API endpoints."""
 
+import asyncio
 import base64
 import hashlib
 import json
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response
@@ -17,12 +20,17 @@ from issuance.application.rust_integration import (
     get_marty_rs,
     get_or_generate_issuer_key,
     create_verifiable_credential_wrapper,
+    postprocess_sd_jwt_x5c,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
     oid4vci_create_authorization_response,
     oid4vci_exchange_auth_code_for_token,
     oid4vci_verify_pkce_s256,
     verify_proof_jwt,
+    didcomm_resolve_did,
+    didcomm_extract_endpoint,
+    didcomm_pack_credential,
+    didcomm_encrypt,
 )
 from issuance.domain.entities import (
     Application,
@@ -40,13 +48,13 @@ from issuance.domain.ports import IIssuanceRepository
 
 logger = logging.getLogger(__name__)
 
-# Configuration
-REVOCATION_PROFILE_SERVICE_URL = os.environ.get(
-    "REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"
-)
-CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
-    "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://localhost:8003"
-)
+# Configuration — no localhost fallback; services must be explicitly configured.
+REVOCATION_PROFILE_SERVICE_URL = os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "")
+CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get("CREDENTIAL_TEMPLATE_SERVICE_URL", "")
+if not REVOCATION_PROFILE_SERVICE_URL:
+    logger.warning("REVOCATION_PROFILE_SERVICE_URL not set — revocation calls will fail")
+if not CREDENTIAL_TEMPLATE_SERVICE_URL:
+    logger.warning("CREDENTIAL_TEMPLATE_SERVICE_URL not set — template calls will fail")
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
 # Routers
@@ -54,6 +62,172 @@ issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
 application_template_router = APIRouter(prefix="/v1/application-templates", tags=["application-templates"])
 application_router = APIRouter(prefix="/v1/applications", tags=["applications"])
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["issued-credentials"])
+
+# ---------------------------------------------------------------------------
+# TLS-aware gRPC channel helper
+# ---------------------------------------------------------------------------
+_GRPC_CA_CERT = os.environ.get("GRPC_CA_CERT", "")
+
+
+def _create_grpc_channel(target: str):
+    """Create a gRPC channel, using TLS when GRPC_CA_CERT is set."""
+    import grpc.aio as _grpc_aio
+
+    if _GRPC_CA_CERT:
+        with open(_GRPC_CA_CERT, "rb") as f:
+            creds = _grpc_aio.ssl_channel_credentials(root_certificates=f.read())
+        return _grpc_aio.secure_channel(target, creds)
+    return _grpc_aio.insecure_channel(target)
+
+
+# ---------------------------------------------------------------------------
+# In-memory rate limiter for OAuth endpoints (token, authorize)
+# ---------------------------------------------------------------------------
+_TOKEN_RATE_LIMIT = int(os.environ.get("TOKEN_RATE_LIMIT", "30"))  # requests
+_TOKEN_RATE_WINDOW = int(os.environ.get("TOKEN_RATE_WINDOW", "60"))  # seconds
+
+
+class _InMemoryRateLimiter:
+    """Simple per-IP sliding-window rate limiter (no Redis dependency)."""
+
+    def __init__(self, limit: int, window: int) -> None:
+        self._limit = limit
+        self._window = window
+        self._hits: dict[str, list[float]] = {}
+        self._lock = asyncio.Lock()
+
+    async def check(self, key: str) -> None:
+        now = time.monotonic()
+        async with self._lock:
+            timestamps = self._hits.get(key, [])
+            # Prune expired entries
+            cutoff = now - self._window
+            timestamps = [t for t in timestamps if t > cutoff]
+            if len(timestamps) >= self._limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Rate limit exceeded",
+                    headers={"Retry-After": str(self._window)},
+                )
+            timestamps.append(now)
+            self._hits[key] = timestamps
+
+
+_token_limiter = _InMemoryRateLimiter(_TOKEN_RATE_LIMIT, _TOKEN_RATE_WINDOW)
+
+
+async def _enforce_token_rate_limit(request: Request) -> None:
+    """FastAPI Depends() guard for OAuth endpoints."""
+    client_ip = request.client.host if request.client else "unknown"
+    await _token_limiter.check(f"token:{client_ip}")
+
+
+# ---------------------------------------------------------------------------
+# In-memory Pushed Authorization Request (PAR) store — RFC 9126
+# ---------------------------------------------------------------------------
+_PAR_TTL_SECONDS = 90
+
+
+class _PARStore:
+    """Thread-safe in-memory store for PAR requests with TTL expiry.
+
+    PAR requests are ephemeral (90s lifetime) so an in-memory dict with
+    lazy cleanup is sufficient.  If the server restarts, wallets simply
+    re-send the PAR — no durability needed.
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, tuple[float, dict]] = {}  # uri → (expires_at, params)
+        self._lock = asyncio.Lock()
+
+    async def save(self, request_uri: str, params: dict) -> None:
+        async with self._lock:
+            self._store[request_uri] = (time.monotonic() + _PAR_TTL_SECONDS, params)
+
+    async def pop(self, request_uri: str) -> dict | None:
+        """Retrieve and delete a PAR request (single-use)."""
+        async with self._lock:
+            entry = self._store.pop(request_uri, None)
+            # Lazy cleanup of expired entries
+            now = time.monotonic()
+            expired = [k for k, (exp, _) in self._store.items() if exp < now]
+            for k in expired:
+                del self._store[k]
+        if entry is None:
+            return None
+        expires_at, params = entry
+        if time.monotonic() > expires_at:
+            return None  # expired
+        return params
+
+
+_par_store = _PARStore()
+
+
+# ---------------------------------------------------------------------------
+# In-memory nonce pool — OID4VCI v1 §7.3
+# ---------------------------------------------------------------------------
+# The EUDI Wallet Kit (and other spec-compliant wallets) calls the nonce
+# endpoint WITHOUT an Authorization header.  The resulting nonce is not
+# bound to any transaction at the time of issuance.  When the wallet later
+# submits a credential request with proof containing that nonce, the
+# credential endpoint must be able to validate it.
+#
+# This pool stores all recently-issued nonces so the proof validator can
+# accept them even when they don't match tx.nonce.
+_NONCE_POOL_TTL_SECONDS = 300  # 5 minutes — matches c_nonce_expires_in
+
+
+class _NoncePool:
+    """Thread-safe single-use nonce pool with TTL expiry."""
+
+    def __init__(self) -> None:
+        self._nonces: dict[str, float] = {}   # nonce → expires_at
+        self._lock = asyncio.Lock()
+
+    async def add(self, nonce: str) -> None:
+        async with self._lock:
+            self._nonces[nonce] = time.monotonic() + _NONCE_POOL_TTL_SECONDS
+            # Lazy cleanup
+            now = time.monotonic()
+            expired = [k for k, exp in self._nonces.items() if exp < now]
+            for k in expired:
+                del self._nonces[k]
+
+    async def consume(self, nonce: str) -> bool:
+        """Check and consume a nonce (single-use). Returns True if valid."""
+        async with self._lock:
+            exp = self._nonces.pop(nonce, None)
+            if exp is None:
+                return False
+            if time.monotonic() > exp:
+                return False
+            return True
+
+
+_nonce_pool = _NoncePool()
+
+
+# ---------------------------------------------------------------------------
+# API key authentication for management endpoints
+# ---------------------------------------------------------------------------
+_ISSUANCE_API_KEY = os.environ.get("ISSUANCE_API_KEY", "")
+_api_key_header = Header(None, alias="X-API-Key")
+
+
+async def _verify_management_api_key(
+    x_api_key: str | None = _api_key_header,
+) -> str:
+    """Verify X-API-Key header for management endpoints."""
+    import hmac as _hmac
+
+    if not _ISSUANCE_API_KEY:
+        raise HTTPException(status_code=503, detail="ISSUANCE_API_KEY not configured on server")
+    if not x_api_key:
+        raise HTTPException(status_code=401, detail="X-API-Key header is missing")
+    if not _hmac.compare_digest(x_api_key, _ISSUANCE_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid API Key")
+    return x_api_key
 
 
 # ============================================================================
@@ -65,6 +239,7 @@ class InitiateIssuanceRequest(BaseModel):
     credential_template_id: str | None = None  # Optional — falls back to default type
     applicant_id: str | None = None
     subject_did: str | None = None
+    holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     claims: dict[str, Any] = {}
 
 
@@ -138,6 +313,30 @@ class ApplicationTemplateCreate(BaseModel):
     auto_approval_rules: list[dict[str, Any]] = []
     ui_config: dict[str, Any] = {}
     notification_config: dict[str, Any] = {}
+
+
+# ── DIDComm v2 models ─────────────────────────────────────────────────────
+
+class DidcommDeliverRequest(BaseModel):
+    transaction_id: str
+    holder_did: str
+    universal_resolver_url: str | None = None
+
+
+class DidcommDeliveryResponse(BaseModel):
+    transaction_id: str
+    credential_id: str
+    holder_did: str
+    service_endpoint: str
+    didcomm_message_id: str
+    status: str  # "delivered" or "delivery_failed"
+    error: str | None = None
+
+
+class DidcommAckResponse(BaseModel):
+    status: str  # "acknowledged"
+    message_id: str
+    transaction_id: str | None = None
 
 
 class ApplicationTemplateResponse(BaseModel):
@@ -267,6 +466,36 @@ def org_issuer_url_spruce(org_id: str) -> str:
     return f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
 
 
+def org_issuer_url_credential_manager(org_id: str) -> str:
+    """Return the Google CredentialManager-compatible per-org issuer URL.
+
+    Google's CredentialManager SDK (Android) only supports ``dc+sd-jwt`` format
+    entries.  Any ``jwt_vc_json`` or ``spruce-vc+sd-jwt`` entry in the same
+    metadata document causes the SDK's format parser to fail.  We therefore use
+    a distinct issuer path for CredentialManager offers so the metadata endpoint
+    can emit only ``dc+sd-jwt`` entries.
+
+      credential_issuer = https://issuer.example.com/org/<id>/credential-manager
+      well-known URL   = https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>/credential-manager
+    """
+    return f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
+
+
+def org_issuer_url_apple_wallet(org_id: str) -> str:
+    """Return the Apple Wallet-compatible per-org issuer URL.
+
+    Apple's Verify with Wallet / ISO 18013-5 issuance path only supports
+    ``mso_mdoc`` format entries.  Any ``jwt_vc_json``, ``dc+sd-jwt``, or
+    ``spruce-vc+sd-jwt`` entry in the same metadata document may confuse
+    the wallet's format parser.  We use a distinct issuer path so the metadata
+    endpoint can emit only ``mso_mdoc`` entries.
+
+      credential_issuer = https://issuer.example.com/org/<id>/apple-wallet
+      well-known URL   = https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>/apple-wallet
+    """
+    return f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
+
+
 def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetime | None) -> str:
     if status == CredentialStatus.ACTIVE and expires_at and expires_at < datetime.now(timezone.utc):
         return "EXPIRED"
@@ -345,7 +574,7 @@ async def _issued_credential_to_protocol(
 # OID4VCI Endpoints
 # ============================================================================
 
-@issuance_router.post("/initiate", response_model=IssuanceResponse)
+@issuance_router.post("/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)])
 async def initiate_issuance(
     request: InitiateIssuanceRequest,
     repo: IIssuanceRepository = Depends(),
@@ -359,12 +588,11 @@ async def initiate_issuance(
 
     # Validate organization exists via gRPC
     try:
-        import grpc.aio as grpc_aio
         from marty_proto.v1 import organization_service_pb2 as org_pb2
         from marty_proto.v1 import organization_service_pb2_grpc as org_grpc
 
         org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-        async with grpc_aio.insecure_channel(org_grpc_target) as channel:
+        async with _create_grpc_channel(org_grpc_target) as channel:
             org_stub = org_grpc.OrganizationServiceStub(channel)
             org_resp = await org_stub.GetOrganization(
                 org_pb2.GetOrganizationRequest(organization_id=request.organization_id)
@@ -383,18 +611,18 @@ async def initiate_issuance(
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
     credential_vct: str | None = None
     zk_predicate_claims: list[str] = []
+    selective_disclosure_claims: list[str] = []
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     wallet_configs: list[dict] = []
     if request.credential_template_id:
         _tmpl_resolved = False
         # Try gRPC first
         try:
-            import grpc.aio as _grpc_aio
             from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
             from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
 
             ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
-            async with _grpc_aio.insecure_channel(ct_grpc_target) as channel:
+            async with _create_grpc_channel(ct_grpc_target) as channel:
                 ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
                 tmpl_resp = await ct_stub.GetTemplate(
                     ct_pb2.GetTemplateRequest(template_id=request.credential_template_id)
@@ -408,6 +636,7 @@ async def initiate_issuance(
                 else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
             )
             zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
+            selective_disclosure_claims = list(tmpl_resp.selective_disclosure_fields) if tmpl_resp.selective_disclosure_fields else []
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
             _tmpl_resolved = True
@@ -442,6 +671,7 @@ async def initiate_issuance(
             )
             logger.info(f"Fetched credential type from template (HTTP): {credential_type} vct={credential_vct}")
             zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
+            selective_disclosure_claims = tmpl.get("selective_disclosure_fields") or []
             credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
             wallet_configs = tmpl.get("wallet_configs") or []
 
@@ -464,6 +694,7 @@ async def initiate_issuance(
         claims=merged_claims,
         credential_type=credential_type,
         zk_predicate_claims=zk_predicate_claims,
+        selective_disclosure_claims=selective_disclosure_claims,
         credential_payload_format=credential_payload_format,
         wallet_configs=wallet_configs,
     )
@@ -492,12 +723,19 @@ async def initiate_issuance(
             return f"{base}#spruce-sd-jwt"
         if variant == "mso_mdoc":
             return f"{base}#mdoc"
+        if variant == "credential-manager":
+            return f"{base}#credential-manager"
+        if variant == "apple-wallet":
+            return f"{base}#apple-wallet"
         return f"{base}#sd-jwt"
 
     # Default offer uses the standard vc+sd-jwt config (works with Walt.id and
     # most OID4VCI-compliant wallets).  For mso_mdoc templates, use the #mdoc
     # config id so the default offer also resolves to the correct metadata entry.
-    default_fmt_variant = "mso_mdoc" if credential_payload_format == "mso_mdoc" else None
+    # credential_payload_format may be "MDOC" (enum value), "mso_mdoc", or "mdoc"
+    # depending on which code path stored the template — all three indicate mdoc.
+    _MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
+    default_fmt_variant = "mso_mdoc" if credential_payload_format in _MDOC_PAYLOAD_FORMATS else None
     default_config_id = _config_id_for_format_variant(credential_config_id, default_fmt_variant)
     offer_json_str = oid4vci_create_credential_offer(
         issuer_url=org_issuer_url(request.organization_id),
@@ -514,10 +752,34 @@ async def initiate_issuance(
     # credential_configuration_id for that wallet's SDK.
     credential_offer_uris: dict[str, str] = {}
     credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
+    didcomm_delivery_results: list[dict] = []
     for wc in tx.wallet_configs:
         wid = wc.get("wallet_id", "")
         scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
         fmt_variant = wc.get("format_variant")
+        if not wid:
+            continue
+
+        # DIDComm v2 wallets: push delivery instead of offer URI
+        if fmt_variant == "didcomm_v2":
+            holder_did_for_delivery = request.holder_did or request.subject_did
+            if holder_did_for_delivery:
+                try:
+                    delivery = await _didcomm_sign_and_deliver(
+                        tx=tx, holder_did=holder_did_for_delivery, repo=repo,
+                    )
+                    didcomm_delivery_results.append(delivery.model_dump())
+                    credential_offer_uris[wid] = f"didcomm://{delivery.service_endpoint}"
+                except Exception as dc_err:
+                    logger.warning(f"DIDComm auto-delivery to {holder_did_for_delivery} failed: {dc_err}")
+                    credential_offer_uris[wid] = f"didcomm://pending?transaction_id={tx.id}"
+            else:
+                # No holder_did — caller must use /didcomm/deliver later
+                credential_offer_uris[wid] = f"didcomm://pending?transaction_id={tx.id}"
+            if wc.get("display_name"):
+                credential_offer_labels[wid] = wc["display_name"]
+            continue
+
         if wid:
             wallet_config_id = _config_id_for_format_variant(credential_config_id, fmt_variant)
             # SpruceID SDK requires a dedicated issuer URL whose metadata document
@@ -527,6 +789,10 @@ async def initiate_issuance(
             wallet_issuer_url = (
                 org_issuer_url_spruce(request.organization_id)
                 if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
+                else org_issuer_url_credential_manager(request.organization_id)
+                if fmt_variant == "credential-manager"
+                else org_issuer_url_apple_wallet(request.organization_id)
+                if fmt_variant == "apple-wallet"
                 else org_issuer_url(request.organization_id)
             )
             wallet_offer_json = oid4vci_create_credential_offer(
@@ -556,10 +822,10 @@ async def initiate_issuance(
 
 # ── Authorization Endpoint (OID4VCI §5) ──────────────────────────────────
 
-@issuance_router.get("/authorize")
+@issuance_router.get("/authorize", dependencies=[Depends(_enforce_token_rate_limit)])
 async def authorize(
-    response_type: str = Query(...),
-    client_id: str = Query(...),
+    response_type: str = Query(None),
+    client_id: str = Query(None),
     redirect_uri: str = Query(None),
     state: str = Query(None),
     code_challenge: str = Query(None),
@@ -568,15 +834,85 @@ async def authorize(
     authorization_details: str = Query(None),
     scope: str = Query(None),
     organization_id: str = Query(None),
+    request_uri: str = Query(None),
     repo: IIssuanceRepository = Depends(),
 ):
     """OAuth 2.0 authorization endpoint for OID4VCI authorization code flow.
 
     The authorization request parameters arrive as query params (RFC 6749 §4.1.1).
+    When ``request_uri`` is present (RFC 9126 PAR flow), the stored PAR parameters
+    are used instead of inline query params.
     We delegate all protocol validation (response_type, PKCE, etc.) to the Rust
     engine and only handle DB persistence here.
     """
     import json as _json
+
+    # ── RFC 9126: resolve PAR request_uri ────────────────────────────
+    if request_uri:
+        par_params = await _par_store.pop(request_uri)
+        if par_params is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_request",
+                    "error_description": "request_uri is invalid or expired",
+                },
+            )
+        # PAR params override inline query params (RFC 9126 §3)
+        response_type = par_params.get("response_type") or response_type
+        client_id = par_params.get("client_id") or client_id
+        redirect_uri = par_params.get("redirect_uri") or redirect_uri
+        state = par_params.get("state") or state
+        code_challenge = par_params.get("code_challenge") or code_challenge
+        code_challenge_method = par_params.get("code_challenge_method") or code_challenge_method
+        issuer_state = par_params.get("issuer_state") or issuer_state
+        authorization_details = par_params.get("authorization_details") or authorization_details
+        scope = par_params.get("scope") or scope
+        organization_id = par_params.get("organization_id") or organization_id
+
+    if not response_type or not client_id:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_request",
+                "error_description": "response_type and client_id are required",
+            },
+        )
+
+    # ── Redirect URI allowlist (RFC 6749 §3.1.2.2) ──────────────────
+    if redirect_uri:
+        allowed_raw = os.environ.get("ALLOWED_REDIRECT_URIS", "")
+        if allowed_raw:
+            allowed_uris = [u.strip() for u in allowed_raw.split(",") if u.strip()]
+            if redirect_uri not in allowed_uris:
+                logger.warning(
+                    "Rejected unregistered redirect_uri=%s (client_id=%s)",
+                    redirect_uri, client_id,
+                )
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_request",
+                        "error_description": "redirect_uri is not registered",
+                    },
+                )
+        else:
+            # No allowlist configured — enforce basic safety: must be HTTPS
+            # (except localhost for development).
+            parsed = urlparse(redirect_uri)
+            is_localhost = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+            if parsed.scheme != "https" and not is_localhost:
+                logger.warning(
+                    "Rejected non-HTTPS redirect_uri=%s (client_id=%s)",
+                    redirect_uri, client_id,
+                )
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_request",
+                        "error_description": "redirect_uri must use HTTPS",
+                    },
+                )
 
     # Build the authorization request JSON for the Rust engine
     auth_details = None
@@ -643,7 +979,60 @@ async def authorize(
     return auth_resp
 
 
-@issuance_router.post("/token", response_model=TokenResponse)
+# ── Pushed Authorization Request Endpoint (RFC 9126) ─────────────────────
+
+@issuance_router.post("/par", dependencies=[Depends(_enforce_token_rate_limit)])
+async def pushed_authorization_request(
+    http_request: Request,
+    response_type: str = Form(None),
+    client_id: str = Form(None),
+    redirect_uri: str = Form(None),
+    scope: str = Form(None),
+    state: str = Form(None),
+    code_challenge: str = Form(None),
+    code_challenge_method: str = Form(None),
+    issuer_state: str = Form(None),
+    authorization_details: str = Form(None),
+    organization_id: str = Form(None),
+) -> JSONResponse:
+    """Pushed Authorization Request endpoint (RFC 9126 §2).
+
+    Accepts the same parameters as the authorization endpoint via POST form body.
+    Stores the request and returns a ``request_uri`` that the client presents
+    at the authorization endpoint instead of inline parameters.
+
+    Response (201):
+        {"request_uri": "urn:ietf:params:oauth:request_uri:<uuid>", "expires_in": 90}
+    """
+    import uuid as _uuid
+
+    request_uri = f"urn:ietf:params:oauth:request_uri:{_uuid.uuid4()}"
+
+    await _par_store.save(request_uri, {
+        "response_type": response_type,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "issuer_state": issuer_state,
+        "authorization_details": authorization_details,
+        "organization_id": organization_id,
+    })
+
+    logger.info(
+        "[par] client_id=%s request_uri=%s",
+        client_id, request_uri[:60],
+    )
+
+    return JSONResponse(
+        status_code=201,
+        content={"request_uri": request_uri, "expires_in": _PAR_TTL_SECONDS},
+    )
+
+
+@issuance_router.post("/token", response_model=TokenResponse, dependencies=[Depends(_enforce_token_rate_limit)])
 async def exchange_token(
     http_request: Request,
     grant_type: str = Form(...),
@@ -794,10 +1183,14 @@ async def exchange_token(
     tx.status = IssuanceStatus.AUTHORIZED
     await repo.save_transaction(tx)
 
+    # Also store the token nonce in the global pool for wallets that call the
+    # nonce endpoint separately (EUDI Wallet Kit replaces it via /nonce).
+    if tx.nonce:
+        await _nonce_pool.add(tx.nonce)
+
     logger.info(
         f"[token] rid={rid} tx_id={tx.id} org={tx.organization_id} "
-        f"cred_type={tx.credential_type} access_token={tx.access_token[:16]}... "
-        f"nonce={tx.nonce[:8]}..."
+        f"cred_type={tx.credential_type}"
     )
 
     return TokenResponse(
@@ -819,9 +1212,16 @@ async def nonce_endpoint(
     Returns a fresh nonce for use in credential proof JWTs.
     If the caller presents a Bearer access token, the stored nonce for that
     transaction/session is also refreshed so proof validation passes.
+
+    All nonces are also stored in an in-memory pool so that wallets which
+    call the nonce endpoint without an access token (e.g. EUDI Wallet Kit)
+    can still have their proof validated at the credential endpoint.
     """
-    import uuid as _uuid
-    new_nonce = str(_uuid.uuid4())
+    import secrets as _secrets
+    new_nonce = _secrets.token_urlsafe(32)
+
+    # Always add to the global nonce pool for fallback validation
+    await _nonce_pool.add(new_nonce)
 
     if authorization and authorization.startswith("Bearer "):
         access_token = authorization.split(" ", 1)[1]
@@ -969,12 +1369,17 @@ async def issue_credential(
     
     # Get issuer key for organization
     try:
-        issuer_key = get_or_generate_issuer_key(tx.organization_id)
+        issuer_key = await get_or_generate_issuer_key(tx.organization_id)
     except ImportError as e:
         logger.error(f"Rust bindings not available: {e}")
         tx.fail("Rust bindings not available")
         await repo.save_transaction(tx)
         raise HTTPException(status_code=500, detail="Credential signing service unavailable")
+    except RuntimeError as e:
+        logger.error(f"Issuer key storage unavailable: {e}")
+        tx.fail("Issuer key storage unavailable")
+        await repo.save_transaction(tx)
+        raise HTTPException(status_code=500, detail="Credential issuer key unavailable")
     
     # Get credential type from transaction (stored during initiation)
     credential_type = tx.credential_type or "org.iso.18013.5.1.mDL"
@@ -1052,6 +1457,26 @@ async def issue_credential(
     ok, did_from_proof, verify_err = verify_proof_jwt(
         proof_jwt, expected_nonce=tx.nonce or None
     )
+    if not ok and verify_err and "nonce" in verify_err.lower():
+        # Fallback: the wallet may have fetched a nonce from the nonce endpoint
+        # without an access token (e.g. EUDI Wallet Kit).  Extract the nonce
+        # from the proof JWT and check the global nonce pool.
+        try:
+            import base64 as _b64n, json as _json_n
+            _proof_parts_n = proof_jwt.split('.')
+            _pad_n = '=' * ((-len(_proof_parts_n[1])) % 4)
+            _payload_n = _json_n.loads(_b64n.urlsafe_b64decode(_proof_parts_n[1] + _pad_n))
+            _proof_nonce = _payload_n.get('nonce')
+            logger.info(f"[credential] rid={rid} nonce pool fallback: proof_nonce={_proof_nonce!r}")
+            if _proof_nonce and await _nonce_pool.consume(_proof_nonce):
+                logger.info(f"[credential] rid={rid} nonce pool hit — retrying proof verification with pool nonce")
+                ok, did_from_proof, verify_err = verify_proof_jwt(
+                    proof_jwt, expected_nonce=_proof_nonce
+                )
+            else:
+                logger.info(f"[credential] rid={rid} nonce pool miss — nonce not found in pool")
+        except Exception as _nonce_err:
+            logger.warning(f"[credential] rid={rid} nonce pool fallback failed: {_nonce_err}")
     if ok:
         holder_did = did_from_proof
         logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
@@ -1095,11 +1520,22 @@ async def issue_credential(
     # wallet sends in the credential request — ensures CBOR mdoc output.
     credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
     # Determine the format string to pass to the Rust signer.
+    # Template-declared format wins — mirrors the mso_mdoc override pattern.
     # mso_mdoc: always forced regardless of what the wallet requests.
+    # SD-JWT templates: force vc+sd-jwt so Rust dispatches to the SD-JWT signer
+    #   rather than falling through to plain JWT-VC.
     # spruce-vc+sd-jwt: SpruceKit's custom alias — normalise to vc+sd-jwt for Rust;
     #   the response uses the original request.format so SpruceKit parses it correctly.
-    if credential_payload_fmt == "mso_mdoc":
+    _SD_JWT_PAYLOAD_FORMATS = {
+        "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
+        "SD_JWT_VC", "sd_jwt_vc",       # Python enum value / lowercase alias
+        "vc+sd-jwt", "dc+sd-jwt",       # IANA media type variants
+    }
+    _MDOC_PAYLOAD_FORMATS_LOCAL = {"mso_mdoc", "MDOC", "mdoc"}
+    if credential_payload_fmt in _MDOC_PAYLOAD_FORMATS_LOCAL:
         signing_format = "mso_mdoc"
+    elif credential_payload_fmt in _SD_JWT_PAYLOAD_FORMATS:
+        signing_format = "vc+sd-jwt"
     elif request.format == "spruce-vc+sd-jwt":
         signing_format = "vc+sd-jwt"
     else:
@@ -1107,19 +1543,34 @@ async def issue_credential(
     # For mdoc, credential_type is the doctype; Rust defaults to org.iso.18013.5.1.mDL
     # when mdoc_doctype is None, so tx.credential_type is passed through directly.
     signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+
+    # For SD-JWT, if no explicit selective disclosure claims were configured
+    # on the template, default to all top-level claim keys (EUDI compliance).
+    sd_claims = tx.selective_disclosure_claims or []
+    if signing_format == "vc+sd-jwt" and not sd_claims:
+        sd_claims = [k for k in clean_claims if not k.startswith("_")]
+
     try:
         jwt_credential, credential_id = create_verifiable_credential_wrapper(
             issuer_did=issuer_key["did"],
-            issuer_jwk_json="",  # Not used - kept for API compatibility
+            issuer_jwk_json=issuer_key["jwk_json"],
             subject_id=holder_did or tx.subject_did,
             credential_type=signing_credential_type,
             claims_json=json.dumps(clean_claims),
             expiration_seconds=31536000,  # 1 year
             organization_id=tx.organization_id,
             format=signing_format,
+            selective_disclosure_claims=sd_claims,
             zk_predicate_claims=tx.zk_predicate_claims or [],
             credential_payload_format=credential_payload_fmt,
         )
+
+        # EUDI compliance: inject x5c header and HTTPS iss for SD-JWT credentials.
+        # The EUDI reference verifier only supports X.509-based verification.
+        if signing_format == "vc+sd-jwt":
+            jwt_credential = postprocess_sd_jwt_x5c(
+                jwt_credential, issuer_key, tx.organization_id, ISSUER_BASE_URL,
+            )
         
         # Only update state and emit event on first issuance; allow idempotent
         # wallet retries (wallets sometimes re-request after a network timeout).
@@ -1170,7 +1621,266 @@ async def issue_credential(
         logger.error(f"[credential] rid={rid} tx_id={tx.id} Rust credential creation failed: {e}")
         tx.fail(str(e))
         await repo.save_transaction(tx)
-        raise HTTPException(status_code=500, detail=f"Credential creation failed: {e}")
+        raise HTTPException(status_code=500, detail="Credential creation failed")
+
+
+# ── DIDComm v2 Push Delivery ─────────────────────────────────────────────
+
+async def _didcomm_sign_and_deliver(
+    tx: "IssuanceTransaction",
+    holder_did: str,
+    repo: "IIssuanceRepository",
+    universal_resolver_url: str | None = None,
+) -> DidcommDeliveryResponse:
+    """Sign a credential and deliver it to the holder via DIDComm v2.
+
+    1. Sign the credential using the same Rust signer as OID4VCI.
+    2. Pack the signed credential into a DIDComm v2 issue-credential/3.0 message.
+    3. Resolve the holder's DID Document to find their DIDComm service endpoint.
+    4. POST the DIDComm message to that endpoint.
+    """
+    issuer_key = await get_or_generate_issuer_key(tx.organization_id)
+
+    credential_type = tx.credential_type or "VerifiableCredential"
+    _INTERNAL_CLAIM_FIELDS = {
+        "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
+        "issuance_transaction_id", "issuance_fallback", "credential_type",
+        "credential_display_name", "rejection_reason", "review_notes",
+        "info_requests", "applicant_id", "_vct",
+    }
+    clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
+
+    credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+    if credential_payload_fmt == "mso_mdoc":
+        signing_format = "mso_mdoc"
+    elif credential_payload_fmt in ("w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt"):
+        signing_format = "vc+sd-jwt"
+    else:
+        signing_format = "vc+sd-jwt"
+
+    vct_for_signing = (
+        tx.claims.get("_vct")
+        or (f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            if credential_type and not credential_type.startswith("http")
+            else credential_type)
+    )
+    signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+
+    # SD-JWT default: all top-level claims if none configured
+    sd_claims_dc = tx.selective_disclosure_claims or []
+    if signing_format == "vc+sd-jwt" and not sd_claims_dc:
+        sd_claims_dc = [k for k in clean_claims if not k.startswith("_")]
+
+    # Step 1: Sign the credential (same Rust signer as OID4VCI)
+    jwt_credential, credential_id = create_verifiable_credential_wrapper(
+        issuer_did=issuer_key["did"],
+        issuer_jwk_json=issuer_key["jwk_json"],
+        subject_id=holder_did,
+        credential_type=signing_credential_type,
+        claims_json=json.dumps(clean_claims),
+        expiration_seconds=31536000,
+        organization_id=tx.organization_id,
+        format=signing_format,
+        selective_disclosure_claims=sd_claims_dc,
+        zk_predicate_claims=tx.zk_predicate_claims or [],
+        credential_payload_format=credential_payload_fmt,
+    )
+
+    # EUDI compliance: inject x5c header and HTTPS iss for SD-JWT credentials.
+    if signing_format == "vc+sd-jwt":
+        jwt_credential = postprocess_sd_jwt_x5c(
+            jwt_credential, issuer_key, tx.organization_id, ISSUER_BASE_URL,
+        )
+
+    # Step 2: Pack into DIDComm v2 envelope
+    didcomm_message_json = didcomm_pack_credential(
+        credential=jwt_credential,
+        credential_format=credential_payload_fmt,
+        issuer_did=issuer_key["did"],
+        holder_did=holder_did,
+        credential_id=credential_id,
+    )
+    didcomm_msg = json.loads(didcomm_message_json)
+    didcomm_message_id = didcomm_msg.get("id", "")
+
+    # Step 3: Resolve holder DID → service endpoint
+    did_doc = didcomm_resolve_did(holder_did, universal_resolver_url)
+    service_endpoint = didcomm_extract_endpoint(did_doc)
+    if not service_endpoint:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Holder DID {holder_did} has no DIDComm service endpoint",
+        )
+
+    # Step 3b: Encrypt if the holder has an X25519 key agreement key
+    # (anoncrypt: ECDH-ES+A256KW + A256GCM per DIDComm v2 §4.1)
+    delivery_content = didcomm_message_json
+    delivery_content_type = "application/didcomm-plain+json"
+    try:
+        encrypted = didcomm_encrypt(didcomm_message_json, did_doc)
+        delivery_content = encrypted
+        delivery_content_type = "application/didcomm-encrypted+json"
+        logger.info(f"DIDComm message encrypted for {holder_did}")
+    except Exception as enc_err:
+        # No key agreement key or encryption failure — fall back to plaintext
+        logger.info(f"DIDComm encryption not available for {holder_did}, sending plaintext: {enc_err}")
+
+    # Step 4: POST the DIDComm message to the holder's endpoint
+    delivery_status = "delivered"
+    delivery_error = None
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                service_endpoint,
+                content=delivery_content,
+                headers={"Content-Type": delivery_content_type},
+            )
+            if resp.status_code >= 400:
+                delivery_status = "delivery_failed"
+                delivery_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+    except Exception as e:
+        delivery_status = "delivery_failed"
+        delivery_error = str(e)
+
+    # Update transaction state
+    if delivery_status == "delivered" and tx.status != IssuanceStatus.ISSUED:
+        tx.nonce = None
+        tx.complete()
+        await repo.save_transaction(tx)
+        expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+        issued_credential = IssuedCredential(
+            id=credential_id,
+            transaction_id=tx.id,
+            organization_id=tx.organization_id,
+            credential_template_id=tx.credential_template_id,
+            applicant_id=tx.applicant_id,
+            subject_did=holder_did,
+            credential_jwt=jwt_credential,
+            credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
+            status=CredentialStatus.ACTIVE,
+            issued_at=tx.issued_at or datetime.now(timezone.utc),
+            expires_at=expires_at,
+        )
+        await repo.save_credential(issued_credential)
+        await repo.save_event(IssuanceEvent(
+            transaction_id=tx.id,
+            application_id=tx.application_id,
+            event_type=EventType.CREDENTIAL_ISSUED,
+            metadata={
+                "credential_id": credential_id,
+                "credential_type": credential_type,
+                "delivery_protocol": "didcomm_v2",
+                "service_endpoint": service_endpoint,
+            },
+        ))
+
+    return DidcommDeliveryResponse(
+        transaction_id=tx.id,
+        credential_id=credential_id,
+        holder_did=holder_did,
+        service_endpoint=service_endpoint,
+        didcomm_message_id=didcomm_message_id,
+        status=delivery_status,
+        error=delivery_error,
+    )
+
+
+@issuance_router.post("/didcomm/deliver", response_model=DidcommDeliveryResponse, dependencies=[Depends(_verify_management_api_key)])
+async def didcomm_deliver(
+    request: DidcommDeliverRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> DidcommDeliveryResponse:
+    """Deliver a credential to a holder via DIDComm v2 push.
+
+    Signs the credential, wraps it in a DIDComm v2 issue-credential/3.0
+    message, resolves the holder's DID Document for their service endpoint,
+    and POSTs the message.
+    """
+    tx = await repo.get_transaction(request.transaction_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if tx.status == IssuanceStatus.ISSUED:
+        raise HTTPException(status_code=409, detail="Credential already issued")
+    if tx.status not in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
+        raise HTTPException(status_code=400, detail=f"Transaction in {tx.status.value} state")
+
+    return await _didcomm_sign_and_deliver(
+        tx=tx,
+        holder_did=request.holder_did,
+        repo=repo,
+        universal_resolver_url=request.universal_resolver_url,
+    )
+
+
+@issuance_router.post("/didcomm/receive")
+async def didcomm_receive(
+    http_request: Request,
+    repo: IIssuanceRepository = Depends(),
+) -> JSONResponse:
+    """Receive a DIDComm v2 message (acknowledgments, problem-reports, etc.).
+
+    This is the **inbound** DIDComm endpoint — other agents POST messages
+    here. Handles:
+    - `https://didcomm.org/notification/1.0/ack` — delivery acknowledgment
+    - `https://didcomm.org/report-problem/2.0/problem-report` — error report
+    """
+    body = await http_request.body()
+    content_type = http_request.headers.get("content-type", "")
+
+    if "didcomm-encrypted" in content_type:
+        # For now, we don't decrypt inbound JWE — log and accept
+        logger.info("Received encrypted DIDComm message (encrypted ack processing not yet supported)")
+        return JSONResponse(status_code=202, content={"status": "accepted"})
+
+    try:
+        msg = json.loads(body)
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=400, content={"error": "invalid_json"})
+
+    msg_type = msg.get("type", "")
+    msg_id = msg.get("id", "")
+    thid = msg.get("thid", "")  # Thread ID — correlates to the original message
+
+    if "ack" in msg_type or "notification" in msg_type:
+        logger.info(f"DIDComm ack received: msg_id={msg_id} thid={thid}")
+        # Record the ack as an event if we can find the transaction
+        if thid:
+            # Try to find a credential with this message ID
+            # The thid should match the didcomm_message_id from delivery
+            try:
+                await repo.save_event(IssuanceEvent(
+                    transaction_id=thid,
+                    application_id=None,
+                    event_type=EventType.CREDENTIAL_ISSUED,
+                    metadata={
+                        "didcomm_ack": True,
+                        "ack_message_id": msg_id,
+                        "original_message_id": thid,
+                        "ack_from": msg.get("from", ""),
+                    },
+                ))
+            except Exception as e:
+                logger.warning(f"Could not record DIDComm ack event: {e}")
+
+        return JSONResponse(
+            status_code=200,
+            content={"status": "acknowledged", "message_id": msg_id},
+        )
+
+    if "problem-report" in msg_type:
+        problem_code = msg.get("body", {}).get("code", "unknown")
+        problem_comment = msg.get("body", {}).get("comment", "")
+        logger.warning(
+            f"DIDComm problem-report: msg_id={msg_id} thid={thid} "
+            f"code={problem_code} comment={problem_comment}"
+        )
+        return JSONResponse(
+            status_code=200,
+            content={"status": "received", "message_id": msg_id},
+        )
+
+    logger.info(f"DIDComm message received: type={msg_type} id={msg_id}")
+    return JSONResponse(status_code=202, content={"status": "accepted", "message_id": msg_id})
 
 
 @issuance_router.post("/deferred-credential")
@@ -1325,7 +2035,7 @@ class TransactionRevokeRequest(BaseModel):
     reason: str | None = None
 
 
-@issuance_router.post("/transactions/{tx_id}/revoke")
+@issuance_router.post("/transactions/{tx_id}/revoke", dependencies=[Depends(_verify_management_api_key)])
 async def revoke_transaction(
     tx_id: str,
     request: TransactionRevokeRequest,
@@ -1407,11 +2117,11 @@ async def _delegate_to_revocation_profile(
             logger.error(f"RevocationProfile service error: {e}")
             raise HTTPException(
                 status_code=503,
-                detail=f"Revocation service unavailable: {str(e)}"
+                detail="Revocation service unavailable"
             )
 
 
-@issuance_router.post("/credentials/{credential_id}/revoke", response_model=CredentialStatusResponse)
+@issuance_router.post("/credentials/{credential_id}/revoke", response_model=CredentialStatusResponse, dependencies=[Depends(_verify_management_api_key)])
 async def revoke_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -1451,7 +2161,7 @@ async def revoke_credential(
     }
 
 
-@issuance_router.post("/credentials/{credential_id}/suspend", response_model=CredentialStatusResponse)
+@issuance_router.post("/credentials/{credential_id}/suspend", response_model=CredentialStatusResponse, dependencies=[Depends(_verify_management_api_key)])
 async def suspend_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -1488,7 +2198,7 @@ async def suspend_credential(
     }
 
 
-@issuance_router.post("/credentials/{credential_id}/reinstate", response_model=CredentialStatusResponse)
+@issuance_router.post("/credentials/{credential_id}/reinstate", response_model=CredentialStatusResponse, dependencies=[Depends(_verify_management_api_key)])
 async def reinstate_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -1597,7 +2307,7 @@ async def get_issued_credential(
     return await _issued_credential_to_protocol(cred, repo)
 
 
-@issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse)
+@issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])
 async def revoke_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -1610,7 +2320,7 @@ async def revoke_issued_credential(
     return await _issued_credential_to_protocol(cred, repo)
 
 
-@issued_credential_router.post("/{credential_id}/suspend", response_model=IssuedCredentialRecordResponse)
+@issued_credential_router.post("/{credential_id}/suspend", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])
 async def suspend_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -1623,7 +2333,7 @@ async def suspend_issued_credential(
     return await _issued_credential_to_protocol(cred, repo)
 
 
-@issued_credential_router.post("/{credential_id}/reinstate", response_model=IssuedCredentialRecordResponse)
+@issued_credential_router.post("/{credential_id}/reinstate", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])
 async def reinstate_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,

@@ -16,6 +16,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from issuance.domain.ports import IIssuanceRepository
+from issuance.application.rust_integration import configure_issuer_key_store
 
 
 def _friendly_ctype_name(ctype: str) -> str:
@@ -120,6 +121,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresIssuanceRepository(session_factory)
+    configure_issuer_key_store(session_factory)
     logger.info("PostgreSQL adapter initialized for issuance service")
 
     # Start gRPC server
@@ -142,6 +144,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if grpc_server:
         await grpc_server.stop(grace=5)
         logger.info("gRPC server stopped")
+    configure_issuer_key_store(None)
     await engine.dispose()
 
 
@@ -154,9 +157,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     
+    _cors_origins = [
+        o.strip()
+        for o in os.environ.get("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+        if o.strip()
+    ]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -260,6 +268,135 @@ def create_app() -> FastAPI:
             "credential_configurations_supported": credential_configurations,
         }
 
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/credential-manager")
+    async def get_org_issuer_metadata_credential_manager(org_id: str) -> dict:
+        """Return per-org issuer metadata compatible with Google CredentialManager API.
+
+        Google's Android CredentialManager SDK only supports ``dc+sd-jwt``
+        format entries.  Any ``jwt_vc_json``, ``spruce-vc+sd-jwt``, or
+        ``mso_mdoc`` entry in the same metadata document causes the SDK's
+        format parser to reject the entire document.
+
+        This endpoint emits *only* ``dc+sd-jwt`` entries (using the
+        ``#credential-manager`` config-id suffix) so that Google Wallet
+        credential offers resolve correctly.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+
+        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
+        credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
+        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
+        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
+
+        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _binding = ["did:key", "jwk"]
+        _signing_algs = ["ES256", "EdDSA"]
+
+        repo = get_repo()
+        known_types = await repo.get_credential_types_for_org(org_id)
+
+        credential_configurations: dict = {}
+        for ctype in known_types:
+            if ctype.startswith("org.iso.18013"):
+                # ISO mDoc credentials are not supported by Google
+                # CredentialManager's dc+sd-jwt path — skip them here.
+                continue
+            # Emit only dc+sd-jwt entries — the sole format Google's
+            # CredentialManager SDK can parse.
+            credential_configurations[f"{ctype}#credential-manager"] = {
+                "format": "dc+sd-jwt",
+                "vct": f"{ISSUER_BASE_URL}/credentials/{ctype}",
+                "scope": ctype,
+                "cryptographic_binding_methods_supported": _binding,
+                "credential_signing_alg_values_supported": _signing_algs,
+                "proof_types_supported": _proof_types,
+                "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+            }
+
+        nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
+        deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
+        notification_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/notification"
+
+        return {
+            "credential_issuer": issuer_url,
+            "authorization_endpoint": authorization_endpoint,
+            "credential_endpoint": credential_endpoint,
+            "token_endpoint": token_endpoint,
+            "nonce_endpoint": nonce_endpoint,
+            "deferred_credential_endpoint": deferred_credential_endpoint,
+            "notification_endpoint": notification_endpoint,
+            "credential_configurations_supported": credential_configurations,
+        }
+
+    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet")
+    async def get_org_issuer_metadata_apple_wallet(org_id: str) -> dict:
+        """Return per-org issuer metadata compatible with Apple Wallet.
+
+        Apple's Verify with Wallet and ISO 18013-5 issuance path expects
+        ``mso_mdoc`` format entries.  Any ``jwt_vc_json``, ``dc+sd-jwt``, or
+        ``spruce-vc+sd-jwt`` entry in the same metadata document may cause
+        the wallet to fail format negotiation.
+
+        This endpoint emits *only* ``mso_mdoc`` entries (using the
+        ``#apple-wallet`` config-id suffix) so that Apple Wallet credential
+        offers resolve correctly.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+
+        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
+        credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
+        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
+        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
+
+        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _binding = ["did:key", "jwk"]
+        _signing_algs = ["ES256", "EdDSA"]
+
+        repo = get_repo()
+        known_types = await repo.get_credential_types_for_org(org_id)
+
+        credential_configurations: dict = {}
+        for ctype in known_types:
+            # Apple Wallet uses ISO 18013-5 mDoc for mdoc-typed credentials
+            # and can also accept mso_mdoc for non-ISO typed credentials
+            # (the Rust signing engine defaults the doctype).
+            if ctype.startswith("org.iso.18013"):
+                credential_configurations[f"{ctype}#apple-wallet"] = {
+                    "format": "mso_mdoc",
+                    "doctype": ctype,
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                }
+            else:
+                # Non-ISO credentials — emit as mso_mdoc with a derived doctype
+                credential_configurations[f"{ctype}#apple-wallet"] = {
+                    "format": "mso_mdoc",
+                    "doctype": ctype,
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                }
+
+        nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
+        deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
+        notification_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/notification"
+
+        return {
+            "credential_issuer": issuer_url,
+            "authorization_endpoint": authorization_endpoint,
+            "credential_endpoint": credential_endpoint,
+            "token_endpoint": token_endpoint,
+            "nonce_endpoint": nonce_endpoint,
+            "deferred_credential_endpoint": deferred_credential_endpoint,
+            "notification_endpoint": notification_endpoint,
+            "credential_configurations_supported": credential_configurations,
+        }
+
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}")
     async def get_org_issuer_metadata(org_id: str) -> dict:
         """Return per-org OID4VCI v1 issuer metadata (dynamic, org-scoped).
@@ -285,10 +422,18 @@ def create_app() -> FastAPI:
         # Pull distinct credential types from the issuance DB — self-contained,
         # no external auth required, and grows automatically with new templates.
         repo = get_repo()
-        known_types = await repo.get_credential_types_for_org(org_id)
+        type_formats = await repo.get_credential_type_formats_for_org(org_id)
+
+        # Build a set of credential types that explicitly support mDoc format
+        # based on the template's supported_formats column.
+        _MDOC_FORMATS = {"mdoc", "mso_mdoc", "MDOC"}
+        mdoc_types: set[str] = set()
+        for ctype, formats in type_formats:
+            if any(f in _MDOC_FORMATS for f in formats):
+                mdoc_types.add(ctype)
 
         credential_configurations: dict = {}
-        for ctype in known_types:
+        for ctype, _formats in type_formats:
             # JWT-VC format entry (primary — used by most wallets by default)
             credential_configurations[ctype] = {
                 "format": "jwt_vc_json",
@@ -300,9 +445,11 @@ def create_app() -> FastAPI:
                 # OID4VCI §11.2.3 — display is at the top level of the config object
                 "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
             }
-            if ctype.startswith("org.iso.18013"):
-                # ISO 18013-5 mDoc — emit mso_mdoc format entry.
-                # All OID4VCI-conformant wallets (including SpruceKit) use this entry.
+            if ctype.startswith("org.iso.18013") or ctype in mdoc_types:
+                # mDoc — emit mso_mdoc format entry.
+                # Covers ISO 18013-5 types (doctype = ctype) and any credential
+                # type whose template declares mDoc in supported_formats
+                # (e.g. com.icao.dtc for ICAO DTC passports).
                 credential_configurations[f"{ctype}#mdoc"] = {
                     "format": "mso_mdoc",
                     "doctype": ctype,
@@ -312,7 +459,7 @@ def create_app() -> FastAPI:
                     "proof_types_supported": _proof_types,
                     "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
                 }
-            else:
+            if not ctype.startswith("org.iso.18013"):
                 # SD-JWT: use "dc+sd-jwt" per OID4VCI-1FINAL Appendix A (Final spec format ID).
                 # "vc+sd-jwt" was the Draft identifier; "dc+sd-jwt" is the Final spec name.
                 # NOTE: do NOT emit a "spruce-vc+sd-jwt" entry — Walt.id's
@@ -364,6 +511,7 @@ def create_app() -> FastAPI:
             "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -385,6 +533,7 @@ def create_app() -> FastAPI:
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/credential",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "nonce_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/nonce",
             "deferred_credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential",
             "notification_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/notification",
@@ -409,6 +558,60 @@ def create_app() -> FastAPI:
     # discover its metadata via the oauth-authorization-server well-known.
     # ------------------------------------------------------------------
 
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/credential-manager")
+    async def get_org_credential_manager_as_metadata(org_id: str) -> dict:
+        """Per-org OAuth 2.0 AS metadata for Google CredentialManager SDK (RFC 8414).
+
+        Google's CredentialManager SDK derives the AS metadata URL from the
+        ``credential_issuer`` field.  When
+        ``credential_issuer = https://host/org/{id}/credential-manager`` the SDK fetches:
+            /.well-known/oauth-authorization-server/org/{id}/credential-manager
+        The ``issuer`` value MUST match ``credential_issuer`` exactly.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
+        return {
+            "issuer": issuer_url,
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
+            "token_endpoint_auth_methods_supported": ["none"],
+            "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                "authorization_code",
+            ],
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "pre-authorized_grant_anonymous_access_supported": True,
+        }
+
+    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet")
+    async def get_org_apple_wallet_as_metadata(org_id: str) -> dict:
+        """Per-org OAuth 2.0 AS metadata for Apple Wallet (RFC 8414).
+
+        Apple Wallet derives the AS metadata URL from the ``credential_issuer``
+        field.  When ``credential_issuer = https://host/org/{id}/apple-wallet``
+        the wallet fetches:
+            /.well-known/oauth-authorization-server/org/{id}/apple-wallet
+        The ``issuer`` value MUST match ``credential_issuer`` exactly.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
+        return {
+            "issuer": issuer_url,
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
+            "token_endpoint_auth_methods_supported": ["none"],
+            "grant_types_supported": [
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+                "authorization_code",
+            ],
+            "response_types_supported": ["code"],
+            "code_challenge_methods_supported": ["S256"],
+            "pre-authorized_grant_anonymous_access_supported": True,
+        }
+
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
     async def get_org_spruce_as_metadata(org_id: str) -> dict:
         """Per-org OAuth 2.0 AS metadata for SpruceID SDK (RFC 8414).
@@ -427,6 +630,7 @@ def create_app() -> FastAPI:
             "issuer": issuer_url,
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
@@ -446,6 +650,7 @@ def create_app() -> FastAPI:
             "issuer": issuer_url,
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
@@ -464,6 +669,7 @@ def create_app() -> FastAPI:
             "issuer": ISSUER_BASE_URL,
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
+            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",

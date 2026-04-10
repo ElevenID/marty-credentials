@@ -129,6 +129,18 @@ class IIssuanceRepository(ABC):
         """
         pass
 
+    @abstractmethod
+    async def get_credential_type_formats_for_org(self, org_id: str) -> list[tuple[str, list[str]]]:
+        """Return (credential_type, supported_formats) for an org's active templates.
+
+        Like ``get_credential_types_for_org`` but also returns the
+        ``supported_formats`` JSON array from each template so that issuer
+        metadata can emit the correct format-specific configuration entries
+        (e.g. ``com.icao.dtc#mdoc`` for mDoc-capable templates that don't
+        start with ``org.iso.18013``).
+        """
+        pass
+
     # Authorization session methods (OID4VCI authorization code flow)
     @abstractmethod
     async def save_authorization_session(self, session: AuthorizationSession) -> None:

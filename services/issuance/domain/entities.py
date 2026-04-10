@@ -50,6 +50,7 @@ class IssuanceTransaction:
     claims: dict[str, Any] = field(default_factory=dict)
     credential_type: str | None = None  # Store credential type from template
     zk_predicate_claims: list[str] = field(default_factory=list)  # ZK-eligible claims (zk_mdoc only)
+    selective_disclosure_claims: list[str] = field(default_factory=list)  # SD-JWT selectively disclosable claims
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"  # SD-JWT payload structure
     wallet_configs: list[dict] = field(default_factory=list)  # [{wallet_id, deep_link_scheme}, ...]
     

@@ -33,6 +33,7 @@ from issuance.infrastructure.api.routes import (
     ApplicationTemplateCreate,
     ApplicationTemplateResponse,
     EvidenceSubmission,
+    _verify_management_api_key,
     application_router,
     application_template_router,
 )
@@ -53,7 +54,7 @@ class IssuanceEventResponse(BaseModel):
 # Application Template Endpoints
 # ============================================================================
 
-@application_template_router.post("", response_model=ApplicationTemplateResponse)
+@application_template_router.post("", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def create_application_template(
     request: ApplicationTemplateCreate,
     repo: IIssuanceRepository = Depends(),
@@ -99,7 +100,7 @@ async def create_application_template(
     )
 
 
-@application_template_router.get("", response_model=list[ApplicationTemplateResponse])
+@application_template_router.get("", response_model=list[ApplicationTemplateResponse], dependencies=[Depends(_verify_management_api_key)])
 async def list_application_templates(
     organization_id: str = Query(...),
     repo: IIssuanceRepository = Depends(),
@@ -131,7 +132,7 @@ async def list_application_templates(
     ]
 
 
-@application_template_router.get("/{template_id}", response_model=ApplicationTemplateResponse)
+@application_template_router.get("/{template_id}", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application_template(
     template_id: str,
     repo: IIssuanceRepository = Depends(),
@@ -162,7 +163,7 @@ async def get_application_template(
     )
 
 
-@application_template_router.put("/{template_id}", response_model=ApplicationTemplateResponse)
+@application_template_router.put("/{template_id}", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def update_application_template(
     template_id: str,
     request: ApplicationTemplateCreate,
@@ -216,7 +217,7 @@ async def update_application_template(
 # Application Endpoints
 # ============================================================================
 
-@application_router.post("", response_model=ApplicationResponse)
+@application_router.post("", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def create_application(
     request: ApplicationCreate,
     repo: IIssuanceRepository = Depends(),
@@ -260,7 +261,7 @@ async def create_application(
     )
 
 
-@application_router.get("", response_model=list[ApplicationResponse])
+@application_router.get("", response_model=list[ApplicationResponse], dependencies=[Depends(_verify_management_api_key)])
 async def list_applications(
     organization_id: str = Query(...),
     status: str = Query(None),
@@ -295,7 +296,7 @@ async def list_applications(
     ]
 
 
-@application_router.get("/{application_id}", response_model=ApplicationResponse)
+@application_router.get("/{application_id}", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application(
     application_id: str,
     repo: IIssuanceRepository = Depends(),
@@ -322,7 +323,7 @@ async def get_application(
     )
 
 
-@application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse)
+@application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def submit_evidence(
     application_id: str,
     evidence: EvidenceSubmission,
@@ -362,7 +363,7 @@ async def submit_evidence(
     )
 
 
-@application_router.post("/{application_id}/approve", response_model=ApplicationResponse)
+@application_router.post("/{application_id}/approve", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def approve_application(
     application_id: str,
     approval: ApplicationApproval,
@@ -418,7 +419,7 @@ async def approve_application(
     )
 
 
-@application_router.post("/{application_id}/reject", response_model=ApplicationResponse)
+@application_router.post("/{application_id}/reject", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def reject_application(
     application_id: str,
     rejection: ApplicationRejection,
@@ -706,6 +707,7 @@ async def _get_or_refresh_transaction(
     "/{application_id}/issuance-offer",
     response_model=IssuanceOfferResponse,
     summary="Generate Wallet Invite (Admin)",
+    dependencies=[Depends(_verify_management_api_key)],
 )
 async def generate_issuance_offer(
     application_id: str,
@@ -899,6 +901,7 @@ async def get_issuance_offer(
     "/{application_id}/issuance-events",
     response_model=list[IssuanceEventResponse],
     summary="List Issuance Events (Admin)",
+    dependencies=[Depends(_verify_management_api_key)],
 )
 async def list_issuance_events(
     application_id: str,

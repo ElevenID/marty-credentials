@@ -54,3 +54,7 @@ rust/marty-rs/pkg/
 # OS
 .DS_Store
 Thumbs.db
+
+# Environment files
+.env
+.env.*

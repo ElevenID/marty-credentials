@@ -2,13 +2,9 @@
 
 use super::helpers::{create_issuer_auth, der_to_cose_signature};
 use ciborium::Value as CborValue;
-use isomdl::definitions::issuer_signed::{IssuerSigned, IssuerSignedItem};
-use isomdl::definitions::device_response::Status;
-use isomdl::definitions::{DeviceResponse, Document};
-use isomdl::definitions::helpers::{NonEmptyMap, NonEmptyVec, Tag24, ByteStr};
-use isomdl::cose::MaybeTagged;
+use isomdl::definitions::issuer_signed::IssuerSignedItem;
+use isomdl::definitions::helpers::{NonEmptyMap, NonEmptyVec, Tag24};
 use pyo3::prelude::*;
-use ssi::claims::cose::CoseSign1;
 use std::collections::BTreeMap;
 
 /// Signed mDoc document
@@ -42,6 +38,7 @@ impl MdocSignedDocument {
 pub struct MdocPreparedForHsm {
     pub(crate) tbs_data: Vec<u8>,
     pub(crate) doc_type: String,
+    #[allow(dead_code)]
     pub(crate) namespaces: BTreeMap<String, BTreeMap<String, CborValue>>,
     pub(crate) issuer_signed_items: BTreeMap<String, Vec<IssuerSignedItem>>,
 }
@@ -121,8 +118,10 @@ fn build_device_response(
         (CborValue::Text("nameSpaces".to_string()), {
             // Let isomdl serialize the NonEmptyMap with proper Tag24 wrapping
             let mut ns_bytes = Vec::new();
-            ciborium::ser::into_writer(&namespaces_map, &mut ns_bytes).unwrap();
-            ciborium::from_reader(&ns_bytes[..]).unwrap()
+            ciborium::ser::into_writer(&namespaces_map, &mut ns_bytes)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("CBOR serialization failed: {e}")))?;
+            ciborium::from_reader(&ns_bytes[..])
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("CBOR round-trip failed: {e}")))?
         }),
         (CborValue::Text("issuerAuth".to_string()), issuer_auth_cbor),
     ]);
@@ -133,7 +132,8 @@ fn build_device_response(
     let empty_device_namespaces = {
         let empty_map = BTreeMap::<String, Vec<u8>>::new();
         let mut bytes = Vec::new();
-        ciborium::ser::into_writer(&empty_map, &mut bytes).unwrap();
+        ciborium::ser::into_writer(&empty_map, &mut bytes)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("CBOR serialization failed: {e}")))?;
         bytes
     };
     

@@ -41,7 +41,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
 from cryptography.x509 import load_pem_x509_certificate
 from cryptography.x509.oid import NameOID
 
-from mmf.core.credentials.ports import (
+from marty_credentials.ports.credential_ports import (
     CredentialData,
     CredentialOffer,
     CredentialSubject,
@@ -524,7 +524,7 @@ class MultipazCredentialIssuer:
         """Create an OID4VCI credential offer."""
 
         offer_id = str(uuid.uuid4())
-        pre_auth_code = str(uuid.uuid4()) if pre_authorized else None
+        pre_auth_code = secrets.token_urlsafe(32) if pre_authorized else None
 
         # Mock offer JSON
         offer_json = json.dumps(
@@ -987,6 +987,7 @@ class MultipazCredentialVerifier:
             vc_list = vp.get("verifiableCredential", [])
 
             all_claims = {}
+            vc_errors = []
             for vc in vc_list:
                 if isinstance(vc, str):
                     # Decode nested VC JWT
@@ -1001,11 +1002,20 @@ class MultipazCredentialVerifier:
                             vc_data = vc_payload.get("vc", {})
                             cs = vc_data.get("credentialSubject", {})
                             all_claims.update(cs)
-                    except Exception:
-                        pass
+                    except Exception as vc_exc:
+                        logger.warning("Failed to decode nested VC JWT: %s", vc_exc)
+                        vc_errors.append(str(vc_exc))
                 elif isinstance(vc, dict):
                     cs = vc.get("credentialSubject", {})
                     all_claims.update(cs)
+
+            if vc_errors:
+                return VerificationResult(
+                    valid=False,
+                    claims=all_claims,
+                    issuer=payload.get("iss"),
+                    error=f"Failed to decode {len(vc_errors)} embedded VC(s): {'; '.join(vc_errors)}",
+                )
 
             return VerificationResult(valid=True, claims=all_claims, issuer=payload.get("iss"))
 
