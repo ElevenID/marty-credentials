@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from issuance.domain.entities import (
     Application,
@@ -155,4 +156,14 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
         """Look up a session by its access token (post-exchange)."""
+        pass
+
+    @abstractmethod
+    async def get_retention_summary(self, org_id: str, retention_days: int) -> dict[str, Any]:
+        """Return Hosted Pilot retention status for an organization."""
+        pass
+
+    @abstractmethod
+    async def purge_retention_records(self, org_id: str, retention_days: int) -> dict[str, Any]:
+        """Purge Hosted Pilot data older than the retention window."""
         pass

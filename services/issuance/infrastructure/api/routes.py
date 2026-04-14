@@ -2035,6 +2035,36 @@ class TransactionRevokeRequest(BaseModel):
     reason: str | None = None
 
 
+class RetentionRecordCounts(BaseModel):
+    issuance_transactions: int = 0
+    applications: int = 0
+    authorization_sessions: int = 0
+    issuance_events: int = 0
+    issued_credentials: int = 0
+    total: int = 0
+
+
+class IssuanceRetentionSummaryResponse(BaseModel):
+    organization_id: str
+    retention_days: int
+    cutoff_at: str
+    oldest_retained_record_at: str | None = None
+    next_expiry_at: str | None = None
+    eligible_for_purge: RetentionRecordCounts
+    tracked_scope: list[str] = Field(default_factory=list)
+
+
+class IssuanceRetentionPurgeResponse(BaseModel):
+    organization_id: str
+    retention_days: int
+    cutoff_at: str
+    purged_at: str
+    purged_records: RetentionRecordCounts
+    next_expiry_at: str | None = None
+    oldest_retained_record_at: str | None = None
+    tracked_scope: list[str] = Field(default_factory=list)
+
+
 @issuance_router.post("/transactions/{tx_id}/revoke", dependencies=[Depends(_verify_management_api_key)])
 async def revoke_transaction(
     tx_id: str,
@@ -2065,6 +2095,45 @@ async def revoke_transaction(
         "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
         "revocation_reason": tx.revocation_reason,
     }
+
+
+@issuance_router.get("/organizations/{organization_id}/retention", response_model=IssuanceRetentionSummaryResponse)
+async def get_organization_retention_summary(
+    organization_id: str,
+    retention_days: int = Query(30, ge=1, le=3650),
+    repo: IIssuanceRepository = Depends(),
+) -> IssuanceRetentionSummaryResponse:
+    """Return Hosted Pilot retention status for an organization."""
+    summary = await repo.get_retention_summary(organization_id, retention_days)
+    return IssuanceRetentionSummaryResponse(
+        organization_id=summary["organization_id"],
+        retention_days=summary["retention_days"],
+        cutoff_at=summary["cutoff_at"],
+        oldest_retained_record_at=summary.get("oldest_retained_record_at"),
+        next_expiry_at=summary.get("next_expiry_at"),
+        eligible_for_purge=RetentionRecordCounts(**summary.get("eligible_for_purge", {})),
+        tracked_scope=list(summary.get("tracked_scope", [])),
+    )
+
+
+@issuance_router.post("/organizations/{organization_id}/retention/purge", response_model=IssuanceRetentionPurgeResponse)
+async def purge_organization_retention_data(
+    organization_id: str,
+    retention_days: int = Query(30, ge=1, le=3650),
+    repo: IIssuanceRepository = Depends(),
+) -> IssuanceRetentionPurgeResponse:
+    """Purge Hosted Pilot data that has aged past the retention window."""
+    purge_result = await repo.purge_retention_records(organization_id, retention_days)
+    return IssuanceRetentionPurgeResponse(
+        organization_id=purge_result["organization_id"],
+        retention_days=purge_result["retention_days"],
+        cutoff_at=purge_result["cutoff_at"],
+        purged_at=purge_result["purged_at"],
+        purged_records=RetentionRecordCounts(**purge_result.get("purged_records", {})),
+        next_expiry_at=purge_result.get("next_expiry_at"),
+        oldest_retained_record_at=purge_result.get("oldest_retained_record_at"),
+        tracked_scope=list(purge_result.get("tracked_scope", [])),
+    )
 
 
 @issuance_router.get("/transactions/{tx_id}/revocation-status")

@@ -1,9 +1,12 @@
 """In-memory repository adapter for development."""
 
+from datetime import datetime, timedelta, timezone
+
 from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    AuthorizationSession,
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
@@ -19,6 +22,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._credentials: dict[str, IssuedCredential] = {}
         self._applications: dict[str, Application] = {}
         self._application_templates: dict[str, ApplicationTemplate] = {}
+        self._authorization_sessions: dict[str, AuthorizationSession] = {}
         self._events: list[IssuanceEvent] = []
     
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
@@ -120,3 +124,132 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             if tx.organization_id == org_id and tx.credential_type:
                 seen.add(tx.credential_type)
         return [(ct, []) for ct in sorted(seen)]
+
+    async def save_authorization_session(self, auth_session: AuthorizationSession) -> None:
+        self._authorization_sessions[auth_session.id] = auth_session
+
+    async def get_authorization_session_by_code(self, code: str) -> AuthorizationSession | None:
+        for auth_session in self._authorization_sessions.values():
+            if auth_session.code == code:
+                return auth_session
+        return None
+
+    async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
+        import hmac as _hmac
+
+        for auth_session in self._authorization_sessions.values():
+            if auth_session.access_token and _hmac.compare_digest(auth_session.access_token, token):
+                return auth_session
+        return None
+
+    async def get_retention_summary(self, org_id: str, retention_days: int) -> dict[str, object]:
+        cutoff_at = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        expired_transactions = [tx for tx in self._transactions.values() if tx.organization_id == org_id and tx.created_at < cutoff_at]
+        expired_applications = [app for app in self._applications.values() if app.organization_id == org_id and app.created_at < cutoff_at]
+        expired_auth_sessions = [session for session in self._authorization_sessions.values() if session.organization_id == org_id and session.created_at < cutoff_at]
+        expired_events = [event for event in self._events if self._event_belongs_to_org(event, org_id) and event.created_at < cutoff_at]
+        expired_credentials = [
+            credential for credential in self._credentials.values()
+            if credential.organization_id == org_id and credential.transaction_id in {tx.id for tx in expired_transactions}
+        ]
+
+        retained_candidates = [
+            tx.created_at for tx in self._transactions.values()
+            if tx.organization_id == org_id and tx.created_at >= cutoff_at
+        ]
+        retained_candidates.extend(
+            app.created_at for app in self._applications.values()
+            if app.organization_id == org_id and app.created_at >= cutoff_at
+        )
+        retained_candidates.extend(
+            session.created_at for session in self._authorization_sessions.values()
+            if session.organization_id == org_id and session.created_at >= cutoff_at
+        )
+        retained_candidates.extend(
+            event.created_at for event in self._events
+            if self._event_belongs_to_org(event, org_id) and event.created_at >= cutoff_at
+        )
+
+        oldest_retained_record_at = min(retained_candidates) if retained_candidates else None
+        next_expiry_at = (
+            oldest_retained_record_at + timedelta(days=retention_days)
+            if oldest_retained_record_at else None
+        )
+
+        eligible_for_purge = {
+            "issuance_transactions": len(expired_transactions),
+            "applications": len(expired_applications),
+            "authorization_sessions": len(expired_auth_sessions),
+            "issuance_events": len(expired_events),
+            "issued_credentials": len(expired_credentials),
+        }
+        eligible_for_purge["total"] = sum(eligible_for_purge.values())
+
+        return {
+            "organization_id": org_id,
+            "retention_days": retention_days,
+            "cutoff_at": cutoff_at.isoformat(),
+            "oldest_retained_record_at": oldest_retained_record_at.isoformat() if oldest_retained_record_at else None,
+            "next_expiry_at": next_expiry_at.isoformat() if next_expiry_at else None,
+            "eligible_for_purge": eligible_for_purge,
+            "tracked_scope": [
+                "applications",
+                "submitted_evidence",
+                "issuance_transactions",
+                "issued_credentials",
+                "authorization_sessions",
+                "issuance_events",
+            ],
+        }
+
+    async def purge_retention_records(self, org_id: str, retention_days: int) -> dict[str, object]:
+        summary = await self.get_retention_summary(org_id, retention_days)
+        cutoff_at = datetime.fromisoformat(str(summary["cutoff_at"]))
+        expired_transaction_ids = {
+            tx.id for tx in self._transactions.values()
+            if tx.organization_id == org_id and tx.created_at < cutoff_at
+        }
+
+        self._events = [
+            event for event in self._events
+            if not (self._event_belongs_to_org(event, org_id) and event.created_at < cutoff_at)
+        ]
+        self._authorization_sessions = {
+            key: value for key, value in self._authorization_sessions.items()
+            if not (value.organization_id == org_id and value.created_at < cutoff_at)
+        }
+        self._applications = {
+            key: value for key, value in self._applications.items()
+            if not (value.organization_id == org_id and value.created_at < cutoff_at)
+        }
+        self._credentials = {
+            key: value for key, value in self._credentials.items()
+            if not (value.organization_id == org_id and value.transaction_id in expired_transaction_ids)
+        }
+        self._transactions = {
+            key: value for key, value in self._transactions.items()
+            if not (value.organization_id == org_id and value.created_at < cutoff_at)
+        }
+
+        post_purge = await self.get_retention_summary(org_id, retention_days)
+        return {
+            "organization_id": org_id,
+            "retention_days": retention_days,
+            "cutoff_at": summary["cutoff_at"],
+            "purged_at": datetime.now(timezone.utc).isoformat(),
+            "purged_records": summary["eligible_for_purge"],
+            "next_expiry_at": post_purge["next_expiry_at"],
+            "oldest_retained_record_at": post_purge["oldest_retained_record_at"],
+            "tracked_scope": summary["tracked_scope"],
+        }
+
+    def _event_belongs_to_org(self, event: IssuanceEvent, org_id: str) -> bool:
+        if event.transaction_id:
+            tx = self._transactions.get(event.transaction_id)
+            if tx and tx.organization_id == org_id:
+                return True
+        if event.application_id:
+            app = self._applications.get(event.application_id)
+            if app and app.organization_id == org_id:
+                return True
+        return False

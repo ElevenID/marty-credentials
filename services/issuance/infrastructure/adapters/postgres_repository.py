@@ -3,9 +3,10 @@
 import hashlib
 import hmac
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -74,6 +75,30 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     def _denormalize_optional_template_id(value: str | None) -> str | None:
         """Return stored empty-string sentinels as ``None`` to callers."""
         return value or None
+
+    @staticmethod
+    def _event_org_condition(org_id: str):
+        transaction_ids = select(issuance_transactions_table.c.id).where(
+            issuance_transactions_table.c.organization_id == org_id
+        )
+        application_ids = select(applications_table.c.id).where(
+            applications_table.c.organization_id == org_id
+        )
+        return or_(
+            issuance_events_table.c.transaction_id.in_(transaction_ids),
+            issuance_events_table.c.application_id.in_(application_ids),
+        )
+
+    @staticmethod
+    def _old_transaction_ids_query(org_id: str, cutoff_at: datetime):
+        return select(issuance_transactions_table.c.id).where(
+            issuance_transactions_table.c.organization_id == org_id,
+            issuance_transactions_table.c.created_at < cutoff_at,
+        )
+
+    @staticmethod
+    def _result_rowcount(result: Any) -> int:
+        return int(result.rowcount or 0)
     
     # Transaction methods
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
@@ -741,3 +766,167 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             result = await session.execute(stmt)
             row = result.first()
             return self._row_to_auth_session(row) if row else None
+
+    async def get_retention_summary(self, org_id: str, retention_days: int) -> dict[str, Any]:
+        cutoff_at = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        old_transaction_ids = self._old_transaction_ids_query(org_id, cutoff_at)
+
+        async with self._session_factory() as session:
+            expired_transactions = await session.execute(
+                select(func.count())
+                .select_from(issuance_transactions_table)
+                .where(
+                    issuance_transactions_table.c.organization_id == org_id,
+                    issuance_transactions_table.c.created_at < cutoff_at,
+                )
+            )
+            expired_applications = await session.execute(
+                select(func.count())
+                .select_from(applications_table)
+                .where(
+                    applications_table.c.organization_id == org_id,
+                    applications_table.c.created_at < cutoff_at,
+                )
+            )
+            expired_auth_sessions = await session.execute(
+                select(func.count())
+                .select_from(authorization_sessions_table)
+                .where(
+                    authorization_sessions_table.c.organization_id == org_id,
+                    authorization_sessions_table.c.created_at < cutoff_at,
+                )
+            )
+            expired_events = await session.execute(
+                select(func.count())
+                .select_from(issuance_events_table)
+                .where(
+                    issuance_events_table.c.created_at < cutoff_at,
+                    self._event_org_condition(org_id),
+                )
+            )
+            expired_credentials = await session.execute(
+                select(func.count())
+                .select_from(issued_credentials_table)
+                .where(
+                    issued_credentials_table.c.organization_id == org_id,
+                    issued_credentials_table.c.transaction_id.in_(old_transaction_ids),
+                )
+            )
+
+            eligible_for_purge = {
+                "issuance_transactions": int(expired_transactions.scalar_one() or 0),
+                "applications": int(expired_applications.scalar_one() or 0),
+                "authorization_sessions": int(expired_auth_sessions.scalar_one() or 0),
+                "issuance_events": int(expired_events.scalar_one() or 0),
+                "issued_credentials": int(expired_credentials.scalar_one() or 0),
+            }
+            eligible_for_purge["total"] = sum(eligible_for_purge.values())
+
+            transaction_min = await session.execute(
+                select(func.min(issuance_transactions_table.c.created_at)).where(
+                    issuance_transactions_table.c.organization_id == org_id,
+                    issuance_transactions_table.c.created_at >= cutoff_at,
+                )
+            )
+            application_min = await session.execute(
+                select(func.min(applications_table.c.created_at)).where(
+                    applications_table.c.organization_id == org_id,
+                    applications_table.c.created_at >= cutoff_at,
+                )
+            )
+            auth_session_min = await session.execute(
+                select(func.min(authorization_sessions_table.c.created_at)).where(
+                    authorization_sessions_table.c.organization_id == org_id,
+                    authorization_sessions_table.c.created_at >= cutoff_at,
+                )
+            )
+            event_min = await session.execute(
+                select(func.min(issuance_events_table.c.created_at)).where(
+                    issuance_events_table.c.created_at >= cutoff_at,
+                    self._event_org_condition(org_id),
+                )
+            )
+
+            retained_candidates = [
+                transaction_min.scalar_one_or_none(),
+                application_min.scalar_one_or_none(),
+                auth_session_min.scalar_one_or_none(),
+                event_min.scalar_one_or_none(),
+            ]
+            retained_candidates = [candidate for candidate in retained_candidates if candidate is not None]
+
+        oldest_retained_record_at = min(retained_candidates) if retained_candidates else None
+        next_expiry_at = (
+            oldest_retained_record_at + timedelta(days=retention_days)
+            if oldest_retained_record_at else None
+        )
+
+        return {
+            "organization_id": org_id,
+            "retention_days": retention_days,
+            "cutoff_at": cutoff_at.isoformat(),
+            "oldest_retained_record_at": oldest_retained_record_at.isoformat() if oldest_retained_record_at else None,
+            "next_expiry_at": next_expiry_at.isoformat() if next_expiry_at else None,
+            "eligible_for_purge": eligible_for_purge,
+            "tracked_scope": [
+                "applications",
+                "submitted_evidence",
+                "issuance_transactions",
+                "issued_credentials",
+                "authorization_sessions",
+                "issuance_events",
+            ],
+        }
+
+    async def purge_retention_records(self, org_id: str, retention_days: int) -> dict[str, Any]:
+        summary = await self.get_retention_summary(org_id, retention_days)
+        cutoff_at = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        old_transaction_ids = self._old_transaction_ids_query(org_id, cutoff_at)
+
+        async with self._session_factory() as session:
+            delete_events_result = await session.execute(
+                delete(issuance_events_table).where(
+                    issuance_events_table.c.created_at < cutoff_at,
+                    self._event_org_condition(org_id),
+                )
+            )
+            delete_auth_sessions_result = await session.execute(
+                delete(authorization_sessions_table).where(
+                    authorization_sessions_table.c.organization_id == org_id,
+                    authorization_sessions_table.c.created_at < cutoff_at,
+                )
+            )
+            delete_applications_result = await session.execute(
+                delete(applications_table).where(
+                    applications_table.c.organization_id == org_id,
+                    applications_table.c.created_at < cutoff_at,
+                )
+            )
+            delete_transactions_result = await session.execute(
+                delete(issuance_transactions_table).where(
+                    issuance_transactions_table.c.organization_id == org_id,
+                    issuance_transactions_table.c.created_at < cutoff_at,
+                )
+            )
+            await session.commit()
+
+        post_purge = await self.get_retention_summary(org_id, retention_days)
+        purged_records = {
+            "issuance_transactions": self._result_rowcount(delete_transactions_result),
+            "applications": self._result_rowcount(delete_applications_result),
+            "authorization_sessions": self._result_rowcount(delete_auth_sessions_result),
+            "issuance_events": self._result_rowcount(delete_events_result),
+            "issued_credentials": int(summary["eligible_for_purge"].get("issued_credentials", 0)),
+        }
+        purged_records["total"] = sum(purged_records.values())
+
+        return {
+            "organization_id": org_id,
+            "retention_days": retention_days,
+            "cutoff_at": cutoff_at.isoformat(),
+            "purged_at": datetime.now(timezone.utc).isoformat(),
+            "purged_records": purged_records,
+            "next_expiry_at": post_purge["next_expiry_at"],
+            "oldest_retained_record_at": post_purge["oldest_retained_record_at"],
+            "tracked_scope": summary["tracked_scope"],
+        }

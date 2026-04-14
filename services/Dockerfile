@@ -85,6 +85,10 @@ RUN if [ -n "$(ls -A /tmp/*.whl 2>/dev/null)" ]; then \
 COPY marty-microservices-framework /tmp/mmf
 RUN pip install --no-cache-dir /tmp/mmf && rm -rf /tmp/mmf
 
+# Install shared package dependencies used by the issuance runtime.
+COPY marty-ui/packages/marty_common /app/packages/marty_common
+RUN pip install --no-cache-dir -e /app/packages/marty_common
+
 # Install Python dependencies for issuance service
 RUN pip install --no-cache-dir \
     fastapi==0.109.0 \
@@ -112,6 +116,10 @@ COPY marty-credentials/services/issuance /app/services/issuance
 
 # Copy shared proto stubs
 COPY marty-credentials/packages /app/packages
+COPY marty-ui/packages/marty_common /app/packages/marty_common
+
+# Copy shared runtime helpers
+COPY marty-ui/scripts/load-secrets-env.sh /app/load-secrets-env.sh
 
 # Copy status_list (required by issuance for SymmetricEncryption)
 COPY marty-credentials/python/status_list /app/status_list
