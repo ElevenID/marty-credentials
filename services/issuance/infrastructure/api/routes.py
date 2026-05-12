@@ -12,15 +12,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from issuance.application.rust_integration import (
+    create_sd_jwt_vc_with_remote_signing,
     get_marty_rs,
-    get_or_generate_issuer_key,
-    create_verifiable_credential_wrapper,
-    postprocess_sd_jwt_x5c,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
     oid4vci_create_authorization_response,
@@ -31,6 +29,10 @@ from issuance.application.rust_integration import (
     didcomm_extract_endpoint,
     didcomm_pack_credential,
     didcomm_encrypt,
+)
+from issuance.infrastructure.api.signing_context import (
+    resolve_remote_issuer_context,
+    sign_payload_with_remote_service,
 )
 from issuance.domain.entities import (
     Application,
@@ -56,6 +58,173 @@ if not REVOCATION_PROFILE_SERVICE_URL:
 if not CREDENTIAL_TEMPLATE_SERVICE_URL:
     logger.warning("CREDENTIAL_TEMPLATE_SERVICE_URL not set — template calls will fail")
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+_MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "mdoc"}
+_VDS_NC_PAYLOAD_FORMATS = {"vds_nc", "vdsnc"}
+
+# Staged-rollout flag — mirrors the one in main.py.  Set VDSNC_RUST_ENABLED=false
+# to disable VDS-NC signing and return an error for VDS-NC credential requests.
+_VDSNC_RUST_ENABLED: bool = os.environ.get("VDSNC_RUST_ENABLED", "true").lower() not in (
+    "false", "0", "no", "off"
+)
+_SD_JWT_PAYLOAD_FORMATS = {
+    "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
+    "sd_jwt_vc", "vc+sd_jwt", "dc+sd_jwt",
+}
+
+_ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
+
+
+def _normalize_issuer_mode(value: str | None) -> str:
+    mode = (value or "org_managed").strip() or "org_managed"
+    if mode not in _ISSUER_MODES:
+        raise HTTPException(status_code=422, detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}")
+    return mode
+
+
+def _normalize_payload_format(value: str | None) -> str:
+    return (value or "").strip().lower().replace("-", "_")
+
+
+def _credential_format_for_remote_context(payload_format: str | None, request_format: str | None = None) -> str:
+    normalized_payload = _normalize_payload_format(payload_format)
+    normalized_request = _normalize_payload_format(request_format)
+    if normalized_payload in _MDOC_PAYLOAD_FORMATS:
+        return "mso_mdoc"
+    if normalized_payload in _VDS_NC_PAYLOAD_FORMATS:
+        return "vds_nc"
+    if normalized_request in {"jwt_vc_json", "jwt_vc"}:
+        return "jwt_vc_json"
+    return "dc+sd-jwt"
+
+
+def _format_from_configuration_id(configuration_id: str | None) -> str | None:
+    """Infer a request format alias from an OID4VCI credential configuration id."""
+    normalized = (configuration_id or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized.endswith("#spruce-sd-jwt"):
+        return "spruce-vc+sd-jwt"
+    if normalized.endswith("#credential-manager"):
+        return "dc+sd-jwt"
+    if normalized.endswith("#sd-jwt"):
+        return "vc+sd-jwt"
+    if normalized.endswith("#mdoc") or normalized.endswith("#apple-wallet"):
+        return "mso_mdoc"
+    if normalized.endswith("#vds-nc"):
+        return "vds_nc"
+    return None
+
+
+def _default_request_format_for_payload(payload_format: str | None) -> str:
+    normalized_payload = _normalize_payload_format(payload_format)
+    if normalized_payload in _MDOC_PAYLOAD_FORMATS:
+        return "mso_mdoc"
+    if normalized_payload in _VDS_NC_PAYLOAD_FORMATS:
+        return "vds_nc"
+    if normalized_payload in _SD_JWT_PAYLOAD_FORMATS:
+        return "vc+sd-jwt"
+    return "jwt_vc_json"
+
+
+def _effective_request_format(
+    request: "CredentialRequest",
+    tx: IssuanceTransaction | None = None,
+) -> str:
+    """Resolve the effective wallet-request format when ``format`` is omitted."""
+    return (
+        request.format
+        or _format_from_configuration_id(request.credential_configuration_id)
+        or _format_from_configuration_id(request.credential_identifier)
+        or _default_request_format_for_payload(tx.credential_payload_format if tx else None)
+    )
+
+
+def _key_purpose_for_credential_format(credential_format: str) -> str:
+    if credential_format in {"mso_mdoc", "zk_mdoc"}:
+        return "mdoc_dsc"
+    if credential_format == "vds_nc":
+        return "vdsnc_signing"
+    return "vc_jwt_issuer"
+
+
+def _unsupported_remote_signing_format_detail(signing_format: str, credential_format: str | None = None) -> str:
+    """Return a fail-closed detail for formats without remote-signing support."""
+    fmt = credential_format or signing_format
+    return (
+        "DID-backed remote signing currently supports SD-JWT VC issuance only. "
+        f"Requested format {fmt!r} resolves to signing format {signing_format!r}, "
+        "which requires remote COSE/VDS signing support before it can be issued safely."
+    )
+
+
+async def apply_remote_issuer_context(
+    tx: IssuanceTransaction,
+    *,
+    credential_format: str | None = None,
+    force: bool = False,
+    raise_on_error: bool = False,
+) -> dict[str, Any] | None:
+    """Attach the org's active DID issuer profile to a transaction when available."""
+    if not tx.organization_id:
+        return None
+
+    resolved_format = credential_format or _credential_format_for_remote_context(tx.credential_payload_format)
+    try:
+        context = await resolve_remote_issuer_context(
+            tx.organization_id,
+            issuer_profile_id=tx.issuer_profile_id,
+            issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
+            credential_format=resolved_format,
+            key_purpose=_key_purpose_for_credential_format(resolved_format),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Unable to resolve remote issuer context for org=%s: %s", tx.organization_id, exc)
+        if raise_on_error:
+            raise
+        return None
+
+    if not context:
+        return None
+
+    resolved_issuer_did = context.get("issuer_did")
+    resolved_service_id = context.get("signing_service_id")
+    resolved_profile_id = context.get("issuer_profile_id") or (context.get("issuer_profile") or {}).get("id")
+    resolved_issuer_mode = context.get("issuer_mode") or (context.get("issuer_profile") or {}).get("issuer_mode")
+    if resolved_profile_id and resolved_profile_id != tx.issuer_profile_id:
+        tx.issuer_profile_id = str(resolved_profile_id)
+    if resolved_issuer_mode:
+        tx.issuer_mode = _normalize_issuer_mode(str(resolved_issuer_mode))
+    if resolved_issuer_did and resolved_issuer_did != tx.issuer_did_override:
+        logger.info(
+            "Resolved issuer DID for tx=%s org=%s format=%s: %s -> %s",
+            tx.id,
+            tx.organization_id,
+            resolved_format,
+            tx.issuer_did_override,
+            resolved_issuer_did,
+        )
+        tx.issuer_did_override = resolved_issuer_did
+    if resolved_service_id and resolved_service_id != tx.signing_service_id:
+        logger.info(
+            "Resolved signing service for tx=%s org=%s format=%s: %s -> %s",
+            tx.id,
+            tx.organization_id,
+            resolved_format,
+            tx.signing_service_id,
+            resolved_service_id,
+        )
+        tx.signing_service_id = resolved_service_id
+    return context
+
+
+def _did_resolution_failure_detail(tx: IssuanceTransaction, exc: Exception) -> str:
+    issuer_label = tx.issuer_did_override or "active issuer profile"
+    return (
+        f"DID resolution failed for issuer {issuer_label}: "
+        f"remote signing key could not be resolved ({exc})"
+    )
+
 
 # Routers
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
@@ -240,6 +409,8 @@ class InitiateIssuanceRequest(BaseModel):
     applicant_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
+    issuer_profile_id: str | None = None
+    issuer_mode: str = "org_managed"
     claims: dict[str, Any] = {}
 
 
@@ -273,7 +444,7 @@ class TokenResponse(BaseModel):
 
 
 class CredentialRequest(BaseModel):
-    format: str = "jwt_vc_json"
+    format: str | None = None
     # OID4VCI v1 §8.2: proofs is an object mapping proof_type -> list[str]
     proofs: dict[str, list[str]] | None = None
     # Legacy draft support — kept for backward compatibility
@@ -362,6 +533,7 @@ class ApplicationTemplateResponse(BaseModel):
 class ApplicationCreate(BaseModel):
     application_template_id: str
     applicant_data: dict[str, Any]
+    integration_context: dict[str, Any] = {}
 
 
 class ApplicationResponse(BaseModel):
@@ -371,6 +543,7 @@ class ApplicationResponse(BaseModel):
     applicant_identifier: str
     form_data: dict[str, Any]
     evidence_submissions: list[dict[str, Any]]
+    integration_context: dict[str, Any] = {}
     status: str
     review_notes: str | None
     reviewer_id: str | None
@@ -431,6 +604,7 @@ class IssuedCredentialRecordResponse(BaseModel):
     credential_hash: str | None = None
     revoked_at: str | None = None
     revocation_reason: str | None = None
+    issuer_did: str | None = None
     revoked_by: str | None = None
     created_at: str
     updated_at: str | None = None
@@ -496,6 +670,28 @@ def org_issuer_url_apple_wallet(org_id: str) -> str:
     return f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
 
 
+def _allowed_credential_issuer_audience_paths(org_id: str) -> tuple[str, ...]:
+    """Credential issuer URL paths accepted in holder proof JWT audiences."""
+    return (
+        f"/org/{org_id}",
+        f"/org/{org_id}/spruce",
+        f"/org/{org_id}/credential-manager",
+        f"/org/{org_id}/apple-wallet",
+    )
+
+
+def _proof_audience_matches_org_issuer(audience: str | None, org_id: str) -> bool:
+    """Return True when a proof JWT aud matches a supported per-org issuer URL."""
+    normalized = (audience or "").strip().rstrip("/")
+    if not normalized:
+        return False
+
+    parsed = urlparse(normalized)
+    candidate_path = (parsed.path if (parsed.scheme or parsed.netloc) else normalized).rstrip("/")
+    allowed_paths = _allowed_credential_issuer_audience_paths(org_id)
+    return any(candidate_path == path or candidate_path.endswith(path) for path in allowed_paths)
+
+
 def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetime | None) -> str:
     if status == CredentialStatus.ACTIVE and expires_at and expires_at < datetime.now(timezone.utc):
         return "EXPIRED"
@@ -503,9 +699,11 @@ def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetim
 
 
 def _credential_format_to_protocol(tx: IssuanceTransaction | None, cred: IssuedCredential) -> str:
-    payload_format = (tx.credential_payload_format if tx else None) or ""
-    if payload_format == "mso_mdoc":
+    payload_format = _normalize_payload_format(tx.credential_payload_format if tx else None)
+    if payload_format in _MDOC_PAYLOAD_FORMATS:
         return "MDOC"
+    if payload_format in _VDS_NC_PAYLOAD_FORMATS:
+        return "VDS_NC"
     return "SD_JWT_VC"
 
 
@@ -564,6 +762,7 @@ async def _issued_credential_to_protocol(
         credential_hash=cred.credential_hash,
         revoked_at=cred.revoked_at.isoformat() if cred.revoked_at else None,
         revocation_reason=cred.revocation_reason,
+        issuer_did=cred.issuer_did or (tx.issuer_did_override if tx else None),
         revoked_by=None,
         created_at=issued_at.isoformat(),
         updated_at=updated_at.isoformat() if updated_at else None,
@@ -577,6 +776,7 @@ async def _issued_credential_to_protocol(
 @issuance_router.post("/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)])
 async def initiate_issuance(
     request: InitiateIssuanceRequest,
+    http_request: Request = None,
     repo: IIssuanceRepository = Depends(),
 ) -> IssuanceResponse:
     """Initiate a credential issuance transaction.
@@ -639,8 +839,10 @@ async def initiate_issuance(
             selective_disclosure_claims = list(tmpl_resp.selective_disclosure_fields) if tmpl_resp.selective_disclosure_fields else []
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
-            _tmpl_resolved = True
             logger.info(f"Fetched credential type from template (gRPC): {credential_type} vct={credential_vct}")
+            logger.info(f"Template wallet_configs_json: {tmpl_resp.wallet_configs_json}")
+            logger.info(f"Parsed wallet_configs ({len(wallet_configs)} entries): {[wc.get('wallet_id') for wc in wallet_configs]}")
+            _tmpl_resolved = True
         except HTTPException:
             raise
         except Exception as _grpc_err:
@@ -682,15 +884,63 @@ async def initiate_issuance(
     # Store vct in claims under a reserved key so the credential endpoint can
     # use it at signing time without a second template lookup.
     merged_claims = {**request.claims, "_vct": credential_vct}
+    # MIP §8.3 – if the caller deferred claims resolution (only sent
+    # _application_id), resolve actual claim values from the application's
+    # form_data.
+    _resolved_application = merged_claims.pop("_application_id", None)
+    if _resolved_application and (
+        not merged_claims or list(merged_claims.keys()) == ["_vct"]
+    ):
+        try:
+            app = await repo.get_application(str(_resolved_application))
+            if app and app.form_data:
+                merged_claims = {**app.form_data, "_vct": credential_vct}
+                logger.info(
+                    "[initiate] resolved claims from application %s: keys=%s",
+                    _resolved_application, list(app.form_data.keys()),
+                )
+            else:
+                logger.warning(
+                    "[initiate] application %s not found or has empty form_data",
+                    _resolved_application,
+                )
+        except Exception as _app_err:
+            logger.warning(
+                "[initiate] could not resolve application %s: %s", _resolved_application, _app_err,
+            )
+    logger.info(
+        "[initiate] org=%s template=%s cred_type=%s received_claims=%s merged_claims=%s",
+        request.organization_id,
+        request.credential_template_id,
+        credential_type,
+        list(request.claims.keys()),
+        list(merged_claims.keys()),
+    )
 
     # DB column is NOT NULL; when callers omit template id, persist a stable fallback.
     effective_credential_template_id = request.credential_template_id or "default"
+
+    # Extract issuer identity headers injected by the gateway when an
+    # IssuerProfile is configured for the organization.
+    issuer_did_override: str | None = None
+    signing_service_id: str | None = None
+    issuer_profile_id = request.issuer_profile_id
+    issuer_mode = _normalize_issuer_mode(request.issuer_mode)
+    if http_request is not None:
+        issuer_did_override = http_request.headers.get("x-issuer-did")
+        signing_service_id = http_request.headers.get("x-signing-service-id")
+        issuer_profile_id = issuer_profile_id or http_request.headers.get("x-issuer-profile-id")
+        issuer_mode = _normalize_issuer_mode(http_request.headers.get("x-issuer-mode") or issuer_mode)
 
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
         credential_template_id=effective_credential_template_id,
         applicant_id=request.applicant_id,
         subject_did=request.subject_did,
+        issuer_profile_id=issuer_profile_id or None,
+        issuer_mode=issuer_mode,
+        issuer_did_override=issuer_did_override or None,
+        signing_service_id=signing_service_id or None,
         claims=merged_claims,
         credential_type=credential_type,
         zk_predicate_claims=zk_predicate_claims,
@@ -698,6 +948,11 @@ async def initiate_issuance(
         credential_payload_format=credential_payload_format,
         wallet_configs=wallet_configs,
     )
+    if not (tx.issuer_did_override and tx.signing_service_id):
+        await apply_remote_issuer_context(
+            tx,
+            credential_format=_credential_format_for_remote_context(credential_payload_format),
+        )
     await repo.save_transaction(tx)
     
     # OID4VCI: Pass credential offer inline for better wallet compatibility.
@@ -716,26 +971,34 @@ async def initiate_issuance(
           metadata document.
         - ISO 18013-5 mDoc (``variant == "mso_mdoc"``): ``{base}#mdoc``
           which maps to the ``mso_mdoc`` entry in the standard issuer metadata.
+        - ICAO VDS-NC (``variant == "vds_nc"``): ``{base}#vds-nc``
+          which maps to the ``vds_nc`` entry in issuer metadata.
         """
         if base == "default":
             return base
-        if variant == "spruce-vc+sd-jwt":
+        normalized_variant = _normalize_payload_format(variant)
+        if normalized_variant == "spruce_vc+sd_jwt":
             return f"{base}#spruce-sd-jwt"
-        if variant == "mso_mdoc":
+        if normalized_variant in _MDOC_PAYLOAD_FORMATS:
             return f"{base}#mdoc"
-        if variant == "credential-manager":
+        if normalized_variant in _VDS_NC_PAYLOAD_FORMATS:
+            return f"{base}#vds-nc"
+        if normalized_variant == "credential_manager":
             return f"{base}#credential-manager"
-        if variant == "apple-wallet":
+        if normalized_variant == "apple_wallet":
             return f"{base}#apple-wallet"
         return f"{base}#sd-jwt"
 
     # Default offer uses the standard vc+sd-jwt config (works with Walt.id and
     # most OID4VCI-compliant wallets).  For mso_mdoc templates, use the #mdoc
     # config id so the default offer also resolves to the correct metadata entry.
-    # credential_payload_format may be "MDOC" (enum value), "mso_mdoc", or "mdoc"
-    # depending on which code path stored the template — all three indicate mdoc.
-    _MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
-    default_fmt_variant = "mso_mdoc" if credential_payload_format in _MDOC_PAYLOAD_FORMATS else None
+    normalized_payload_format = _normalize_payload_format(credential_payload_format)
+    if normalized_payload_format in _MDOC_PAYLOAD_FORMATS:
+        default_fmt_variant = "mso_mdoc"
+    elif normalized_payload_format in _VDS_NC_PAYLOAD_FORMATS:
+        default_fmt_variant = "vds_nc"
+    else:
+        default_fmt_variant = None
     default_config_id = _config_id_for_format_variant(credential_config_id, default_fmt_variant)
     offer_json_str = oid4vci_create_credential_offer(
         issuer_url=org_issuer_url(request.organization_id),
@@ -753,6 +1016,7 @@ async def initiate_issuance(
     credential_offer_uris: dict[str, str] = {}
     credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
     didcomm_delivery_results: list[dict] = []
+    logger.info(f"Building credential_offer_uris from {len(tx.wallet_configs)} wallet configs: {tx.wallet_configs}")
     for wc in tx.wallet_configs:
         wid = wc.get("wallet_id", "")
         scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
@@ -1269,9 +1533,9 @@ async def issue_credential(
             tx = await repo.get_by_pre_auth_code(auth_session.issuer_state)
         if not tx:
             # Stub transaction for auth-code-only issuance.
-            # Strip the "#sd-jwt" suffix that may be present on the config ID
-            # (added to the offer for SpruceID wallet compatibility) so the
-            # signing code receives the bare credential type (e.g. "access_badge").
+            # Strip any format suffix (e.g. #sd-jwt, #mdoc, #vds-nc) that may be
+            # present on the config ID so signing receives the bare credential type
+            # (e.g. "access_badge").
             raw_config_id = (
                 auth_session.credential_configuration_ids[0]
                 if auth_session.credential_configuration_ids
@@ -1292,7 +1556,7 @@ async def issue_credential(
     if tx.status == IssuanceStatus.ISSUED:
         existing_cred = await repo.get_credential_by_transaction_id(tx.id)
         if existing_cred:
-            response_format = request.format or "vc+sd-jwt"
+            response_format = _effective_request_format(request, tx)
             credential_obj = {"format": response_format, "credential": existing_cred.credential_jwt}
             import uuid as _uuid
             notification_id = str(_uuid.uuid4())
@@ -1322,9 +1586,11 @@ async def issue_credential(
             cred_type_base,
             f"{cred_type_base}#sd-jwt",
             f"{cred_type_base}#mdoc",
+            f"{cred_type_base}#vds-nc",
             f"{cred_type_base}#spruce-sd-jwt",
             "default",
             "default#sd-jwt",
+            "default#vds-nc",
         }
         # Also include org's published credential types so validation is
         # consistent with GET /.well-known/openid-credential-issuer/org/{org_id}.
@@ -1335,6 +1601,7 @@ async def issue_credential(
                     _ctype,
                     f"{_ctype}#sd-jwt",
                     f"{_ctype}#mdoc",
+                    f"{_ctype}#vds-nc",
                     f"{_ctype}#spruce-sd-jwt",
                 })
         if request.credential_configuration_id not in valid_config_ids:
@@ -1366,20 +1633,18 @@ async def issue_credential(
                     "error_description": f"Unknown credential_identifier: {request.credential_identifier!r}",
                 },
             )
+
+    effective_request_format = _effective_request_format(request, tx)
     
-    # Get issuer key for organization
-    try:
-        issuer_key = await get_or_generate_issuer_key(tx.organization_id)
-    except ImportError as e:
-        logger.error(f"Rust bindings not available: {e}")
-        tx.fail("Rust bindings not available")
+    # Resolve issuer DID + remote signing service before proof validation. The
+    # actual signing key is loaded only if we must fall back to legacy local
+    # signing after determining the credential format below.
+    issuer_context = await apply_remote_issuer_context(
+        tx,
+        credential_format=_credential_format_for_remote_context(tx.credential_payload_format, effective_request_format),
+    )
+    if issuer_context:
         await repo.save_transaction(tx)
-        raise HTTPException(status_code=500, detail="Credential signing service unavailable")
-    except RuntimeError as e:
-        logger.error(f"Issuer key storage unavailable: {e}")
-        tx.fail("Issuer key storage unavailable")
-        await repo.save_transaction(tx)
-        raise HTTPException(status_code=500, detail="Credential issuer key unavailable")
     
     # Get credential type from transaction (stored during initiation)
     credential_type = tx.credential_type or "org.iso.18013.5.1.mDL"
@@ -1419,8 +1684,8 @@ async def issue_credential(
         )
 
     # OID4VCI-1FINAL Appendix F.4: aud in proof JWT MUST be the credential_issuer URL.
-    # We validate that aud ends with /org/{org_id} to accept both localhost and
-    # production hostnames (PUBLIC_API_URL may differ between dev and prod).
+    # We validate the issuer URL path to accept both localhost and production
+    # hostnames while honoring wallet-specific issuer paths such as /spruce.
     if tx.organization_id:
         try:
             import base64 as _b64, json as _json
@@ -1428,11 +1693,11 @@ async def issue_credential(
             _pad = '=' * ((-len(_proof_parts[1])) % 4)
             _proof_payload = _json.loads(_b64.urlsafe_b64decode(_proof_parts[1] + _pad))
             _proof_aud = _proof_payload.get('aud') or ''
-            _expected_aud_suffix = f'/org/{tx.organization_id}'
-            if not _proof_aud.endswith(_expected_aud_suffix):
+            _expected_aud_paths = _allowed_credential_issuer_audience_paths(tx.organization_id)
+            if not _proof_audience_matches_org_issuer(_proof_aud, tx.organization_id):
                 logger.warning(
                     f"[credential] rid={rid} aud mismatch: got {_proof_aud!r}, "
-                    f"expected URL ending in {_expected_aud_suffix!r}"
+                    f"expected issuer path in {_expected_aud_paths!r}"
                 )
                 return JSONResponse(
                     status_code=400,
@@ -1440,7 +1705,7 @@ async def issue_credential(
                         "error": "invalid_proof",
                         "error_description": (
                             f"OID4VCI §8.2: proof JWT aud MUST be the credential_issuer URL "
-                            f"(ending in {_expected_aud_suffix}), got {_proof_aud!r}"
+                            f"(path in {_expected_aud_paths}), got {_proof_aud!r}"
                         ),
                     },
                 )
@@ -1526,23 +1791,24 @@ async def issue_credential(
     #   rather than falling through to plain JWT-VC.
     # spruce-vc+sd-jwt: SpruceKit's custom alias — normalise to vc+sd-jwt for Rust;
     #   the response uses the original request.format so SpruceKit parses it correctly.
-    _SD_JWT_PAYLOAD_FORMATS = {
-        "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
-        "SD_JWT_VC", "sd_jwt_vc",       # Python enum value / lowercase alias
-        "vc+sd-jwt", "dc+sd-jwt",       # IANA media type variants
-    }
-    _MDOC_PAYLOAD_FORMATS_LOCAL = {"mso_mdoc", "MDOC", "mdoc"}
-    if credential_payload_fmt in _MDOC_PAYLOAD_FORMATS_LOCAL:
+    normalized_payload_format = _normalize_payload_format(credential_payload_fmt)
+    if normalized_payload_format in _MDOC_PAYLOAD_FORMATS:
         signing_format = "mso_mdoc"
-    elif credential_payload_fmt in _SD_JWT_PAYLOAD_FORMATS:
+    elif normalized_payload_format in _VDS_NC_PAYLOAD_FORMATS:
+        if not _VDSNC_RUST_ENABLED:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="VDS-NC credential issuance is temporarily disabled (VDSNC_RUST_ENABLED=false)",
+            )
+        signing_format = "vds_nc"
+    elif normalized_payload_format in _SD_JWT_PAYLOAD_FORMATS:
         signing_format = "vc+sd-jwt"
-    elif request.format == "spruce-vc+sd-jwt":
+    elif effective_request_format == "spruce-vc+sd-jwt":
         signing_format = "vc+sd-jwt"
     else:
-        signing_format = request.format
-    # For mdoc, credential_type is the doctype; Rust defaults to org.iso.18013.5.1.mDL
-    # when mdoc_doctype is None, so tx.credential_type is passed through directly.
-    signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+        signing_format = effective_request_format
+    # For mdoc/vds_nc, pass the stored credential_type directly. SD-JWT uses vct URI.
+    signing_credential_type = tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
 
     # For SD-JWT, if no explicit selective disclosure claims were configured
     # on the template, default to all top-level claim keys (EUDI compliance).
@@ -1550,28 +1816,113 @@ async def issue_credential(
     if signing_format == "vc+sd-jwt" and not sd_claims:
         sd_claims = [k for k in clean_claims if not k.startswith("_")]
 
+    remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt, effective_request_format)
+    if signing_format != "vc+sd-jwt":
+        detail = _unsupported_remote_signing_format_detail(signing_format, remote_credential_format)
+        logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
+        raise HTTPException(status_code=503, detail=detail)
+
+    remote_context = issuer_context if isinstance(issuer_context, dict) else None
+    if signing_format == "vc+sd-jwt":
+        try:
+            remote_context = await apply_remote_issuer_context(
+                tx,
+                credential_format=remote_credential_format,
+                force=True,
+                raise_on_error=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            detail = _did_resolution_failure_detail(tx, exc)
+            logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
+            raise HTTPException(status_code=503, detail=detail) from exc
+        if remote_context:
+            await repo.save_transaction(tx)
+
+        if not (tx.issuer_did_override and tx.signing_service_id):
+            detail = (
+                "Issuer identity is not configured for this organization. "
+                "Create an active DID issuer profile backed by a remote signing service before issuing credentials."
+            )
+            logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
+            raise HTTPException(status_code=503, detail=detail)
+
+        if not remote_context or not isinstance(remote_context.get("service"), dict):
+            try:
+                remote_context = await resolve_remote_issuer_context(
+                    tx.organization_id,
+                    issuer_profile_id=tx.issuer_profile_id,
+                    issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
+                    credential_format=remote_credential_format,
+                    key_purpose=_key_purpose_for_credential_format(remote_credential_format),
+                )
+            except Exception as exc:  # noqa: BLE001
+                detail = _did_resolution_failure_detail(tx, exc)
+                logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
+                raise HTTPException(status_code=503, detail=detail) from exc
+            if remote_context:
+                tx.issuer_did_override = remote_context.get("issuer_did") or tx.issuer_did_override
+                tx.signing_service_id = remote_context.get("signing_service_id") or tx.signing_service_id
+                tx.issuer_profile_id = remote_context.get("issuer_profile_id") or (remote_context.get("issuer_profile") or {}).get("id") or tx.issuer_profile_id
+                tx.issuer_mode = _normalize_issuer_mode(remote_context.get("issuer_mode") or (remote_context.get("issuer_profile") or {}).get("issuer_mode") or tx.issuer_mode)
+                await repo.save_transaction(tx)
+        if not remote_context:
+            detail = (
+                "Unable to resolve the remote DID issuer profile for this organization. "
+                "Verify the DID identity is active and its signing service is available."
+            )
+            logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
+            raise HTTPException(status_code=503, detail=detail)
+
     try:
-        jwt_credential, credential_id = create_verifiable_credential_wrapper(
-            issuer_did=issuer_key["did"],
-            issuer_jwk_json=issuer_key["jwk_json"],
+        # All credentials require remote signing (all keys in KMS)
+        if not (tx.issuer_did_override and tx.signing_service_id):
+            detail = (
+                "Remote signing configuration is required. "
+                "Issuer identity and signing service must be configured for this organization."
+            )
+            logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
+            raise HTTPException(status_code=503, detail=detail)
+
+        service = remote_context.get("service") if isinstance(remote_context, dict) else {}
+        service = service if isinstance(service, dict) else {}
+        signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
+        signing_key_reference = (
+            remote_context.get("signing_key_reference")
+            if isinstance(remote_context, dict)
+            else None
+        )
+        verification_method_id = (
+            remote_context.get("verification_method_id")
+            if isinstance(remote_context, dict)
+            else None
+        )
+        effective_issuer_did = tx.issuer_did_override
+
+        async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
+            return await sign_payload_with_remote_service(
+                organization_id=tx.organization_id,
+                signing_service_id=tx.signing_service_id or "",
+                payload=payload,
+                algorithm=algorithm or signing_algorithm,
+                key_reference=signing_key_reference,
+            )
+
+        logger.info(f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}")
+        jwt_credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+            issuer_did=effective_issuer_did,
+            signing_service_id=tx.signing_service_id,
+            remote_sign=_remote_sign,
             subject_id=holder_did or tx.subject_did,
             credential_type=signing_credential_type,
             claims_json=json.dumps(clean_claims),
             expiration_seconds=31536000,  # 1 year
-            organization_id=tx.organization_id,
-            format=signing_format,
             selective_disclosure_claims=sd_claims,
-            zk_predicate_claims=tx.zk_predicate_claims or [],
-            credential_payload_format=credential_payload_fmt,
+            algorithm=signing_algorithm,
+            signing_key_reference=signing_key_reference,
+            verification_method_id=verification_method_id,
+            credential_format=effective_request_format,
         )
 
-        # EUDI compliance: inject x5c header and HTTPS iss for SD-JWT credentials.
-        # The EUDI reference verifier only supports X.509-based verification.
-        if signing_format == "vc+sd-jwt":
-            jwt_credential = postprocess_sd_jwt_x5c(
-                jwt_credential, issuer_key, tx.organization_id, ISSUER_BASE_URL,
-            )
-        
         # Only update state and emit event on first issuance; allow idempotent
         # wallet retries (wallets sometimes re-request after a network timeout).
         if tx.status == IssuanceStatus.AUTHORIZED:
@@ -1587,6 +1938,7 @@ async def issue_credential(
                 credential_template_id=tx.credential_template_id,
                 applicant_id=tx.applicant_id,
                 subject_did=holder_did or tx.subject_did,
+                issuer_did=effective_issuer_did,
                 credential_jwt=jwt_credential,
                 credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
                 status=CredentialStatus.ACTIVE,
@@ -1607,7 +1959,7 @@ async def issue_credential(
         # - "credential" as bare string for Walt.id / Draft-11 clients
         # Use the request format in the response object (not signing_format which may
         # have been normalised from spruce-vc+sd-jwt → vc+sd-jwt for Rust).
-        response_format = request.format or signing_format or "vc+sd-jwt"
+        response_format = effective_request_format or signing_format or "vc+sd-jwt"
         credential_obj = {"format": response_format, "credential": jwt_credential}
         import uuid as _uuid
         notification_id = str(_uuid.uuid4())
@@ -1617,11 +1969,15 @@ async def issue_credential(
             notification_id=notification_id,
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"[credential] rid={rid} tx_id={tx.id} Rust credential creation failed: {e}")
+        logger.error(f"[credential] rid={rid} tx_id={tx.id} credential creation failed: {e}")
         tx.fail(str(e))
         await repo.save_transaction(tx)
-        raise HTTPException(status_code=500, detail="Credential creation failed")
+        if signing_format == "vc+sd-jwt" and (tx.issuer_did_override or tx.signing_service_id):
+            raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, e)) from e
+        raise HTTPException(status_code=500, detail=f"Credential creation failed: {e}") from e
 
 
 # ── DIDComm v2 Push Delivery ─────────────────────────────────────────────
@@ -1639,8 +1995,6 @@ async def _didcomm_sign_and_deliver(
     3. Resolve the holder's DID Document to find their DIDComm service endpoint.
     4. POST the DIDComm message to that endpoint.
     """
-    issuer_key = await get_or_generate_issuer_key(tx.organization_id)
-
     credential_type = tx.credential_type or "VerifiableCredential"
     _INTERNAL_CLAIM_FIELDS = {
         "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
@@ -1651,9 +2005,17 @@ async def _didcomm_sign_and_deliver(
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
 
     credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-    if credential_payload_fmt == "mso_mdoc":
+    normalized_payload_format = _normalize_payload_format(credential_payload_fmt)
+    if normalized_payload_format in _MDOC_PAYLOAD_FORMATS:
         signing_format = "mso_mdoc"
-    elif credential_payload_fmt in ("w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt"):
+    elif normalized_payload_format in _VDS_NC_PAYLOAD_FORMATS:
+        if not _VDSNC_RUST_ENABLED:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="VDS-NC credential issuance is temporarily disabled (VDSNC_RUST_ENABLED=false)",
+            )
+        signing_format = "vds_nc"
+    elif normalized_payload_format in _SD_JWT_PAYLOAD_FORMATS:
         signing_format = "vc+sd-jwt"
     else:
         signing_format = "vc+sd-jwt"
@@ -1664,39 +2026,103 @@ async def _didcomm_sign_and_deliver(
             if credential_type and not credential_type.startswith("http")
             else credential_type)
     )
-    signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+    signing_credential_type = tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
 
     # SD-JWT default: all top-level claims if none configured
     sd_claims_dc = tx.selective_disclosure_claims or []
     if signing_format == "vc+sd-jwt" and not sd_claims_dc:
         sd_claims_dc = [k for k in clean_claims if not k.startswith("_")]
 
-    # Step 1: Sign the credential (same Rust signer as OID4VCI)
-    jwt_credential, credential_id = create_verifiable_credential_wrapper(
-        issuer_did=issuer_key["did"],
-        issuer_jwk_json=issuer_key["jwk_json"],
+    # Step 1: Sign the credential - all credentials require remote signing
+    remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt)
+    effective_request_format = remote_credential_format
+    if signing_format != "vc+sd-jwt":
+        raise HTTPException(
+            status_code=503,
+            detail=_unsupported_remote_signing_format_detail(signing_format, remote_credential_format),
+        )
+
+    remote_context: dict[str, Any] | None = None
+
+    # Ensure remote signing is configured for all credentials
+    try:
+        remote_context = await apply_remote_issuer_context(
+            tx,
+            credential_format=remote_credential_format,
+            force=True,
+            raise_on_error=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, exc)) from exc
+    if remote_context:
+        await repo.save_transaction(tx)
+
+    if not (tx.issuer_did_override and tx.signing_service_id):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Remote signing configuration is required. "
+                "Issuer identity and signing service must be configured for this organization."
+            ),
+        )
+
+    if not remote_context or not isinstance(remote_context.get("service"), dict):
+        try:
+            remote_context = await resolve_remote_issuer_context(
+                tx.organization_id,
+                issuer_profile_id=tx.issuer_profile_id,
+                issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
+                credential_format=remote_credential_format,
+                key_purpose=_key_purpose_for_credential_format(remote_credential_format),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, exc)) from exc
+        if remote_context:
+            tx.issuer_did_override = remote_context.get("issuer_did") or tx.issuer_did_override
+            tx.signing_service_id = remote_context.get("signing_service_id") or tx.signing_service_id
+            tx.issuer_profile_id = remote_context.get("issuer_profile_id") or (remote_context.get("issuer_profile") or {}).get("id") or tx.issuer_profile_id
+            tx.issuer_mode = _normalize_issuer_mode(remote_context.get("issuer_mode") or (remote_context.get("issuer_profile") or {}).get("issuer_mode") or tx.issuer_mode)
+            await repo.save_transaction(tx)
+    if not remote_context:
+        raise HTTPException(status_code=503, detail="Unable to resolve the remote DID issuer profile for this organization.")
+
+    service = remote_context.get("service") if isinstance(remote_context, dict) else {}
+    service = service if isinstance(service, dict) else {}
+    signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
+    signing_key_reference = remote_context.get("signing_key_reference") if isinstance(remote_context, dict) else None
+    verification_method_id = remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
+    effective_issuer_did_dc = tx.issuer_did_override
+
+    async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
+        return await sign_payload_with_remote_service(
+            organization_id=tx.organization_id,
+            signing_service_id=tx.signing_service_id or "",
+            payload=payload,
+            algorithm=algorithm or signing_algorithm,
+            key_reference=signing_key_reference,
+        )
+
+    logger.info(f"[credential] rid={rid} signing_path=didcomm format={effective_request_format} jwt_typ_will_be={effective_request_format}")
+    jwt_credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+        issuer_did=effective_issuer_did_dc,
+        signing_service_id=tx.signing_service_id,
+        remote_sign=_remote_sign,
         subject_id=holder_did,
         credential_type=signing_credential_type,
         claims_json=json.dumps(clean_claims),
         expiration_seconds=31536000,
-        organization_id=tx.organization_id,
-        format=signing_format,
         selective_disclosure_claims=sd_claims_dc,
-        zk_predicate_claims=tx.zk_predicate_claims or [],
-        credential_payload_format=credential_payload_fmt,
+        algorithm=signing_algorithm,
+        signing_key_reference=signing_key_reference,
+        verification_method_id=verification_method_id,
+        credential_format=effective_request_format,
     )
-
-    # EUDI compliance: inject x5c header and HTTPS iss for SD-JWT credentials.
-    if signing_format == "vc+sd-jwt":
-        jwt_credential = postprocess_sd_jwt_x5c(
-            jwt_credential, issuer_key, tx.organization_id, ISSUER_BASE_URL,
-        )
 
     # Step 2: Pack into DIDComm v2 envelope
     didcomm_message_json = didcomm_pack_credential(
         credential=jwt_credential,
         credential_format=credential_payload_fmt,
-        issuer_did=issuer_key["did"],
+        issuer_did=effective_issuer_did_dc,
         holder_did=holder_did,
         credential_id=credential_id,
     )
@@ -1755,6 +2181,7 @@ async def _didcomm_sign_and_deliver(
             credential_template_id=tx.credential_template_id,
             applicant_id=tx.applicant_id,
             subject_did=holder_did,
+            issuer_did=effective_issuer_did_dc,
             credential_jwt=jwt_credential,
             credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
             status=CredentialStatus.ACTIVE,

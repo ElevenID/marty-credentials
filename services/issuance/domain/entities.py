@@ -12,6 +12,7 @@ from typing import Any
 
 _OFFER_TTL_MINUTES = int(os.environ.get("ISSUANCE_OFFER_TTL_MINUTES", "10080"))  # 7 days
 _AUTH_SESSION_TTL_MINUTES = int(os.environ.get("ISSUANCE_AUTH_SESSION_TTL_MINUTES", "60"))  # 1 hour
+_CANVAS_LTI_STATE_TTL_MINUTES = int(os.environ.get("CANVAS_LTI_STATE_TTL_MINUTES", "10"))
 
 
 class IssuanceStatus(str, Enum):
@@ -46,6 +47,12 @@ class IssuanceTransaction:
     access_token: str | None = None
     nonce: str | None = None
     
+    # Issuer identity override (injected by gateway from IssuerProfile)
+    issuer_profile_id: str | None = None
+    issuer_mode: str = "org_managed"
+    issuer_did_override: str | None = None
+    signing_service_id: str | None = None
+
     # Credential data
     claims: dict[str, Any] = field(default_factory=dict)
     credential_type: str | None = None  # Store credential type from template
@@ -109,6 +116,84 @@ class IssuanceEvent:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass
+class CanvasEventReceipt:
+    """Replay-safe receipt for inbound Canvas credential events."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    provider_event_id: str = ""
+    organization_id: str = ""
+    credential_template_id: str = ""
+    canvas_account_id: str | None = None
+    payload_hash: str = ""
+    issuance_transaction_id: str | None = None
+    issuance_response: dict[str, Any] = field(default_factory=dict)
+    status: str = "processed"
+    error_summary: str | None = None
+    first_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_seen_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class CanvasConnectorConfig:
+    """Organization-managed Canvas connector mapping for inbound events."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str = ""
+    canvas_account_id: str = ""
+    credential_template_id: str = ""
+    application_template_id: str | None = None
+    flow_mode: str = "elevenid_orchestrated_canvas_evidence"
+    direct_issue_enabled: bool = False
+    auto_approve_on_evidence: bool = False
+    evidence_requirements: list[str] = field(default_factory=list)
+    display_name: str | None = None
+    canvas_base_url: str | None = None
+    lti_client_id: str | None = None
+    lti_deployment_id: str | None = None
+    lti_issuer: str | None = None
+    lti_jwks_url: str | None = None
+    lti_jwks_json: dict[str, Any] | None = None
+    lti_jwks_fetched_at: datetime | None = None
+    lti_jwks_expires_at: datetime | None = None
+    lti_openid_configuration: dict[str, Any] | None = None
+    enabled: bool = True
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class CanvasLtiLaunchState:
+    """Server-owned nonce/state for a Canvas LTI 1.3 launch."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    connector_id: str = ""
+    organization_id: str = ""
+    canvas_account_id: str = ""
+    state: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    nonce: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    login_hint: str | None = None
+    target_link_uri: str | None = None
+    lti_message_hint: str | None = None
+    redirect_uri: str | None = None
+    status: str = "pending"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+        + timedelta(minutes=_CANVAS_LTI_STATE_TTL_MINUTES)
+    )
+    consumed_at: datetime | None = None
+
+    @property
+    def is_expired(self) -> bool:
+        return datetime.now(timezone.utc) > self.expires_at
+
+    def mark_consumed(self) -> None:
+        self.status = "consumed"
+        self.consumed_at = datetime.now(timezone.utc)
+
+
 class CredentialStatus(str, Enum):
     """Credential lifecycle status."""
     ACTIVE = "active"
@@ -169,6 +254,7 @@ class IssuedCredential:
     credential_template_id: str = ""
     applicant_id: str | None = None
     subject_did: str | None = None
+    issuer_did: str | None = None
     
     # Credential data
     credential_jwt: str = ""
@@ -242,6 +328,7 @@ class Application:
     # Application data
     form_data: dict[str, Any] = field(default_factory=dict)
     evidence_submissions: list[dict[str, Any]] = field(default_factory=list)
+    integration_context: dict[str, Any] = field(default_factory=dict)
     
     # Status tracking
     status: ApplicationStatus = ApplicationStatus.PENDING

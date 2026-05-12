@@ -28,6 +28,9 @@ RUN pip3 install --break-system-packages maturin[patchelf]
 
 WORKDIR /build
 
+# Copy vendored Rust crates required by workspace patches
+COPY marty-core/vendor/core2-0.4.0 ./marty-core/vendor/core2-0.4.0/
+
 # Copy marty-core workspace for building Python bindings
 # Build context is workspace root, so paths are relative to /Volumes/Heart of Gold/Github/work/
 COPY marty-core/Cargo.toml ./marty-core/

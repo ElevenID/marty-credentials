@@ -1,12 +1,14 @@
 """Rust integration for credential signing operations."""
 
 import base64
+import hashlib
 import json
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Any, Awaitable, Callable, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,7 +18,6 @@ from status_list.infrastructure.security.encryption import SymmetricEncryption
 
 logger = logging.getLogger(__name__)
 
-_ephemeral_key_warning_logged = False
 _issuer_key_session_factory: async_sessionmaker[AsyncSession] | None = None
 _issuer_key_encryption: SymmetricEncryption | None = None
 
@@ -65,150 +66,6 @@ def base64url_decode(data: str) -> bytes:
 
 
 # base64url_decode removed — PKCE verification now delegated to Rust.
-
-
-# ---------------------------------------------------------------------------
-# X.509 / SD-JWT EUDI compliance helpers
-# ---------------------------------------------------------------------------
-
-# Cached per-organization: {"private_key": EC key, "x5c_b64": str}
-_org_eudi_keys: dict = {}
-
-
-def postprocess_sd_jwt_x5c(
-    sd_jwt_compact: str,
-    key_info: dict,
-    organization_id: str,
-    issuer_url: str,
-) -> str:
-    """Re-sign an SD-JWT with P-256/ES256 + X.509 cert for EUDI compliance.
-
-    The EUDI reference verifier only supports X.509 certificate-based
-    verification with P-256/ES256 (the JVM crypto stack doesn't support
-    Ed25519 in X.509 certificates).
-
-    This function post-processes an SD-JWT produced by the Rust signer to:
-
-    1. Replace ``iss`` (and ``issuer``) with the HTTPS *issuer_url*.
-    2. Switch ``alg`` from ``EdDSA`` to ``ES256`` (P-256).
-    3. Add an ``x5c`` header containing a self-signed P-256 X.509 certificate.
-    4. Remove ``kid`` (X.509 verification takes precedence).
-    5. Re-sign the JWS with the P-256 private key.
-
-    A P-256 key pair and self-signed cert are generated once per org and cached.
-    """
-    eudi_key = _get_or_generate_eudi_key(organization_id)
-
-    # Split SD-JWT: JWS~disc1~disc2~
-    first_tilde = sd_jwt_compact.find("~")
-    if first_tilde == -1:
-        logger.warning("SD-JWT has no disclosures separator, skipping x5c injection")
-        return sd_jwt_compact
-    jws = sd_jwt_compact[:first_tilde]
-    disclosures_tail = sd_jwt_compact[first_tilde:]  # includes leading ~
-
-    # Split JWS: header.payload.signature
-    jws_parts = jws.split(".")
-    if len(jws_parts) != 3:
-        logger.warning("Malformed SD-JWT JWS (%d parts), skipping x5c injection", len(jws_parts))
-        return sd_jwt_compact
-
-    # Decode and modify header
-    header = json.loads(base64url_decode(jws_parts[0]))
-    header["alg"] = "ES256"
-    header["typ"] = "dc+sd-jwt"
-    header["x5c"] = [eudi_key["x5c_b64"]]
-    header.pop("kid", None)
-
-    # Decode and modify payload: replace iss with HTTPS URL
-    payload = json.loads(base64url_decode(jws_parts[1]))
-    payload["iss"] = issuer_url
-    if "issuer" in payload:
-        payload["issuer"] = issuer_url
-
-    # Add cnf (confirmation) claim for holder key binding.
-    # The EUDI verifier requires cnf to verify the KB-JWT signature.
-    # Extract the holder's public JWK from the did:jwk:... sub claim.
-    if "cnf" not in payload:
-        sub = payload.get("sub", "")
-        cs_sub = None
-        # Check credentialSubject.id as well
-        if not sub:
-            cs = payload.get("credentialSubject", {})
-            cs_sub = cs.get("id", "") if isinstance(cs, dict) else ""
-            sub = cs_sub or ""
-        if sub.startswith("did:jwk:"):
-            try:
-                jwk_b64 = sub[len("did:jwk:"):]
-                holder_jwk = json.loads(base64url_decode(jwk_b64))
-                # Strip private key parameters, keep only public
-                holder_jwk.pop("d", None)
-                payload["cnf"] = {"jwk": holder_jwk}
-            except Exception as e:
-                logger.warning("Failed to extract holder JWK from sub %r: %s", sub[:40], e)
-
-    # Re-encode header and payload
-    new_header_b64 = base64url_encode(json.dumps(header, separators=(",", ":")).encode())
-    new_payload_b64 = base64url_encode(json.dumps(payload, separators=(",", ":")).encode())
-
-    # Re-sign with ES256 (P-256)
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-    signing_input = f"{new_header_b64}.{new_payload_b64}".encode("ascii")
-    der_sig = eudi_key["private_key"].sign(
-        signing_input, ec.ECDSA(eudi_key["hash_alg"]()),
-    )
-    # Convert DER-encoded ECDSA signature to raw R||S (64 bytes for P-256)
-    r, s = decode_dss_signature(der_sig)
-    raw_sig = r.to_bytes(32, "big") + s.to_bytes(32, "big")
-    sig_b64 = base64url_encode(raw_sig)
-
-    return f"{new_header_b64}.{new_payload_b64}.{sig_b64}{disclosures_tail}"
-
-
-def _get_or_generate_eudi_key(organization_id: str) -> dict:
-    """Get or generate a P-256 key + self-signed X.509 cert for EUDI SD-JWT.
-
-    Returns dict with 'private_key' (EC key), 'x5c_b64' (base64 DER cert),
-    and 'hash_alg' (hash algorithm class for ECDSA).
-    """
-    if organization_id in _org_eudi_keys:
-        return _org_eudi_keys[organization_id]
-
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography import x509
-    from cryptography.x509.oid import NameOID
-    from datetime import datetime as _dt, timedelta as _td
-
-    # Generate P-256 key pair
-    private_key = ec.generate_private_key(ec.SECP256R1())
-
-    # Self-signed X.509 certificate
-    subject = issuer_name = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, f"Marty Issuer {organization_id}"),
-    ])
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer_name)
-        .public_key(private_key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(_dt.utcnow())
-        .not_valid_after(_dt.utcnow() + _td(days=365))
-        .sign(private_key, hashes.SHA256())
-    )
-    der_bytes = cert.public_bytes(serialization.Encoding.DER)
-    x5c_b64 = base64.b64encode(der_bytes).decode("ascii")
-
-    result = {
-        "private_key": private_key,
-        "x5c_b64": x5c_b64,
-        "hash_alg": hashes.SHA256,
-    }
-    _org_eudi_keys[organization_id] = result
-    logger.info("Generated P-256 EUDI signing key + X.509 cert for org %r", organization_id)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -317,30 +174,6 @@ async def _save_persisted_issuer_key(organization_id: str, key_info: dict) -> No
     logger.info("Persisted encrypted issuer signing key for org %r", organization_id)
 
 
-def _warn_ephemeral_key_storage() -> None:
-    """Warn once when falling back to in-process issuer key storage."""
-    global _ephemeral_key_warning_logged
-    if _ephemeral_key_warning_logged:
-        return
-    _ephemeral_key_warning_logged = True
-    logger.warning(
-        "Using in-process issuer key storage; keys are not persisted and will rotate on restart. "
-        "Configure database-backed or KMS-backed key storage for production deployments."
-    )
-
-
-def _enforce_non_ephemeral_keys_in_production() -> None:
-    """Block ephemeral issuer keys in production unless explicitly allowed."""
-    environment = os.environ.get("MARTY_ENVIRONMENT") or os.environ.get("ENVIRONMENT") or ""
-    allow_ephemeral = os.environ.get("ALLOW_EPHEMERAL_ISSUER_KEYS", "false").lower() == "true"
-    if environment.lower() == "production" and not allow_ephemeral and not _persistent_key_store_available():
-        raise RuntimeError(
-            "Ephemeral issuer key storage is disabled in production. "
-            "Configure ISSUER_KEY_MASTER_KEY for database-backed key storage or set "
-            "ALLOW_EPHEMERAL_ISSUER_KEYS=true as a temporary override."
-        )
-
-
 def get_marty_rs():
     """Import Rust bindings for credential operations.
 
@@ -364,11 +197,11 @@ def get_marty_rs():
 
 
 async def get_or_generate_issuer_key(organization_id: str = "default") -> dict:
-    """Get or generate an Ed25519 signing key for an organization.
+    """Return the KMS-backed issuer signing key for an organization.
 
-    Prefers database-backed encrypted storage when configured via
-    ``ISSUER_KEY_MASTER_KEY`` and the service session factory. Falls back to the
-    in-process cache only in non-production environments.
+    Loads from database-backed encrypted storage (requires ``ISSUER_KEY_MASTER_KEY``
+    and a configured session factory). Raises ``RuntimeError`` when no persisted
+    key is found — ephemeral software key generation is not supported.
 
     Returns:
         dict with 'did' (did:key:z6Mk...), 'private_key' (bytes), 'public_key' (bytes)
@@ -381,35 +214,10 @@ async def get_or_generate_issuer_key(organization_id: str = "default") -> dict:
     if persisted_key is not None:
         return persisted_key
 
-    _enforce_non_ephemeral_keys_in_production()
-
-    marty_rs = get_marty_rs()
-    private_key, public_key = marty_rs.generate_ed25519_key()
-    pub_bytes = bytes(public_key)
-    did = _did_key_from_ed25519(pub_bytes)
-
-    key_info = {
-        "did": did,
-        "private_key": bytes(private_key),
-        "public_key": pub_bytes,
-        # OKP/Ed25519 JWK — used by the Rust OID4VCI signing engine.
-        # d = base64url(private_seed_32_bytes), x = base64url(public_32_bytes)
-        "jwk_json": json.dumps({
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": base64url_encode(pub_bytes),
-            "d": base64url_encode(bytes(private_key)),
-        }),
-    }
-
-    if _persistent_key_store_available():
-        await _save_persisted_issuer_key(organization_id, key_info)
-    else:
-        _warn_ephemeral_key_storage()
-
-    _org_keys[organization_id] = key_info
-    logger.info(f"Generated Ed25519 issuer key for org {organization_id!r}: {did}")
-    return key_info
+    raise RuntimeError(
+        f"No signing key found for organization {organization_id!r}. "
+        "Provision a KMS-backed key via the signing-keys service before issuing credentials."
+    )
 
 
 def _fix_mdoc_issuer_auth(credential_b64: str) -> str:
@@ -461,14 +269,11 @@ def create_verifiable_credential_wrapper(
 
     Uses the supplied issuer JWK when present, otherwise falls back to the
     in-process cache. Delegates format-aware signing entirely to the Rust
-    marty-oid4vci engine. Supports jwt_vc_json, vc+sd-jwt, mso_mdoc, and
-    zk_mdoc formats.
+    marty-oid4vci engine. Supports jwt_vc_json, vc+sd-jwt, mso_mdoc,
+    vds_nc, and zk_mdoc formats.
     """
     signing_jwk_json = issuer_jwk_json.strip() if issuer_jwk_json else ""
     if signing_jwk_json in ("", "{}"):
-        issuer_key = next(
-            (k for k in _org_keys.values() if k["did"] == issuer_did), None
-        )
         issuer_key = next(
             (k for k in _org_keys.values() if k["did"] == issuer_did), None
         )
@@ -507,6 +312,125 @@ def create_verifiable_credential_wrapper(
         return (credential_str, credential_id)
 
     return result
+
+
+def _json_dumps_compact(value: Any) -> str:
+    # ensure_ascii=True produces ASCII-safe JSON (non-ASCII escaped as \\uXXXX),
+    # matching serde_json default serialization used by sd-jwt-rs and other Rust JWT libs.
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _remote_issuer_kid(
+    issuer_did: str,
+    signing_service_id: str,
+    signing_key_reference: str | None = None,
+) -> str:
+    if issuer_did.startswith("did:web:"):
+        fragment = signing_key_reference or f"{signing_service_id}-vm"
+    elif signing_key_reference:
+        fragment = signing_key_reference
+    elif issuer_did.startswith("did:jwk:"):
+        fragment = "0"
+    elif issuer_did.startswith("did:key:"):
+        fragment = issuer_did.rsplit(":", 1)[-1]
+    else:
+        fragment = f"{signing_service_id}-vm"
+    safe_fragment = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in fragment)
+    return f"{issuer_did}#{safe_fragment or 'key-1'}"
+
+
+async def create_sd_jwt_vc_with_remote_signing(
+    *,
+    issuer_did: str,
+    signing_service_id: str,
+    remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
+    subject_id: str | None,
+    credential_type: str,
+    claims_json: str,
+    expiration_seconds: int = 31536000,
+    selective_disclosure_claims: list[str] | None = None,
+    algorithm: str | None = None,
+    signing_key_reference: str | None = None,
+    verification_method_id: str | None = None,
+    credential_format: str | None = None,
+) -> Tuple[str, str]:
+    """Create an SD-JWT VC whose signature is produced by a remote KMS.
+
+    Args:
+        credential_format: OID4VCI format string (e.g. ``"spruce-vc+sd-jwt"``)
+            used in the credential response metadata.  The JWT ``typ`` header
+            is always ``"vc+sd-jwt"`` per RFC 9596 §3.2.1 regardless of this value.
+    """
+    claims = json.loads(claims_json or "{}")
+    if not isinstance(claims, dict):
+        raise RuntimeError("claims_json must encode an object")
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    credential_id = f"urn:uuid:{uuid.uuid4()}"
+    sd_claims = set(selective_disclosure_claims or [])
+
+    payload: dict[str, Any] = {
+        "iss": issuer_did,
+        "iat": now,
+        "nbf": now,
+        "exp": now + int(expiration_seconds or 31536000),
+        "jti": credential_id,
+        "vct": credential_type,
+    }
+    if subject_id:
+        payload["sub"] = subject_id
+        payload["cnf"] = {"kid": subject_id}
+
+    disclosures: list[str] = []
+    sd_hashes: list[str] = []
+    for key, value in claims.items():
+        if key in sd_claims:
+            disclosure = [base64url_encode(secrets.token_bytes(16)), key, value]
+            disclosure_b64 = base64url_encode(_json_dumps_compact(disclosure).encode("utf-8"))
+            sd_hashes.append(base64url_encode(hashlib.sha256(disclosure_b64.encode("ascii")).digest()))
+            disclosures.append(disclosure_b64)
+        else:
+            payload[key] = value
+
+    if sd_hashes:
+        payload["_sd_alg"] = "sha-256"
+        # Sort the _sd digests for deterministic output, matching sd-jwt-rs issuer behavior.
+        payload["_sd"] = sorted(sd_hashes)
+
+    # RFC 9596 §3.2.1: the JWT typ header MUST be "vc+sd-jwt" for SD-JWT VCs.
+    # The credential_format (e.g. "spruce-vc+sd-jwt", "dc+sd-jwt") is the OID4VCI
+    # format identifier used in metadata/responses, NOT the JWT typ header.
+    header = {
+        "alg": algorithm or "ES256",
+        "typ": "vc+sd-jwt",
+        "kid": verification_method_id or _remote_issuer_kid(issuer_did, signing_service_id, signing_key_reference),
+    }
+    encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
+    encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
+    signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
+
+    sign_result = await remote_sign(signing_input, algorithm)
+    response_algorithm = sign_result.get("algorithm")
+    signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
+    if not isinstance(signature_b64, str) or not signature_b64:
+        raise RuntimeError("Remote signing service returned no usable JWS signature")
+
+    if response_algorithm and response_algorithm != header["alg"]:
+        logger.debug("Remote signer returned algorithm %s for requested %s", response_algorithm, header["alg"])
+
+    jwt = f"{encoded_header}.{encoded_payload}.{signature_b64}"
+    # SD-JWT compact serialization: jwt~disc1~disc2~  (trailing ~ with no KB JWT)
+    # When there are no disclosures, output jwt~ to match sd-jwt-rs issuer behavior.
+    # jwt~~ would produce an empty-string disclosure that breaks sd-jwt-rs parsing.
+    jwt_parts = [jwt] + disclosures
+    return f"{'~'.join(jwt_parts)}~", credential_id
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +503,53 @@ def oid4vci_verify_pkce_s256(code_verifier: str, code_challenge: str) -> bool:
     """Verify a PKCE S256 code_verifier against a code_challenge via Rust."""
     marty_rs = get_marty_rs()
     return marty_rs.oid4vci_verify_pkce_s256(code_verifier, code_challenge)
+
+
+def canvas_normalize_base_url(base_url: str) -> str:
+    """Normalize and harden a Canvas base URL via the Rust layer."""
+    marty_rs = get_marty_rs()
+    return marty_rs.canvas_normalize_base_url(
+        base_url,
+        _env_truthy("CANVAS_ALLOW_PRIVATE_BASE_URLS", default=False),
+        _env_truthy("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", default=False),
+    )
+
+
+def canvas_probe_lti_platform(base_url: str, timeout_seconds: int = 5) -> dict[str, Any]:
+    """Fetch and validate Canvas LTI platform metadata via the Rust layer."""
+    marty_rs = get_marty_rs()
+    probe_json = marty_rs.canvas_probe_lti_platform(
+        base_url,
+        timeout_seconds,
+        _env_truthy("CANVAS_ALLOW_PRIVATE_BASE_URLS", default=False),
+        _env_truthy("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", default=False),
+    )
+    return json.loads(probe_json)
+
+
+def verify_canvas_lti_launch(
+    *,
+    id_token: str,
+    expected_issuer: str,
+    expected_client_id: str,
+    expected_deployment_id: str,
+    jwks_json: dict[str, Any] | str,
+    expected_nonce: str | None = None,
+    leeway_seconds: int = 120,
+) -> dict[str, Any]:
+    """Verify a Canvas LTI launch id_token via the Rust layer."""
+    marty_rs = get_marty_rs()
+    jwks_payload = jwks_json if isinstance(jwks_json, str) else json.dumps(jwks_json)
+    verified_json = marty_rs.lti_verify_launch_jwt(
+        id_token,
+        expected_issuer,
+        expected_client_id,
+        expected_deployment_id,
+        jwks_payload,
+        expected_nonce,
+        leeway_seconds,
+    )
+    return json.loads(verified_json)
 
 
 def verify_proof_jwt(

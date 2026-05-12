@@ -33,9 +33,112 @@ CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
 )
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
+_MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
+_VDS_NC_PAYLOAD_FORMATS = {"vds_nc", "VDS_NC", "vdsnc"}
+_SD_JWT_PAYLOAD_FORMATS = {
+    "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
+    "SD_JWT_VC", "sd_jwt_vc",
+    "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt",
+}
+
 
 def _org_issuer_url(org_id: str) -> str:
     return f"{ISSUER_BASE_URL}/org/{org_id}"
+
+
+def _credential_format_for_remote_context(payload_format: str | None, request_format: str | None = None) -> str:
+    normalized_payload = (payload_format or "").strip().lower().replace("-", "_")
+    normalized_request = (request_format or "").strip().lower().replace("-", "_")
+    if normalized_payload in {"mso_mdoc", "mdoc"}:
+        return "mso_mdoc"
+    if normalized_payload in {"vds_nc", "vdsnc"}:
+        return "vds_nc"
+    if normalized_request in {"jwt_vc_json", "jwt_vc"}:
+        return "jwt_vc_json"
+    return "dc+sd-jwt"
+
+
+def _key_purpose_for_credential_format(credential_format: str) -> str:
+    if credential_format in {"mso_mdoc", "zk_mdoc"}:
+        return "mdoc_dsc"
+    if credential_format == "vds_nc":
+        return "vdsnc_signing"
+    return "vc_jwt_issuer"
+
+
+async def _resolve_remote_signing_context_for_tx(
+    tx: Any,
+    *,
+    credential_format: str,
+) -> dict[str, Any]:
+    """Resolve and attach the org-scoped DID issuer context for gRPC issuance."""
+    from issuance.infrastructure.api.signing_context import resolve_remote_issuer_context
+
+    context = await resolve_remote_issuer_context(
+        tx.organization_id,
+        issuer_profile_id=getattr(tx, "issuer_profile_id", None),
+        issuer_mode=getattr(tx, "issuer_mode", "org_managed"),
+        credential_format=credential_format,
+        key_purpose=_key_purpose_for_credential_format(credential_format),
+    )
+    if not context:
+        raise RuntimeError("No active DID issuer profile is configured for this organization")
+
+    issuer_did = context.get("issuer_did")
+    signing_service_id = context.get("signing_service_id")
+    if not issuer_did or not signing_service_id:
+        raise RuntimeError("Resolved DID issuer context is missing issuer_did or signing_service_id")
+
+    tx.issuer_did_override = issuer_did
+    tx.signing_service_id = signing_service_id
+    tx.issuer_profile_id = context.get("issuer_profile_id") or (context.get("issuer_profile") or {}).get("id") or getattr(tx, "issuer_profile_id", None)
+    tx.issuer_mode = context.get("issuer_mode") or (context.get("issuer_profile") or {}).get("issuer_mode") or getattr(tx, "issuer_mode", "org_managed")
+    return context
+
+
+async def _create_remote_signed_sd_jwt_for_tx(
+    tx: Any,
+    *,
+    subject_id: str | None,
+    credential_type: str,
+    claims_json: str,
+    credential_format: str,
+    selective_disclosure_claims: list[str] | None = None,
+) -> tuple[str, str, dict[str, Any]]:
+    """Create an SD-JWT credential signed by the org-scoped remote DID key."""
+    from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
+    from issuance.infrastructure.api.signing_context import sign_payload_with_remote_service
+
+    remote_context = await _resolve_remote_signing_context_for_tx(tx, credential_format=credential_format)
+    service = remote_context.get("service") if isinstance(remote_context.get("service"), dict) else {}
+    algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
+    signing_key_reference = remote_context.get("signing_key_reference") if isinstance(remote_context, dict) else None
+    verification_method_id = remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
+
+    async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
+        return await sign_payload_with_remote_service(
+            organization_id=tx.organization_id,
+            signing_service_id=tx.signing_service_id,
+            payload=payload,
+            algorithm=algorithm_hint or algorithm,
+            key_reference=signing_key_reference,
+        )
+
+    credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+        issuer_did=tx.issuer_did_override,
+        signing_service_id=tx.signing_service_id,
+        remote_sign=_remote_sign,
+        subject_id=subject_id,
+        credential_type=credential_type,
+        claims_json=claims_json,
+        expiration_seconds=31536000,
+        selective_disclosure_claims=selective_disclosure_claims or [],
+        algorithm=algorithm,
+        signing_key_reference=signing_key_reference,
+        verification_method_id=verification_method_id,
+        credential_format=credential_format,
+    )
+    return credential, credential_id, remote_context
 
 
 def _tx_to_pb(tx: Any) -> pb2.TransactionResponse:
@@ -170,6 +273,31 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
 
             merged_claims = {**dict(request.claims), "_vct": credential_vct}
+            # MIP §8.3 – if the caller deferred claims resolution (only sent
+            # _application_id), resolve actual claim values from the application's
+            # form_data stored in the issuance service.
+            _resolved_application = merged_claims.pop("_application_id", None)
+            if _resolved_application and (
+                not merged_claims or list(merged_claims.keys()) == ["_vct"]
+            ):
+                try:
+                    app = await repo.get_application(str(_resolved_application))
+                    if app and app.form_data:
+                        merged_claims = {**app.form_data, "_vct": credential_vct}
+                        logger.info(
+                            "[grpc-initiate] resolved claims from application %s: keys=%s",
+                            _resolved_application, list(app.form_data.keys()),
+                        )
+                    else:
+                        logger.warning(
+                            "[grpc-initiate] application %s not found or has empty form_data",
+                            _resolved_application,
+                        )
+                except Exception as _app_err:
+                    logger.warning(
+                        "[grpc-initiate] could not resolve application %s: %s",
+                        _resolved_application, _app_err,
+                    )
             effective_template_id = request.credential_template_id or "default"
 
             tx = IssuanceTransaction(
@@ -399,8 +527,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         try:
             from issuance.domain.entities import IssuanceStatus, IssuanceTransaction, EventType, IssuanceEvent
             from issuance.application.rust_integration import (
-                get_or_generate_issuer_key,
-                create_verifiable_credential_wrapper,
                 verify_proof_jwt,
             )
 
@@ -469,19 +595,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details(verify_err or "Proof verification failed")
                 return pb2.IssueCredentialResponse()
 
-            # Get issuer key
-            try:
-                issuer_key = await get_or_generate_issuer_key(tx.organization_id)
-            except ImportError as e:
-                context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details("Credential signing service unavailable")
-                return pb2.IssueCredentialResponse()
-            except RuntimeError as e:
-                logger.error(f"Issuer key storage unavailable: {e}")
-                context.set_code(grpc.StatusCode.INTERNAL)
-                context.set_details("Credential issuer key unavailable")
-                return pb2.IssueCredentialResponse()
-
             credential_type = tx.credential_type or "org.iso.18013.5.1.mDL"
             _INTERNAL_CLAIM_FIELDS = {
                 "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
@@ -515,43 +628,29 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 signing_format = fmt
 
             signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+            if signing_format != "vc+sd-jwt":
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(
+                    "gRPC issuance requires DID-backed remote signing; "
+                    f"format {signing_format!r} is not yet supported on this adapter"
+                )
+                return pb2.IssueCredentialResponse()
 
-            # Try external DocumentSigner if configured, fall back to local Rust FFI
-            from issuance.infrastructure.adapters.document_signer_client import (
-                is_external_signer_enabled,
-                sign_credential_via_document_signer,
-            )
-
-            jwt_credential = None
-            credential_id = None
-
-            if is_external_signer_enabled() and signing_format in ("vc+sd-jwt", "jwt_vc_json"):
-                try:
-                    jwt_credential, credential_id = await sign_credential_via_document_signer(
-                        subject_id=holder_did or tx.subject_did,
-                        credential_type=signing_credential_type,
-                        claims_json=json.dumps(clean_claims),
-                        selective_disclosure_claims=tx.selective_disclosure_claims or [],
-                        organization_id=tx.organization_id,
-                    )
-                    logger.info("Credential signed via external DocumentSigner")
-                except Exception as ds_err:
-                    logger.warning(f"DocumentSigner failed, falling back to Rust FFI: {ds_err}")
-                    jwt_credential = None
-
-            if jwt_credential is None:
-                jwt_credential, credential_id = create_verifiable_credential_wrapper(
-                    issuer_did=issuer_key["did"],
-                    issuer_jwk_json=issuer_key["jwk_json"],
+            remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt, fmt)
+            try:
+                jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
+                    tx,
                     subject_id=holder_did or tx.subject_did,
                     credential_type=signing_credential_type,
                     claims_json=json.dumps(clean_claims),
-                    expiration_seconds=31536000,
-                    organization_id=tx.organization_id,
-                    format=signing_format,
-                    zk_predicate_claims=tx.zk_predicate_claims or [],
-                    credential_payload_format=credential_payload_fmt,
+                    credential_format=remote_credential_format,
+                    selective_disclosure_claims=tx.selective_disclosure_claims or [],
                 )
+            except Exception as signing_err:  # noqa: BLE001
+                logger.error("gRPC DID-backed signing failed for tx=%s org=%s: %s", tx.id, tx.organization_id, signing_err)
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details(f"DID-backed remote signing failed: {signing_err}")
+                return pb2.IssueCredentialResponse()
 
             if tx.status == IssuanceStatus.AUTHORIZED:
                 tx.complete()
@@ -606,8 +705,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 IssuedCredential, CredentialStatus,
             )
             from issuance.application.rust_integration import (
-                get_or_generate_issuer_key,
-                create_verifiable_credential_wrapper,
                 didcomm_resolve_did,
                 didcomm_extract_endpoint,
                 didcomm_pack_credential,
@@ -642,8 +739,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details(f"Transaction in {tx.status.value} state")
                 return pb2.DidcommDeliverResponse()
 
-            issuer_key = await get_or_generate_issuer_key(tx.organization_id)
-
             credential_type = tx.credential_type or "VerifiableCredential"
             _INTERNAL_CLAIM_FIELDS = {
                 "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
@@ -670,23 +765,35 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             )
             signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
 
-            jwt_credential, credential_id = create_verifiable_credential_wrapper(
-                issuer_did=issuer_key["did"],
-                issuer_jwk_json=issuer_key["jwk_json"],
-                subject_id=request.holder_did,
-                credential_type=signing_credential_type,
-                claims_json=json.dumps(clean_claims),
-                expiration_seconds=31536000,
-                organization_id=tx.organization_id,
-                format=signing_format,
-                zk_predicate_claims=tx.zk_predicate_claims or [],
-                credential_payload_format=credential_payload_fmt,
-            )
+            if signing_format != "vc+sd-jwt":
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(
+                    "gRPC DIDComm delivery requires DID-backed remote signing; "
+                    f"format {signing_format!r} is not yet supported on this adapter"
+                )
+                return pb2.DidcommDeliverResponse()
+
+            remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt)
+            try:
+                jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
+                    tx,
+                    subject_id=request.holder_did,
+                    credential_type=signing_credential_type,
+                    claims_json=json.dumps(clean_claims),
+                    credential_format=remote_credential_format,
+                    selective_disclosure_claims=tx.selective_disclosure_claims or [],
+                )
+                await repo.save_transaction(tx)
+            except Exception as signing_err:  # noqa: BLE001
+                logger.error("gRPC DIDComm DID-backed signing failed for tx=%s org=%s: %s", tx.id, tx.organization_id, signing_err)
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details(f"DID-backed remote signing failed: {signing_err}")
+                return pb2.DidcommDeliverResponse()
 
             didcomm_message_json = didcomm_pack_credential(
                 credential=jwt_credential,
                 credential_format=credential_payload_fmt,
-                issuer_did=issuer_key["did"],
+                issuer_did=tx.issuer_did_override,
                 holder_did=request.holder_did,
                 credential_id=credential_id,
             )

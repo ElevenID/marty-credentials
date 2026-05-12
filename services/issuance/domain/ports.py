@@ -9,6 +9,9 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    CanvasConnectorConfig,
+    CanvasEventReceipt,
+    CanvasLtiLaunchState,
     AuthorizationSession,
     IssuanceEvent,
     IssuanceTransaction,
@@ -120,6 +123,60 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def save_canvas_event_receipt(self, receipt: CanvasEventReceipt) -> None:
+        """Persist an inbound Canvas event receipt for replay-safe processing."""
+        pass
+
+    @abstractmethod
+    async def get_canvas_event_receipt(
+        self,
+        provider_event_id: str,
+        canvas_account_id: str | None = None,
+    ) -> CanvasEventReceipt | None:
+        """Look up a previously-processed Canvas event receipt by provider event ID and account."""
+        pass
+
+    @abstractmethod
+    async def save_canvas_connector(self, connector: CanvasConnectorConfig) -> None:
+        """Persist a Canvas connector configuration."""
+        pass
+
+    @abstractmethod
+    async def get_canvas_connector(self, connector_id: str) -> CanvasConnectorConfig | None:
+        """Look up a Canvas connector by ID."""
+        pass
+
+    @abstractmethod
+    async def get_canvas_connector_by_account_id(self, canvas_account_id: str) -> CanvasConnectorConfig | None:
+        """Look up the active Canvas connector for a Canvas account ID."""
+        pass
+
+    @abstractmethod
+    async def list_canvas_connectors(self, organization_id: str) -> list[CanvasConnectorConfig]:
+        """List Canvas connectors for an organization."""
+        pass
+
+    @abstractmethod
+    async def delete_canvas_connector(self, connector_id: str) -> None:
+        """Delete a Canvas connector configuration."""
+        pass
+
+    @abstractmethod
+    async def save_canvas_lti_launch_state(self, launch_state: CanvasLtiLaunchState) -> None:
+        """Persist a server-owned Canvas LTI launch state."""
+        pass
+
+    @abstractmethod
+    async def get_canvas_lti_launch_state(self, state: str) -> CanvasLtiLaunchState | None:
+        """Look up a Canvas LTI launch state by opaque state value."""
+        pass
+
+    @abstractmethod
+    async def consume_canvas_lti_launch_state(self, state: str) -> CanvasLtiLaunchState | None:
+        """Atomically consume a pending Canvas LTI launch state when possible."""
+        pass
+
+    @abstractmethod
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
         """Return credential_type values for an org's active credential templates.
 
@@ -140,6 +197,11 @@ class IIssuanceRepository(ABC):
         (e.g. ``com.icao.dtc#mdoc`` for mDoc-capable templates that don't
         start with ``org.iso.18013``).
         """
+        pass
+
+    @abstractmethod
+    async def get_credential_display_metadata_for_org(self, org_id: str) -> dict[str, dict[str, Any]]:
+        """Return human display metadata keyed by credential_type."""
         pass
 
     # Authorization session methods (OID4VCI authorization code flow)

@@ -106,6 +106,9 @@ pub fn create_verifiable_credential(
         marty_oid4vci::types::SignedCredential::ZkMdoc { issuer_signed_b64, .. } => {
             issuer_signed_b64.clone()
         }
+        marty_oid4vci::types::SignedCredential::VdsNc { barcode_data, .. } => {
+            barcode_data.clone()
+        }
     };
 
     Ok((credential_str, signed.credential_id().to_string()))

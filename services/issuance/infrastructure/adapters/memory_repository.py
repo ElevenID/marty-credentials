@@ -7,6 +7,9 @@ from issuance.domain.entities import (
     ApplicationStatus,
     ApplicationTemplate,
     AuthorizationSession,
+    CanvasConnectorConfig,
+    CanvasEventReceipt,
+    CanvasLtiLaunchState,
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
@@ -23,6 +26,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._applications: dict[str, Application] = {}
         self._application_templates: dict[str, ApplicationTemplate] = {}
         self._authorization_sessions: dict[str, AuthorizationSession] = {}
+        self._canvas_connectors: dict[str, CanvasConnectorConfig] = {}
+        self._canvas_event_receipts: dict[tuple[str | None, str], CanvasEventReceipt] = {}
+        self._canvas_lti_launch_states: dict[str, CanvasLtiLaunchState] = {}
         self._events: list[IssuanceEvent] = []
     
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
@@ -111,6 +117,57 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             key=lambda e: e.created_at,
         )
 
+    async def save_canvas_event_receipt(self, receipt: CanvasEventReceipt) -> None:
+        self._canvas_event_receipts[(receipt.canvas_account_id, receipt.provider_event_id)] = receipt
+
+    async def get_canvas_event_receipt(
+        self,
+        provider_event_id: str,
+        canvas_account_id: str | None = None,
+    ) -> CanvasEventReceipt | None:
+        if canvas_account_id is not None:
+            return self._canvas_event_receipts.get((canvas_account_id, provider_event_id))
+        for (_account_id, event_id), receipt in self._canvas_event_receipts.items():
+            if event_id == provider_event_id:
+                return receipt
+        return None
+
+    async def save_canvas_connector(self, connector: CanvasConnectorConfig) -> None:
+        self._canvas_connectors[connector.id] = connector
+
+    async def get_canvas_connector(self, connector_id: str) -> CanvasConnectorConfig | None:
+        return self._canvas_connectors.get(connector_id)
+
+    async def get_canvas_connector_by_account_id(self, canvas_account_id: str) -> CanvasConnectorConfig | None:
+        for connector in self._canvas_connectors.values():
+            if connector.canvas_account_id == canvas_account_id and connector.enabled:
+                return connector
+        return None
+
+    async def list_canvas_connectors(self, organization_id: str) -> list[CanvasConnectorConfig]:
+        return [
+            connector
+            for connector in self._canvas_connectors.values()
+            if connector.organization_id == organization_id
+        ]
+
+    async def delete_canvas_connector(self, connector_id: str) -> None:
+        self._canvas_connectors.pop(connector_id, None)
+
+    async def save_canvas_lti_launch_state(self, launch_state: CanvasLtiLaunchState) -> None:
+        self._canvas_lti_launch_states[launch_state.state] = launch_state
+
+    async def get_canvas_lti_launch_state(self, state: str) -> CanvasLtiLaunchState | None:
+        return self._canvas_lti_launch_states.get(state)
+
+    async def consume_canvas_lti_launch_state(self, state: str) -> CanvasLtiLaunchState | None:
+        launch_state = self._canvas_lti_launch_states.get(state)
+        if launch_state is None or launch_state.status != "pending" or launch_state.is_expired:
+            return None
+        launch_state.mark_consumed()
+        self._canvas_lti_launch_states[state] = launch_state
+        return launch_state
+
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
         seen: set[str] = set()
         for tx in self._transactions.values():
@@ -124,6 +181,17 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             if tx.organization_id == org_id and tx.credential_type:
                 seen.add(tx.credential_type)
         return [(ct, []) for ct in sorted(seen)]
+
+    async def get_credential_display_metadata_for_org(self, org_id: str) -> dict[str, dict[str, object]]:
+        return {
+            credential_type: {
+                "name": credential_type,
+                "description": None,
+                "claims": [],
+                "display_style": {},
+            }
+            for credential_type, _formats in await self.get_credential_type_formats_for_org(org_id)
+        }
 
     async def save_authorization_session(self, auth_session: AuthorizationSession) -> None:
         self._authorization_sessions[auth_session.id] = auth_session

@@ -84,3 +84,27 @@ class VerifyDirectRequest(BaseModel):
     presentation_definition: PresentationDefinition
     verifier_did: str
     trusted_issuers: list[str] = []
+
+
+class VerifyVdsNcRequest(BaseModel):
+    """Request to verify a VDS-NC barcode."""
+    barcode: str
+    issuer_jwk_json: str | None = None
+    issuer_did: str | None = None
+    organization_id: str | None = None
+    verification_method_id: str | None = None
+    trusted_issuers: list[str] = []
+    credential_format: str = "vds_nc"
+    key_purpose: str = "vdsnc_signing"
+    algorithm: str | None = None
+    allow_public_did_fallback: bool = False
+
+
+class VdsNcVerificationResult(BaseModel):
+    """Result of VDS-NC barcode verification."""
+    valid: bool
+    country: str | None = None
+    payload: dict[str, Any] | None = None
+    signature_status: str = "Unknown"
+    errors: list[str] = []
+    method: str = "vds_nc"

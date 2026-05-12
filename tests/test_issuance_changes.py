@@ -13,6 +13,7 @@ Tests for the issuance service changes:
 
 import hashlib
 import json
+import types
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -29,10 +30,13 @@ import os
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
+_PYTHON = os.path.join(_REPO_ROOT, "python")
 
-# Insert services root so "issuance.*" and "verification.*" resolve.
-if _SERVICES not in sys.path:
-    sys.path.insert(0, _SERVICES)
+# Insert repo-local package roots so "issuance.*", "verification.*", and
+# "status_list.*" resolve when the test is run without a pre-set PYTHONPATH.
+for _path in (_SERVICES, _PYTHON):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 
 # ---- Domain imports -------------------------------------------------------
@@ -119,6 +123,161 @@ def repo():
 # 1. InMemoryIssuanceRepository — get_credential_by_transaction_id
 # ============================================================================
 
+class TestSpruceClaimDescriptions:
+    def test_claim_descriptions_are_oid4vci_list_shape(self):
+        from issuance.main import _claim_descriptions, _with_claim_descriptions
+
+        metadata = {
+            "claims": [
+                {
+                    "name": "email",
+                    "display_name": "Email Address",
+                    "required": True,
+                    "description": "Holder email address",
+                },
+                {"name": "given_name", "display": {"label": "Given Name"}},
+            ]
+        }
+
+        claims = _claim_descriptions(metadata)
+        assert claims == [
+            {
+                "path": ["email"],
+                "display": [{"name": "Email Address", "locale": "en-US"}],
+                "mandatory": True,
+            },
+            {
+                "path": ["given_name"],
+                "display": [{"name": "Given Name", "locale": "en-US"}],
+            },
+        ]
+
+        config = _with_claim_descriptions({"format": "spruce-vc+sd-jwt"}, metadata)
+        assert isinstance(config["claims"], list)
+        assert config["claims"][0]["path"] == ["email"]
+
+
+class TestRemoteIssuerFailureDetail:
+    async def test_apply_remote_issuer_context_refreshes_existing_context(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        captured: dict[str, str | None] = {}
+
+        async def fake_resolve_remote_issuer_context(
+            organization_id: str,
+            *,
+            issuer_profile_id: str | None = None,
+            issuer_mode: str | None = None,
+            credential_format: str | None = None,
+            key_purpose: str | None = None,
+            algorithm: str | None = None,
+        ):
+            captured.update(
+                {
+                    "organization_id": organization_id,
+                    "issuer_profile_id": issuer_profile_id,
+                    "issuer_mode": issuer_mode,
+                    "credential_format": credential_format,
+                    "key_purpose": key_purpose,
+                    "algorithm": algorithm,
+                }
+            )
+            return {
+                "ok": True,
+                "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme#not-a-fragment".split("#")[0],
+                "issuer_profile_id": "ip-selected",
+                "issuer_mode": "elevenid_alias_for_org",
+                "signing_service_id": "svc-mdoc",
+                "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
+                "service": {"id": "svc-mdoc"},
+            }
+
+        monkeypatch.setattr(routes, "resolve_remote_issuer_context", fake_resolve_remote_issuer_context)
+        tx = _make_transaction(
+            issuer_did_override="did:web:beta.elevenidllc.com:orgs:old",
+            signing_service_id="svc-old",
+            issuer_profile_id="ip-selected",
+            issuer_mode="elevenid_alias_for_org",
+            credential_payload_format="mso_mdoc",
+        )
+
+        context = await routes.apply_remote_issuer_context(tx, credential_format="mso_mdoc")
+
+        assert context["signing_service_id"] == "svc-mdoc"
+        assert tx.issuer_did_override == "did:web:beta.elevenidllc.com:orgs:acme"
+        assert tx.signing_service_id == "svc-mdoc"
+        assert captured == {
+            "organization_id": "org-1",
+            "issuer_profile_id": "ip-selected",
+            "issuer_mode": "elevenid_alias_for_org",
+            "credential_format": "mso_mdoc",
+            "key_purpose": "mdoc_dsc",
+            "algorithm": None,
+        }
+
+    async def test_remote_signing_preserves_gateway_error_detail(self, monkeypatch):
+        from issuance.infrastructure.api import signing_context
+
+        class FakeResponse:
+            status_code = 503
+            reason_phrase = "Service Unavailable"
+            text = '{"detail":"Signing failed: OpenBao key cred-issuer-marty-es256 is missing"}'
+
+            def json(self):
+                return {"detail": "Signing failed: OpenBao key cred-issuer-marty-es256 is missing"}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, *args, **kwargs):
+                return FakeResponse()
+
+        monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setenv("ISSUANCE_API_KEY", "test-key")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            await signing_context.sign_payload_with_remote_service(
+                organization_id="org-1",
+                signing_service_id="managed-openbao-transit",
+                payload=b"payload",
+                algorithm="ES256",
+                key_reference="cred-issuer-marty-es256",
+            )
+
+        assert "DID-backed signing failed (HTTP 503)" in str(excinfo.value)
+        assert "cred-issuer-marty-es256" in str(excinfo.value)
+
+    def test_did_resolution_failure_detail_mentions_issuer_and_key_error(self):
+        from issuance.infrastructure.api.routes import _did_resolution_failure_detail
+
+        tx = _make_transaction(
+            issuer_did_override="did:web:beta.elevenidllc.com:orgs:marty",
+            signing_service_id="managed-openbao-transit",
+        )
+
+        detail = _did_resolution_failure_detail(tx, RuntimeError("OpenBao key missing"))
+
+        assert "DID resolution failed" in detail
+        assert "did:web:beta.elevenidllc.com:orgs:marty" in detail
+        assert "OpenBao key missing" in detail
+
+    def test_unsupported_remote_signing_format_detail_fails_closed(self):
+        from issuance.infrastructure.api.routes import _unsupported_remote_signing_format_detail
+
+        detail = _unsupported_remote_signing_format_detail("mso_mdoc", "mso_mdoc")
+
+        assert "SD-JWT VC issuance only" in detail
+        assert "mso_mdoc" in detail
+        assert "remote COSE/VDS signing support" in detail
+
+
 class TestGetCredentialByTransactionId:
     async def test_returns_matching_credential(self, repo):
         cred = _make_credential(transaction_id="tx-42")
@@ -188,6 +347,12 @@ class TestCredentialFormatToProtocol:
         cred = _make_credential()
         assert _credential_format_to_protocol(tx, cred) == "MDOC"
 
+    def test_vds_nc(self):
+        from issuance.infrastructure.api.routes import _credential_format_to_protocol
+        tx = _make_transaction(credential_payload_format="vds_nc")
+        cred = _make_credential()
+        assert _credential_format_to_protocol(tx, cred) == "VDS_NC"
+
     def test_sd_jwt(self):
         from issuance.infrastructure.api.routes import _credential_format_to_protocol
         tx = _make_transaction(credential_payload_format="w3c_vcdm_v2_sd_jwt")
@@ -201,7 +366,47 @@ class TestCredentialFormatToProtocol:
 
 
 # ============================================================================
-# 4. _subject_claims_hash helper
+# 4. proof JWT audience helper
+# ============================================================================
+
+class TestProofAudienceMatching:
+    def test_accepts_supported_org_issuer_paths(self):
+        from issuance.infrastructure.api.routes import _proof_audience_matches_org_issuer
+
+        org_id = "00000000-0000-0000-0000-000000000001"
+        assert _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}",
+            org_id,
+        )
+        assert _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}/spruce",
+            org_id,
+        )
+        assert _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}/credential-manager",
+            org_id,
+        )
+        assert _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}/apple-wallet",
+            org_id,
+        )
+
+    def test_rejects_unknown_org_issuer_path(self):
+        from issuance.infrastructure.api.routes import _proof_audience_matches_org_issuer
+
+        org_id = "00000000-0000-0000-0000-000000000001"
+        assert not _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}/unknown-wallet",
+            org_id,
+        )
+        assert not _proof_audience_matches_org_issuer(
+            "https://beta.elevenidllc.com/org/other/spruce",
+            org_id,
+        )
+
+
+# ============================================================================
+# 5. _subject_claims_hash helper
 # ============================================================================
 
 class TestSubjectClaimsHash:
@@ -460,3 +665,189 @@ class TestRustIntegrationOrgIdValidation:
                 )
         finally:
             rust_mod._org_keys.update(saved)
+
+    async def test_remote_sd_jwt_uses_verification_method_id_as_kid(self):
+        """Remote SD-JWT issuance should publish the DID verification method, not a raw KMS key hint."""
+        from issuance.application.rust_integration import (
+            base64url_decode,
+            create_sd_jwt_vc_with_remote_signing,
+        )
+
+        captured: dict[str, str | None] = {}
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            captured["payload"] = payload.decode("ascii")
+            captured["algorithm"] = algorithm
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        verification_method_id = "did:web:beta.elevenidllc.com:orgs:acme#issuer-profile-v1"
+
+        credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+            issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
+            signing_service_id="managed-openbao-transit",
+            remote_sign=fake_remote_sign,
+            subject_id="did:key:z6Mk_subject",
+            credential_type="https://beta.elevenidllc.com/credentials/access_badge",
+            claims_json=json.dumps({"name": "Alice"}),
+            algorithm="ES256",
+            signing_key_reference="raw-openbao-key-name",
+            verification_method_id=verification_method_id,
+        )
+
+        jwt = credential.split("~", 1)[0]
+        encoded_header = jwt.split(".", 1)[0]
+        header = json.loads(base64url_decode(encoded_header))
+
+        assert header["kid"] == verification_method_id
+        assert header["typ"] == "vc+sd-jwt"
+        assert captured["algorithm"] == "ES256"
+        assert credential_id.startswith("urn:uuid:")
+
+    async def test_grpc_remote_signing_helper_uses_org_scoped_did_context(self, monkeypatch):
+        from issuance.application.rust_integration import base64url_decode
+
+        if "marty_proto.v1" not in sys.modules:
+            proto_pkg = types.ModuleType("marty_proto")
+            proto_v1 = types.ModuleType("marty_proto.v1")
+            issuance_pb2 = types.ModuleType("marty_proto.v1.issuance_service_pb2")
+            issuance_pb2_grpc = types.ModuleType("marty_proto.v1.issuance_service_pb2_grpc")
+            issuance_pb2_grpc.IssuanceServiceServicer = object
+            sys.modules["marty_proto"] = proto_pkg
+            sys.modules["marty_proto.v1"] = proto_v1
+            sys.modules["marty_proto.v1.issuance_service_pb2"] = issuance_pb2
+            sys.modules["marty_proto.v1.issuance_service_pb2_grpc"] = issuance_pb2_grpc
+
+        from issuance.infrastructure.adapters import grpc_adapter
+        from issuance.infrastructure.api import signing_context
+
+        issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
+        verification_method_id = f"{issuer_did}#cred-issuer-acme-es256"
+        captured: dict[str, object] = {}
+
+        async def fake_resolve_remote_issuer_context(
+            organization_id: str,
+            *,
+            issuer_profile_id: str | None = None,
+            issuer_mode: str | None = None,
+            credential_format: str | None = None,
+            key_purpose: str | None = None,
+            algorithm: str | None = None,
+        ):
+            captured["resolve"] = {
+                "organization_id": organization_id,
+                "issuer_profile_id": issuer_profile_id,
+                "issuer_mode": issuer_mode,
+                "credential_format": credential_format,
+                "key_purpose": key_purpose,
+                "algorithm": algorithm,
+            }
+            return {
+                "ok": True,
+                "issuer_did": issuer_did,
+                "issuer_profile_id": "ip-grpc",
+                "issuer_mode": "org_managed",
+                "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": "cred-issuer-acme-es256",
+                "verification_method_id": verification_method_id,
+                "service": {"id": "managed-openbao-transit", "algorithm": "ES256"},
+            }
+
+        async def fake_sign_payload_with_remote_service(**kwargs):
+            captured["sign"] = kwargs
+            return {"signature_raw_b64": "AQID", "algorithm": kwargs.get("algorithm")}
+
+        monkeypatch.setattr(signing_context, "resolve_remote_issuer_context", fake_resolve_remote_issuer_context)
+        monkeypatch.setattr(signing_context, "sign_payload_with_remote_service", fake_sign_payload_with_remote_service)
+
+        tx = _make_transaction(
+            issuer_did_override="did:web:beta.elevenidllc.com:orgs:old",
+            signing_service_id="svc-old",
+            issuer_profile_id="ip-grpc",
+            issuer_mode="org_managed",
+        )
+
+        credential, credential_id, remote_context = await grpc_adapter._create_remote_signed_sd_jwt_for_tx(
+            tx,
+            subject_id="did:key:z6Mk_subject",
+            credential_type="https://beta.elevenidllc.com/credentials/access_badge",
+            claims_json=json.dumps({"name": "Alice"}),
+            credential_format="dc+sd-jwt",
+            selective_disclosure_claims=[],
+        )
+
+        jwt = credential.split("~", 1)[0]
+        header = json.loads(base64url_decode(jwt.split(".", 1)[0]))
+
+        assert header["kid"] == verification_method_id
+        assert tx.issuer_did_override == issuer_did
+        assert tx.signing_service_id == "managed-openbao-transit"
+        assert remote_context["verification_method_id"] == verification_method_id
+        assert captured["resolve"] == {
+            "organization_id": "org-1",
+            "issuer_profile_id": "ip-grpc",
+            "issuer_mode": "org_managed",
+            "credential_format": "dc+sd-jwt",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": None,
+        }
+        assert captured["sign"]["organization_id"] == "org-1"
+        assert captured["sign"]["signing_service_id"] == "managed-openbao-transit"
+        assert captured["sign"]["key_reference"] == "cred-issuer-acme-es256"
+        assert credential_id.startswith("urn:uuid:")
+
+
+# ============================================================================
+# IssuanceTransaction issuer_did_override field
+# ============================================================================
+
+class TestIssuanceTransactionIssuerDidOverride:
+    """Validate that the issuer_did_override field on IssuanceTransaction
+    defaults to None and can be set explicitly."""
+
+    def test_defaults_to_none(self):
+        tx = _make_transaction()
+        assert tx.issuer_did_override is None
+
+    def test_stores_override_did(self):
+        tx = _make_transaction(
+            issuer_did_override="did:web:beta.elevenidllc.com:orgs:acme",
+        )
+        assert tx.issuer_did_override == "did:web:beta.elevenidllc.com:orgs:acme"
+
+    def test_signing_service_id_defaults_to_none(self):
+        tx = _make_transaction()
+        assert tx.signing_service_id is None
+
+    def test_stores_signing_service_id(self):
+        tx = _make_transaction(signing_service_id="svc-abc123")
+        assert tx.signing_service_id == "svc-abc123"
+
+    def test_explicit_issuer_selection_defaults_to_org_managed(self):
+        tx = _make_transaction()
+        assert tx.issuer_profile_id is None
+        assert tx.issuer_mode == "org_managed"
+
+    def test_stores_explicit_issuer_profile_and_mode(self):
+        tx = _make_transaction(
+            issuer_profile_id="ip-elevenid",
+            issuer_mode="elevenid_managed",
+        )
+        assert tx.issuer_profile_id == "ip-elevenid"
+        assert tx.issuer_mode == "elevenid_managed"
+
+    def test_effective_issuer_did_with_override(self):
+        """When issuer_did_override is set, it should be preferred over a
+        fallback legacy DID."""
+        tx = _make_transaction(
+            issuer_did_override="did:web:beta.elevenidllc.com:orgs:acme",
+        )
+        legacy_did = "did:key:z6Mk_legacy"
+        effective = tx.issuer_did_override or legacy_did
+        assert effective == "did:web:beta.elevenidllc.com:orgs:acme"
+
+    def test_effective_issuer_did_without_override(self):
+        """When issuer_did_override is None, the legacy DID should be used."""
+        tx = _make_transaction()
+        legacy_did = "did:key:z6Mk_legacy"
+        effective = tx.issuer_did_override or legacy_did
+        assert effective == "did:key:z6Mk_legacy"

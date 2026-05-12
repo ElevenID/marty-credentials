@@ -17,6 +17,9 @@ RUN pip3 install --break-system-packages maturin
 
 WORKDIR /build
 
+# Copy vendored Rust crates required by workspace patches
+COPY marty-core/vendor/core2-0.4.0 ./marty-core/vendor/core2-0.4.0/
+
 # Copy marty-core workspace
 COPY marty-core/Cargo.toml ./marty-core/
 COPY marty-core/Cargo.lock* ./marty-core/

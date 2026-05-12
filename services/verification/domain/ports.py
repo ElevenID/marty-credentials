@@ -43,7 +43,12 @@ class ICredentialVerifier(ABC):
         self,
         credential: dict[str, Any],
         verifier_did: str,
-        trusted_issuers: list[str] | None = None
+        trusted_issuers: list[str] | None = None,
+        organization_id: str | None = None,
+        credential_format: str | None = None,
+        key_purpose: str | None = None,
+        algorithm: str | None = None,
+        allow_public_did_fallback: bool = False,
     ) -> dict[str, Any]:
         """Verify a W3C Verifiable Credential."""
         pass
@@ -63,7 +68,19 @@ class ICredentialVerifier(ABC):
         self,
         presentation: dict[str, Any],
         presentation_definition: dict[str, Any],
-        verifier_did: str
+        verifier_did: str,
+        trusted_issuers: list[str] | None = None,
+        organization_id: str | None = None,
+        allow_public_did_fallback: bool = False,
     ) -> dict[str, Any]:
         """Verify a presentation against a presentation definition."""
+        pass
+
+    @abstractmethod
+    async def verify_vds_nc(
+        self,
+        barcode: str,
+        issuer_jwk_json: str,
+    ) -> dict[str, Any]:
+        """Verify a VDS-NC barcode against an issuer JWK."""
         pass

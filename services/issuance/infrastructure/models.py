@@ -26,6 +26,10 @@ issuance_transactions_table = Table(
     Column("pre_auth_code", String, nullable=False, unique=True),
     Column("access_token", String, nullable=True),
     Column("c_nonce", String, nullable=True),
+    Column("issuer_profile_id", String, nullable=True),
+    Column("issuer_mode", String, nullable=False, default="org_managed"),
+    Column("issuer_did_override", String, nullable=True),
+    Column("signing_service_id", String, nullable=True),
     Column("claims", JSON, nullable=False, default=dict),
     Column("credential_type", String, nullable=True),
     Column("zk_predicate_claims", JSON, nullable=True, default=list),
@@ -55,6 +59,7 @@ issued_credentials_table = Table(
     Column("credential_template_id", String, nullable=False),
     Column("applicant_id", String, nullable=True),
     Column("subject_did", String, nullable=True),
+    Column("issuer_did", String, nullable=True),
     Column("credential_jwt", String, nullable=False),
     Column("credential_hash", String, nullable=False),
     Column("status", String, nullable=False, default="active"),
@@ -106,6 +111,7 @@ applications_table = Table(
     Column("applicant_identifier", String, nullable=False),
     Column("form_data", JSON, nullable=False, default=dict),
     Column("submitted_evidence", JSON, nullable=False, default=list),
+    Column("integration_context", JSON, nullable=False, default=dict),
     Column("status", String, nullable=False, default="pending"),
     Column("review_notes", String, nullable=True),
     Column("reviewer_id", String, nullable=True),
@@ -141,7 +147,83 @@ issuance_events_table = Table(
     schema="issuance_service"
 )
 
+# Replay-safe inbound Canvas event receipts
+canvas_event_receipts_table = Table(
+    "canvas_event_receipts",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("provider_event_id", String, nullable=False),
+    Column("organization_id", String, nullable=False),
+    Column("credential_template_id", String, nullable=False),
+    Column("canvas_account_id", String, nullable=True),
+    Column("payload_hash", String, nullable=False),
+    Column("issuance_transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="SET NULL"), nullable=True),
+    Column("issuance_response", JSON, nullable=False, default=dict),
+    Column("status", String, nullable=False, default="processed"),
+    Column("error_summary", String, nullable=True),
+    Column("first_seen_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("last_seen_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_event_receipts_provider_event_id", "provider_event_id"),
+    Index("ix_canvas_event_receipts_organization_id", "organization_id"),
+    Index("ux_canvas_event_receipts_account_event", "canvas_account_id", "provider_event_id", unique=True),
+    schema="issuance_service"
+)
+
+canvas_connectors_table = Table(
+    "canvas_connectors",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column("canvas_account_id", String, nullable=False, unique=True),
+    Column("credential_template_id", String, nullable=False),
+    Column("application_template_id", String, nullable=True),
+    Column("flow_mode", String, nullable=False, default="elevenid_orchestrated_canvas_evidence"),
+    Column("direct_issue_enabled", Boolean, nullable=False, default=False),
+    Column("auto_approve_on_evidence", Boolean, nullable=False, default=False),
+    Column("evidence_requirements", JSON, nullable=False, default=list),
+    Column("display_name", String, nullable=True),
+    Column("canvas_base_url", String, nullable=True),
+    Column("lti_client_id", String, nullable=True),
+    Column("lti_deployment_id", String, nullable=True),
+    Column("lti_issuer", String, nullable=True),
+    Column("lti_jwks_url", String, nullable=True),
+    Column("lti_jwks_json", JSON, nullable=True),
+    Column("lti_jwks_fetched_at", DateTime(timezone=True), nullable=True),
+    Column("lti_jwks_expires_at", DateTime(timezone=True), nullable=True),
+    Column("lti_openid_configuration", JSON, nullable=True),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_connectors_organization_id", "organization_id"),
+    Index("ix_canvas_connectors_canvas_account_id", "canvas_account_id"),
+    schema="issuance_service"
+)
+
 # Authorization Sessions table — OID4VCI authorization code flow (§5)
+canvas_lti_launch_states_table = Table(
+    "canvas_lti_launch_states",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("connector_id", String, ForeignKey("issuance_service.canvas_connectors.id", ondelete="CASCADE"), nullable=False),
+    Column("organization_id", String, nullable=False),
+    Column("canvas_account_id", String, nullable=False),
+    Column("state", String, nullable=False, unique=True),
+    Column("nonce", String, nullable=False),
+    Column("login_hint", String, nullable=True),
+    Column("target_link_uri", String, nullable=True),
+    Column("lti_message_hint", String, nullable=True),
+    Column("redirect_uri", String, nullable=True),
+    Column("status", String, nullable=False, default="pending"),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True), nullable=True),
+    Index("ix_canvas_lti_launch_states_state", "state"),
+    Index("ix_canvas_lti_launch_states_connector_id", "connector_id"),
+    Index("ix_canvas_lti_launch_states_organization_status", "organization_id", "status"),
+    schema="issuance_service"
+)
+
 authorization_sessions_table = Table(
     "authorization_sessions",
     mapper_registry.metadata,

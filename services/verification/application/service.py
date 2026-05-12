@@ -72,7 +72,9 @@ class VerificationService:
             result = await self.verifier.verify_presentation(
                 presentation=presentation,
                 presentation_definition=presentation_definition,
-                verifier_did=verifier_did
+                verifier_did=verifier_did,
+                trusted_issuers=trusted_issuers,
+                organization_id=organization_id,
             )
             method = VerificationMethod.W3C_VC
         
@@ -120,7 +122,9 @@ class VerificationService:
                 result = await self.verifier.verify_presentation(
                     presentation=presentation,
                     presentation_definition=session.presentation_definition,
-                    verifier_did=session.verifier_did
+                    verifier_did=session.verifier_did,
+                    trusted_issuers=session.trusted_issuers,
+                    organization_id=session.organization_id,
                 )
                 method = VerificationMethod.W3C_VC
             

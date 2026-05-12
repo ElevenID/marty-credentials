@@ -63,3 +63,6 @@ tracing-error = { version = "0.2" }
 lto = true
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+core2 = { path = "vendor/core2-0.4.0" }

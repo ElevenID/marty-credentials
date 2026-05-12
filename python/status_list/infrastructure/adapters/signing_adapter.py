@@ -48,21 +48,7 @@ class RustSigningAdapter:
         self._issuer_registry = issuer_registry or {}
         self._default_proof_type = default_proof_type
         self._default_cryptosuite = default_cryptosuite
-        self._rust_available = self._check_rust_bindings()
-    
-    def _check_rust_bindings(self) -> bool:
-        """Check if Rust bindings are available."""
-        try:
-            # Try to import the Rust bindings
-            # This would be the actual FFI module in production
-            from marty_verification import sign_vc  # type: ignore
-            return True
-        except ImportError:
-            logger.warning(
-                "Rust signing bindings not available, using fallback"
-            )
-            return False
-    
+
     async def sign_credential(
         self,
         credential: dict,
@@ -71,22 +57,20 @@ class RustSigningAdapter:
     ) -> dict:
         """
         Sign a verifiable credential.
-        
+
         Uses the Rust ssi crate to add a Data Integrity proof
-        to the credential.
-        
+        to the credential. Rust bindings are required; no fallback signing
+        is supported.
+
         Args:
             credential: The unsigned credential
             issuer_id: ID of the issuer
             key_id: Optional specific key to use
-            
+
         Returns:
             The signed credential with proof
         """
-        if self._rust_available:
-            return await self._sign_with_rust(credential, issuer_id, key_id)
-        else:
-            return await self._sign_fallback(credential, issuer_id, key_id)
+        return await self._sign_with_rust(credential, issuer_id, key_id)
     
     async def _sign_with_rust(
         self,
@@ -122,43 +106,7 @@ class RustSigningAdapter:
         except Exception as e:
             logger.error("Rust signing failed: %s", e)
             raise
-    
-    async def _sign_fallback(
-        self,
-        credential: dict,
-        issuer_id: str,
-        key_id: Optional[str] = None,
-    ) -> dict:
-        """
-        Fallback signing when Rust bindings unavailable.
-        
-        This creates a placeholder proof structure for testing.
-        In production, the Rust bindings should always be available.
-        """
-        from datetime import datetime, timezone
-        
-        verification_method = await self.get_verification_method(issuer_id, key_id)
-        
-        # Create a placeholder proof (NOT for production use)
-        proof = {
-            "type": self._default_proof_type,
-            "cryptosuite": self._default_cryptosuite,
-            "created": datetime.now(timezone.utc).isoformat(),
-            "verificationMethod": verification_method,
-            "proofPurpose": "assertionMethod",
-            "proofValue": "PLACEHOLDER_PROOF_VALUE_USE_RUST_BINDINGS",
-        }
-        
-        signed = credential.copy()
-        signed["proof"] = proof
-        
-        logger.warning(
-            "Using fallback signing for issuer %s - NOT FOR PRODUCTION",
-            issuer_id,
-        )
-        
-        return signed
-    
+
     async def get_issuer_did(self, issuer_id: str) -> str:
         """
         Get the DID for an issuer.

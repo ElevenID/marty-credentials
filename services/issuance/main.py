@@ -18,6 +18,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from issuance.domain.ports import IIssuanceRepository
 from issuance.application.rust_integration import configure_issuer_key_store
 
+# ── Staged-rollout feature flag ───────────────────────────────────────────────
+# Set VDSNC_RUST_ENABLED=false in an environment to suppress VDS-NC credential
+# configuration entries from the OID4VCI metadata and disable VDS-NC signing.
+# Defaults to enabled so production deployments require no extra configuration.
+_VDSNC_RUST_ENABLED: bool = os.environ.get("VDSNC_RUST_ENABLED", "true").lower() not in (
+    "false", "0", "no", "off"
+)
+
 
 def _friendly_ctype_name(ctype: str) -> str:
     """Convert a credential type identifier to a human-readable display name.
@@ -37,6 +45,113 @@ def _friendly_ctype_name(ctype: str) -> str:
     name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name)
     # Capitalise each word
     return name.title()
+
+
+def _template_display_name(ctype: str, metadata: dict[str, Any] | None) -> str:
+    name = (metadata or {}).get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return _friendly_ctype_name(ctype)
+
+
+def _claim_display_name(claim: dict[str, Any]) -> str:
+    display = claim.get("display")
+    if isinstance(display, dict):
+        label = display.get("label") or display.get("name")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+    display_name = claim.get("display_name")
+    if isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+    name = str(claim.get("name") or "").replace("_", " ")
+    return name.title() if name else "Claim"
+
+
+def _claim_display_map(metadata: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    entries: dict[str, dict[str, Any]] = {}
+    for claim in (metadata or {}).get("claims") or []:
+        if not isinstance(claim, dict) or not claim.get("name"):
+            continue
+        item: dict[str, Any] = {
+            "display": [{"name": _claim_display_name(claim), "locale": "en-US"}],
+        }
+        description = claim.get("description")
+        if isinstance(description, str) and description.strip():
+            item["description"] = description.strip()
+        entries[str(claim["name"])] = item
+    return entries
+
+
+def _claim_descriptions(metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
+    descriptions: list[dict[str, Any]] = []
+    for claim in (metadata or {}).get("claims") or []:
+        if not isinstance(claim, dict) or not claim.get("name"):
+            continue
+
+        item: dict[str, Any] = {
+            "path": [str(claim["name"])],
+            "display": [{"name": _claim_display_name(claim), "locale": "en-US"}],
+        }
+        if bool(claim.get("required")):
+            item["mandatory"] = True
+        descriptions.append(item)
+    return descriptions
+
+
+def _credential_display_entries(ctype: str, metadata: dict[str, Any] | None) -> list[dict[str, Any]]:
+    entry: dict[str, Any] = {
+        "name": _template_display_name(ctype, metadata),
+        "locale": "en-US",
+    }
+    description = (metadata or {}).get("description")
+    if isinstance(description, str) and description.strip():
+        entry["description"] = description.strip()
+
+    style = (metadata or {}).get("display_style") or {}
+    if isinstance(style, dict):
+        background = style.get("background_color")
+        text = style.get("text_color")
+        logo = style.get("logo_url")
+        if isinstance(background, str) and background.strip():
+            entry["background_color"] = background.strip()
+        if isinstance(text, str) and text.strip():
+            entry["text_color"] = text.strip()
+        if isinstance(logo, str) and logo.strip():
+            entry["logo"] = {"uri": logo.strip(), "alt_text": entry["name"]}
+    return [entry]
+
+
+def _credential_vct(ctype: str, metadata: dict[str, Any] | None, issuer_base_url: str) -> str:
+    vct = (metadata or {}).get("vct")
+    if isinstance(vct, str) and vct.strip():
+        return vct.strip()
+    return f"{issuer_base_url}/credentials/{ctype}"
+
+
+def _credential_definition(ctype: str, metadata: dict[str, Any] | None) -> dict[str, Any]:
+    definition: dict[str, Any] = {"type": ["VerifiableCredential", ctype]}
+    claims = _claim_display_map(metadata)
+    if claims:
+        definition["credentialSubject"] = claims
+    return definition
+
+
+def _with_claims(config: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
+    claims = _claim_display_map(metadata)
+    if claims:
+        config["claims"] = claims
+    return config
+
+
+def _with_claim_descriptions(config: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
+    claims = _claim_descriptions(metadata)
+    if claims:
+        config["claims"] = claims
+    return config
+
+
+def _issuer_display_entries() -> list[dict[str, str]]:
+    return [{"name": os.environ.get("ISSUER_DISPLAY_NAME", "ElevenID LLC"), "locale": "en-US"}]
 
 # ---------------------------------------------------------------------------
 # Request-ID context
@@ -64,6 +179,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         finally:
             request_id_var.reset(token)
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
+from issuance.infrastructure.api.canvas_routes import canvas_integration_router
 from issuance.infrastructure.api.application_routes import (
     application_router,
     application_template_router,
@@ -173,6 +289,7 @@ def create_app() -> FastAPI:
 
     # Register routers
     app.include_router(issuance_router)
+    app.include_router(canvas_integration_router)
     app.include_router(issued_credential_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
@@ -220,9 +337,11 @@ def create_app() -> FastAPI:
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
+        display_metadata = await repo.get_credential_display_metadata_for_org(org_id)
 
         credential_configurations: dict = {}
         for ctype in known_types:
+            ctype_metadata = display_metadata.get(ctype, {})
             if ctype.startswith("org.iso.18013"):
                 # ISO 18013-5 mDoc — SpruceKit's ProfilesCredentialConfiguration supports
                 # mso_mdoc natively. Only emit the mso_mdoc entry; jwt_vc_json and
@@ -235,7 +354,7 @@ def create_app() -> FastAPI:
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                    "display": _credential_display_entries(ctype, ctype_metadata),
                 }
             else:
                 # Non-ISO SD-JWT credential — emit as spruce-vc+sd-jwt so
@@ -243,15 +362,15 @@ def create_app() -> FastAPI:
                 # Only spruce-vc+sd-jwt (and mso_mdoc above) are valid variants in
                 # that enum; vc+sd-jwt or jwt_vc_json would cause the whole document
                 # to fail to deserialise in the SpruceID Rust SDK.
-                credential_configurations[f"{ctype}#spruce-sd-jwt"] = {
+                credential_configurations[f"{ctype}#spruce-sd-jwt"] = _with_claim_descriptions({
                     "format": "spruce-vc+sd-jwt",
-                    "vct": f"{ISSUER_BASE_URL}/credentials/{ctype}",
+                    "vct": _credential_vct(ctype, ctype_metadata, ISSUER_BASE_URL),
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
-                }
+                    "display": _credential_display_entries(ctype, ctype_metadata),
+                }, ctype_metadata)
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
         deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
@@ -259,6 +378,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "display": _issuer_display_entries(),
             "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
@@ -294,24 +414,26 @@ def create_app() -> FastAPI:
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
+        display_metadata = await repo.get_credential_display_metadata_for_org(org_id)
 
         credential_configurations: dict = {}
         for ctype in known_types:
+            ctype_metadata = display_metadata.get(ctype, {})
             if ctype.startswith("org.iso.18013"):
                 # ISO mDoc credentials are not supported by Google
                 # CredentialManager's dc+sd-jwt path — skip them here.
                 continue
             # Emit only dc+sd-jwt entries — the sole format Google's
             # CredentialManager SDK can parse.
-            credential_configurations[f"{ctype}#credential-manager"] = {
+            credential_configurations[f"{ctype}#credential-manager"] = _with_claims({
                 "format": "dc+sd-jwt",
-                "vct": f"{ISSUER_BASE_URL}/credentials/{ctype}",
+                "vct": _credential_vct(ctype, ctype_metadata, ISSUER_BASE_URL),
                 "scope": ctype,
                 "cryptographic_binding_methods_supported": _binding,
                 "credential_signing_alg_values_supported": _signing_algs,
                 "proof_types_supported": _proof_types,
-                "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
-            }
+                "display": _credential_display_entries(ctype, ctype_metadata),
+            }, ctype_metadata)
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
         deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
@@ -319,6 +441,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "display": _issuer_display_entries(),
             "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
@@ -354,9 +477,11 @@ def create_app() -> FastAPI:
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
+        display_metadata = await repo.get_credential_display_metadata_for_org(org_id)
 
         credential_configurations: dict = {}
         for ctype in known_types:
+            ctype_metadata = display_metadata.get(ctype, {})
             # Apple Wallet uses ISO 18013-5 mDoc for mdoc-typed credentials
             # and can also accept mso_mdoc for non-ISO typed credentials
             # (the Rust signing engine defaults the doctype).
@@ -368,7 +493,7 @@ def create_app() -> FastAPI:
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                    "display": _credential_display_entries(ctype, ctype_metadata),
                 }
             else:
                 # Non-ISO credentials — emit as mso_mdoc with a derived doctype
@@ -379,7 +504,7 @@ def create_app() -> FastAPI:
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                    "display": _credential_display_entries(ctype, ctype_metadata),
                 }
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
@@ -388,6 +513,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "display": _issuer_display_entries(),
             "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
@@ -423,17 +549,27 @@ def create_app() -> FastAPI:
         # no external auth required, and grows automatically with new templates.
         repo = get_repo()
         type_formats = await repo.get_credential_type_formats_for_org(org_id)
+        display_metadata = await repo.get_credential_display_metadata_for_org(org_id)
 
-        # Build a set of credential types that explicitly support mDoc format
+        # Build sets of credential types that explicitly support mDoc / VDS-NC
         # based on the template's supported_formats column.
-        _MDOC_FORMATS = {"mdoc", "mso_mdoc", "MDOC"}
+        _MDOC_FORMATS = {"mdoc", "mso_mdoc"}
+        _VDS_NC_FORMATS = {"vds_nc", "vdsnc"}
         mdoc_types: set[str] = set()
+        vds_nc_types: set[str] = set()
         for ctype, formats in type_formats:
-            if any(f in _MDOC_FORMATS for f in formats):
+            normalized_formats = {
+                str(f).strip().lower().replace("-", "_")
+                for f in (formats or [])
+            }
+            if normalized_formats & _MDOC_FORMATS:
                 mdoc_types.add(ctype)
+            if normalized_formats & _VDS_NC_FORMATS:
+                vds_nc_types.add(ctype)
 
         credential_configurations: dict = {}
         for ctype, _formats in type_formats:
+            ctype_metadata = display_metadata.get(ctype, {})
             # JWT-VC format entry (primary — used by most wallets by default)
             credential_configurations[ctype] = {
                 "format": "jwt_vc_json",
@@ -441,9 +577,9 @@ def create_app() -> FastAPI:
                 "cryptographic_binding_methods_supported": _binding,
                 "credential_signing_alg_values_supported": _signing_algs,
                 "proof_types_supported": _proof_types,
-                "credential_definition": {"type": ["VerifiableCredential"]},
+                "credential_definition": _credential_definition(ctype, ctype_metadata),
                 # OID4VCI §11.2.3 — display is at the top level of the config object
-                "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                "display": _credential_display_entries(ctype, ctype_metadata),
             }
             if ctype.startswith("org.iso.18013") or ctype in mdoc_types:
                 # mDoc — emit mso_mdoc format entry.
@@ -457,23 +593,37 @@ def create_app() -> FastAPI:
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
+                    "display": _credential_display_entries(ctype, ctype_metadata),
                 }
+            if ctype in vds_nc_types:
+                if _VDSNC_RUST_ENABLED:
+                    credential_configurations[f"{ctype}#vds-nc"] = {
+                        "format": "vds_nc",
+                        "scope": ctype,
+                        "cryptographic_binding_methods_supported": _binding,
+                        "credential_signing_alg_values_supported": _signing_algs,
+                        "proof_types_supported": _proof_types,
+                        "display": _credential_display_entries(ctype, ctype_metadata),
+                    }
+                else:
+                    logger.debug(
+                        "VDS-NC metadata suppressed for %s: VDSNC_RUST_ENABLED=false", ctype
+                    )
             if not ctype.startswith("org.iso.18013"):
                 # SD-JWT: use "dc+sd-jwt" per OID4VCI-1FINAL Appendix A (Final spec format ID).
                 # "vc+sd-jwt" was the Draft identifier; "dc+sd-jwt" is the Final spec name.
                 # NOTE: do NOT emit a "spruce-vc+sd-jwt" entry — Walt.id's
                 # CredentialFormatSerializer rejects any unknown format string in
                 # the entire metadata document, causing a 400 on all requests.
-                credential_configurations[f"{ctype}#sd-jwt"] = {
+                credential_configurations[f"{ctype}#sd-jwt"] = _with_claims({
                     "format": "dc+sd-jwt",
-                    "vct": f"{ISSUER_BASE_URL}/credentials/{ctype}",
+                    "vct": _credential_vct(ctype, ctype_metadata, ISSUER_BASE_URL),
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
                     "proof_types_supported": _proof_types,
-                    "display": [{"name": _friendly_ctype_name(ctype), "locale": "en-US"}],
-                }
+                    "display": _credential_display_entries(ctype, ctype_metadata),
+                }, ctype_metadata)
 
         # OID4VCI-1FINAL Appendix A.2: mso_mdoc MUST appear in credential_configurations_supported
         # so conformant wallets can discover mDoc support. This generic entry covers all
@@ -508,6 +658,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "display": _issuer_display_entries(),
             "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
             "token_endpoint": token_endpoint,
@@ -530,6 +681,7 @@ def create_app() -> FastAPI:
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         return {
             "credential_issuer": ISSUER_BASE_URL,
+            "display": _issuer_display_entries(),
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/credential",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",

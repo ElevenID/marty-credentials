@@ -21,6 +21,7 @@ from issuance.domain.entities import (
     ApplicationStatus,
     ApplicationTemplate,
     IssuanceEvent,
+    IssuanceStatus,
     IssuanceTransaction,
     EventType,
 )
@@ -34,6 +35,7 @@ from issuance.infrastructure.api.routes import (
     ApplicationTemplateResponse,
     EvidenceSubmission,
     _verify_management_api_key,
+    apply_remote_issuer_context,
     application_router,
     application_template_router,
 )
@@ -239,6 +241,7 @@ async def create_application(
         application_template_id=request.application_template_id,
         applicant_identifier=applicant_identifier,
         form_data=applicant_data,
+        integration_context=request.integration_context,
     )
     await repo.save_application(app)
     
@@ -251,6 +254,7 @@ async def create_application(
         applicant_identifier=app.applicant_identifier,
         form_data=app.form_data,
         evidence_submissions=app.evidence_submissions,
+        integration_context=app.integration_context,
         status=app.status.value,
         review_notes=app.review_notes,
         reviewer_id=app.reviewer_id,
@@ -284,6 +288,7 @@ async def list_applications(
             applicant_identifier=a.applicant_identifier,
             form_data=a.form_data,
             evidence_submissions=a.evidence_submissions,
+            integration_context=a.integration_context,
             status=a.status.value,
             review_notes=a.review_notes,
             reviewer_id=a.reviewer_id,
@@ -313,6 +318,7 @@ async def get_application(
         applicant_identifier=app.applicant_identifier,
         form_data=app.form_data,
         evidence_submissions=app.evidence_submissions,
+        integration_context=app.integration_context,
         status=app.status.value,
         review_notes=app.review_notes,
         reviewer_id=app.reviewer_id,
@@ -353,6 +359,7 @@ async def submit_evidence(
         applicant_identifier=app.applicant_identifier,
         form_data=app.form_data,
         evidence_submissions=app.evidence_submissions,
+        integration_context=app.integration_context,
         status=app.status.value,
         review_notes=app.review_notes,
         reviewer_id=app.reviewer_id,
@@ -387,14 +394,48 @@ async def approve_application(
     app.reviewed_at = datetime.now(timezone.utc)
     
     # Trigger credential issuance
+    # Resolve the credential type from the template (needed for signing).
+    credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
+    credential_vct: str | None = None
+    try:
+        ct_url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
+        async with httpx.AsyncClient(timeout=10.0) as _client:
+            _resp = await _client.get(ct_url)
+        if _resp.status_code < 400:
+            _tmpl = _resp.json()
+            credential_type = _tmpl.get("credential_type") or credential_type
+            raw_vct = _tmpl.get("vct") or ""
+            credential_vct = (
+                raw_vct if raw_vct.startswith("http")
+                else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            )
+    except Exception:
+        pass
+
+    # Merge claims with _vct and ensure form_data is propagated
+    merged_claims = {**app.form_data}
+    if credential_vct:
+        merged_claims["_vct"] = credential_vct
+
+    logger.info(
+        "[approve] app=%s template=%s cred_type=%s form_data_keys=%s merged_claims_keys=%s",
+        application_id,
+        template.credential_template_id,
+        credential_type,
+        list(app.form_data.keys()) if app.form_data else [],
+        list(merged_claims.keys()),
+    )
+
     tx = IssuanceTransaction(
         organization_id=app.organization_id,
         credential_template_id=template.credential_template_id,
         applicant_id=app.applicant_identifier,
         application_id=application_id,
         subject_did=None,
-        claims=app.form_data,
+        claims=merged_claims,
+        credential_type=credential_type,
     )
+    await apply_remote_issuer_context(tx)
     await repo.save_transaction(tx)
     
     app.issuance_transaction_id = tx.id
@@ -409,6 +450,7 @@ async def approve_application(
         applicant_identifier=app.applicant_identifier,
         form_data=app.form_data,
         evidence_submissions=app.evidence_submissions,
+        integration_context=app.integration_context,
         status=app.status.value,
         review_notes=app.review_notes,
         reviewer_id=app.reviewer_id,
@@ -448,6 +490,7 @@ async def reject_application(
         applicant_identifier=app.applicant_identifier,
         form_data=app.form_data,
         evidence_submissions=app.evidence_submissions,
+        integration_context=app.integration_context,
         status=app.status.value,
         review_notes=app.review_notes,
         reviewer_id=app.reviewer_id,
@@ -678,12 +721,16 @@ async def _get_or_refresh_transaction(
     repo: IIssuanceRepository,
     template: "ApplicationTemplate | None",
 ) -> IssuanceTransaction:
-    """Return the linked transaction or create a fresh one if it's expired/missing."""
+    """Return a reusable transaction or create a fresh one for single-use offers."""
     tx: IssuanceTransaction | None = None
     if app.issuance_transaction_id:
         tx = await repo.get_transaction(app.issuance_transaction_id)
 
-    if tx and not tx.is_expired:
+    if tx and tx.status == IssuanceStatus.PENDING and not tx.is_expired:
+        before = (tx.issuer_did_override, tx.signing_service_id)
+        await apply_remote_issuer_context(tx)
+        if before != (tx.issuer_did_override, tx.signing_service_id):
+            await repo.save_transaction(tx)
         return tx
 
     # Create a fresh transaction
@@ -696,6 +743,7 @@ async def _get_or_refresh_transaction(
         subject_did=None,
         claims=app.form_data,
     )
+    await apply_remote_issuer_context(tx)
     await repo.save_transaction(tx)
     app.issuance_transaction_id = tx.id
     await repo.save_application(app)
