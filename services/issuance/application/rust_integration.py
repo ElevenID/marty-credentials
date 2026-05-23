@@ -360,6 +360,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     signing_key_reference: str | None = None,
     verification_method_id: str | None = None,
     credential_format: str | None = None,
+    credential_id: str | None = None,
 ) -> Tuple[str, str]:
     """Create an SD-JWT VC whose signature is produced by a remote KMS.
 
@@ -373,7 +374,7 @@ async def create_sd_jwt_vc_with_remote_signing(
         raise RuntimeError("claims_json must encode an object")
 
     now = int(datetime.now(timezone.utc).timestamp())
-    credential_id = f"urn:uuid:{uuid.uuid4()}"
+    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
     sd_claims = set(selective_disclosure_claims or [])
 
     payload: dict[str, Any] = {

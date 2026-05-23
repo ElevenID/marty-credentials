@@ -2,22 +2,30 @@
 
 import hashlib
 import hmac
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    ApprovalPolicySet,
     AuthorizationSession,
-    CanvasConnectorConfig,
     CanvasEventReceipt,
     CanvasLtiLaunchState,
+    CanvasPlatform,
+    CanvasProgramBinding,
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
+    DeliveryTarget,
+    EvidenceFact,
     IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
@@ -30,9 +38,12 @@ from issuance.infrastructure.models import (
     application_templates_table,
     applications_table,
     authorization_sessions_table,
-    canvas_connectors_table,
     canvas_event_receipts_table,
     canvas_lti_launch_states_table,
+    canvas_platforms_table,
+    canvas_program_bindings_table,
+    credential_delivery_records_table,
+    evidence_facts_table,
     issued_credentials_table,
     issuance_events_table,
     issuance_transactions_table,
@@ -52,6 +63,7 @@ if not _TOKEN_HMAC_KEY_RAW:
     )
     _TOKEN_HMAC_KEY_RAW = "marty-token-hmac-default-key"
 _TOKEN_HMAC_KEY: bytes = _TOKEN_HMAC_KEY_RAW.encode()
+logger = logging.getLogger(__name__)
 
 
 def _hash_token(raw_token: str | None) -> str | None:
@@ -66,6 +78,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
+        self._approval_policy_cache_ttl_seconds = int(
+            os.environ.get("ISSUANCE_APPROVAL_POLICY_CACHE_SECONDS", "60")
+        )
+        self._approval_policy_cache: dict[
+            tuple[str, str],
+            tuple[datetime, ApprovalPolicySet | None],
+        ] = {}
 
     @staticmethod
     def _normalize_optional_template_id(value: str | None) -> str:
@@ -124,27 +143,46 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         )
 
     @staticmethod
-    def _row_to_canvas_connector(row) -> CanvasConnectorConfig:
-        return CanvasConnectorConfig(
+    def _row_to_canvas_platform(row) -> CanvasPlatform:
+        return CanvasPlatform(
             id=row.id,
             organization_id=row.organization_id,
             canvas_account_id=row.canvas_account_id,
-            credential_template_id=row.credential_template_id,
-            application_template_id=getattr(row, "application_template_id", None),
-            flow_mode=getattr(row, "flow_mode", None) or "elevenid_orchestrated_canvas_evidence",
-            direct_issue_enabled=bool(getattr(row, "direct_issue_enabled", False)),
-            auto_approve_on_evidence=bool(getattr(row, "auto_approve_on_evidence", False)),
-            evidence_requirements=list(getattr(row, "evidence_requirements", None) or []),
             display_name=row.display_name,
             canvas_base_url=row.canvas_base_url,
-            lti_client_id=getattr(row, "lti_client_id", None),
-            lti_deployment_id=getattr(row, "lti_deployment_id", None),
-            lti_issuer=getattr(row, "lti_issuer", None),
-            lti_jwks_url=getattr(row, "lti_jwks_url", None),
-            lti_jwks_json=getattr(row, "lti_jwks_json", None),
-            lti_jwks_fetched_at=getattr(row, "lti_jwks_fetched_at", None),
-            lti_jwks_expires_at=getattr(row, "lti_jwks_expires_at", None),
-            lti_openid_configuration=getattr(row, "lti_openid_configuration", None),
+            lti_client_id=row.lti_client_id,
+            lti_deployment_id=row.lti_deployment_id,
+            lti_issuer=row.lti_issuer,
+            lti_jwks_url=row.lti_jwks_url,
+            lti_jwks_json=row.lti_jwks_json,
+            lti_jwks_fetched_at=row.lti_jwks_fetched_at,
+            lti_jwks_expires_at=row.lti_jwks_expires_at,
+            lti_openid_configuration=row.lti_openid_configuration,
+            enabled=row.enabled,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    @staticmethod
+    def _row_to_canvas_program_binding(row) -> CanvasProgramBinding:
+        return CanvasProgramBinding(
+            id=row.id,
+            organization_id=row.organization_id,
+            platform_id=row.platform_id,
+            application_template_id=row.application_template_id,
+            credential_template_id=row.credential_template_id,
+            display_name=row.display_name,
+            flow_mode=row.flow_mode or "elevenid_orchestrated_canvas_evidence",
+            direct_issue_enabled=bool(row.direct_issue_enabled),
+            auto_approve_on_evidence=bool(row.auto_approve_on_evidence),
+            evidence_requirements=list(row.evidence_requirements or []),
+            canvas_scope=row.canvas_scope or {},
+            delivery_mode=row.delivery_mode or "wallet_only",
+            issuer_mode=row.issuer_mode or "org_managed",
+            approval_policy_set_id=row.approval_policy_set_id,
+            deployment_profile_id=getattr(row, "deployment_profile_id", None),
+            feature_flags=dict(getattr(row, "feature_flags", None) or {}),
+            canvas_credentials=dict(getattr(row, "canvas_credentials", None) or {}),
             enabled=row.enabled,
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -154,7 +192,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     def _row_to_canvas_lti_launch_state(row) -> CanvasLtiLaunchState:
         return CanvasLtiLaunchState(
             id=row.id,
-            connector_id=row.connector_id,
+            platform_id=row.platform_id,
             organization_id=row.organization_id,
             canvas_account_id=row.canvas_account_id,
             state=row.state,
@@ -168,6 +206,41 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             created_at=row.created_at,
             expires_at=row.expires_at,
             consumed_at=row.consumed_at,
+        )
+
+    @staticmethod
+    def _row_to_delivery_record(row) -> CredentialDeliveryRecord:
+        return CredentialDeliveryRecord(
+            id=row.id,
+            credential_id=row.credential_id,
+            transaction_id=row.transaction_id,
+            organization_id=row.organization_id,
+            delivery_target=DeliveryTarget(row.delivery_target),
+            delivery_mode=row.delivery_mode or "wallet_only",
+            status=CredentialDeliveryStatus(row.status),
+            canvas_account_id=row.canvas_account_id,
+            external_credential_id=row.external_credential_id,
+            external_issuer_id=row.external_issuer_id,
+            last_error=row.last_error,
+            metadata=row.metadata or {},
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    @staticmethod
+    def _row_to_evidence_fact(row) -> EvidenceFact:
+        return EvidenceFact(
+            id=row.id,
+            organization_id=row.organization_id,
+            application_id=row.application_id,
+            subject_id=row.subject_id,
+            provider=row.provider,
+            fact_type=row.fact_type,
+            scope=row.scope or {},
+            assertion=row.assertion or {},
+            verification=row.verification or {},
+            source=row.source or {},
+            created_at=row.created_at,
         )
 
     @staticmethod
@@ -187,6 +260,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             issuer_mode=getattr(row, "issuer_mode", None) or "org_managed",
             issuer_did_override=getattr(row, "issuer_did_override", None),
             signing_service_id=getattr(row, "signing_service_id", None),
+            delivery_mode=getattr(row, "delivery_mode", None) or "wallet_only",
             claims=row.claims or {},
             credential_type=row.credential_type,
             zk_predicate_claims=list(row.zk_predicate_claims or []),
@@ -218,6 +292,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "issuer_mode": tx.issuer_mode or "org_managed",
                 "issuer_did_override": tx.issuer_did_override,
                 "signing_service_id": tx.signing_service_id,
+                "delivery_mode": tx.delivery_mode or "wallet_only",
                 "claims": tx.claims,
                 "credential_type": tx.credential_type,
                 "zk_predicate_claims": tx.zk_predicate_claims or [],
@@ -407,6 +482,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "credential_template_id": cred.credential_template_id,
                 "applicant_id": cred.applicant_id,
                 "subject_did": cred.subject_did,
+                "issuer_did": cred.issuer_did,
+                "revocation_profile_id": cred.revocation_profile_id,
+                "status_list_entries": cred.status_list_entries,
                 "credential_jwt": cred.credential_jwt,
                 "credential_hash": cred.credential_hash,
                 "status": cred.status.value,
@@ -449,6 +527,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 credential_template_id=row.credential_template_id,
                 applicant_id=row.applicant_id,
                 subject_did=row.subject_did,
+                issuer_did=row.issuer_did,
+                revocation_profile_id=getattr(row, "revocation_profile_id", None),
+                status_list_entries=getattr(row, "status_list_entries", None) or [],
                 credential_jwt=row.credential_jwt,
                 credential_hash=row.credential_hash,
                 status=CredentialStatus(row.status),
@@ -478,6 +559,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 credential_template_id=row.credential_template_id,
                 applicant_id=row.applicant_id,
                 subject_did=row.subject_did,
+                issuer_did=row.issuer_did,
+                revocation_profile_id=getattr(row, "revocation_profile_id", None),
+                status_list_entries=getattr(row, "status_list_entries", None) or [],
                 credential_jwt=row.credential_jwt,
                 credential_hash=row.credential_hash,
                 status=CredentialStatus(row.status),
@@ -520,6 +604,233 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     credentials.append(cred)
             
             return credentials
+
+    async def save_delivery_record(self, record: CredentialDeliveryRecord) -> None:
+        async with self._session_factory() as session:
+            data = {
+                "id": record.id,
+                "credential_id": record.credential_id,
+                "transaction_id": record.transaction_id,
+                "organization_id": record.organization_id,
+                "delivery_target": record.delivery_target.value,
+                "delivery_mode": record.delivery_mode,
+                "status": record.status.value,
+                "canvas_account_id": record.canvas_account_id,
+                "external_credential_id": record.external_credential_id,
+                "external_issuer_id": record.external_issuer_id,
+                "last_error": record.last_error,
+                "metadata": record.metadata,
+                "created_at": record.created_at,
+                "updated_at": record.updated_at,
+            }
+            update_data = {
+                key: value
+                for key, value in data.items()
+                if key not in {"id", "created_at"}
+            }
+            stmt = (
+                pg_insert(credential_delivery_records_table)
+                .values(**data)
+                .on_conflict_do_update(
+                    index_elements=["id"],
+                    set_=update_data,
+                )
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def get_delivery_record(self, record_id: str) -> CredentialDeliveryRecord | None:
+        async with self._session_factory() as session:
+            stmt = select(credential_delivery_records_table).where(
+                credential_delivery_records_table.c.id == record_id
+            )
+            result = await session.execute(stmt)
+            row = result.first()
+            return self._row_to_delivery_record(row) if row else None
+
+    async def get_canvas_delivery_record_by_external_credential_id(
+        self,
+        external_credential_id: str,
+        *,
+        canvas_account_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> CredentialDeliveryRecord | None:
+        async with self._session_factory() as session:
+            stmt = select(credential_delivery_records_table).where(
+                credential_delivery_records_table.c.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS.value,
+                credential_delivery_records_table.c.external_credential_id == external_credential_id,
+            )
+            if canvas_account_id is not None:
+                stmt = stmt.where(credential_delivery_records_table.c.canvas_account_id == canvas_account_id)
+            if organization_id is not None:
+                stmt = stmt.where(credential_delivery_records_table.c.organization_id == organization_id)
+            stmt = stmt.order_by(credential_delivery_records_table.c.created_at.desc()).limit(1)
+            result = await session.execute(stmt)
+            row = result.first()
+            return self._row_to_delivery_record(row) if row else None
+
+    async def list_delivery_records_for_credential(self, credential_id: str) -> list[CredentialDeliveryRecord]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(credential_delivery_records_table)
+                .where(credential_delivery_records_table.c.credential_id == credential_id)
+                .order_by(
+                    credential_delivery_records_table.c.created_at,
+                    case(
+                        (credential_delivery_records_table.c.delivery_target == "wallet", 0),
+                        (credential_delivery_records_table.c.delivery_target == "didcomm_v2", 1),
+                        (credential_delivery_records_table.c.delivery_target == "canvas_credentials", 2),
+                        else_=99,
+                    ),
+                    credential_delivery_records_table.c.delivery_target,
+                )
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return [self._row_to_delivery_record(row) for row in rows]
+
+    async def list_delivery_records(
+        self,
+        *,
+        delivery_target: DeliveryTarget | None = None,
+        statuses: list[CredentialDeliveryStatus] | None = None,
+        organization_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[CredentialDeliveryRecord]:
+        async with self._session_factory() as session:
+            stmt = select(credential_delivery_records_table)
+            if delivery_target is not None:
+                stmt = stmt.where(
+                    credential_delivery_records_table.c.delivery_target == delivery_target.value
+                )
+            if statuses is not None:
+                stmt = stmt.where(
+                    credential_delivery_records_table.c.status.in_([status.value for status in statuses])
+                )
+            if organization_id is not None:
+                stmt = stmt.where(
+                    credential_delivery_records_table.c.organization_id == organization_id
+                )
+            stmt = stmt.order_by(
+                credential_delivery_records_table.c.created_at,
+                case(
+                    (credential_delivery_records_table.c.delivery_target == "wallet", 0),
+                    (credential_delivery_records_table.c.delivery_target == "didcomm_v2", 1),
+                    (credential_delivery_records_table.c.delivery_target == "canvas_credentials", 2),
+                    else_=99,
+                ),
+                credential_delivery_records_table.c.delivery_target,
+            )
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            result = await session.execute(stmt)
+            rows = result.all()
+            return [self._row_to_delivery_record(row) for row in rows]
+
+    async def save_evidence_fact(self, fact: EvidenceFact) -> None:
+        async with self._session_factory() as session:
+            data = {
+                "id": fact.id,
+                "organization_id": fact.organization_id,
+                "application_id": fact.application_id,
+                "subject_id": fact.subject_id,
+                "provider": fact.provider,
+                "fact_type": fact.fact_type,
+                "scope": fact.scope,
+                "assertion": fact.assertion,
+                "verification": fact.verification,
+                "source": fact.source,
+                "created_at": fact.created_at,
+            }
+            stmt = (
+                pg_insert(evidence_facts_table)
+                .values(**data)
+                .on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={
+                        key: value
+                        for key, value in data.items()
+                        if key not in {"id", "created_at"}
+                    },
+                )
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def list_evidence_facts_for_application(self, application_id: str) -> list[EvidenceFact]:
+        async with self._session_factory() as session:
+            stmt = (
+                select(evidence_facts_table)
+                .where(evidence_facts_table.c.application_id == application_id)
+                .order_by(evidence_facts_table.c.created_at)
+            )
+            result = await session.execute(stmt)
+            rows = result.all()
+            return [self._row_to_evidence_fact(row) for row in rows]
+
+    async def get_approval_policy_set(
+        self,
+        organization_id: str,
+        policy_set_id: str,
+    ) -> ApprovalPolicySet | None:
+        cache_key = (organization_id, policy_set_id)
+        now = datetime.now(timezone.utc)
+        cached = self._approval_policy_cache.get(cache_key)
+        if cached is not None:
+            cached_at, cached_policy = cached
+            cache_age = (now - cached_at).total_seconds()
+            if cache_age <= self._approval_policy_cache_ttl_seconds:
+                return cached_policy
+
+        try:
+            async with self._session_factory() as session:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT
+                            id,
+                            organization_id,
+                            policy_type,
+                            status,
+                            cedar_policies,
+                            cedar_schema_version,
+                            updated_at
+                        FROM organization_service.policy_sets
+                        WHERE id = :policy_set_id
+                          AND organization_id = :organization_id
+                        """
+                    ),
+                    {
+                        "policy_set_id": policy_set_id,
+                        "organization_id": organization_id,
+                    },
+                )
+                row = result.mappings().first()
+        except SQLAlchemyError as exc:
+            logger.warning(
+                "Unable to load approval PolicySet %s for organization %s: %s",
+                policy_set_id,
+                organization_id,
+                exc,
+            )
+            self._approval_policy_cache[cache_key] = (now, None)
+            return None
+
+        policy_set = (
+            ApprovalPolicySet(
+                id=str(row["id"]),
+                organization_id=str(row["organization_id"]),
+                policy_type=str(row["policy_type"] or ""),
+                status=str(row["status"] or ""),
+                cedar_policies=row["cedar_policies"],
+                cedar_schema_version=row.get("cedar_schema_version"),
+                updated_at=row.get("updated_at"),
+            )
+            if row
+            else None
+        )
+        self._approval_policy_cache[cache_key] = (now, policy_set)
+        return policy_set
     
     # Application Template methods
     async def save_application_template(self, template: ApplicationTemplate) -> None:
@@ -543,6 +854,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "claim_collection_rules": template.claim_collection_rules,
                 "required_checks": template.required_checks,
                 "approval_strategy": template.approval_strategy,
+                "approval_policy_set_id": template.approval_policy_set_id,
                 "application_validity_days": template.application_validity_days,
                 "auto_approval_rules": template.auto_approval_rules,
                 "ui_config": template.ui_config,
@@ -589,6 +901,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 claim_collection_rules=row.claim_collection_rules or [],
                 required_checks=row.required_checks or [],
                 approval_strategy=row.approval_strategy,
+                approval_policy_set_id=getattr(row, "approval_policy_set_id", None),
                 application_validity_days=row.application_validity_days,
                 auto_approval_rules=row.auto_approval_rules or [],
                 ui_config=row.ui_config or {},
@@ -806,31 +1119,52 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             row = result.first()
             return self._row_to_canvas_event_receipt(row) if row else None
 
-    async def save_canvas_connector(self, connector: CanvasConnectorConfig) -> None:
+    async def list_canvas_event_receipts(
+        self,
+        *,
+        organization_id: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list[CanvasEventReceipt]:
+        async with self._session_factory() as session:
+            conditions = []
+            if organization_id is not None:
+                conditions.append(canvas_event_receipts_table.c.organization_id == organization_id)
+            if status is not None:
+                conditions.append(canvas_event_receipts_table.c.status == status)
+
+            stmt = select(canvas_event_receipts_table).order_by(
+                canvas_event_receipts_table.c.last_seen_at
+            )
+            if conditions:
+                stmt = stmt.where(and_(*conditions))
+            if limit is not None:
+                stmt = stmt.limit(limit)
+            result = await session.execute(stmt)
+            return [
+                self._row_to_canvas_event_receipt(row)
+                for row in result.all()
+            ]
+
+    async def save_canvas_platform(self, platform: CanvasPlatform) -> None:
         async with self._session_factory() as session:
             data = {
-                "id": connector.id,
-                "organization_id": connector.organization_id,
-                "canvas_account_id": connector.canvas_account_id,
-                "credential_template_id": connector.credential_template_id,
-                "application_template_id": connector.application_template_id,
-                "flow_mode": connector.flow_mode,
-                "direct_issue_enabled": connector.direct_issue_enabled,
-                "auto_approve_on_evidence": connector.auto_approve_on_evidence,
-                "evidence_requirements": connector.evidence_requirements or [],
-                "display_name": connector.display_name,
-                "canvas_base_url": connector.canvas_base_url,
-                "lti_client_id": connector.lti_client_id,
-                "lti_deployment_id": connector.lti_deployment_id,
-                "lti_issuer": connector.lti_issuer,
-                "lti_jwks_url": connector.lti_jwks_url,
-                "lti_jwks_json": connector.lti_jwks_json,
-                "lti_jwks_fetched_at": connector.lti_jwks_fetched_at,
-                "lti_jwks_expires_at": connector.lti_jwks_expires_at,
-                "lti_openid_configuration": connector.lti_openid_configuration,
-                "enabled": connector.enabled,
-                "created_at": connector.created_at,
-                "updated_at": connector.updated_at,
+                "id": platform.id,
+                "organization_id": platform.organization_id,
+                "canvas_account_id": platform.canvas_account_id,
+                "display_name": platform.display_name,
+                "canvas_base_url": platform.canvas_base_url,
+                "lti_client_id": platform.lti_client_id,
+                "lti_deployment_id": platform.lti_deployment_id,
+                "lti_issuer": platform.lti_issuer,
+                "lti_jwks_url": platform.lti_jwks_url,
+                "lti_jwks_json": platform.lti_jwks_json,
+                "lti_jwks_fetched_at": platform.lti_jwks_fetched_at,
+                "lti_jwks_expires_at": platform.lti_jwks_expires_at,
+                "lti_openid_configuration": platform.lti_openid_configuration,
+                "enabled": platform.enabled,
+                "created_at": platform.created_at,
+                "updated_at": platform.updated_at,
             }
             update_data = {
                 key: value
@@ -838,7 +1172,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 if key not in {"id", "created_at"}
             }
             stmt = (
-                pg_insert(canvas_connectors_table)
+                pg_insert(canvas_platforms_table)
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["id"],
@@ -848,35 +1182,119 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             await session.execute(stmt)
             await session.commit()
 
-    async def get_canvas_connector(self, connector_id: str) -> CanvasConnectorConfig | None:
+    async def get_canvas_platform(self, platform_id: str) -> CanvasPlatform | None:
         async with self._session_factory() as session:
-            stmt = select(canvas_connectors_table).where(canvas_connectors_table.c.id == connector_id)
+            stmt = select(canvas_platforms_table).where(canvas_platforms_table.c.id == platform_id)
             result = await session.execute(stmt)
             row = result.first()
-            return self._row_to_canvas_connector(row) if row else None
+            return self._row_to_canvas_platform(row) if row else None
 
-    async def get_canvas_connector_by_account_id(self, canvas_account_id: str) -> CanvasConnectorConfig | None:
+    async def get_canvas_platform_by_account_id(
+        self,
+        organization_id: str,
+        canvas_account_id: str,
+    ) -> CanvasPlatform | None:
         async with self._session_factory() as session:
-            stmt = select(canvas_connectors_table).where(
-                canvas_connectors_table.c.canvas_account_id == canvas_account_id,
-                canvas_connectors_table.c.enabled.is_(True),
+            stmt = select(canvas_platforms_table).where(
+                canvas_platforms_table.c.organization_id == organization_id,
+                canvas_platforms_table.c.canvas_account_id == canvas_account_id,
             )
             result = await session.execute(stmt)
             row = result.first()
-            return self._row_to_canvas_connector(row) if row else None
+            return self._row_to_canvas_platform(row) if row else None
 
-    async def list_canvas_connectors(self, organization_id: str) -> list[CanvasConnectorConfig]:
+    async def list_canvas_platforms(self, organization_id: str) -> list[CanvasPlatform]:
         async with self._session_factory() as session:
-            stmt = select(canvas_connectors_table).where(
-                canvas_connectors_table.c.organization_id == organization_id
+            stmt = (
+                select(canvas_platforms_table)
+                .where(canvas_platforms_table.c.organization_id == organization_id)
+                .order_by(canvas_platforms_table.c.created_at)
             )
             result = await session.execute(stmt)
-            rows = result.all()
-            return [self._row_to_canvas_connector(row) for row in rows]
+            return [self._row_to_canvas_platform(row) for row in result.all()]
 
-    async def delete_canvas_connector(self, connector_id: str) -> None:
+    async def delete_canvas_platform(self, platform_id: str) -> None:
         async with self._session_factory() as session:
-            stmt = delete(canvas_connectors_table).where(canvas_connectors_table.c.id == connector_id)
+            stmt = delete(canvas_platforms_table).where(canvas_platforms_table.c.id == platform_id)
+            await session.execute(stmt)
+            await session.commit()
+
+    async def save_canvas_program_binding(self, binding: CanvasProgramBinding) -> None:
+        async with self._session_factory() as session:
+            data = {
+                "id": binding.id,
+                "organization_id": binding.organization_id,
+                "platform_id": binding.platform_id,
+                "application_template_id": binding.application_template_id,
+                "credential_template_id": binding.credential_template_id,
+                "display_name": binding.display_name,
+                "flow_mode": binding.flow_mode,
+                "direct_issue_enabled": binding.direct_issue_enabled,
+                "auto_approve_on_evidence": binding.auto_approve_on_evidence,
+                "evidence_requirements": binding.evidence_requirements or [],
+                "canvas_scope": binding.canvas_scope or {},
+                "delivery_mode": binding.delivery_mode or "wallet_only",
+                "issuer_mode": binding.issuer_mode or "org_managed",
+                "approval_policy_set_id": binding.approval_policy_set_id,
+                "deployment_profile_id": binding.deployment_profile_id,
+                "feature_flags": binding.feature_flags or {},
+                "canvas_credentials": binding.canvas_credentials or {},
+                "enabled": binding.enabled,
+                "created_at": binding.created_at,
+                "updated_at": binding.updated_at,
+            }
+            update_data = {
+                key: value
+                for key, value in data.items()
+                if key not in {"id", "created_at"}
+            }
+            stmt = (
+                pg_insert(canvas_program_bindings_table)
+                .values(**data)
+                .on_conflict_do_update(
+                    index_elements=["id"],
+                    set_=update_data,
+                )
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def get_canvas_program_binding(self, binding_id: str) -> CanvasProgramBinding | None:
+        async with self._session_factory() as session:
+            stmt = select(canvas_program_bindings_table).where(
+                canvas_program_bindings_table.c.id == binding_id
+            )
+            result = await session.execute(stmt)
+            row = result.first()
+            return self._row_to_canvas_program_binding(row) if row else None
+
+    async def list_canvas_program_bindings(
+        self,
+        organization_id: str,
+        platform_id: str | None = None,
+        application_template_id: str | None = None,
+    ) -> list[CanvasProgramBinding]:
+        async with self._session_factory() as session:
+            conditions = [canvas_program_bindings_table.c.organization_id == organization_id]
+            if platform_id is not None:
+                conditions.append(canvas_program_bindings_table.c.platform_id == platform_id)
+            if application_template_id is not None:
+                conditions.append(
+                    canvas_program_bindings_table.c.application_template_id == application_template_id
+                )
+            stmt = (
+                select(canvas_program_bindings_table)
+                .where(and_(*conditions))
+                .order_by(canvas_program_bindings_table.c.created_at)
+            )
+            result = await session.execute(stmt)
+            return [self._row_to_canvas_program_binding(row) for row in result.all()]
+
+    async def delete_canvas_program_binding(self, binding_id: str) -> None:
+        async with self._session_factory() as session:
+            stmt = delete(canvas_program_bindings_table).where(
+                canvas_program_bindings_table.c.id == binding_id
+            )
             await session.execute(stmt)
             await session.commit()
 
@@ -884,7 +1302,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         async with self._session_factory() as session:
             data = {
                 "id": launch_state.id,
-                "connector_id": launch_state.connector_id,
+                "platform_id": launch_state.platform_id,
                 "organization_id": launch_state.organization_id,
                 "canvas_account_id": launch_state.canvas_account_id,
                 "state": launch_state.state,

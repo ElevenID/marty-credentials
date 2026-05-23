@@ -28,8 +28,11 @@ RUN pip3 install --break-system-packages maturin[patchelf]
 
 WORKDIR /build
 
-# Copy vendored Rust crates required by workspace patches
-COPY marty-core/vendor/core2-0.4.0 ./marty-core/vendor/core2-0.4.0/
+# Copy vendored Rust crates required by marty-core workspace patches.
+# The build target is marty-core/vendor because marty-core/Cargo.toml patches
+# crates.io core2 to vendor/core2-0.4.0, but the checked-in vendor copy lives
+# in marty-credentials/vendor for shared service builds.
+COPY marty-credentials/vendor/core2-0.4.0 ./marty-core/vendor/core2-0.4.0/
 
 # Copy marty-core workspace for building Python bindings
 # Build context is workspace root, so paths are relative to /Volumes/Heart of Gold/Github/work/

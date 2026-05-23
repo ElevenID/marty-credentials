@@ -9,10 +9,11 @@ Includes server streaming for real-time credential lifecycle events.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -24,6 +25,11 @@ from marty_proto.v1 import (
 )
 
 logger = logging.getLogger(__name__)
+
+try:
+    from marty_common import MARTY_DEFAULT_REVOCATION_PROFILE_ID
+except Exception:  # pragma: no cover - local fallback for isolated issuance tests
+    MARTY_DEFAULT_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
 
 REVOCATION_PROFILE_SERVICE_URL = os.environ.get(
     "REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"
@@ -64,6 +70,27 @@ def _key_purpose_for_credential_format(credential_format: str) -> str:
     if credential_format == "vds_nc":
         return "vdsnc_signing"
     return "vc_jwt_issuer"
+
+
+def _default_revocation_profile_id() -> str:
+    return (
+        os.environ.get("MARTY_DEFAULT_REVOCATION_PROFILE_ID")
+        or os.environ.get("REVOCATION_PROFILE_ID")
+        or MARTY_DEFAULT_REVOCATION_PROFILE_ID
+    )
+
+
+def _revocation_index_from_credential(credential: Any) -> int | None:
+    for entry in getattr(credential, "status_list_entries", None) or []:
+        if not isinstance(entry, dict):
+            continue
+        purpose = str(entry.get("status_purpose") or entry.get("statusPurpose") or "revocation")
+        if purpose != "revocation":
+            continue
+        index = entry.get("index")
+        if index is not None:
+            return int(index)
+    return None
 
 
 async def _resolve_remote_signing_context_for_tx(
@@ -526,9 +553,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         """Issue a credential (requires valid access token and proof JWT)."""
         try:
             from issuance.domain.entities import IssuanceStatus, IssuanceTransaction, EventType, IssuanceEvent
+            from issuance.domain.entities import CredentialStatus, DeliveryTarget, IssuedCredential
             from issuance.application.rust_integration import (
                 verify_proof_jwt,
             )
+            from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
 
             repo = self._get_repo()
 
@@ -652,18 +681,45 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details(f"DID-backed remote signing failed: {signing_err}")
                 return pb2.IssueCredentialResponse()
 
+            response_format = fmt or signing_format or "vc+sd-jwt"
             if tx.status == IssuanceStatus.AUTHORIZED:
+                tx.nonce = None
                 tx.complete()
                 await repo.save_transaction(tx)
+                expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+                issued_credential = IssuedCredential(
+                    id=credential_id,
+                    transaction_id=tx.id,
+                    organization_id=tx.organization_id,
+                    credential_template_id=tx.credential_template_id,
+                    applicant_id=tx.applicant_id,
+                    subject_did=holder_did or tx.subject_did,
+                    issuer_did=tx.issuer_did_override,
+                    credential_jwt=jwt_credential,
+                    credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
+                    status=CredentialStatus.ACTIVE,
+                    issued_at=tx.issued_at or datetime.now(timezone.utc),
+                    expires_at=expires_at,
+                )
+                await repo.save_credential(issued_credential)
                 await repo.save_event(IssuanceEvent(
                     transaction_id=tx.id,
                     application_id=tx.application_id,
                     event_type=EventType.CREDENTIAL_ISSUED,
                     metadata={"credential_id": credential_id, "credential_type": credential_type},
                 ))
+                await record_post_issuance_deliveries(
+                    repo,
+                    tx,
+                    issued_credential,
+                    delivered_target=DeliveryTarget.WALLET,
+                    delivery_metadata={
+                        "protocol": "grpc",
+                        "requested_format": response_format,
+                    },
+                )
 
             import uuid as _uuid
-            response_format = fmt or signing_format or "vc+sd-jwt"
             response = pb2.IssueCredentialResponse(
                 credentials=[pb2.CredentialEntry(format=response_format, credential=jwt_credential)],
                 notification_id=str(_uuid.uuid4()),
@@ -703,12 +759,14 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             from issuance.domain.entities import (
                 IssuanceStatus, IssuanceEvent, EventType,
                 IssuedCredential, CredentialStatus,
+                DeliveryTarget,
             )
             from issuance.application.rust_integration import (
                 didcomm_resolve_did,
                 didcomm_extract_endpoint,
                 didcomm_pack_credential,
             )
+            from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
             from datetime import timedelta
 
             repo = self._get_repo()
@@ -856,6 +914,17 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         "service_endpoint": service_endpoint,
                     },
                 ))
+                await record_post_issuance_deliveries(
+                    repo,
+                    tx,
+                    issued_credential,
+                    delivered_target=DeliveryTarget.DIDCOMM_V2,
+                    delivery_metadata={
+                        "protocol": "didcomm_v2",
+                        "service_endpoint": service_endpoint,
+                        "didcomm_message_id": didcomm_message_id,
+                    },
+                )
 
             return pb2.DidcommDeliverResponse(
                 transaction_id=tx.id,
@@ -1007,7 +1076,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         # Map action to status for RevocationProfile contract
         action_to_status = {"revoke": "revoked", "suspend": "suspended", "reinstate": "reinstated"}
         revocation_status = action_to_status.get(action, action)
+        revocation_profile_id = getattr(cred, "revocation_profile_id", None) or _default_revocation_profile_id()
+        status_list_index = _revocation_index_from_credential(cred)
         try:
+            if status_list_index is None:
+                raise RuntimeError("credential has no allocated status-list entry")
             import grpc.aio as grpc_aio
             from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
             from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
@@ -1017,9 +1090,9 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 rp_stub = rp_grpc.RevocationProfileServiceStub(channel)
                 resp = await rp_stub.ProcessRevocation(
                     rp_pb2.ProcessRevocationRequest(
-                        profile_id="default",
+                        profile_id=revocation_profile_id,
                         credential_id=credential_id,
-                        index=0,
+                        index=status_list_index,
                         status=revocation_status,
                         reason=reason or "",
                         credential_format="sd_jwt",
@@ -1029,19 +1102,23 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 logger.warning(f"RevocationProfile gRPC returned error for {action}: {resp.error}")
         except Exception as e:
             logger.warning(f"RevocationProfile gRPC failed for {action}, falling back to HTTP: {e}")
+            if status_list_index is None:
+                logger.warning("Skipping RevocationProfile HTTP fallback because credential has no status-list entry")
+                status_list_index = -1
             try:
                 import httpx
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    await client.post(
-                        f"{REVOCATION_PROFILE_SERVICE_URL}/internal/revocation-profiles/default/process-revocation",
-                        json={
-                            "credential_id": credential_id,
-                            "index": 0,
-                            "status": revocation_status,
-                            "credential_format": "sd_jwt",
-                            "reason": reason or None,
-                        },
-                    )
+                if status_list_index >= 0:
+                    async with httpx.AsyncClient(timeout=10.0) as client:
+                        await client.post(
+                            f"{REVOCATION_PROFILE_SERVICE_URL}/internal/revocation-profiles/{revocation_profile_id}/process-revocation",
+                            json={
+                                "credential_id": credential_id,
+                                "index": status_list_index,
+                                "status": revocation_status,
+                                "credential_format": "sd_jwt",
+                                "reason": reason or None,
+                            },
+                        )
             except Exception as http_e:
                 logger.warning(f"RevocationProfile HTTP also unavailable for {action}: {http_e}")
 

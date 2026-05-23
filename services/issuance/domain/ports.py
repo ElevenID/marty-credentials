@@ -9,9 +9,15 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
-    CanvasConnectorConfig,
+    ApprovalPolicySet,
     CanvasEventReceipt,
     CanvasLtiLaunchState,
+    CanvasPlatform,
+    CanvasProgramBinding,
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
+    DeliveryTarget,
+    EvidenceFact,
     AuthorizationSession,
     IssuanceEvent,
     IssuanceTransaction,
@@ -72,6 +78,63 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def list_credentials_by_org(self, org_id: str) -> list[IssuedCredential]:
         """List all credentials for an organization."""
+        pass
+
+    @abstractmethod
+    async def save_delivery_record(self, record: CredentialDeliveryRecord) -> None:
+        """Save or update a credential delivery record."""
+        pass
+
+    @abstractmethod
+    async def get_delivery_record(self, record_id: str) -> CredentialDeliveryRecord | None:
+        """Get a credential delivery record by ID."""
+        pass
+
+    @abstractmethod
+    async def get_canvas_delivery_record_by_external_credential_id(
+        self,
+        external_credential_id: str,
+        *,
+        canvas_account_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> CredentialDeliveryRecord | None:
+        """Get a Canvas mirror delivery record by its external Canvas credential ID."""
+        pass
+
+    @abstractmethod
+    async def list_delivery_records_for_credential(self, credential_id: str) -> list[CredentialDeliveryRecord]:
+        """List delivery records for a credential."""
+        pass
+
+    @abstractmethod
+    async def list_delivery_records(
+        self,
+        *,
+        delivery_target: DeliveryTarget | None = None,
+        statuses: list[CredentialDeliveryStatus] | None = None,
+        organization_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[CredentialDeliveryRecord]:
+        """List delivery records filtered by target/status/organization."""
+        pass
+
+    @abstractmethod
+    async def save_evidence_fact(self, fact: EvidenceFact) -> None:
+        """Save or update a normalized evidence fact."""
+        pass
+
+    @abstractmethod
+    async def list_evidence_facts_for_application(self, application_id: str) -> list[EvidenceFact]:
+        """List normalized evidence facts for an application."""
+        pass
+
+    @abstractmethod
+    async def get_approval_policy_set(
+        self,
+        organization_id: str,
+        policy_set_id: str,
+    ) -> ApprovalPolicySet | None:
+        """Get an organization-owned approval PolicySet referenced by issuance."""
         pass
     
     # Application Template methods
@@ -137,28 +200,68 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_canvas_connector(self, connector: CanvasConnectorConfig) -> None:
-        """Persist a Canvas connector configuration."""
+    async def list_canvas_event_receipts(
+        self,
+        *,
+        organization_id: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list[CanvasEventReceipt]:
+        """List Canvas event receipts for reconciliation and reporting."""
         pass
 
     @abstractmethod
-    async def get_canvas_connector(self, connector_id: str) -> CanvasConnectorConfig | None:
-        """Look up a Canvas connector by ID."""
+    async def save_canvas_platform(self, platform: CanvasPlatform) -> None:
+        """Persist Canvas tenant/platform trust configuration."""
         pass
 
     @abstractmethod
-    async def get_canvas_connector_by_account_id(self, canvas_account_id: str) -> CanvasConnectorConfig | None:
-        """Look up the active Canvas connector for a Canvas account ID."""
+    async def get_canvas_platform(self, platform_id: str) -> CanvasPlatform | None:
+        """Look up a Canvas platform by ID."""
         pass
 
     @abstractmethod
-    async def list_canvas_connectors(self, organization_id: str) -> list[CanvasConnectorConfig]:
-        """List Canvas connectors for an organization."""
+    async def get_canvas_platform_by_account_id(
+        self,
+        organization_id: str,
+        canvas_account_id: str,
+    ) -> CanvasPlatform | None:
+        """Look up a Canvas platform by organization and Canvas account ID."""
         pass
 
     @abstractmethod
-    async def delete_canvas_connector(self, connector_id: str) -> None:
-        """Delete a Canvas connector configuration."""
+    async def list_canvas_platforms(self, organization_id: str) -> list[CanvasPlatform]:
+        """List Canvas platforms for an organization."""
+        pass
+
+    @abstractmethod
+    async def delete_canvas_platform(self, platform_id: str) -> None:
+        """Delete a Canvas platform and its program bindings."""
+        pass
+
+    @abstractmethod
+    async def save_canvas_program_binding(self, binding: CanvasProgramBinding) -> None:
+        """Persist a program-level Canvas binding."""
+        pass
+
+    @abstractmethod
+    async def get_canvas_program_binding(self, binding_id: str) -> CanvasProgramBinding | None:
+        """Look up a Canvas program binding by ID."""
+        pass
+
+    @abstractmethod
+    async def list_canvas_program_bindings(
+        self,
+        organization_id: str,
+        platform_id: str | None = None,
+        application_template_id: str | None = None,
+    ) -> list[CanvasProgramBinding]:
+        """List Canvas program bindings with optional filters."""
+        pass
+
+    @abstractmethod
+    async def delete_canvas_program_binding(self, binding_id: str) -> None:
+        """Delete a Canvas program binding."""
         pass
 
     @abstractmethod

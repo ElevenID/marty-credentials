@@ -30,6 +30,7 @@ issuance_transactions_table = Table(
     Column("issuer_mode", String, nullable=False, default="org_managed"),
     Column("issuer_did_override", String, nullable=True),
     Column("signing_service_id", String, nullable=True),
+    Column("delivery_mode", String(40), nullable=False, server_default="wallet_only"),
     Column("claims", JSON, nullable=False, default=dict),
     Column("credential_type", String, nullable=True),
     Column("zk_predicate_claims", JSON, nullable=True, default=list),
@@ -46,6 +47,7 @@ issuance_transactions_table = Table(
     Index("ix_issuance_transactions_pre_auth_code", "pre_auth_code"),
     Index("ix_issuance_transactions_applicant_id", "applicant_id"),
     Index("ix_issuance_transactions_application_id", "application_id"),
+    Index("ix_issuance_transactions_delivery_mode", "delivery_mode"),
     schema="issuance_service"
 )
 
@@ -60,6 +62,8 @@ issued_credentials_table = Table(
     Column("applicant_id", String, nullable=True),
     Column("subject_did", String, nullable=True),
     Column("issuer_did", String, nullable=True),
+    Column("revocation_profile_id", String, nullable=True),
+    Column("status_list_entries", JSON, nullable=False, default=list),
     Column("credential_jwt", String, nullable=False),
     Column("credential_hash", String, nullable=False),
     Column("status", String, nullable=False, default="active"),
@@ -73,6 +77,54 @@ issued_credentials_table = Table(
     Index("ix_issued_credentials_status", "status"),
     Index("ix_issued_credentials_applicant_id", "applicant_id"),
     schema="issuance_service"
+)
+
+credential_delivery_records_table = Table(
+    "credential_delivery_records",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("credential_id", String, ForeignKey("issuance_service.issued_credentials.id", ondelete="CASCADE"), nullable=False),
+    Column("transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="CASCADE"), nullable=False),
+    Column("organization_id", String, nullable=False),
+    Column("delivery_target", String(40), nullable=False),
+    Column("delivery_mode", String(40), nullable=False, server_default="wallet_only"),
+    Column("status", String(40), nullable=False, server_default="pending"),
+    Column("canvas_account_id", String, nullable=True),
+    Column("external_credential_id", String, nullable=True),
+    Column("external_issuer_id", String, nullable=True),
+    Column("last_error", Text, nullable=True),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_credential_delivery_records_credential_id", "credential_id"),
+    Index("ix_credential_delivery_records_transaction_id", "transaction_id"),
+    Index("ix_credential_delivery_records_organization_id", "organization_id"),
+    Index("ix_credential_delivery_records_status", "status"),
+    Index("ix_credential_delivery_records_delivery_target", "delivery_target"),
+    Index("ix_credential_delivery_records_external_credential_id", "external_credential_id"),
+    Index("ix_credential_delivery_records_canvas_account_id", "canvas_account_id"),
+    schema="issuance_service",
+)
+
+evidence_facts_table = Table(
+    "evidence_facts",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column("application_id", String, ForeignKey("issuance_service.applications.id", ondelete="CASCADE"), nullable=False),
+    Column("subject_id", String, nullable=False),
+    Column("provider", String(80), nullable=False),
+    Column("fact_type", String(160), nullable=False),
+    Column("scope", JSON, nullable=False, default=dict),
+    Column("assertion", JSON, nullable=False, default=dict),
+    Column("verification", JSON, nullable=False, default=dict),
+    Column("source", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_evidence_facts_organization_id", "organization_id"),
+    Index("ix_evidence_facts_application_id", "application_id"),
+    Index("ix_evidence_facts_provider", "provider"),
+    Index("ix_evidence_facts_fact_type", "fact_type"),
+    schema="issuance_service",
 )
 
 # Application Templates table
@@ -89,6 +141,7 @@ application_templates_table = Table(
     Column("claim_collection_rules", JSON, nullable=False, default=list),
     Column("required_checks", JSON, nullable=False, default=list),
     Column("approval_strategy", String, nullable=False, default="auto"),
+    Column("approval_policy_set_id", String, nullable=True),
     Column("application_validity_days", Integer, nullable=False, default=30),
     Column("auto_approval_rules", JSON, nullable=False, default=list),
     Column("ui_config", JSON, nullable=False, default=dict),
@@ -169,24 +222,19 @@ canvas_event_receipts_table = Table(
     schema="issuance_service"
 )
 
-canvas_connectors_table = Table(
-    "canvas_connectors",
+# Authorization Sessions table — OID4VCI authorization code flow (§5)
+canvas_platforms_table = Table(
+    "canvas_platforms",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, nullable=False),
-    Column("canvas_account_id", String, nullable=False, unique=True),
-    Column("credential_template_id", String, nullable=False),
-    Column("application_template_id", String, nullable=True),
-    Column("flow_mode", String, nullable=False, default="elevenid_orchestrated_canvas_evidence"),
-    Column("direct_issue_enabled", Boolean, nullable=False, default=False),
-    Column("auto_approve_on_evidence", Boolean, nullable=False, default=False),
-    Column("evidence_requirements", JSON, nullable=False, default=list),
+    Column("canvas_account_id", String, nullable=False),
     Column("display_name", String, nullable=True),
-    Column("canvas_base_url", String, nullable=True),
-    Column("lti_client_id", String, nullable=True),
-    Column("lti_deployment_id", String, nullable=True),
-    Column("lti_issuer", String, nullable=True),
-    Column("lti_jwks_url", String, nullable=True),
+    Column("canvas_base_url", Text, nullable=True),
+    Column("lti_client_id", Text, nullable=True),
+    Column("lti_deployment_id", Text, nullable=True),
+    Column("lti_issuer", Text, nullable=True),
+    Column("lti_jwks_url", Text, nullable=True),
     Column("lti_jwks_json", JSON, nullable=True),
     Column("lti_jwks_fetched_at", DateTime(timezone=True), nullable=True),
     Column("lti_jwks_expires_at", DateTime(timezone=True), nullable=True),
@@ -194,17 +242,48 @@ canvas_connectors_table = Table(
     Column("enabled", Boolean, nullable=False, default=True),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
-    Index("ix_canvas_connectors_organization_id", "organization_id"),
-    Index("ix_canvas_connectors_canvas_account_id", "canvas_account_id"),
-    schema="issuance_service"
+    Index("ix_canvas_platforms_organization_id", "organization_id"),
+    Index("ix_canvas_platforms_canvas_account_id", "canvas_account_id"),
+    Index("ux_canvas_platforms_org_account", "organization_id", "canvas_account_id", unique=True),
+    schema="issuance_service",
 )
 
-# Authorization Sessions table — OID4VCI authorization code flow (§5)
+canvas_program_bindings_table = Table(
+    "canvas_program_bindings",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column("platform_id", String, ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"), nullable=False),
+    Column("application_template_id", String, nullable=False),
+    Column("credential_template_id", String, nullable=False),
+    Column("display_name", String, nullable=True),
+    Column("flow_mode", String(80), nullable=False, default="elevenid_orchestrated_canvas_evidence"),
+    Column("direct_issue_enabled", Boolean, nullable=False, default=False),
+    Column("auto_approve_on_evidence", Boolean, nullable=False, default=False),
+    Column("evidence_requirements", JSON, nullable=False, default=list),
+    Column("canvas_scope", JSON, nullable=False, default=dict),
+    Column("delivery_mode", String(40), nullable=False, server_default="wallet_only"),
+    Column("issuer_mode", String(40), nullable=False, server_default="org_managed"),
+    Column("approval_policy_set_id", String, nullable=True),
+    Column("deployment_profile_id", String, nullable=True),
+    Column("feature_flags", JSON, nullable=False, default=dict),
+    Column("canvas_credentials", JSON, nullable=False, default=dict),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_program_bindings_organization_id", "organization_id"),
+    Index("ix_canvas_program_bindings_platform_id", "platform_id"),
+    Index("ix_canvas_program_bindings_application_template_id", "application_template_id"),
+    Index("ix_canvas_program_bindings_credential_template_id", "credential_template_id"),
+    Index("ix_canvas_program_bindings_deployment_profile_id", "deployment_profile_id"),
+    schema="issuance_service",
+)
+
 canvas_lti_launch_states_table = Table(
     "canvas_lti_launch_states",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("connector_id", String, ForeignKey("issuance_service.canvas_connectors.id", ondelete="CASCADE"), nullable=False),
+    Column("platform_id", String, ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"), nullable=False),
     Column("organization_id", String, nullable=False),
     Column("canvas_account_id", String, nullable=False),
     Column("state", String, nullable=False, unique=True),
@@ -219,7 +298,7 @@ canvas_lti_launch_states_table = Table(
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("consumed_at", DateTime(timezone=True), nullable=True),
     Index("ix_canvas_lti_launch_states_state", "state"),
-    Index("ix_canvas_lti_launch_states_connector_id", "connector_id"),
+    Index("ix_canvas_lti_launch_states_platform_id", "platform_id"),
     Index("ix_canvas_lti_launch_states_organization_status", "organization_id", "status"),
     schema="issuance_service"
 )

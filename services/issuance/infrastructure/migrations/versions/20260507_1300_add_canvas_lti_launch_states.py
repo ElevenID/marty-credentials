@@ -21,9 +21,7 @@ def upgrade():
         """
         CREATE TABLE IF NOT EXISTS issuance_service.canvas_lti_launch_states (
             id VARCHAR(36) PRIMARY KEY,
-            connector_id VARCHAR(36) NOT NULL
-                REFERENCES issuance_service.canvas_connectors(id)
-                ON DELETE CASCADE,
+            platform_id VARCHAR(36) NOT NULL,
             organization_id VARCHAR(36) NOT NULL,
             canvas_account_id VARCHAR(255) NOT NULL,
             state VARCHAR(255) NOT NULL UNIQUE,
@@ -48,8 +46,8 @@ def upgrade():
     )
     op.execute(
         """
-        CREATE INDEX IF NOT EXISTS ix_canvas_lti_launch_states_connector_id
-            ON issuance_service.canvas_lti_launch_states(connector_id)
+        CREATE INDEX IF NOT EXISTS ix_canvas_lti_launch_states_platform_id
+            ON issuance_service.canvas_lti_launch_states(platform_id)
         """
     )
     op.execute(
@@ -62,6 +60,6 @@ def upgrade():
 
 def downgrade():
     op.execute("DROP INDEX IF EXISTS issuance_service.ix_canvas_lti_launch_states_organization_status")
-    op.execute("DROP INDEX IF EXISTS issuance_service.ix_canvas_lti_launch_states_connector_id")
+    op.execute("DROP INDEX IF EXISTS issuance_service.ix_canvas_lti_launch_states_platform_id")
     op.execute("DROP INDEX IF EXISTS issuance_service.ix_canvas_lti_launch_states_state")
     op.execute("DROP TABLE IF EXISTS issuance_service.canvas_lti_launch_states")

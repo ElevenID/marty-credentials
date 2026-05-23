@@ -17,20 +17,10 @@ depends_on = None
 
 
 def upgrade():
-    op.execute(
-        """
-        ALTER TABLE issuance_service.canvas_connectors
-            ADD COLUMN IF NOT EXISTS lti_jwks_fetched_at TIMESTAMP WITH TIME ZONE,
-            ADD COLUMN IF NOT EXISTS lti_jwks_expires_at TIMESTAMP WITH TIME ZONE
-        """
-    )
+    # Canvas JWKS metadata now lives on canvas_platforms, created by
+    # add_canvas_platform_program_bindings. The old connector table is gone.
+    pass
 
 
 def downgrade():
-    op.execute(
-        """
-        ALTER TABLE issuance_service.canvas_connectors
-            DROP COLUMN IF EXISTS lti_jwks_expires_at,
-            DROP COLUMN IF EXISTS lti_jwks_fetched_at
-        """
-    )
+    pass

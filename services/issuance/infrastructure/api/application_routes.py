@@ -5,27 +5,47 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
     "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://credential-template-service:8003"
 )
 
+from issuance.application.application_approval import (
+    CredentialContext,
+    approve_application_for_issuance,
+)
+from issuance.application.evidence_reconciliation import (
+    build_canvas_evidence_reconciliation_report,
+    reconcile_canvas_evidence_transitions,
+)
+from issuance.application.evidence_transition import persist_evidence_fact_and_apply_policy
+from issuance.application.external_evidence_api import (
+    ExternalEvidenceApiError,
+    execute_external_evidence_api_check,
+    find_external_api_requirement,
+    requirement_check_id,
+)
 from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    EvidenceFact,
     IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
     EventType,
 )
 from issuance.domain.ports import IIssuanceRepository
+from issuance.infrastructure.adapters.delivery_records import (
+    delivery_mode_from_integration_context,
+)
 from issuance.infrastructure.api.routes import (
     ApplicationApproval,
     ApplicationCreate,
@@ -52,6 +72,128 @@ class IssuanceEventResponse(BaseModel):
     created_at: str
 
 
+class EvidenceFactResponse(BaseModel):
+    id: str
+    organization_id: str
+    application_id: str
+    subject_id: str
+    provider: str
+    fact_type: str
+    scope: dict[str, Any]
+    assertion: dict[str, Any]
+    verification: dict[str, Any]
+    source: dict[str, Any]
+    created_at: str
+
+
+class ApplicationEvidenceSummaryResponse(BaseModel):
+    application_id: str
+    organization_id: str
+    status: str
+    evidence_facts: list[EvidenceFactResponse]
+    policy_decision: dict[str, Any] | None = None
+    policy_source: str | None = None
+    policy_set_id: str | None = None
+    issuance_transaction_id: str | None = None
+    canvas: dict[str, Any] | None = None
+    available_api_checks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class EvidenceReconciliationRequest(BaseModel):
+    organization_id: str
+    application_id: str | None = None
+    limit: int = 100
+    dry_run: bool = False
+    issue_on_permit: bool = True
+
+
+class ExternalEvidenceApiCheckRequest(BaseModel):
+    inputs: dict[str, Any] = {}
+    issue_on_permit: bool = True
+
+
+class ExternalEvidenceApiCheckResponse(BaseModel):
+    application_id: str
+    organization_id: str
+    check_id: str
+    status: str
+    application_status: str
+    evidence_fact: EvidenceFactResponse
+    policy_decision: dict[str, Any]
+    issuance_transaction_id: str | None = None
+    response_metadata: dict[str, Any]
+
+
+def _evidence_fact_to_response(fact: EvidenceFact) -> EvidenceFactResponse:
+    return EvidenceFactResponse(
+        id=fact.id,
+        organization_id=fact.organization_id,
+        application_id=fact.application_id,
+        subject_id=fact.subject_id,
+        provider=fact.provider,
+        fact_type=fact.fact_type,
+        scope=fact.scope,
+        assertion=fact.assertion,
+        verification=fact.verification,
+        source=fact.source,
+        created_at=fact.created_at.isoformat(),
+    )
+
+
+def _application_policy_context(app: Application) -> tuple[dict[str, Any] | None, str | None, str | None, dict[str, Any] | None]:
+    integration_context = app.integration_context if isinstance(app.integration_context, dict) else {}
+    policy = integration_context.get("policy")
+    if not isinstance(policy, dict):
+        policy = None
+    canvas = integration_context.get("canvas")
+    if not isinstance(canvas, dict):
+        canvas = None
+    return (
+        policy,
+        policy.get("policy_source") if policy else None,
+        policy.get("policy_set_id") if policy else None,
+        canvas,
+    )
+
+
+def _available_external_api_checks(template: ApplicationTemplate | None) -> list[dict[str, Any]]:
+    """Return reviewer-safe descriptors for configured user-defined API checks."""
+
+    checks: list[dict[str, Any]] = []
+    if template is None:
+        return checks
+    for requirement in template.evidence_requirements or []:
+        if not isinstance(requirement, dict):
+            continue
+        evidence_type = str(requirement.get("evidence_type") or "").upper()
+        if evidence_type not in {"EXTERNAL_API", "EXTERNAL_FACT"}:
+            continue
+        if evidence_type == "EXTERNAL_API" and not isinstance(requirement.get("api"), dict):
+            continue
+        check_id = requirement_check_id(requirement)
+        if not check_id:
+            continue
+        api = requirement.get("api") if isinstance(requirement.get("api"), dict) else {}
+        checks.append(
+            {
+                "check_id": check_id,
+                "evidence_type": evidence_type,
+                "description": requirement.get("description") or requirement.get("label") or check_id,
+                "provider": requirement.get("provider") or "external_api",
+                "fact_type": requirement.get("fact_type") or "",
+                "required": requirement.get("required", True) is not False,
+                "verification_method": requirement.get("verification_method") or "EXTERNAL_API_RESPONSE",
+                "auto_issue_on_permit": bool(
+                    requirement.get("auto_issue_on_permit")
+                    or requirement.get("auto_approve_on_evidence")
+                ),
+                "api_method": str(api.get("method") or "POST").upper(),
+                "scope": requirement.get("scope") if isinstance(requirement.get("scope"), dict) else {},
+            }
+        )
+    return checks
+
+
 # ============================================================================
 # Application Template Endpoints
 # ============================================================================
@@ -72,6 +214,7 @@ async def create_application_template(
         claim_collection_rules=request.claim_collection_rules,
         required_checks=request.required_checks,
         approval_strategy=request.approval_strategy,
+        approval_policy_set_id=request.approval_policy_set_id,
         application_validity_days=request.application_validity_days,
         auto_approval_rules=request.auto_approval_rules,
         ui_config=request.ui_config,
@@ -92,6 +235,7 @@ async def create_application_template(
         claim_collection_rules=template.claim_collection_rules,
         required_checks=template.required_checks,
         approval_strategy=template.approval_strategy,
+        approval_policy_set_id=template.approval_policy_set_id,
         application_validity_days=template.application_validity_days,
         auto_approval_rules=template.auto_approval_rules,
         ui_config=template.ui_config,
@@ -122,6 +266,7 @@ async def list_application_templates(
             claim_collection_rules=t.claim_collection_rules,
             required_checks=t.required_checks,
             approval_strategy=t.approval_strategy,
+            approval_policy_set_id=t.approval_policy_set_id,
             application_validity_days=t.application_validity_days,
             auto_approval_rules=t.auto_approval_rules,
             ui_config=t.ui_config,
@@ -155,6 +300,7 @@ async def get_application_template(
         claim_collection_rules=template.claim_collection_rules,
         required_checks=template.required_checks,
         approval_strategy=template.approval_strategy,
+        approval_policy_set_id=template.approval_policy_set_id,
         application_validity_days=template.application_validity_days,
         auto_approval_rules=template.auto_approval_rules,
         ui_config=template.ui_config,
@@ -184,6 +330,7 @@ async def update_application_template(
     template.claim_collection_rules = request.claim_collection_rules
     template.required_checks = request.required_checks
     template.approval_strategy = request.approval_strategy
+    template.approval_policy_set_id = request.approval_policy_set_id
     template.application_validity_days = request.application_validity_days
     template.auto_approval_rules = request.auto_approval_rules
     template.ui_config = request.ui_config
@@ -205,6 +352,7 @@ async def update_application_template(
         claim_collection_rules=template.claim_collection_rules,
         required_checks=template.required_checks,
         approval_strategy=template.approval_strategy,
+        approval_policy_set_id=template.approval_policy_set_id,
         application_validity_days=template.application_validity_days,
         auto_approval_rules=template.auto_approval_rules,
         ui_config=template.ui_config,
@@ -329,6 +477,183 @@ async def get_application(
     )
 
 
+@application_router.get("/{application_id}/evidence-facts", response_model=list[EvidenceFactResponse], dependencies=[Depends(_verify_management_api_key)])
+async def list_application_evidence_facts(
+    application_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> list[EvidenceFactResponse]:
+    """List normalized MIP evidence facts for an application."""
+    app = await repo.get_application(application_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    facts = await repo.list_evidence_facts_for_application(application_id)
+    return [_evidence_fact_to_response(fact) for fact in facts]
+
+
+@application_router.get("/{application_id}/evidence-summary", response_model=ApplicationEvidenceSummaryResponse, dependencies=[Depends(_verify_management_api_key)])
+async def get_application_evidence_summary(
+    application_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> ApplicationEvidenceSummaryResponse:
+    """Return application evidence facts and latest approval policy metadata."""
+    app = await repo.get_application(application_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    facts = await repo.list_evidence_facts_for_application(application_id)
+    template = await repo.get_application_template(app.application_template_id)
+    policy, policy_source, policy_set_id, canvas = _application_policy_context(app)
+    return ApplicationEvidenceSummaryResponse(
+        application_id=app.id,
+        organization_id=app.organization_id,
+        status=app.status.value,
+        evidence_facts=[_evidence_fact_to_response(fact) for fact in facts],
+        policy_decision=policy,
+        policy_source=policy_source,
+        policy_set_id=policy_set_id,
+        issuance_transaction_id=app.issuance_transaction_id,
+        canvas=canvas,
+        available_api_checks=_available_external_api_checks(template),
+    )
+
+
+@application_router.post(
+    "/{application_id}/evidence/api-checks/{check_id}/run",
+    response_model=ExternalEvidenceApiCheckResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def run_external_evidence_api_check(
+    application_id: str,
+    check_id: str,
+    request: ExternalEvidenceApiCheckRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> ExternalEvidenceApiCheckResponse:
+    """Run a user-defined external evidence API check and create a MIP fact."""
+    app = await repo.get_application(application_id)
+    if not app:
+        raise HTTPException(status_code=404, detail="Application not found")
+    if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
+        raise HTTPException(status_code=400, detail=f"Cannot run evidence check for application in {app.status} status")
+
+    template = await repo.get_application_template(app.application_template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Application template not found")
+    requirement = find_external_api_requirement(template, check_id)
+    if requirement is None:
+        raise HTTPException(status_code=404, detail="External evidence API check not found on application template")
+
+    try:
+        check_result = await execute_external_evidence_api_check(
+            app=app,
+            requirement=requirement,
+            inputs=request.inputs,
+        )
+    except ExternalEvidenceApiError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail=f"External evidence API request failed: {exc}") from exc
+
+    evidence_fact = check_result.evidence_fact
+    external_context = {
+        "last_check_id": check_id,
+        "last_evidence_fact_id": evidence_fact.id,
+        "provider": evidence_fact.provider,
+        "fact_type": evidence_fact.fact_type,
+        "verification_status": evidence_fact.verification.get("status"),
+        "response_metadata": check_result.response_metadata,
+        "checked_at": evidence_fact.created_at.isoformat(),
+    }
+    auto_issue_enabled = bool(
+        requirement.get("auto_issue_on_permit")
+        or requirement.get("auto_approve_on_evidence")
+    )
+    transition = await persist_evidence_fact_and_apply_policy(
+        repo=repo,
+        app=app,
+        template=template,
+        evidence_fact=evidence_fact,
+        evidence_submission={
+            "evidence_type": requirement.get("evidence_type") or "EXTERNAL_API",
+            "evidence_data": {
+                "provider": evidence_fact.provider,
+                "fact_type": evidence_fact.fact_type,
+                "scope": evidence_fact.scope,
+                "assertion": evidence_fact.assertion,
+            },
+            "source": evidence_fact.source,
+            "evidence_fact_ids": [evidence_fact.id],
+            "verification": evidence_fact.verification,
+        },
+        integration_context_updates={"external_evidence_api": external_context},
+        requirements=template.evidence_requirements,
+        source="external_evidence_api",
+        audit_metadata={"check_id": check_id},
+        connector=None,
+        evaluate_policy=True,
+        issue_on_permit=request.issue_on_permit,
+        auto_issue_on_permit=auto_issue_enabled,
+        reviewer_id="external-evidence:auto-approval",
+        review_notes="Auto-approved by MIP policy after user-defined external evidence API check",
+        issuer_context_applier=apply_remote_issuer_context,
+    )
+    policy_decision = transition.policy_decision
+    tx = transition.issuance_transaction
+
+    return ExternalEvidenceApiCheckResponse(
+        application_id=app.id,
+        organization_id=app.organization_id,
+        check_id=check_id,
+        status="evidence_received",
+        application_status=app.status.value,
+        evidence_fact=_evidence_fact_to_response(evidence_fact),
+        policy_decision=(getattr(app, "integration_context", {}) or {}).get(
+            "policy",
+            policy_decision.to_dict() if policy_decision else {},
+        ),
+        issuance_transaction_id=tx.id if tx else app.issuance_transaction_id,
+        response_metadata=check_result.response_metadata,
+    )
+
+
+@application_router.post("/evidence/reconcile", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
+async def reconcile_application_evidence(
+    request: EvidenceReconciliationRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> dict[str, Any]:
+    """Recover Canvas evidence policy and approval-to-issuance transitions."""
+    if request.application_id:
+        app = await repo.get_application(request.application_id)
+        if not app or app.organization_id != request.organization_id:
+            raise HTTPException(status_code=404, detail="Application not found for organization")
+
+    result = await reconcile_canvas_evidence_transitions(
+        repo=repo,
+        organization_id=request.organization_id,
+        application_id=request.application_id,
+        limit=max(1, min(request.limit, 1000)),
+        dry_run=request.dry_run,
+        issue_on_permit=request.issue_on_permit,
+        issuer_context_applier=apply_remote_issuer_context,
+    )
+    return result.to_dict()
+
+
+@application_router.get("/evidence/reconciliation-report", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
+async def get_application_evidence_reconciliation_report(
+    organization_id: str = Query(...),
+    limit: int = Query(100),
+    repo: IIssuanceRepository = Depends(),
+) -> dict[str, Any]:
+    """Return a dry-run Canvas evidence reconciliation report."""
+    result = await build_canvas_evidence_reconciliation_report(
+        repo=repo,
+        organization_id=organization_id,
+        limit=max(1, min(limit, 1000)),
+    )
+    return result.to_dict()
+
+
 @application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def submit_evidence(
     application_id: str,
@@ -388,12 +713,6 @@ async def approve_application(
     if not template or not template.credential_template_id:
         raise HTTPException(status_code=400, detail="Application template missing credential template ID")
     
-    app.status = ApplicationStatus.APPROVED
-    app.review_notes = approval.review_notes
-    app.reviewer_id = approval.reviewer_id
-    app.reviewed_at = datetime.now(timezone.utc)
-    
-    # Trigger credential issuance
     # Resolve the credential type from the template (needed for signing).
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
     credential_vct: str | None = None
@@ -412,34 +731,26 @@ async def approve_application(
     except Exception:
         pass
 
-    # Merge claims with _vct and ensure form_data is propagated
-    merged_claims = {**app.form_data}
-    if credential_vct:
-        merged_claims["_vct"] = credential_vct
-
     logger.info(
-        "[approve] app=%s template=%s cred_type=%s form_data_keys=%s merged_claims_keys=%s",
+        "[approve] app=%s template=%s cred_type=%s form_data_keys=%s",
         application_id,
         template.credential_template_id,
         credential_type,
         list(app.form_data.keys()) if app.form_data else [],
-        list(merged_claims.keys()),
     )
 
-    tx = IssuanceTransaction(
-        organization_id=app.organization_id,
-        credential_template_id=template.credential_template_id,
-        applicant_id=app.applicant_identifier,
-        application_id=application_id,
-        subject_did=None,
-        claims=merged_claims,
-        credential_type=credential_type,
+    tx = await approve_application_for_issuance(
+        repo=repo,
+        app=app,
+        template=template,
+        reviewer_id=approval.reviewer_id,
+        review_notes=approval.review_notes,
+        credential_context=CredentialContext(
+            credential_type=credential_type,
+            credential_vct=credential_vct,
+        ),
+        issuer_context_applier=apply_remote_issuer_context,
     )
-    await apply_remote_issuer_context(tx)
-    await repo.save_transaction(tx)
-    
-    app.issuance_transaction_id = tx.id
-    await repo.save_application(app)
     
     logger.info(f"Approved application {application_id}, created issuance transaction {tx.id}")
     
@@ -727,9 +1038,11 @@ async def _get_or_refresh_transaction(
         tx = await repo.get_transaction(app.issuance_transaction_id)
 
     if tx and tx.status == IssuanceStatus.PENDING and not tx.is_expired:
+        delivery_before = tx.delivery_mode
+        tx.delivery_mode = delivery_mode_from_integration_context(app.integration_context)
         before = (tx.issuer_did_override, tx.signing_service_id)
         await apply_remote_issuer_context(tx)
-        if before != (tx.issuer_did_override, tx.signing_service_id):
+        if before != (tx.issuer_did_override, tx.signing_service_id) or delivery_before != tx.delivery_mode:
             await repo.save_transaction(tx)
         return tx
 
@@ -741,6 +1054,7 @@ async def _get_or_refresh_transaction(
         applicant_id=app.applicant_identifier,
         application_id=app.id,
         subject_did=None,
+        delivery_mode=delivery_mode_from_integration_context(app.integration_context),
         claims=app.form_data,
     )
     await apply_remote_issuer_context(tx)

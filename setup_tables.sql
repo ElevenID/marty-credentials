@@ -95,12 +95,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_canvas_event_receipts_account_event
 ALTER TABLE IF EXISTS issuance_service.canvas_event_receipts OWNER TO marty;
 GRANT ALL PRIVILEGES ON TABLE issuance_service.canvas_event_receipts TO marty;
 
--- Canvas connector configuration for resolving inbound account IDs
-CREATE TABLE IF NOT EXISTS issuance_service.canvas_connectors (
+-- Canvas platform trust and program binding configuration
+CREATE TABLE IF NOT EXISTS issuance_service.canvas_platforms (
     id VARCHAR(36) PRIMARY KEY,
     organization_id VARCHAR(36) NOT NULL,
-    canvas_account_id VARCHAR(255) NOT NULL UNIQUE,
-    credential_template_id VARCHAR(36) NOT NULL,
+    canvas_account_id VARCHAR(255) NOT NULL,
     display_name VARCHAR(255),
     canvas_base_url TEXT,
     lti_client_id TEXT,
@@ -113,29 +112,57 @@ CREATE TABLE IF NOT EXISTS issuance_service.canvas_connectors (
     lti_openid_configuration JSON,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    CONSTRAINT ux_canvas_platforms_org_account UNIQUE (organization_id, canvas_account_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_canvas_platforms_organization_id
+    ON issuance_service.canvas_platforms(organization_id);
+CREATE INDEX IF NOT EXISTS ix_canvas_platforms_canvas_account_id
+    ON issuance_service.canvas_platforms(canvas_account_id);
+ALTER TABLE IF EXISTS issuance_service.canvas_platforms OWNER TO marty;
+GRANT ALL PRIVILEGES ON TABLE issuance_service.canvas_platforms TO marty;
+
+CREATE TABLE IF NOT EXISTS issuance_service.canvas_program_bindings (
+    id VARCHAR(36) PRIMARY KEY,
+    organization_id VARCHAR(36) NOT NULL,
+    platform_id VARCHAR(36) NOT NULL REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE,
+    application_template_id VARCHAR(36) NOT NULL,
+    credential_template_id VARCHAR(36) NOT NULL,
+    display_name VARCHAR(255),
+    flow_mode VARCHAR(80) NOT NULL DEFAULT 'elevenid_orchestrated_canvas_evidence',
+    direct_issue_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    auto_approve_on_evidence BOOLEAN NOT NULL DEFAULT FALSE,
+    evidence_requirements JSON NOT NULL DEFAULT '[]',
+    canvas_scope JSON NOT NULL DEFAULT '{}',
+    delivery_mode VARCHAR(40) NOT NULL DEFAULT 'wallet_only',
+    issuer_mode VARCHAR(40) NOT NULL DEFAULT 'org_managed',
+    approval_policy_set_id VARCHAR(36),
+    deployment_profile_id TEXT,
+    feature_flags JSON NOT NULL DEFAULT '{}',
+    canvas_credentials JSON NOT NULL DEFAULT '{}',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_client_id TEXT;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_deployment_id TEXT;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_issuer TEXT;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_jwks_url TEXT;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_jwks_json JSON;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_jwks_fetched_at TIMESTAMP WITH TIME ZONE;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_jwks_expires_at TIMESTAMP WITH TIME ZONE;
-ALTER TABLE issuance_service.canvas_connectors ADD COLUMN IF NOT EXISTS lti_openid_configuration JSON;
-
-CREATE INDEX IF NOT EXISTS ix_canvas_connectors_organization_id
-    ON issuance_service.canvas_connectors(organization_id);
-CREATE INDEX IF NOT EXISTS ix_canvas_connectors_canvas_account_id
-    ON issuance_service.canvas_connectors(canvas_account_id);
-ALTER TABLE IF EXISTS issuance_service.canvas_connectors OWNER TO marty;
-GRANT ALL PRIVILEGES ON TABLE issuance_service.canvas_connectors TO marty;
+CREATE INDEX IF NOT EXISTS ix_canvas_program_bindings_organization_id
+    ON issuance_service.canvas_program_bindings(organization_id);
+CREATE INDEX IF NOT EXISTS ix_canvas_program_bindings_platform_id
+    ON issuance_service.canvas_program_bindings(platform_id);
+CREATE INDEX IF NOT EXISTS ix_canvas_program_bindings_application_template_id
+    ON issuance_service.canvas_program_bindings(application_template_id);
+CREATE INDEX IF NOT EXISTS ix_canvas_program_bindings_credential_template_id
+    ON issuance_service.canvas_program_bindings(credential_template_id);
+CREATE INDEX IF NOT EXISTS ix_canvas_program_bindings_deployment_profile_id
+    ON issuance_service.canvas_program_bindings(deployment_profile_id);
+ALTER TABLE IF EXISTS issuance_service.canvas_program_bindings OWNER TO marty;
+GRANT ALL PRIVILEGES ON TABLE issuance_service.canvas_program_bindings TO marty;
 
 -- Server-owned Canvas LTI launch state for nonce/replay protection
 CREATE TABLE IF NOT EXISTS issuance_service.canvas_lti_launch_states (
     id VARCHAR(36) PRIMARY KEY,
-    connector_id VARCHAR(36) NOT NULL REFERENCES issuance_service.canvas_connectors(id) ON DELETE CASCADE,
+    platform_id VARCHAR(36) NOT NULL REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE,
     organization_id VARCHAR(36) NOT NULL,
     canvas_account_id VARCHAR(255) NOT NULL,
     state VARCHAR(255) NOT NULL UNIQUE,
@@ -153,8 +180,8 @@ CREATE TABLE IF NOT EXISTS issuance_service.canvas_lti_launch_states (
 
 CREATE INDEX IF NOT EXISTS ix_canvas_lti_launch_states_state
     ON issuance_service.canvas_lti_launch_states(state);
-CREATE INDEX IF NOT EXISTS ix_canvas_lti_launch_states_connector_id
-    ON issuance_service.canvas_lti_launch_states(connector_id);
+CREATE INDEX IF NOT EXISTS ix_canvas_lti_launch_states_platform_id
+    ON issuance_service.canvas_lti_launch_states(platform_id);
 CREATE INDEX IF NOT EXISTS ix_canvas_lti_launch_states_organization_status
     ON issuance_service.canvas_lti_launch_states(organization_id, status);
 ALTER TABLE IF EXISTS issuance_service.canvas_lti_launch_states OWNER TO marty;

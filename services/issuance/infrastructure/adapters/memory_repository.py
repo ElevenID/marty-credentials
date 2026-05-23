@@ -6,10 +6,16 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    ApprovalPolicySet,
     AuthorizationSession,
-    CanvasConnectorConfig,
     CanvasEventReceipt,
     CanvasLtiLaunchState,
+    CanvasPlatform,
+    CanvasProgramBinding,
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
+    DeliveryTarget,
+    EvidenceFact,
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
@@ -19,6 +25,19 @@ from issuance.domain.ports import IIssuanceRepository
 
 class InMemoryIssuanceRepository(IIssuanceRepository):
     """In-memory implementation for development and testing."""
+
+    @staticmethod
+    def _delivery_record_sort_key(record: CredentialDeliveryRecord):
+        target_priority = {
+            "wallet": 0,
+            "didcomm_v2": 1,
+            "canvas_credentials": 2,
+        }
+        return (
+            record.created_at,
+            target_priority.get(record.delivery_target.value, 99),
+            record.delivery_target.value,
+        )
     
     def __init__(self):
         self._transactions: dict[str, IssuanceTransaction] = {}
@@ -26,9 +45,13 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._applications: dict[str, Application] = {}
         self._application_templates: dict[str, ApplicationTemplate] = {}
         self._authorization_sessions: dict[str, AuthorizationSession] = {}
-        self._canvas_connectors: dict[str, CanvasConnectorConfig] = {}
         self._canvas_event_receipts: dict[tuple[str | None, str], CanvasEventReceipt] = {}
         self._canvas_lti_launch_states: dict[str, CanvasLtiLaunchState] = {}
+        self._canvas_platforms: dict[str, CanvasPlatform] = {}
+        self._canvas_program_bindings: dict[str, CanvasProgramBinding] = {}
+        self._delivery_records: dict[str, CredentialDeliveryRecord] = {}
+        self._evidence_facts: dict[str, EvidenceFact] = {}
+        self._approval_policy_sets: dict[tuple[str, str], ApprovalPolicySet] = {}
         self._events: list[IssuanceEvent] = []
     
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
@@ -70,6 +93,85 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     
     async def list_credentials_by_org(self, org_id: str) -> list[IssuedCredential]:
         return [c for c in self._credentials.values() if c.organization_id == org_id]
+
+    async def save_delivery_record(self, record: CredentialDeliveryRecord) -> None:
+        existing = self._delivery_records.get(record.id)
+        if existing is not None:
+            record.created_at = existing.created_at
+        record.updated_at = datetime.now(timezone.utc)
+        self._delivery_records[record.id] = record
+
+    async def get_delivery_record(self, record_id: str) -> CredentialDeliveryRecord | None:
+        return self._delivery_records.get(record_id)
+
+    async def get_canvas_delivery_record_by_external_credential_id(
+        self,
+        external_credential_id: str,
+        *,
+        canvas_account_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> CredentialDeliveryRecord | None:
+        for record in sorted(self._delivery_records.values(), key=self._delivery_record_sort_key):
+            if record.delivery_target != DeliveryTarget.CANVAS_CREDENTIALS:
+                continue
+            if record.external_credential_id != external_credential_id:
+                continue
+            if canvas_account_id is not None and record.canvas_account_id != canvas_account_id:
+                continue
+            if organization_id is not None and record.organization_id != organization_id:
+                continue
+            return record
+        return None
+
+    async def list_delivery_records_for_credential(self, credential_id: str) -> list[CredentialDeliveryRecord]:
+        return sorted(
+            [record for record in self._delivery_records.values() if record.credential_id == credential_id],
+            key=self._delivery_record_sort_key,
+        )
+
+    async def list_delivery_records(
+        self,
+        *,
+        delivery_target: DeliveryTarget | None = None,
+        statuses: list[CredentialDeliveryStatus] | None = None,
+        organization_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[CredentialDeliveryRecord]:
+        records = list(self._delivery_records.values())
+        if delivery_target is not None:
+            records = [record for record in records if record.delivery_target == delivery_target]
+        if statuses is not None:
+            allowed_statuses = set(statuses)
+            records = [record for record in records if record.status in allowed_statuses]
+        if organization_id is not None:
+            records = [record for record in records if record.organization_id == organization_id]
+        records = sorted(records, key=self._delivery_record_sort_key)
+        if limit is not None:
+            records = records[:limit]
+        return records
+
+    async def save_evidence_fact(self, fact: EvidenceFact) -> None:
+        self._evidence_facts[fact.id] = fact
+
+    async def list_evidence_facts_for_application(self, application_id: str) -> list[EvidenceFact]:
+        return sorted(
+            [
+                fact
+                for fact in self._evidence_facts.values()
+                if fact.application_id == application_id
+            ],
+            key=lambda fact: fact.created_at,
+        )
+
+    async def save_approval_policy_set(self, policy_set: ApprovalPolicySet) -> None:
+        self._approval_policy_sets[(policy_set.organization_id, policy_set.id)] = policy_set
+
+    async def get_approval_policy_set(
+        self,
+        organization_id: str,
+        policy_set_id: str,
+    ) -> ApprovalPolicySet | None:
+        return self._approval_policy_sets.get((organization_id, policy_set_id))
     
     async def save_application_template(self, template: ApplicationTemplate) -> None:
         from datetime import datetime, timezone
@@ -132,27 +234,95 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 return receipt
         return None
 
-    async def save_canvas_connector(self, connector: CanvasConnectorConfig) -> None:
-        self._canvas_connectors[connector.id] = connector
+    async def list_canvas_event_receipts(
+        self,
+        *,
+        organization_id: str | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list[CanvasEventReceipt]:
+        receipts = list(self._canvas_event_receipts.values())
+        if organization_id is not None:
+            receipts = [
+                receipt
+                for receipt in receipts
+                if receipt.organization_id == organization_id
+            ]
+        if status is not None:
+            receipts = [receipt for receipt in receipts if receipt.status == status]
+        receipts = sorted(receipts, key=lambda receipt: receipt.last_seen_at)
+        if limit is not None:
+            receipts = receipts[:limit]
+        return receipts
 
-    async def get_canvas_connector(self, connector_id: str) -> CanvasConnectorConfig | None:
-        return self._canvas_connectors.get(connector_id)
+    async def save_canvas_platform(self, platform: CanvasPlatform) -> None:
+        platform.updated_at = datetime.now(timezone.utc)
+        self._canvas_platforms[platform.id] = platform
 
-    async def get_canvas_connector_by_account_id(self, canvas_account_id: str) -> CanvasConnectorConfig | None:
-        for connector in self._canvas_connectors.values():
-            if connector.canvas_account_id == canvas_account_id and connector.enabled:
-                return connector
+    async def get_canvas_platform(self, platform_id: str) -> CanvasPlatform | None:
+        return self._canvas_platforms.get(platform_id)
+
+    async def get_canvas_platform_by_account_id(
+        self,
+        organization_id: str,
+        canvas_account_id: str,
+    ) -> CanvasPlatform | None:
+        for platform in self._canvas_platforms.values():
+            if (
+                platform.organization_id == organization_id
+                and platform.canvas_account_id == canvas_account_id
+            ):
+                return platform
         return None
 
-    async def list_canvas_connectors(self, organization_id: str) -> list[CanvasConnectorConfig]:
-        return [
-            connector
-            for connector in self._canvas_connectors.values()
-            if connector.organization_id == organization_id
-        ]
+    async def list_canvas_platforms(self, organization_id: str) -> list[CanvasPlatform]:
+        return sorted(
+            [
+                platform
+                for platform in self._canvas_platforms.values()
+                if platform.organization_id == organization_id
+            ],
+            key=lambda platform: platform.created_at,
+        )
 
-    async def delete_canvas_connector(self, connector_id: str) -> None:
-        self._canvas_connectors.pop(connector_id, None)
+    async def delete_canvas_platform(self, platform_id: str) -> None:
+        self._canvas_platforms.pop(platform_id, None)
+        self._canvas_program_bindings = {
+            binding_id: binding
+            for binding_id, binding in self._canvas_program_bindings.items()
+            if binding.platform_id != platform_id
+        }
+
+    async def save_canvas_program_binding(self, binding: CanvasProgramBinding) -> None:
+        binding.updated_at = datetime.now(timezone.utc)
+        self._canvas_program_bindings[binding.id] = binding
+
+    async def get_canvas_program_binding(self, binding_id: str) -> CanvasProgramBinding | None:
+        return self._canvas_program_bindings.get(binding_id)
+
+    async def list_canvas_program_bindings(
+        self,
+        organization_id: str,
+        platform_id: str | None = None,
+        application_template_id: str | None = None,
+    ) -> list[CanvasProgramBinding]:
+        bindings = [
+            binding
+            for binding in self._canvas_program_bindings.values()
+            if binding.organization_id == organization_id
+        ]
+        if platform_id is not None:
+            bindings = [binding for binding in bindings if binding.platform_id == platform_id]
+        if application_template_id is not None:
+            bindings = [
+                binding
+                for binding in bindings
+                if binding.application_template_id == application_template_id
+            ]
+        return sorted(bindings, key=lambda binding: binding.created_at)
+
+    async def delete_canvas_program_binding(self, binding_id: str) -> None:
+        self._canvas_program_bindings.pop(binding_id, None)
 
     async def save_canvas_lti_launch_state(self, launch_state: CanvasLtiLaunchState) -> None:
         self._canvas_lti_launch_states[launch_state.state] = launch_state
@@ -277,6 +447,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             tx.id for tx in self._transactions.values()
             if tx.organization_id == org_id and tx.created_at < cutoff_at
         }
+        expired_credential_ids = {
+            credential.id for credential in self._credentials.values()
+            if credential.organization_id == org_id and credential.transaction_id in expired_transaction_ids
+        }
 
         self._events = [
             event for event in self._events
@@ -293,6 +467,20 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._credentials = {
             key: value for key, value in self._credentials.items()
             if not (value.organization_id == org_id and value.transaction_id in expired_transaction_ids)
+        }
+        self._delivery_records = {
+            key: value for key, value in self._delivery_records.items()
+            if not (
+                value.organization_id == org_id
+                and (
+                    value.transaction_id in expired_transaction_ids
+                    or value.credential_id in expired_credential_ids
+                )
+            )
+        }
+        self._evidence_facts = {
+            key: value for key, value in self._evidence_facts.items()
+            if value.organization_id != org_id or value.application_id in self._applications
         }
         self._transactions = {
             key: value for key, value in self._transactions.items()

@@ -7,8 +7,10 @@ import json
 import logging
 import os
 import time
+import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -39,6 +41,11 @@ from issuance.domain.entities import (
     ApplicationStatus,
     ApplicationTemplate,
     AuthorizationSession,
+    CanvasPlatform,
+    CanvasProgramBinding,
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
+    DeliveryTarget,
     CredentialStatus,
     EventType,
     IssuanceEvent,
@@ -47,8 +54,29 @@ from issuance.domain.entities import (
     IssuedCredential,
 )
 from issuance.domain.ports import IIssuanceRepository
+from issuance.infrastructure.adapters.delivery_records import (
+    canvas_delivery_feature_enabled,
+    canvas_deployment_profile_delivery_metadata,
+    normalize_delivery_mode,
+    record_post_issuance_deliveries,
+)
+from issuance.infrastructure.adapters.canvas_credentials_adapter import (
+    publish_canvas_credential_mirror,
+    sync_canvas_credential_status,
+)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CanvasMirrorTarget:
+    platform: CanvasPlatform
+    binding: CanvasProgramBinding
+
+try:
+    from marty_common import MARTY_DEFAULT_REVOCATION_PROFILE_ID
+except Exception:  # pragma: no cover - local fallback for isolated issuance tests
+    MARTY_DEFAULT_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
 
 # Configuration — no localhost fallback; services must be explicitly configured.
 REVOCATION_PROFILE_SERVICE_URL = os.environ.get("REVOCATION_PROFILE_SERVICE_URL", "")
@@ -411,6 +439,7 @@ class InitiateIssuanceRequest(BaseModel):
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     issuer_profile_id: str | None = None
     issuer_mode: str = "org_managed"
+    delivery_mode: str = "wallet_only"
     claims: dict[str, Any] = {}
 
 
@@ -475,11 +504,12 @@ class ApplicationTemplateCreate(BaseModel):
     description: str | None = None
     credential_template_id: str | None = None
     form_fields: list[dict[str, Any]] = []
-    evidence_requirements: list[str] = []
+    evidence_requirements: list[Any] = []
     claim_collection_rules: list[dict[str, Any]] = []
     # Pluggable vetting checks: {check_type, custom_name, is_required, order, config, external_provider, webhook_url}
     required_checks: list[dict[str, Any]] = []
     approval_strategy: str = "auto"
+    approval_policy_set_id: str | None = None
     application_validity_days: int = 30
     auto_approval_rules: list[dict[str, Any]] = []
     ui_config: dict[str, Any] = {}
@@ -517,10 +547,11 @@ class ApplicationTemplateResponse(BaseModel):
     description: str | None
     credential_template_id: str | None
     form_fields: list[dict[str, Any]]
-    evidence_requirements: list[str]
+    evidence_requirements: list[Any]
     claim_collection_rules: list[dict[str, Any]]
     required_checks: list[dict[str, Any]]
     approval_strategy: str
+    approval_policy_set_id: str | None = None
     application_validity_days: int
     auto_approval_rules: list[dict[str, Any]]
     ui_config: dict[str, Any]
@@ -583,6 +614,106 @@ class IssuedCredentialStatusListEntryResponse(BaseModel):
     status_list_id: str
     index: int
     status_list_uri: str | None = None
+    type: str | None = None
+    status_purpose: str | None = None
+    status_list_credential: str | None = None
+
+
+class CredentialDeliveryRecordResponse(BaseModel):
+    id: str
+    delivery_target: str
+    delivery_mode: str
+    status: str
+    canvas_account_id: str | None = None
+    external_credential_id: str | None = None
+    external_issuer_id: str | None = None
+    last_error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+
+class CanvasMirrorBatchProcessResponse(BaseModel):
+    delivery_target: str = "canvas_credentials"
+    organization_id: str | None = None
+    retry_failed: bool = False
+    processed_count: int = 0
+    delivered_count: int = 0
+    failed_count: int = 0
+    blocked_count: int = 0
+    metrics: dict[str, int] = Field(default_factory=dict)
+    records: list[CredentialDeliveryRecordResponse] = Field(default_factory=list)
+
+
+class CanvasMirrorStatusSyncBatchResponse(BaseModel):
+    delivery_target: str = "canvas_credentials"
+    organization_id: str | None = None
+    processed_count: int = 0
+    synced_count: int = 0
+    failed_count: int = 0
+    blocked_count: int = 0
+    metrics: dict[str, int] = Field(default_factory=dict)
+    records: list[CredentialDeliveryRecordResponse] = Field(default_factory=list)
+
+
+class CanvasMirrorAutomationCycleResponse(BaseModel):
+    delivery_target: str = "canvas_credentials"
+    organization_id: str | None = None
+    retry_failed: bool = True
+    publish: CanvasMirrorBatchProcessResponse
+    status_sync: CanvasMirrorStatusSyncBatchResponse
+    processed_count: int = 0
+    failed_count: int = 0
+    blocked_count: int = 0
+    metrics: dict[str, int] = Field(default_factory=dict)
+    started_at: str
+    completed_at: str
+
+
+class CanvasMirrorAlertResponse(BaseModel):
+    alert_type: str
+    severity: str
+    delivery_record_id: str
+    credential_id: str
+    transaction_id: str
+    canvas_account_id: str | None = None
+    attempt_count: int = 0
+    last_error: str | None = None
+    last_error_at: str | None = None
+    message: str
+    recommended_action: str
+
+
+class CanvasMirrorHealthResponse(BaseModel):
+    organization_id: str
+    pending_publish_count: int = 0
+    failed_publish_count: int = 0
+    delivered_count: int = 0
+    lifecycle_sync_failed_count: int = 0
+    lifecycle_sync_ok_count: int = 0
+    repeated_publish_failure_count: int = 0
+    repeated_lifecycle_sync_failure_count: int = 0
+    warning_alert_count: int = 0
+    critical_alert_count: int = 0
+    alert_count: int = 0
+    alert_thresholds: dict[str, int] = Field(default_factory=dict)
+    metrics: dict[str, int] = Field(default_factory=dict)
+    alerts: list[CanvasMirrorAlertResponse] = Field(default_factory=list)
+    last_successful_publish_at: str | None = None
+    last_lifecycle_sync_failure_at: str | None = None
+    last_lifecycle_sync_success_at: str | None = None
+
+
+class CanvasMirrorProvenanceResponse(BaseModel):
+    delivery_record_id: str
+    organization_id: str
+    canvas_account_id: str | None = None
+    mirror: dict[str, Any]
+    canonical_credential: dict[str, Any]
+    canonical_issuance: dict[str, Any]
+    issuer: dict[str, Any]
+    trust_basis: dict[str, Any]
+    delivery_record: CredentialDeliveryRecordResponse
 
 
 class IssuedCredentialRecordResponse(BaseModel):
@@ -602,6 +733,7 @@ class IssuedCredentialRecordResponse(BaseModel):
     status: str
     status_list_entries: list[IssuedCredentialStatusListEntryResponse] = Field(default_factory=list)
     credential_hash: str | None = None
+    deliveries: list[CredentialDeliveryRecordResponse] = Field(default_factory=list)
     revoked_at: str | None = None
     revocation_reason: str | None = None
     issuer_did: str | None = None
@@ -707,6 +839,138 @@ def _credential_format_to_protocol(tx: IssuanceTransaction | None, cred: IssuedC
     return "SD_JWT_VC"
 
 
+def _default_revocation_profile_id() -> str:
+    return (
+        os.environ.get("MARTY_DEFAULT_REVOCATION_PROFILE_ID")
+        or os.environ.get("REVOCATION_PROFILE_ID")
+        or MARTY_DEFAULT_REVOCATION_PROFILE_ID
+    )
+
+
+def _credential_format_for_revocation_profile(tx: IssuanceTransaction | None, request_format: str | None = None) -> str:
+    payload_format = _normalize_payload_format(tx.credential_payload_format if tx else None)
+    normalized_request = _normalize_payload_format(request_format)
+    if payload_format in _MDOC_PAYLOAD_FORMATS or normalized_request in _MDOC_PAYLOAD_FORMATS:
+        return "mdoc"
+    return "sd_jwt_vc"
+
+
+def _status_list_entries_to_protocol(
+    entries: list[dict[str, Any]] | None,
+) -> list[IssuedCredentialStatusListEntryResponse]:
+    result: list[IssuedCredentialStatusListEntryResponse] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        status_list_id = entry.get("status_list_id") or entry.get("revocation_profile_id")
+        index = entry.get("index")
+        if status_list_id is None or index is None:
+            continue
+        result.append(
+            IssuedCredentialStatusListEntryResponse(
+                status_list_id=str(status_list_id),
+                index=int(index),
+                status_list_uri=entry.get("status_list_uri") or entry.get("statusListCredential"),
+                type=entry.get("type"),
+                status_purpose=entry.get("status_purpose") or entry.get("statusPurpose"),
+                status_list_credential=entry.get("status_list_credential") or entry.get("statusListCredential"),
+            )
+        )
+    return result
+
+
+def _status_list_entry_to_credential_status_claim(entry: dict[str, Any]) -> dict[str, Any]:
+    status_list_uri = str(entry.get("status_list_uri") or entry.get("status_list_credential") or "")
+    status_purpose = str(entry.get("status_purpose") or "revocation")
+    index = int(entry.get("index") or 0)
+    status_entry = {
+        "id": f"{status_list_uri}#{index}" if status_list_uri else f"urn:marty:status-list-entry:{index}",
+        "type": entry.get("type") or "BitstringStatusListEntry",
+        "statusPurpose": status_purpose,
+        "statusListIndex": str(index),
+        "statusListCredential": status_list_uri,
+    }
+    return status_entry
+
+
+def _status_list_entries_to_credential_status_claim(entries: list[dict[str, Any]]) -> list[dict[str, Any]] | dict[str, Any] | None:
+    claims = [_status_list_entry_to_credential_status_claim(entry) for entry in entries if isinstance(entry, dict)]
+    if not claims:
+        return None
+    if len(claims) == 1:
+        return claims[0]
+    return claims
+
+
+def _revocation_index_from_credential(credential: IssuedCredential) -> int | None:
+    for entry in credential.status_list_entries or []:
+        if not isinstance(entry, dict):
+            continue
+        purpose = str(entry.get("status_purpose") or entry.get("statusPurpose") or "revocation")
+        if purpose != "revocation":
+            continue
+        index = entry.get("index")
+        if index is not None:
+            return int(index)
+    return None
+
+
+async def _allocate_credential_status_list_entries(
+    *,
+    credential_id: str,
+    credential_format: str,
+    revocation_profile_id: str | None = None,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    profile_id = revocation_profile_id or _default_revocation_profile_id()
+    service_url = (
+        os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or ""
+    ).strip().rstrip("/")
+    if not service_url:
+        logger.info(
+            "Skipping status-list allocation for credential %s because REVOCATION_PROFILE_SERVICE_URL is not configured",
+            credential_id,
+        )
+        return None, []
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                f"{service_url}/internal/revocation-profiles/{profile_id}/allocate-index",
+                json={"credential_format": credential_format},
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Status-list allocation failed for credential %s via profile %s: %s",
+            credential_id,
+            profile_id,
+            exc,
+        )
+        return None, []
+
+    index = payload.get("index")
+    status_list_url = payload.get("status_list_url")
+    if index is None or not status_list_url:
+        logger.warning(
+            "Status-list allocation response for credential %s was incomplete: %s",
+            credential_id,
+            payload,
+        )
+        return None, []
+
+    return profile_id, [
+        {
+            "status_list_id": profile_id,
+            "index": int(index),
+            "status_list_uri": str(status_list_url),
+            "status_list_credential": str(status_list_url),
+            "type": "BitstringStatusListEntry" if credential_format != "mdoc" else "TokenStatusListEntry",
+            "status_purpose": "revocation",
+        }
+    ]
+
+
 def _subject_claims_hash(tx: IssuanceTransaction | None) -> str | None:
     if tx is None:
         return None
@@ -737,6 +1001,7 @@ async def _issued_credential_to_protocol(
     repo: IIssuanceRepository,
 ) -> IssuedCredentialRecordResponse:
     tx = await repo.get_transaction(cred.transaction_id)
+    delivery_records = await repo.list_delivery_records_for_credential(cred.id)
     subject_id = cred.subject_did or cred.applicant_id or (tx.subject_did if tx else None) or (tx.applicant_id if tx else None) or cred.id
     issued_at = cred.issued_at
     valid_until = cred.expires_at
@@ -751,15 +1016,16 @@ async def _issued_credential_to_protocol(
         flow_execution_id=cred.transaction_id,
         credential_template_id=cred.credential_template_id,
         application_id=tx.application_id if tx else None,
-        revocation_profile_id=None,
+        revocation_profile_id=cred.revocation_profile_id,
         subject_id=subject_id,
         subject_claims_hash=_subject_claims_hash(tx),
         issued_at=issued_at.isoformat(),
         valid_from=issued_at.isoformat(),
         valid_until=valid_until.isoformat() if valid_until else None,
         status=protocol_status,
-        status_list_entries=[],
+        status_list_entries=_status_list_entries_to_protocol(cred.status_list_entries),
         credential_hash=cred.credential_hash,
+        deliveries=[_delivery_record_to_protocol(record) for record in delivery_records],
         revoked_at=cred.revoked_at.isoformat() if cred.revoked_at else None,
         revocation_reason=cred.revocation_reason,
         issuer_did=cred.issuer_did or (tx.issuer_did_override if tx else None),
@@ -767,6 +1033,1082 @@ async def _issued_credential_to_protocol(
         created_at=issued_at.isoformat(),
         updated_at=updated_at.isoformat() if updated_at else None,
     )
+
+
+def _delivery_record_to_protocol(record: CredentialDeliveryRecord) -> CredentialDeliveryRecordResponse:
+    return CredentialDeliveryRecordResponse(
+        id=record.id,
+        delivery_target=record.delivery_target.value,
+        delivery_mode=record.delivery_mode,
+        status=record.status.value,
+        canvas_account_id=record.canvas_account_id,
+        external_credential_id=record.external_credential_id,
+        external_issuer_id=record.external_issuer_id,
+        last_error=record.last_error,
+        metadata=record.metadata,
+        created_at=record.created_at.isoformat(),
+        updated_at=record.updated_at.isoformat(),
+    )
+
+
+def _subject_id_hash(value: str | None) -> str | None:
+    if not value:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _public_canvas_metadata(record: CredentialDeliveryRecord) -> dict[str, Any]:
+    metadata = record.metadata or {}
+    allowed_keys = {
+        "published_at",
+        "publish_attempts",
+        "request_id",
+        "canvas_response_status",
+        "last_attempted_at",
+        "status_synced_at",
+        "status_sync_attempts",
+        "last_status_sync_action",
+        "last_status_sync_attempted_at",
+        "last_status_sync_error",
+        "last_status_sync_error_at",
+        "last_synced_credential_status",
+    }
+    return {key: metadata.get(key) for key in allowed_keys if key in metadata}
+
+
+def _canvas_mirror_record_matches(
+    record: CredentialDeliveryRecord,
+    *,
+    canvas_account_id: str | None = None,
+    organization_id: str | None = None,
+) -> bool:
+    if record.delivery_target != DeliveryTarget.CANVAS_CREDENTIALS:
+        return False
+    if canvas_account_id is not None and record.canvas_account_id != canvas_account_id:
+        return False
+    if organization_id is not None and record.organization_id != organization_id:
+        return False
+    return True
+
+
+async def _resolve_canvas_mirror_delivery_record(
+    *,
+    repo: IIssuanceRepository,
+    delivery_record_id: str | None = None,
+    external_credential_id: str | None = None,
+    credential_id: str | None = None,
+    canvas_account_id: str | None = None,
+    organization_id: str | None = None,
+) -> CredentialDeliveryRecord:
+    if not any([delivery_record_id, external_credential_id, credential_id]):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide delivery_record_id, external_credential_id, or credential_id",
+        )
+
+    record: CredentialDeliveryRecord | None = None
+    if delivery_record_id:
+        record = await repo.get_delivery_record(delivery_record_id)
+        if record is not None and not _canvas_mirror_record_matches(
+            record,
+            canvas_account_id=canvas_account_id,
+            organization_id=organization_id,
+        ):
+            record = None
+    elif external_credential_id:
+        record = await repo.get_canvas_delivery_record_by_external_credential_id(
+            external_credential_id,
+            canvas_account_id=canvas_account_id,
+            organization_id=organization_id,
+        )
+    elif credential_id:
+        records = await repo.list_delivery_records_for_credential(credential_id)
+        record = next(
+            (
+                candidate
+                for candidate in records
+                if _canvas_mirror_record_matches(
+                    candidate,
+                    canvas_account_id=canvas_account_id,
+                    organization_id=organization_id,
+                )
+            ),
+            None,
+        )
+
+    if record is None:
+        raise HTTPException(status_code=404, detail="Canvas mirror delivery record not found")
+    return record
+
+
+async def _canvas_mirror_provenance_to_protocol(
+    record: CredentialDeliveryRecord,
+    repo: IIssuanceRepository,
+) -> CanvasMirrorProvenanceResponse:
+    credential = await repo.get_credential(record.credential_id)
+    if credential is None:
+        raise HTTPException(status_code=409, detail="Canonical issued credential not found for Canvas mirror record")
+    transaction = await repo.get_transaction(record.transaction_id)
+    subject_id = (
+        credential.subject_did
+        or credential.applicant_id
+        or (transaction.subject_did if transaction else None)
+        or (transaction.applicant_id if transaction else None)
+    )
+    credential_status = _credential_status_to_protocol(credential.status, credential.expires_at)
+    issuer_did = credential.issuer_did or (transaction.issuer_did_override if transaction else None)
+    credential_format = _credential_format_to_protocol(transaction, credential)
+    organization_consistent = (
+        credential.organization_id == record.organization_id
+        and (transaction is None or transaction.organization_id == record.organization_id)
+    )
+
+    return CanvasMirrorProvenanceResponse(
+        delivery_record_id=record.id,
+        organization_id=record.organization_id,
+        canvas_account_id=record.canvas_account_id,
+        mirror={
+            "provider": "canvas",
+            "delivery_target": record.delivery_target.value,
+            "delivery_status": record.status.value,
+            "delivery_mode": record.delivery_mode,
+            "external_credential_id": record.external_credential_id,
+            "external_issuer_id": record.external_issuer_id,
+            "metadata": _public_canvas_metadata(record),
+            "last_error": record.last_error,
+        },
+        canonical_credential={
+            "credential_id": credential.id,
+            "credential_template_id": credential.credential_template_id,
+            "credential_format": credential_format,
+            "credential_status": credential_status,
+            "credential_hash": credential.credential_hash,
+            "revocation_profile_id": credential.revocation_profile_id,
+            "status_list_entries": [
+                entry.model_dump(exclude_none=True)
+                for entry in _status_list_entries_to_protocol(credential.status_list_entries)
+            ],
+            "subject_id_hash": _subject_id_hash(subject_id),
+            "issued_at": credential.issued_at.isoformat(),
+            "valid_until": credential.expires_at.isoformat() if credential.expires_at else None,
+            "status_updated_at": credential.status_updated_at.isoformat(),
+            "revocation_reason": credential.revocation_reason,
+        },
+        canonical_issuance={
+            "transaction_id": credential.transaction_id,
+            "application_id": transaction.application_id if transaction else None,
+            "credential_type": transaction.credential_type if transaction else "unknown",
+            "delivery_mode": transaction.delivery_mode if transaction else record.delivery_mode,
+        },
+        issuer={
+            "issuer_did": issuer_did,
+            "issuer_profile_id": transaction.issuer_profile_id if transaction else None,
+            "issuer_mode": transaction.issuer_mode if transaction else None,
+            "credential_issuer_url": org_issuer_url(record.organization_id),
+        },
+        trust_basis={
+            "canonical_issuance_backed": True,
+            "mirror_backed_by_delivery_record": True,
+            "organization_consistent": organization_consistent,
+            "distribution_channel": "canvas_credentials",
+            "status_source": "canonical_credential_status",
+            "credential_status": credential_status,
+            "issuer_trust_anchor": issuer_did,
+        },
+        delivery_record=_delivery_record_to_protocol(record),
+    )
+
+
+def _next_canvas_publish_metadata(
+    record: CredentialDeliveryRecord,
+    attempted_at: datetime,
+) -> dict[str, Any]:
+    return {
+        **(record.metadata or {}),
+        "publish_attempts": int((record.metadata or {}).get("publish_attempts") or 0) + 1,
+        "last_attempted_at": attempted_at.isoformat(),
+    }
+
+
+async def _hydrate_canvas_gate_metadata(
+    record: CredentialDeliveryRecord,
+    transaction: IssuanceTransaction | None,
+    repo: IIssuanceRepository,
+) -> None:
+    if not transaction or not transaction.application_id:
+        return
+    existing = record.metadata or {}
+    if existing.get("deployment_profile_id") and existing.get("canvas_feature_flags"):
+        return
+    app = await repo.get_application(transaction.application_id)
+    profile_metadata = canvas_deployment_profile_delivery_metadata(app)
+    if profile_metadata:
+        record.metadata = {
+            **existing,
+            **profile_metadata,
+        }
+
+
+def _metadata_text(metadata: dict[str, Any] | None, key: str) -> str | None:
+    value = (metadata or {}).get(key)
+    if value is None or not str(value).strip():
+        return None
+    return str(value).strip()
+
+
+async def _resolve_canvas_mirror_target(
+    record: CredentialDeliveryRecord,
+    transaction: IssuanceTransaction | None,
+    repo: IIssuanceRepository,
+) -> tuple[CanvasMirrorTarget | None, str | None]:
+    await _hydrate_canvas_gate_metadata(record, transaction, repo)
+    binding_id = _metadata_text(record.metadata, "canvas_program_binding_id")
+    if not binding_id:
+        return None, "Canvas mirror delivery record is missing canvas_program_binding_id"
+
+    binding = await repo.get_canvas_program_binding(binding_id)
+    if binding is None:
+        return None, f"Canvas program binding {binding_id} was not found"
+    if not binding.enabled:
+        return None, f"Canvas program binding {binding_id} is disabled"
+    if binding.canvas_credentials:
+        record.metadata = {
+            **(record.metadata or {}),
+            "canvas_credentials": dict(binding.canvas_credentials),
+        }
+
+    platform = await repo.get_canvas_platform(binding.platform_id)
+    if platform is None:
+        return None, f"Canvas platform {binding.platform_id} was not found"
+    if not platform.enabled:
+        return None, f"Canvas platform {binding.platform_id} is disabled"
+
+    record.canvas_account_id = platform.canvas_account_id
+    record.metadata = {
+        **(record.metadata or {}),
+        "canvas_platform_id": platform.id,
+        "canvas_program_binding_id": binding.id,
+    }
+    return CanvasMirrorTarget(platform=platform, binding=binding), None
+
+
+def _canvas_gate_blocked_error(flag: str) -> str:
+    if flag == "enable_canvas_mirror_ops":
+        return "Canvas mirror operations are disabled by deployment profile"
+    labels = {
+        "enable_canvas_mirror_publish": "Canvas mirror publish",
+    }
+    return f"{labels.get(flag, flag)} is disabled by deployment profile"
+
+
+def _canvas_gate_blocked_metadata(
+    record: CredentialDeliveryRecord,
+    *,
+    flag: str,
+    blocked_at: datetime,
+) -> dict[str, Any]:
+    return {
+        **(record.metadata or {}),
+        "canvas_feature_gate_blocked": True,
+        "canvas_feature_gate": flag,
+        "canvas_feature_gate_blocked_at": blocked_at.isoformat(),
+        "retryable": False,
+    }
+
+
+def _canvas_delivery_failure_status_code(error_detail: str | None) -> int:
+    detail = (error_detail or "").lower()
+    if any(token in detail for token in ("missing", "not found", "disabled", "no canvas mirror")):
+        return 409
+    return 502
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _max_iso_datetime(values: list[Any]) -> str | None:
+    parsed_values = [parsed for value in values if (parsed := _parse_iso_datetime(value)) is not None]
+    if not parsed_values:
+        return None
+    return max(parsed_values).isoformat()
+
+
+def _delivery_record_has_status_sync_failure(record: CredentialDeliveryRecord) -> bool:
+    return bool((record.metadata or {}).get("last_status_sync_error"))
+
+
+def _metadata_int(metadata: dict[str, Any] | None, key: str) -> int:
+    try:
+        return int((metadata or {}).get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _canvas_mirror_alert_for_record(
+    record: CredentialDeliveryRecord,
+    *,
+    alert_type: str,
+    attempt_key: str,
+    error_at_key: str,
+    warning_threshold: int,
+    critical_threshold: int,
+) -> CanvasMirrorAlertResponse | None:
+    metadata = record.metadata or {}
+    attempt_count = _metadata_int(metadata, attempt_key)
+    if attempt_count < warning_threshold:
+        return None
+
+    severity = "critical" if attempt_count >= critical_threshold else "warning"
+    is_publish = alert_type == "publish_failure"
+    action = (
+        "Check Canvas Credentials publish configuration and rerun the Canvas mirror automation cycle."
+        if is_publish
+        else "Check Canvas Credentials lifecycle status sync configuration and rerun failed status syncs."
+    )
+    noun = "publish" if is_publish else "lifecycle status sync"
+    return CanvasMirrorAlertResponse(
+        alert_type=alert_type,
+        severity=severity,
+        delivery_record_id=record.id,
+        credential_id=record.credential_id,
+        transaction_id=record.transaction_id,
+        canvas_account_id=record.canvas_account_id,
+        attempt_count=attempt_count,
+        last_error=record.last_error or metadata.get("last_status_sync_error"),
+        last_error_at=metadata.get(error_at_key),
+        message=f"Canvas mirror {noun} has failed {attempt_count} times for delivery record {record.id}.",
+        recommended_action=action,
+    )
+
+
+def _canvas_mirror_alert_to_dict(alert: CanvasMirrorAlertResponse) -> dict[str, Any]:
+    if hasattr(alert, "model_dump"):
+        return alert.model_dump()
+    return alert.dict()
+
+
+def _canvas_mirror_publish_metrics(
+    *,
+    processed_count: int,
+    delivered_count: int,
+    failed_count: int,
+    blocked_count: int,
+) -> dict[str, int]:
+    return {
+        "publish.processed": processed_count,
+        "publish.delivered": delivered_count,
+        "publish.failed": failed_count,
+        "publish.blocked": blocked_count,
+    }
+
+
+def _canvas_mirror_status_sync_metrics(
+    *,
+    processed_count: int,
+    synced_count: int,
+    failed_count: int,
+    blocked_count: int,
+) -> dict[str, int]:
+    return {
+        "status_sync.processed": processed_count,
+        "status_sync.synced": synced_count,
+        "status_sync.failed": failed_count,
+        "status_sync.blocked": blocked_count,
+        "status_sync.retry_outcomes": processed_count,
+        "status_sync.retry_succeeded": synced_count,
+        "status_sync.retry_failed": failed_count,
+        "status_sync.retry_blocked": blocked_count,
+    }
+
+
+def _log_canvas_mirror_metrics(
+    *,
+    operation: str,
+    organization_id: str | None,
+    metrics: dict[str, int],
+) -> None:
+    logger.info(
+        "canvas_mirror_metrics",
+        extra={
+            "mip_event": "canvas_mirror_metrics",
+            "canvas_mirror_operation": operation,
+            "organization_id": organization_id,
+            "metrics": metrics,
+        },
+    )
+
+
+async def _post_canvas_mirror_alert_webhook(
+    *,
+    organization_id: str,
+    alerts: list[CanvasMirrorAlertResponse],
+) -> None:
+    webhook_url = (os.environ.get("CANVAS_MIRROR_ALERT_WEBHOOK_URL") or "").strip()
+    if not webhook_url or not alerts:
+        return
+    timeout_seconds = float(os.environ.get("CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS", "5"))
+    payload = {
+        "event": "canvas_mirror_critical_alert",
+        "organization_id": organization_id,
+        "alerts": [_canvas_mirror_alert_to_dict(alert) for alert in alerts],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=max(1.0, min(timeout_seconds, 20.0))) as client:
+            response = await client.post(webhook_url, json=payload)
+            response.raise_for_status()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Canvas mirror alert webhook failed for organization=%s: %s",
+            organization_id,
+            exc,
+        )
+
+
+async def _emit_canvas_mirror_alert_observability(
+    *,
+    repo: IIssuanceRepository,
+    organization_id: str | None,
+    alerts: list[CanvasMirrorAlertResponse],
+) -> None:
+    if not alerts:
+        return
+    org_id = organization_id or alerts[0].canvas_account_id or ""
+    critical_alerts = [alert for alert in alerts if alert.severity == "critical"]
+    for alert in alerts:
+        payload = _canvas_mirror_alert_to_dict(alert)
+        payload["organization_id"] = org_id
+        logger.warning(
+            "canvas_mirror_alert",
+            extra={
+                "mip_event": "canvas_mirror_alert",
+                "canvas_mirror_alert": payload,
+                "organization_id": org_id,
+                "severity": alert.severity,
+            },
+        )
+        await repo.save_event(
+            IssuanceEvent(
+                transaction_id=alert.transaction_id,
+                application_id=None,
+                event_type=EventType.CANVAS_MIRROR_ALERT_EMITTED,
+                metadata=payload,
+            )
+        )
+    if critical_alerts and organization_id:
+        await _post_canvas_mirror_alert_webhook(
+            organization_id=organization_id,
+            alerts=critical_alerts,
+        )
+
+
+async def _emit_canvas_mirror_alerts_for_records(
+    *,
+    repo: IIssuanceRepository,
+    organization_id: str | None,
+    records: list[CredentialDeliveryRecord],
+    alert_type: str,
+) -> None:
+    effective_organization_id = organization_id or (records[0].organization_id if records else None)
+    warning_threshold = _env_int("CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS", 3)
+    critical_threshold = max(
+        warning_threshold,
+        _env_int("CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS", 5),
+    )
+    if alert_type == "publish_failure":
+        attempt_key = "publish_attempts"
+        error_at_key = "last_error_at"
+    else:
+        attempt_key = "status_sync_attempts"
+        error_at_key = "last_status_sync_error_at"
+    alerts = [
+        alert
+        for record in records
+        if (alert := _canvas_mirror_alert_for_record(
+            record,
+            alert_type=alert_type,
+            attempt_key=attempt_key,
+            error_at_key=error_at_key,
+            warning_threshold=warning_threshold,
+            critical_threshold=critical_threshold,
+        )) is not None
+    ]
+    await _emit_canvas_mirror_alert_observability(
+        repo=repo,
+        organization_id=effective_organization_id,
+        alerts=alerts,
+    )
+
+
+def _next_canvas_status_sync_metadata(
+    record: CredentialDeliveryRecord,
+    attempted_at: datetime,
+    *,
+    lifecycle_action: str,
+    credential_status: str | None,
+) -> dict[str, Any]:
+    metadata = {
+        **(record.metadata or {}),
+        "status_sync_attempts": int((record.metadata or {}).get("status_sync_attempts") or 0) + 1,
+        "last_status_sync_action": lifecycle_action,
+        "last_status_sync_attempted_at": attempted_at.isoformat(),
+    }
+    if credential_status:
+        metadata["last_synced_credential_status"] = credential_status
+    return metadata
+
+
+async def _sync_canvas_lifecycle_delivery_record(
+    record: CredentialDeliveryRecord,
+    credential: IssuedCredential,
+    repo: IIssuanceRepository,
+    *,
+    lifecycle_action: str,
+    reason: str | None = None,
+    transaction: IssuanceTransaction | None = None,
+) -> CredentialDeliveryRecord:
+    tx = transaction or await repo.get_transaction(credential.transaction_id)
+    now = datetime.now(timezone.utc)
+    await _hydrate_canvas_gate_metadata(record, tx, repo)
+    if not canvas_delivery_feature_enabled(record.metadata, "enable_canvas_mirror_ops"):
+        record.last_error = _canvas_gate_blocked_error("enable_canvas_mirror_ops")
+        record.metadata = {
+            **_canvas_gate_blocked_metadata(
+                record,
+                flag="enable_canvas_mirror_ops",
+                blocked_at=now,
+            ),
+            "last_status_sync_error": record.last_error,
+            "last_status_sync_error_at": now.isoformat(),
+        }
+        record.updated_at = now
+        await repo.save_delivery_record(record)
+        return record
+
+    target, target_error = await _resolve_canvas_mirror_target(record, tx, repo)
+    sync_metadata = _next_canvas_status_sync_metadata(
+        record,
+        now,
+        lifecycle_action=lifecycle_action,
+        credential_status=credential.status.value,
+    )
+    if target_error or target is None:
+        record.last_error = f"Canvas lifecycle sync skipped: {target_error}"
+        record.metadata = {
+            **(record.metadata or {}),
+            **sync_metadata,
+            "last_status_sync_error": record.last_error,
+            "last_status_sync_error_at": now.isoformat(),
+        }
+        record.updated_at = now
+        await repo.save_delivery_record(record)
+        logger.warning(record.last_error)
+        return record
+
+    try:
+        sync_result = await sync_canvas_credential_status(
+            credential=credential,
+            platform=target.platform,
+            delivery_record=record,
+            lifecycle_action=lifecycle_action,
+            reason=reason,
+        )
+    except Exception as exc:  # noqa: BLE001
+        record.last_error = str(exc)
+        record.metadata = {
+            **sync_metadata,
+            "last_status_sync_error": str(exc),
+            "last_status_sync_error_at": now.isoformat(),
+        }
+        record.updated_at = now
+        await repo.save_delivery_record(record)
+        logger.warning(
+            "Canvas lifecycle sync failed for credential=%s delivery_record=%s: %s",
+            credential.id,
+            record.id,
+            exc,
+        )
+        return record
+
+    record.last_error = None
+    record.metadata = {
+        **sync_metadata,
+        **(sync_result.metadata or {}),
+        "last_status_sync_error": None,
+    }
+    record.updated_at = now
+    await repo.save_delivery_record(record)
+    return record
+
+
+async def _sync_canvas_lifecycle_delivery_records(
+    credential: IssuedCredential,
+    repo: IIssuanceRepository,
+    *,
+    lifecycle_action: str,
+    reason: str | None = None,
+) -> list[CredentialDeliveryRecord]:
+    tx = await repo.get_transaction(credential.transaction_id)
+    delivery_records = await repo.list_delivery_records_for_credential(credential.id)
+    canvas_records = [
+        record
+        for record in delivery_records
+        if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        and record.status == CredentialDeliveryStatus.DELIVERED
+    ]
+    updated_records: list[CredentialDeliveryRecord] = []
+
+    for record in canvas_records:
+        updated_records.append(
+            await _sync_canvas_lifecycle_delivery_record(
+                record,
+                credential,
+                repo,
+                lifecycle_action=lifecycle_action,
+                reason=reason,
+                transaction=tx,
+            )
+        )
+
+    return updated_records
+
+
+async def _process_canvas_mirror_delivery_record(
+    record: CredentialDeliveryRecord,
+    repo: IIssuanceRepository,
+    *,
+    credential: IssuedCredential | None = None,
+    transaction: IssuanceTransaction | None = None,
+) -> CredentialDeliveryRecord:
+    if record.status == CredentialDeliveryStatus.DELIVERED:
+        return record
+
+    now = datetime.now(timezone.utc)
+    credential = credential or await repo.get_credential(record.credential_id)
+    if credential is None:
+        metadata = _next_canvas_publish_metadata(record, now)
+        record.status = CredentialDeliveryStatus.FAILED
+        record.last_error = f"Issued credential {record.credential_id} was not found"
+        record.updated_at = now
+        record.metadata = {
+            **metadata,
+            "last_error_at": now.isoformat(),
+        }
+        await repo.save_delivery_record(record)
+        return record
+
+    transaction = transaction or await repo.get_transaction(record.transaction_id)
+    if transaction is None:
+        metadata = _next_canvas_publish_metadata(record, now)
+        record.status = CredentialDeliveryStatus.FAILED
+        record.last_error = f"Issuance transaction {record.transaction_id} was not found"
+        record.updated_at = now
+        record.metadata = {
+            **metadata,
+            "last_error_at": now.isoformat(),
+        }
+        await repo.save_delivery_record(record)
+        return record
+
+    await _hydrate_canvas_gate_metadata(record, transaction, repo)
+    for feature_flag in ("enable_canvas_mirror_publish", "enable_canvas_mirror_ops"):
+        if not canvas_delivery_feature_enabled(record.metadata, feature_flag):
+            record.status = CredentialDeliveryStatus.FAILED
+            record.last_error = _canvas_gate_blocked_error(feature_flag)
+            record.updated_at = now
+            record.metadata = _canvas_gate_blocked_metadata(
+                record,
+                flag=feature_flag,
+                blocked_at=now,
+            )
+            await repo.save_delivery_record(record)
+            return record
+
+    target, target_error = await _resolve_canvas_mirror_target(record, transaction, repo)
+    metadata = _next_canvas_publish_metadata(record, now)
+    if target_error or target is None:
+        record.status = CredentialDeliveryStatus.FAILED
+        record.last_error = target_error or "Canvas mirror target could not be resolved"
+        record.updated_at = now
+        record.metadata = {
+            **(record.metadata or {}),
+            **metadata,
+            "last_error_at": now.isoformat(),
+        }
+        await repo.save_delivery_record(record)
+        return record
+
+    try:
+        publish_result = await publish_canvas_credential_mirror(
+            credential=credential,
+            transaction=transaction,
+            platform=target.platform,
+            delivery_record=record,
+        )
+    except Exception as exc:  # noqa: BLE001
+        record.status = CredentialDeliveryStatus.FAILED
+        record.last_error = str(exc)
+        record.updated_at = now
+        record.metadata = {
+            **metadata,
+            "last_error_at": now.isoformat(),
+        }
+        await repo.save_delivery_record(record)
+        return record
+
+    record.status = CredentialDeliveryStatus.DELIVERED
+    record.external_credential_id = publish_result.external_credential_id
+    record.external_issuer_id = publish_result.external_issuer_id
+    record.last_error = None
+    record.updated_at = now
+    record.metadata = {
+        **metadata,
+        **(publish_result.metadata or {}),
+    }
+    await repo.save_delivery_record(record)
+    return record
+
+
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in _TRUE_ENV_VALUES:
+        return True
+    if normalized in _FALSE_ENV_VALUES:
+        return False
+    logger.warning("Ignoring invalid boolean %s=%r; using %s", name, raw, default)
+    return default
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Ignoring invalid integer %s=%r; using %s", name, raw, default)
+        return default
+    if value < minimum:
+        logger.warning("Ignoring %s=%r below minimum %s; using %s", name, raw, minimum, default)
+        return default
+    return value
+
+
+@dataclass(frozen=True)
+class CanvasMirrorAutomationConfig:
+    enabled: bool = False
+    organization_id: str | None = None
+    publish_interval_seconds: int = 300
+    status_sync_interval_seconds: int = 900
+    batch_limit: int = 25
+    retry_failed_publish: bool = True
+    run_on_startup: bool = True
+
+    @classmethod
+    def from_env(cls) -> "CanvasMirrorAutomationConfig":
+        organization_id = (os.environ.get("CANVAS_MIRROR_WORKER_ORGANIZATION_ID") or "").strip() or None
+        return cls(
+            enabled=_env_bool("CANVAS_MIRROR_WORKER_ENABLED", False),
+            organization_id=organization_id,
+            publish_interval_seconds=_env_int("CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS", 300),
+            status_sync_interval_seconds=_env_int("CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS", 900),
+            batch_limit=_env_int("CANVAS_MIRROR_WORKER_BATCH_LIMIT", 25),
+            retry_failed_publish=_env_bool("CANVAS_MIRROR_WORKER_RETRY_FAILED", True),
+            run_on_startup=_env_bool("CANVAS_MIRROR_WORKER_RUN_ON_STARTUP", True),
+        )
+
+
+async def run_canvas_mirror_publish_batch(
+    repo: IIssuanceRepository,
+    *,
+    organization_id: str | None = None,
+    limit: int = 25,
+    retry_failed: bool = False,
+) -> CanvasMirrorBatchProcessResponse:
+    statuses = [CredentialDeliveryStatus.PENDING]
+    if retry_failed:
+        statuses.append(CredentialDeliveryStatus.FAILED)
+
+    records = await repo.list_delivery_records(
+        delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+        statuses=statuses,
+        organization_id=organization_id,
+        limit=limit,
+    )
+    processed_records: list[CredentialDeliveryRecordResponse] = []
+    processed_domain_records: list[CredentialDeliveryRecord] = []
+    delivered_count = 0
+    failed_count = 0
+    blocked_count = 0
+
+    for record in records:
+        updated = await _process_canvas_mirror_delivery_record(record, repo)
+        processed_domain_records.append(updated)
+        processed_records.append(_delivery_record_to_protocol(updated))
+        if (updated.metadata or {}).get("canvas_feature_gate_blocked"):
+            blocked_count += 1
+        if updated.status == CredentialDeliveryStatus.DELIVERED:
+            delivered_count += 1
+        elif updated.status == CredentialDeliveryStatus.FAILED:
+            failed_count += 1
+
+    metrics = _canvas_mirror_publish_metrics(
+        processed_count=len(processed_records),
+        delivered_count=delivered_count,
+        failed_count=failed_count,
+        blocked_count=blocked_count,
+    )
+    _log_canvas_mirror_metrics(
+        operation="publish",
+        organization_id=organization_id,
+        metrics=metrics,
+    )
+    await _emit_canvas_mirror_alerts_for_records(
+        repo=repo,
+        organization_id=organization_id,
+        records=[
+            record for record in processed_domain_records
+            if record.status == CredentialDeliveryStatus.FAILED
+        ],
+        alert_type="publish_failure",
+    )
+
+    return CanvasMirrorBatchProcessResponse(
+        organization_id=organization_id,
+        retry_failed=retry_failed,
+        processed_count=len(processed_records),
+        delivered_count=delivered_count,
+        failed_count=failed_count,
+        blocked_count=blocked_count,
+        metrics=metrics,
+        records=processed_records,
+    )
+
+
+async def run_canvas_mirror_status_sync_batch(
+    repo: IIssuanceRepository,
+    *,
+    organization_id: str | None = None,
+    limit: int = 25,
+) -> CanvasMirrorStatusSyncBatchResponse:
+    records = await repo.list_delivery_records(
+        delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+        statuses=[CredentialDeliveryStatus.DELIVERED],
+        organization_id=organization_id,
+    )
+    records_to_process = [
+        record for record in records
+        if _delivery_record_has_status_sync_failure(record)
+    ][:limit]
+
+    processed_records: list[CredentialDeliveryRecordResponse] = []
+    processed_domain_records: list[CredentialDeliveryRecord] = []
+    synced_count = 0
+    failed_count = 0
+    blocked_count = 0
+
+    for record in records_to_process:
+        credential = await repo.get_credential(record.credential_id)
+        if credential is None:
+            now = datetime.now(timezone.utc)
+            lifecycle_action = (record.metadata or {}).get("last_status_sync_action") or "reinstate"
+            record.last_error = f"Issued credential {record.credential_id} was not found for Canvas lifecycle resync"
+            record.metadata = {
+                **_next_canvas_status_sync_metadata(
+                    record,
+                    now,
+                    lifecycle_action=str(lifecycle_action),
+                    credential_status=None,
+                ),
+                "last_status_sync_error": record.last_error,
+                "last_status_sync_error_at": now.isoformat(),
+            }
+            record.updated_at = now
+            await repo.save_delivery_record(record)
+            failed_count += 1
+            processed_domain_records.append(record)
+            processed_records.append(_delivery_record_to_protocol(record))
+            continue
+
+        lifecycle_action = (record.metadata or {}).get("last_status_sync_action") or {
+            CredentialStatus.REVOKED: "revoke",
+            CredentialStatus.SUSPENDED: "suspend",
+            CredentialStatus.ACTIVE: "reinstate",
+        }.get(credential.status, "reinstate")
+        updated = await _sync_canvas_lifecycle_delivery_record(
+            record,
+            credential,
+            repo,
+            lifecycle_action=str(lifecycle_action),
+            reason=credential.revocation_reason,
+        )
+        processed_domain_records.append(updated)
+        processed_records.append(_delivery_record_to_protocol(updated))
+        if (updated.metadata or {}).get("canvas_feature_gate_blocked"):
+            blocked_count += 1
+        if _delivery_record_has_status_sync_failure(updated):
+            failed_count += 1
+        else:
+            synced_count += 1
+
+    metrics = _canvas_mirror_status_sync_metrics(
+        processed_count=len(processed_records),
+        synced_count=synced_count,
+        failed_count=failed_count,
+        blocked_count=blocked_count,
+    )
+    _log_canvas_mirror_metrics(
+        operation="status_sync",
+        organization_id=organization_id,
+        metrics=metrics,
+    )
+    await _emit_canvas_mirror_alerts_for_records(
+        repo=repo,
+        organization_id=organization_id,
+        records=[
+            record for record in processed_domain_records
+            if _delivery_record_has_status_sync_failure(record)
+        ],
+        alert_type="lifecycle_sync_failure",
+    )
+
+    return CanvasMirrorStatusSyncBatchResponse(
+        organization_id=organization_id,
+        processed_count=len(processed_records),
+        synced_count=synced_count,
+        failed_count=failed_count,
+        blocked_count=blocked_count,
+        metrics=metrics,
+        records=processed_records,
+    )
+
+
+async def run_canvas_mirror_automation_cycle(
+    repo: IIssuanceRepository,
+    *,
+    organization_id: str | None = None,
+    limit: int = 25,
+    retry_failed: bool = True,
+) -> CanvasMirrorAutomationCycleResponse:
+    started_at = datetime.now(timezone.utc)
+    publish = await run_canvas_mirror_publish_batch(
+        repo,
+        organization_id=organization_id,
+        limit=limit,
+        retry_failed=retry_failed,
+    )
+    status_sync = await run_canvas_mirror_status_sync_batch(
+        repo,
+        organization_id=organization_id,
+        limit=limit,
+    )
+    completed_at = datetime.now(timezone.utc)
+    metrics = {
+        **{f"publish.{key.removeprefix('publish.')}": value for key, value in publish.metrics.items()},
+        **{f"status_sync.{key.removeprefix('status_sync.')}": value for key, value in status_sync.metrics.items()},
+        "automation.processed": publish.processed_count + status_sync.processed_count,
+        "automation.failed": publish.failed_count + status_sync.failed_count,
+        "automation.blocked": publish.blocked_count + status_sync.blocked_count,
+    }
+    _log_canvas_mirror_metrics(
+        operation="automation_cycle",
+        organization_id=organization_id,
+        metrics=metrics,
+    )
+    return CanvasMirrorAutomationCycleResponse(
+        organization_id=organization_id,
+        retry_failed=retry_failed,
+        publish=publish,
+        status_sync=status_sync,
+        processed_count=publish.processed_count + status_sync.processed_count,
+        failed_count=publish.failed_count + status_sync.failed_count,
+        blocked_count=publish.blocked_count + status_sync.blocked_count,
+        metrics=metrics,
+        started_at=started_at.isoformat(),
+        completed_at=completed_at.isoformat(),
+    )
+
+
+async def run_canvas_mirror_automation_loop(
+    get_repo: Callable[[], IIssuanceRepository],
+    config: CanvasMirrorAutomationConfig,
+) -> None:
+    if not config.enabled:
+        return
+
+    logger.info(
+        "Canvas mirror automation worker enabled: organization_id=%s batch_limit=%s retry_failed=%s",
+        config.organization_id,
+        config.batch_limit,
+        config.retry_failed_publish,
+    )
+    now = time.monotonic()
+    next_publish_at = now if config.run_on_startup else now + config.publish_interval_seconds
+    next_status_sync_at = now if config.run_on_startup else now + config.status_sync_interval_seconds
+
+    while True:
+        current = time.monotonic()
+        if current >= next_publish_at:
+            try:
+                publish = await run_canvas_mirror_publish_batch(
+                    get_repo(),
+                    organization_id=config.organization_id,
+                    limit=config.batch_limit,
+                    retry_failed=config.retry_failed_publish,
+                )
+                if publish.processed_count:
+                    logger.info(
+                        "Canvas mirror publish worker processed=%s delivered=%s failed=%s blocked=%s",
+                        publish.processed_count,
+                        publish.delivered_count,
+                        publish.failed_count,
+                        publish.blocked_count,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Canvas mirror publish worker cycle failed")
+            finally:
+                next_publish_at = time.monotonic() + config.publish_interval_seconds
+
+        current = time.monotonic()
+        if current >= next_status_sync_at:
+            try:
+                status_sync = await run_canvas_mirror_status_sync_batch(
+                    get_repo(),
+                    organization_id=config.organization_id,
+                    limit=config.batch_limit,
+                )
+                if status_sync.processed_count:
+                    logger.info(
+                        "Canvas mirror status-sync worker processed=%s synced=%s failed=%s blocked=%s",
+                        status_sync.processed_count,
+                        status_sync.synced_count,
+                        status_sync.failed_count,
+                        status_sync.blocked_count,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Canvas mirror status-sync worker cycle failed")
+            finally:
+                next_status_sync_at = time.monotonic() + config.status_sync_interval_seconds
+
+        sleep_for = max(1.0, min(next_publish_at, next_status_sync_at) - time.monotonic())
+        await asyncio.sleep(sleep_for)
 
 
 # ============================================================================
@@ -926,6 +2268,10 @@ async def initiate_issuance(
     signing_service_id: str | None = None
     issuer_profile_id = request.issuer_profile_id
     issuer_mode = _normalize_issuer_mode(request.issuer_mode)
+    try:
+        delivery_mode = normalize_delivery_mode(request.delivery_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if http_request is not None:
         issuer_did_override = http_request.headers.get("x-issuer-did")
         signing_service_id = http_request.headers.get("x-signing-service-id")
@@ -941,6 +2287,7 @@ async def initiate_issuance(
         issuer_mode=issuer_mode,
         issuer_did_override=issuer_did_override or None,
         signing_service_id=signing_service_id or None,
+        delivery_mode=delivery_mode,
         claims=merged_claims,
         credential_type=credential_type,
         zk_predicate_claims=zk_predicate_claims,
@@ -1907,6 +3254,16 @@ async def issue_credential(
                 key_reference=signing_key_reference,
             )
 
+        credential_id = f"urn:uuid:{uuid.uuid4()}"
+        revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
+            credential_id=credential_id,
+            credential_format=_credential_format_for_revocation_profile(tx, effective_request_format),
+        )
+        signing_claims = dict(clean_claims)
+        credential_status_claim = _status_list_entries_to_credential_status_claim(status_list_entries)
+        if credential_status_claim:
+            signing_claims["credentialStatus"] = credential_status_claim
+
         logger.info(f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}")
         jwt_credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
             issuer_did=effective_issuer_did,
@@ -1914,17 +3271,19 @@ async def issue_credential(
             remote_sign=_remote_sign,
             subject_id=holder_did or tx.subject_did,
             credential_type=signing_credential_type,
-            claims_json=json.dumps(clean_claims),
+            claims_json=json.dumps(signing_claims),
             expiration_seconds=31536000,  # 1 year
             selective_disclosure_claims=sd_claims,
             algorithm=signing_algorithm,
             signing_key_reference=signing_key_reference,
             verification_method_id=verification_method_id,
             credential_format=effective_request_format,
+            credential_id=credential_id,
         )
 
         # Only update state and emit event on first issuance; allow idempotent
         # wallet retries (wallets sometimes re-request after a network timeout).
+        response_format = effective_request_format or signing_format or "vc+sd-jwt"
         if tx.status == IssuanceStatus.AUTHORIZED:
             # MIP §20.5.2: invalidate nonce immediately upon first use
             tx.nonce = None
@@ -1939,6 +3298,8 @@ async def issue_credential(
                 applicant_id=tx.applicant_id,
                 subject_did=holder_did or tx.subject_did,
                 issuer_did=effective_issuer_did,
+                revocation_profile_id=revocation_profile_id,
+                status_list_entries=status_list_entries,
                 credential_jwt=jwt_credential,
                 credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
                 status=CredentialStatus.ACTIVE,
@@ -1952,6 +3313,16 @@ async def issue_credential(
                 event_type=EventType.CREDENTIAL_ISSUED,
                 metadata={"credential_id": credential_id, "credential_type": credential_type},
             ))
+            await record_post_issuance_deliveries(
+                repo,
+                tx,
+                issued_credential,
+                delivered_target=DeliveryTarget.WALLET,
+                delivery_metadata={
+                    "protocol": "oid4vci",
+                    "requested_format": response_format,
+                },
+            )
 
         logger.info(f"[credential] rid={rid} tx_id={tx.id} issued credential_id={credential_id} cred_type={credential_type}")
         # OID4VCI hybrid response:
@@ -1959,7 +3330,6 @@ async def issue_credential(
         # - "credential" as bare string for Walt.id / Draft-11 clients
         # Use the request format in the response object (not signing_format which may
         # have been normalised from spruce-vc+sd-jwt → vc+sd-jwt for Rust).
-        response_format = effective_request_format or signing_format or "vc+sd-jwt"
         credential_obj = {"format": response_format, "credential": jwt_credential}
         import uuid as _uuid
         notification_id = str(_uuid.uuid4())
@@ -2102,6 +3472,16 @@ async def _didcomm_sign_and_deliver(
             key_reference=signing_key_reference,
         )
 
+    credential_id = f"urn:uuid:{uuid.uuid4()}"
+    revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
+        credential_id=credential_id,
+        credential_format=_credential_format_for_revocation_profile(tx, effective_request_format),
+    )
+    signing_claims = dict(clean_claims)
+    credential_status_claim = _status_list_entries_to_credential_status_claim(status_list_entries)
+    if credential_status_claim:
+        signing_claims["credentialStatus"] = credential_status_claim
+
     logger.info(f"[credential] rid={rid} signing_path=didcomm format={effective_request_format} jwt_typ_will_be={effective_request_format}")
     jwt_credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
         issuer_did=effective_issuer_did_dc,
@@ -2109,13 +3489,14 @@ async def _didcomm_sign_and_deliver(
         remote_sign=_remote_sign,
         subject_id=holder_did,
         credential_type=signing_credential_type,
-        claims_json=json.dumps(clean_claims),
+        claims_json=json.dumps(signing_claims),
         expiration_seconds=31536000,
         selective_disclosure_claims=sd_claims_dc,
         algorithm=signing_algorithm,
         signing_key_reference=signing_key_reference,
         verification_method_id=verification_method_id,
         credential_format=effective_request_format,
+        credential_id=credential_id,
     )
 
     # Step 2: Pack into DIDComm v2 envelope
@@ -2182,6 +3563,8 @@ async def _didcomm_sign_and_deliver(
             applicant_id=tx.applicant_id,
             subject_did=holder_did,
             issuer_did=effective_issuer_did_dc,
+            revocation_profile_id=revocation_profile_id,
+            status_list_entries=status_list_entries,
             credential_jwt=jwt_credential,
             credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
             status=CredentialStatus.ACTIVE,
@@ -2200,6 +3583,17 @@ async def _didcomm_sign_and_deliver(
                 "service_endpoint": service_endpoint,
             },
         ))
+        await record_post_issuance_deliveries(
+            repo,
+            tx,
+            issued_credential,
+            delivered_target=DeliveryTarget.DIDCOMM_V2,
+            delivery_metadata={
+                "protocol": "didcomm_v2",
+                "service_endpoint": service_endpoint,
+                "didcomm_message_id": didcomm_message_id,
+            },
+        )
 
     return DidcommDeliveryResponse(
         transaction_id=tx.id,
@@ -2591,18 +3985,35 @@ async def _delegate_to_revocation_profile(
     credential_id: str,
     action: str,
     reason: str | None = None,
+    credential: IssuedCredential | None = None,
 ) -> dict:
     """Delegate revocation action to RevocationProfile service."""
-    # Call RevocationProfile internal endpoint
+    service_url = (
+        os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or ""
+    ).strip().rstrip("/")
+    if not service_url:
+        raise HTTPException(status_code=503, detail="RevocationProfile service URL is not configured")
+
+    profile_id = (credential.revocation_profile_id if credential else None) or _default_revocation_profile_id()
+    status_list_index = _revocation_index_from_credential(credential) if credential else None
+    if status_list_index is None:
+        raise HTTPException(status_code=503, detail="Credential has no allocated status-list entry")
+
+    status_value = {
+        "revoke": "revoked",
+        "suspend": "suspended",
+        "reinstate": "reinstated",
+    }.get(action, action)
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                f"{REVOCATION_PROFILE_SERVICE_URL}/internal/revocation-profiles/default/process-revocation",
+                f"{service_url}/internal/revocation-profiles/{profile_id}/process-revocation",
                 json={
                     "credential_id": credential_id,
-                    "action": action,
+                    "index": status_list_index,
+                    "status": status_value,
                     "credential_format": "sd_jwt",
-                    "status_list_index": 0,
                     "reason": reason,
                 },
                 timeout=10.0,
@@ -2636,6 +4047,7 @@ async def revoke_credential(
             credential_id=credential_id,
             action="revoke",
             reason=request.reason,
+            credential=cred,
         )
     except HTTPException:
         logger.warning("RevocationProfile service unavailable, using local revocation")
@@ -2646,6 +4058,12 @@ async def revoke_credential(
     cred.revoked_at = cred.status_updated_at
     cred.revocation_reason = request.reason
     await repo.save_credential(cred)
+    await _sync_canvas_lifecycle_delivery_records(
+        cred,
+        repo,
+        lifecycle_action="revoke",
+        reason=request.reason,
+    )
     
     logger.info(f"Revoked credential {credential_id}: {request.reason}")
     
@@ -2676,6 +4094,7 @@ async def suspend_credential(
             credential_id=credential_id,
             action="suspend",
             reason=request.reason,
+            credential=cred,
         )
     except HTTPException:
         logger.warning("RevocationProfile service unavailable, using local suspension")
@@ -2683,6 +4102,12 @@ async def suspend_credential(
     cred.status = CredentialStatus.SUSPENDED
     cred.status_updated_at = datetime.now(timezone.utc)
     await repo.save_credential(cred)
+    await _sync_canvas_lifecycle_delivery_records(
+        cred,
+        repo,
+        lifecycle_action="suspend",
+        reason=request.reason,
+    )
     
     logger.info(f"Suspended credential {credential_id}: {request.reason}")
     
@@ -2716,6 +4141,7 @@ async def reinstate_credential(
             credential_id=credential_id,
             action="reinstate",
             reason=request.reason,
+            credential=cred,
         )
     except HTTPException:
         logger.warning("RevocationProfile service unavailable, using local reinstatement")
@@ -2723,6 +4149,12 @@ async def reinstate_credential(
     cred.status = CredentialStatus.ACTIVE
     cred.status_updated_at = datetime.now(timezone.utc)
     await repo.save_credential(cred)
+    await _sync_canvas_lifecycle_delivery_records(
+        cred,
+        repo,
+        lifecycle_action="reinstate",
+        reason=request.reason,
+    )
     
     logger.info(f"Reinstated credential {credential_id}: {request.reason}")
     
@@ -2801,6 +4233,246 @@ async def get_issued_credential(
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
     return await _issued_credential_to_protocol(cred, repo)
+
+
+@issued_credential_router.post(
+    "/{credential_id}/deliveries/canvas-credentials/publish",
+    response_model=CredentialDeliveryRecordResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def publish_issued_credential_canvas_mirror(
+    credential_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> CredentialDeliveryRecordResponse:
+    cred = await repo.get_credential(credential_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+
+    tx = await repo.get_transaction(cred.transaction_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Issuance transaction not found for credential")
+
+    delivery_records = await repo.list_delivery_records_for_credential(cred.id)
+    canvas_record = next(
+        (record for record in delivery_records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS),
+        None,
+    )
+    if canvas_record is None:
+        raise HTTPException(status_code=409, detail="No Canvas mirror delivery record exists for this credential")
+    canvas_record = await _process_canvas_mirror_delivery_record(
+        canvas_record,
+        repo,
+        credential=cred,
+        transaction=tx,
+    )
+    if canvas_record.status != CredentialDeliveryStatus.DELIVERED:
+        raise HTTPException(
+            status_code=_canvas_delivery_failure_status_code(canvas_record.last_error),
+            detail=canvas_record.last_error or "Canvas Credentials publish failed",
+        )
+    return _delivery_record_to_protocol(canvas_record)
+
+
+@issuance_router.post(
+    "/delivery-records/canvas-credentials/process-pending",
+    response_model=CanvasMirrorBatchProcessResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def process_pending_canvas_mirror_deliveries(
+    organization_id: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=200),
+    retry_failed: bool = Query(False),
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasMirrorBatchProcessResponse:
+    return await run_canvas_mirror_publish_batch(
+        repo,
+        organization_id=organization_id,
+        limit=limit,
+        retry_failed=retry_failed,
+    )
+
+
+@issuance_router.post(
+    "/delivery-records/canvas-credentials/process-status-sync-failures",
+    response_model=CanvasMirrorStatusSyncBatchResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def process_failed_canvas_mirror_status_syncs(
+    organization_id: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=200),
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasMirrorStatusSyncBatchResponse:
+    return await run_canvas_mirror_status_sync_batch(
+        repo,
+        organization_id=organization_id,
+        limit=limit,
+    )
+
+
+@issuance_router.post(
+    "/delivery-records/canvas-credentials/run-automation-cycle",
+    response_model=CanvasMirrorAutomationCycleResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def run_canvas_mirror_automation_cycle_endpoint(
+    organization_id: str | None = Query(None),
+    limit: int = Query(25, ge=1, le=200),
+    retry_failed: bool = Query(True),
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasMirrorAutomationCycleResponse:
+    return await run_canvas_mirror_automation_cycle(
+        repo,
+        organization_id=organization_id,
+        limit=limit,
+        retry_failed=retry_failed,
+    )
+
+
+@issuance_router.get(
+    "/organizations/{organization_id}/canvas-mirror-health",
+    response_model=CanvasMirrorHealthResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def get_canvas_mirror_health(
+    organization_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasMirrorHealthResponse:
+    records = await repo.list_delivery_records(
+        delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+        organization_id=organization_id,
+    )
+
+    pending_publish_count = sum(1 for record in records if record.status == CredentialDeliveryStatus.PENDING)
+    failed_publish_records = [record for record in records if record.status == CredentialDeliveryStatus.FAILED]
+    failed_publish_count = len(failed_publish_records)
+    delivered_records = [record for record in records if record.status == CredentialDeliveryStatus.DELIVERED]
+    blocked_records = [
+        record for record in records
+        if (record.metadata or {}).get("canvas_feature_gate_blocked")
+    ]
+    lifecycle_sync_failed_records = [
+        record for record in delivered_records
+        if _delivery_record_has_status_sync_failure(record)
+    ]
+    lifecycle_sync_ok_records = [
+        record for record in delivered_records
+        if not _delivery_record_has_status_sync_failure(record)
+    ]
+    warning_threshold = _env_int("CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS", 3)
+    critical_threshold = max(
+        warning_threshold,
+        _env_int("CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS", 5),
+    )
+    publish_failure_alerts = [
+        alert
+        for record in failed_publish_records
+        if (alert := _canvas_mirror_alert_for_record(
+            record,
+            alert_type="publish_failure",
+            attempt_key="publish_attempts",
+            error_at_key="last_error_at",
+            warning_threshold=warning_threshold,
+            critical_threshold=critical_threshold,
+        )) is not None
+    ]
+    lifecycle_sync_alerts = [
+        alert
+        for record in lifecycle_sync_failed_records
+        if (alert := _canvas_mirror_alert_for_record(
+            record,
+            alert_type="lifecycle_sync_failure",
+            attempt_key="status_sync_attempts",
+            error_at_key="last_status_sync_error_at",
+            warning_threshold=warning_threshold,
+            critical_threshold=critical_threshold,
+        )) is not None
+    ]
+    alerts = sorted(
+        [*publish_failure_alerts, *lifecycle_sync_alerts],
+        key=lambda alert: (
+            0 if alert.severity == "critical" else 1,
+            -alert.attempt_count,
+            alert.delivery_record_id,
+        ),
+    )
+    critical_alert_count = sum(1 for alert in alerts if alert.severity == "critical")
+    warning_alert_count = sum(1 for alert in alerts if alert.severity == "warning")
+    publish_attempts = [
+        _metadata_int(record.metadata, "publish_attempts")
+        for record in failed_publish_records
+    ]
+    status_sync_attempts = [
+        _metadata_int(record.metadata, "status_sync_attempts")
+        for record in lifecycle_sync_failed_records
+    ]
+
+    return CanvasMirrorHealthResponse(
+        organization_id=organization_id,
+        pending_publish_count=pending_publish_count,
+        failed_publish_count=failed_publish_count,
+        delivered_count=len(delivered_records),
+        lifecycle_sync_failed_count=len(lifecycle_sync_failed_records),
+        lifecycle_sync_ok_count=len(lifecycle_sync_ok_records),
+        repeated_publish_failure_count=len(publish_failure_alerts),
+        repeated_lifecycle_sync_failure_count=len(lifecycle_sync_alerts),
+        warning_alert_count=warning_alert_count,
+        critical_alert_count=critical_alert_count,
+        alert_count=len(alerts),
+        alert_thresholds={
+            "warning_attempts": warning_threshold,
+            "critical_attempts": critical_threshold,
+        },
+        metrics={
+            "publish.pending": pending_publish_count,
+            "publish.failed": failed_publish_count,
+            "publish.delivered": len(delivered_records),
+            "publish.blocked": len(blocked_records),
+            "status_sync.retry_pending": len(lifecycle_sync_failed_records),
+            "status_sync.ok": len(lifecycle_sync_ok_records),
+            "publish_failure_attempts_total": sum(publish_attempts),
+            "status_sync_failure_attempts_total": sum(status_sync_attempts),
+            "max_publish_failure_attempts": max(publish_attempts, default=0),
+            "max_status_sync_failure_attempts": max(status_sync_attempts, default=0),
+            "repeated_publish_failure_count": len(publish_failure_alerts),
+            "repeated_lifecycle_sync_failure_count": len(lifecycle_sync_alerts),
+        },
+        alerts=alerts,
+        last_successful_publish_at=_max_iso_datetime([
+            (record.metadata or {}).get("published_at")
+            for record in delivered_records
+        ]),
+        last_lifecycle_sync_failure_at=_max_iso_datetime([
+            (record.metadata or {}).get("last_status_sync_error_at")
+            for record in lifecycle_sync_failed_records
+        ]),
+        last_lifecycle_sync_success_at=_max_iso_datetime([
+            (record.metadata or {}).get("status_synced_at")
+            for record in lifecycle_sync_ok_records
+        ]),
+    )
+
+
+@issuance_router.get(
+    "/delivery-records/canvas-credentials/provenance",
+    response_model=CanvasMirrorProvenanceResponse,
+)
+async def get_canvas_mirror_provenance(
+    delivery_record_id: str | None = None,
+    external_credential_id: str | None = None,
+    credential_id: str | None = None,
+    canvas_account_id: str | None = None,
+    organization_id: str | None = None,
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasMirrorProvenanceResponse:
+    record = await _resolve_canvas_mirror_delivery_record(
+        repo=repo,
+        delivery_record_id=delivery_record_id,
+        external_credential_id=external_credential_id,
+        credential_id=credential_id,
+        canvas_account_id=canvas_account_id,
+        organization_id=organization_id,
+    )
+    return await _canvas_mirror_provenance_to_protocol(record, repo)
 
 
 @issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])

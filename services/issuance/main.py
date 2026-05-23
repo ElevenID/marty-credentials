@@ -1,10 +1,11 @@
 """Main FastAPI application for issuance service."""
 
+import asyncio
 import logging
 import os
 import re
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import Any, AsyncGenerator
 
@@ -184,7 +185,12 @@ from issuance.infrastructure.api.application_routes import (
     application_router,
     application_template_router,
 )
-from issuance.infrastructure.api.routes import issuance_router, issued_credential_router
+from issuance.infrastructure.api.routes import (
+    CanvasMirrorAutomationConfig,
+    issuance_router,
+    issued_credential_router,
+    run_canvas_mirror_automation_loop,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -253,15 +259,28 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         grpc_server.add_insecure_port(f"[::]:{ISSUANCE_GRPC_PORT}")
         await grpc_server.start()
         logger.info(f"gRPC server started on port {ISSUANCE_GRPC_PORT}")
-    
-    yield
-    
-    logger.info(f"Shutting down {SERVICE_NAME}...")
-    if grpc_server:
-        await grpc_server.stop(grace=5)
-        logger.info("gRPC server stopped")
-    configure_issuer_key_store(None)
-    await engine.dispose()
+
+    canvas_mirror_worker_task: asyncio.Task | None = None
+    canvas_mirror_worker_config = CanvasMirrorAutomationConfig.from_env()
+    if canvas_mirror_worker_config.enabled:
+        canvas_mirror_worker_task = asyncio.create_task(
+            run_canvas_mirror_automation_loop(get_repo, canvas_mirror_worker_config)
+        )
+
+    try:
+        yield
+    finally:
+        logger.info(f"Shutting down {SERVICE_NAME}...")
+        if canvas_mirror_worker_task:
+            canvas_mirror_worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await canvas_mirror_worker_task
+            logger.info("Canvas mirror automation worker stopped")
+        if grpc_server:
+            await grpc_server.stop(grace=5)
+            logger.info("gRPC server stopped")
+        configure_issuer_key_store(None)
+        await engine.dispose()
 
 
 def create_app() -> FastAPI:

@@ -13,6 +13,7 @@ Tests for the issuance service changes:
 
 import hashlib
 import json
+import logging
 import types
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -41,7 +42,11 @@ for _path in (_SERVICES, _PYTHON):
 
 # ---- Domain imports -------------------------------------------------------
 from issuance.domain.entities import (
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
     CredentialStatus,
+    DeliveryTarget,
+    EventType,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
@@ -88,6 +93,79 @@ def _make_credential(**overrides) -> IssuedCredential:
     )
     defaults.update(overrides)
     return IssuedCredential(**defaults)
+
+
+def _make_delivery_record(**overrides) -> CredentialDeliveryRecord:
+    defaults = dict(
+        id="delivery-001",
+        credential_id="cred-001",
+        transaction_id="tx-001",
+        organization_id="org-1",
+        delivery_target=DeliveryTarget.WALLET,
+        delivery_mode="wallet_only",
+        status=CredentialDeliveryStatus.DELIVERED,
+        metadata={"protocol": "oid4vci"},
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    defaults.update(overrides)
+    return CredentialDeliveryRecord(**defaults)
+
+
+async def _save_canvas_program_target(
+    repo,
+    *,
+    platform_id: str = "platform-1",
+    binding_id: str = "binding-1",
+    organization_id: str = "org-1",
+    canvas_account_id: str = "canvas-account-1",
+    credential_template_id: str = "tmpl-1",
+    application_template_id: str = "tmpl-app",
+    canvas_base_url: str = "https://canvas.example.test",
+    platform_enabled: bool = True,
+    binding_enabled: bool = True,
+    canvas_credentials: dict | None = None,
+):
+    from issuance.domain.entities import CanvasPlatform, CanvasProgramBinding
+
+    platform = CanvasPlatform(
+        id=platform_id,
+        organization_id=organization_id,
+        canvas_account_id=canvas_account_id,
+        canvas_base_url=canvas_base_url,
+        enabled=platform_enabled,
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    binding = CanvasProgramBinding(
+        id=binding_id,
+        organization_id=organization_id,
+        platform_id=platform.id,
+        application_template_id=application_template_id,
+        credential_template_id=credential_template_id,
+        delivery_mode="wallet_plus_canvas_mirror",
+        canvas_credentials=canvas_credentials or {},
+        enabled=binding_enabled,
+        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    await repo.save_canvas_platform(platform)
+    await repo.save_canvas_program_binding(binding)
+    return platform, binding
+
+
+def _canvas_binding_metadata(
+    *,
+    platform_id: str = "platform-1",
+    binding_id: str = "binding-1",
+    **extra,
+) -> dict[str, object]:
+    return {
+        "queue": "canvas_credentials_mirror",
+        "canvas_platform_id": platform_id,
+        "canvas_program_binding_id": binding_id,
+        **extra,
+    }
 
 
 class _TestableRepo(InMemoryIssuanceRepository):
@@ -462,6 +540,43 @@ class TestIssuedCredentialToProtocol:
         assert result.credential_format == "SD_JWT_VC"
         assert result.flow_execution_id == "tx-proto"
         assert result.valid_until == "2027-03-15T00:00:00+00:00"
+        assert result.deliveries == []
+
+    async def test_includes_delivery_records(self, repo):
+        from issuance.infrastructure.api.routes import _issued_credential_to_protocol
+
+        tx = _make_transaction(id="tx-delivery", status=IssuanceStatus.ISSUED)
+        tx.complete()
+        cred = _make_credential(transaction_id="tx-delivery")
+        await repo.save_transaction(tx)
+        await repo.save_delivery_record(
+            _make_delivery_record(
+                credential_id=cred.id,
+                transaction_id="tx-delivery",
+                delivery_target=DeliveryTarget.WALLET,
+                status=CredentialDeliveryStatus.DELIVERED,
+            )
+        )
+        await repo.save_delivery_record(
+            _make_delivery_record(
+                id="delivery-002",
+                credential_id=cred.id,
+                transaction_id="tx-delivery",
+                delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+                delivery_mode="wallet_plus_canvas_mirror",
+                status=CredentialDeliveryStatus.PENDING,
+                canvas_account_id="canvas-account-1",
+                metadata={"queue": "canvas_credentials_mirror"},
+            )
+        )
+
+        result = await _issued_credential_to_protocol(cred, repo)
+
+        assert [delivery.delivery_target for delivery in result.deliveries] == [
+            "wallet",
+            "canvas_credentials",
+        ]
+        assert result.deliveries[1].status == "pending"
 
     async def test_expired_credential(self, repo):
         from issuance.infrastructure.api.routes import _issued_credential_to_protocol
@@ -482,6 +597,33 @@ class TestIssuedCredentialToProtocol:
         result = await _issued_credential_to_protocol(cred, repo)
         assert result.credential_type == "unknown"
         assert result.credential_format == "SD_JWT_VC"
+
+    async def test_includes_revocation_profile_and_status_list_entries(self, repo):
+        from issuance.infrastructure.api.routes import _issued_credential_to_protocol
+
+        tx = _make_transaction(id="tx-status-list", status=IssuanceStatus.ISSUED)
+        tx.complete()
+        cred = _make_credential(
+            transaction_id="tx-status-list",
+            revocation_profile_id="rev-prof-1",
+            status_list_entries=[
+                {
+                    "status_list_id": "rev-prof-1",
+                    "index": 42,
+                    "status_list_uri": "https://beta.elevenidllc.com/v1/status-list",
+                    "type": "BitstringStatusListEntry",
+                    "status_purpose": "revocation",
+                }
+            ],
+        )
+        await repo.save_transaction(tx)
+
+        result = await _issued_credential_to_protocol(cred, repo)
+
+        assert result.revocation_profile_id == "rev-prof-1"
+        assert len(result.status_list_entries) == 1
+        assert result.status_list_entries[0].index == 42
+        assert result.status_list_entries[0].status_purpose == "revocation"
 
 
 # ============================================================================
@@ -533,8 +675,1304 @@ class TestIssuedCredentialRecordResponse:
             created_at="2026-03-15T00:00:00+00:00",
         )
         assert record.status_list_entries == []
+        assert record.deliveries == []
         assert record.credential_hash is None
         assert record.revoked_at is None
+
+
+class TestDeliveryRecords:
+    async def test_in_memory_repo_round_trips_delivery_records(self, repo):
+        delivery = _make_delivery_record(
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            canvas_account_id="canvas-account-1",
+            external_credential_id="canvas-cred-1",
+        )
+
+        await repo.save_delivery_record(delivery)
+        result = await repo.list_delivery_records_for_credential("cred-001")
+        by_id = await repo.get_delivery_record(delivery.id)
+        by_external_id = await repo.get_canvas_delivery_record_by_external_credential_id(
+            "canvas-cred-1",
+            canvas_account_id="canvas-account-1",
+        )
+
+        assert len(result) == 1
+        assert result[0].delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        assert result[0].status == CredentialDeliveryStatus.DELIVERED
+        assert by_id is not None
+        assert by_id.id == delivery.id
+        assert by_external_id is not None
+        assert by_external_id.id == delivery.id
+
+    async def test_post_issuance_records_wallet_and_pending_canvas_mirror(self, repo):
+        from issuance.domain.entities import Application, ApplicationStatus
+        from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
+
+        app = Application(
+            id="app-1",
+            organization_id="org-1",
+            application_template_id="tmpl-app",
+            applicant_identifier="applicant-1",
+            status=ApplicationStatus.APPROVED,
+            integration_context={
+                "canvas": {
+                    "canvas_platform_id": "platform-1",
+                    "canvas_program_binding_id": "binding-1",
+                }
+            },
+        )
+        await repo.save_application(app)
+        await _save_canvas_program_target(repo)
+        tx = _make_transaction(
+            id="tx-canvas-delivery",
+            application_id="app-1",
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-canvas", transaction_id="tx-canvas-delivery")
+
+        records = await record_post_issuance_deliveries(
+            repo,
+            tx,
+            cred,
+            delivered_target=DeliveryTarget.WALLET,
+            delivery_metadata={"protocol": "oid4vci"},
+        )
+
+        assert [record.delivery_target for record in records] == [
+            DeliveryTarget.WALLET,
+            DeliveryTarget.CANVAS_CREDENTIALS,
+        ]
+        assert records[0].status == CredentialDeliveryStatus.DELIVERED
+        assert records[1].status == CredentialDeliveryStatus.PENDING
+        assert records[1].canvas_account_id == "canvas-account-1"
+        assert records[1].metadata["canvas_platform_id"] == "platform-1"
+        assert records[1].metadata["canvas_program_binding_id"] == "binding-1"
+        assert records[1].metadata["delivery_destination_id"] == "dd-canvas-credentials-institutional"
+        assert records[1].metadata["delivery_destination_mode"] == "organization_mirror"
+
+    async def test_post_issuance_copies_binding_canvas_credentials_config(self, repo):
+        from issuance.domain.entities import Application, ApplicationStatus
+        from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
+
+        app = Application(
+            id="app-canvas-provider-config",
+            organization_id="org-1",
+            application_template_id="tmpl-app",
+            applicant_identifier="applicant-1",
+            status=ApplicationStatus.APPROVED,
+            integration_context={
+                "canvas": {
+                    "canvas_platform_id": "platform-1",
+                    "canvas_program_binding_id": "binding-1",
+                }
+            },
+        )
+        await repo.save_application(app)
+        await _save_canvas_program_target(
+            repo,
+            canvas_credentials={
+                "provider": "badgr_api",
+                "api_base_url": "https://api.canvascredentials.example",
+                "issuer_id": "issuer-1",
+                "badgeclass_id": "badgeclass-1",
+                "api_token_env": "CANVAS_CREDENTIALS_TOKEN_ORG_1",
+            },
+        )
+        tx = _make_transaction(
+            id="tx-canvas-provider-config",
+            application_id=app.id,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-canvas-provider-config", transaction_id=tx.id)
+
+        records = await record_post_issuance_deliveries(
+            repo,
+            tx,
+            cred,
+            delivered_target=DeliveryTarget.WALLET,
+        )
+
+        canvas_record = records[1]
+        assert canvas_record.status == CredentialDeliveryStatus.PENDING
+        assert canvas_record.metadata["canvas_credentials"] == {
+            "provider": "badgr_api",
+            "api_base_url": "https://api.canvascredentials.example",
+            "issuer_id": "issuer-1",
+            "badgeclass_id": "badgeclass-1",
+            "api_token_env": "CANVAS_CREDENTIALS_TOKEN_ORG_1",
+        }
+
+    async def test_post_issuance_blocks_canvas_mirror_when_profile_disables_publish(self, repo):
+        from issuance.domain.entities import Application, ApplicationStatus
+        from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
+
+        app = Application(
+            id="app-profile-blocked",
+            organization_id="org-1",
+            application_template_id="tmpl-app",
+            applicant_identifier="applicant-1",
+            status=ApplicationStatus.APPROVED,
+            integration_context={
+                "canvas": {
+                    "canvas_platform_id": "platform-1",
+                    "canvas_program_binding_id": "binding-1",
+                    "deployment_profile_id": "deployment-profile-1",
+                    "feature_flags": {
+                        "enable_canvas_mirror_publish": False,
+                        "enable_canvas_mirror_ops": True,
+                    },
+                    "delivery_mode": "wallet_plus_canvas_mirror",
+                }
+            },
+        )
+        await repo.save_application(app)
+        await _save_canvas_program_target(repo)
+        tx = _make_transaction(
+            id="tx-profile-blocked",
+            application_id=app.id,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-profile-blocked", transaction_id=tx.id)
+
+        records = await record_post_issuance_deliveries(
+            repo,
+            tx,
+            cred,
+            delivered_target=DeliveryTarget.WALLET,
+        )
+
+        canvas_record = records[1]
+        assert canvas_record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        assert canvas_record.status == CredentialDeliveryStatus.FAILED
+        assert canvas_record.last_error == "Canvas mirror publish is disabled by deployment profile"
+        assert canvas_record.metadata["deployment_profile_id"] == "deployment-profile-1"
+        assert canvas_record.metadata["canvas_program_binding_id"] == "binding-1"
+        assert canvas_record.metadata["canvas_feature_flags"]["enable_canvas_mirror_publish"] is False
+        assert canvas_record.metadata["canvas_feature_gate_blocked"] is True
+
+    async def test_post_issuance_records_failed_canvas_mirror_when_binding_missing(self, repo):
+        from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
+
+        tx = _make_transaction(
+            id="tx-mirror-missing",
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-mirror-missing", transaction_id="tx-mirror-missing")
+
+        records = await record_post_issuance_deliveries(
+            repo,
+            tx,
+            cred,
+            delivered_target=DeliveryTarget.WALLET,
+        )
+
+        assert records[1].delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        assert records[1].status == CredentialDeliveryStatus.FAILED
+        assert "canvas_program_binding_id" in (records[1].last_error or "")
+
+
+class TestCanvasMirrorPublishing:
+    async def test_publish_canvas_mirror_marks_pending_record_delivered(self, repo, monkeypatch):
+        import httpx
+
+        from issuance.infrastructure.adapters import canvas_credentials_adapter
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(
+            id="tx-canvas-publish",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-canvas-publish", transaction_id=tx.id)
+        platform, _binding = await _save_canvas_program_target(repo)
+        pending = _make_delivery_record(
+            id="delivery-canvas-publish",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.PENDING,
+            canvas_account_id=platform.canvas_account_id,
+            metadata=_canvas_binding_metadata(),
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(pending)
+
+        monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.example.test/api/publish")
+        monkeypatch.setenv("CANVAS_CREDENTIALS_ISSUER_ID", "issuer-elevenid")
+        monkeypatch.setenv("CANVAS_CREDENTIALS_API_TOKEN", "test-token")
+
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 201
+            headers = {"x-request-id": "req-123"}
+            text = '{"id":"canvas-cred-42","issuer_id":"issuer-elevenid"}'
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "id": "canvas-cred-42",
+                    "issuer_id": "issuer-elevenid",
+                    "status": "published",
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                captured["timeout"] = kwargs.get("timeout")
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json=None, headers=None):
+                captured["url"] = url
+                captured["json"] = json
+                captured["headers"] = headers
+                return FakeResponse()
+
+        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", FakeClient)
+
+        response = await routes.publish_issued_credential_canvas_mirror(cred.id, repo)
+        records = await repo.list_delivery_records_for_credential(cred.id)
+        canvas_record = next(
+            record for record in records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        )
+
+        assert response.status == "delivered"
+        assert canvas_record.status == CredentialDeliveryStatus.DELIVERED
+        assert canvas_record.external_credential_id == "canvas-cred-42"
+        assert canvas_record.external_issuer_id == "issuer-elevenid"
+        assert canvas_record.metadata["publish_attempts"] == 1
+        assert canvas_record.metadata["request_id"] == "req-123"
+        assert captured["url"] == "https://canvas.example.test/api/publish"
+        assert captured["headers"] == {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer test-token",
+        }
+        assert captured["json"]["issuer_id"] == "issuer-elevenid"
+        assert captured["json"]["credential"]["id"] == cred.id
+        assert captured["json"]["canvas_account_id"] == "canvas-account-1"
+
+    async def test_publish_canvas_mirror_persists_failure_and_raises(self, repo, monkeypatch):
+        import httpx
+
+        from fastapi import HTTPException
+
+        from issuance.infrastructure.adapters import canvas_credentials_adapter
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(
+            id="tx-canvas-failure",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-canvas-failure", transaction_id=tx.id)
+        platform, _binding = await _save_canvas_program_target(repo)
+        pending = _make_delivery_record(
+            id="delivery-canvas-failure",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.PENDING,
+            canvas_account_id=platform.canvas_account_id,
+            metadata=_canvas_binding_metadata(),
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(pending)
+
+        monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.example.test/api/publish")
+
+        class FailingClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json=None, headers=None):
+                request = httpx.Request("POST", url)
+                raise httpx.RequestError("network down", request=request)
+
+        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", lambda *args, **kwargs: FailingClient())
+
+        with pytest.raises(HTTPException) as excinfo:
+            await routes.publish_issued_credential_canvas_mirror(cred.id, repo)
+
+        records = await repo.list_delivery_records_for_credential(cred.id)
+        canvas_record = next(
+            record for record in records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        )
+
+        assert excinfo.value.status_code == 502
+        assert "Canvas Credentials publish request failed" in str(excinfo.value.detail)
+        assert canvas_record.status == CredentialDeliveryStatus.FAILED
+        assert "network down" in (canvas_record.last_error or "")
+        assert canvas_record.metadata["publish_attempts"] == 1
+
+    async def test_publish_canvas_mirror_is_idempotent_when_already_delivered(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(
+            id="tx-canvas-existing",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-canvas-existing", transaction_id=tx.id)
+        delivered = _make_delivery_record(
+            id="delivery-canvas-existing",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id="canvas-account-1",
+            external_credential_id="canvas-cred-existing",
+            external_issuer_id="issuer-elevenid",
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(delivered)
+
+        async def unexpected_publish(*args, **kwargs):
+            raise AssertionError("publish should not be called for delivered records")
+
+        monkeypatch.setattr(routes, "publish_canvas_credential_mirror", unexpected_publish)
+
+        response = await routes.publish_issued_credential_canvas_mirror(cred.id, repo)
+
+        assert response.status == "delivered"
+        assert response.external_credential_id == "canvas-cred-existing"
+
+    async def test_canvas_mirror_provenance_resolves_canonical_issuance(self, repo):
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(
+            id="tx-canvas-provenance",
+            status=IssuanceStatus.ISSUED,
+            application_id="app-canvas-provenance",
+            delivery_mode="wallet_plus_canvas_mirror",
+            issuer_profile_id="issuer-profile-1",
+            issuer_mode="org_managed",
+            issuer_did_override="did:web:issuer.example",
+        )
+        tx.complete()
+        cred = _make_credential(
+            id="cred-canvas-provenance",
+            transaction_id=tx.id,
+            issuer_did="did:web:issuer.example",
+        )
+        delivered = _make_delivery_record(
+            id="delivery-canvas-provenance",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id="canvas-account-1",
+            external_credential_id="canvas-cred-provenance",
+            external_issuer_id="canvas-issuer-1",
+            metadata={
+                "published_at": "2026-03-01T12:00:00+00:00",
+                "request_id": "req-provenance",
+                "private_note": "not returned",
+            },
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(delivered)
+
+        response = await routes.get_canvas_mirror_provenance(
+            external_credential_id="canvas-cred-provenance",
+            canvas_account_id="canvas-account-1",
+            repo=repo,
+        )
+
+        assert response.delivery_record_id == delivered.id
+        assert response.mirror["external_credential_id"] == "canvas-cred-provenance"
+        assert response.mirror["metadata"] == {
+            "published_at": "2026-03-01T12:00:00+00:00",
+            "request_id": "req-provenance",
+        }
+        assert response.canonical_credential["credential_id"] == cred.id
+        assert response.canonical_credential["credential_status"] == "ACTIVE"
+        assert response.canonical_credential["subject_id_hash"] == hashlib.sha256(
+            "did:key:z6Mk_subject".encode("utf-8")
+        ).hexdigest()
+        assert "subject_id" not in response.canonical_credential
+        assert response.canonical_issuance["application_id"] == "app-canvas-provenance"
+        assert response.issuer["issuer_did"] == "did:web:issuer.example"
+        assert response.trust_basis["canonical_issuance_backed"] is True
+        assert response.trust_basis["distribution_channel"] == "canvas_credentials"
+        assert response.delivery_record.external_credential_id == "canvas-cred-provenance"
+
+
+class TestCanvasMirrorBatchProcessing:
+    async def test_batch_processor_processes_pending_records_with_limit(self, repo, monkeypatch):
+        from issuance.infrastructure.adapters import canvas_credentials_adapter
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+
+        tx_one = _make_transaction(
+            id="tx-batch-one",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        tx_two = _make_transaction(
+            id="tx-batch-two",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred_one = _make_credential(id="cred-batch-one", transaction_id=tx_one.id)
+        cred_two = _make_credential(id="cred-batch-two", transaction_id=tx_two.id)
+        record_one = _make_delivery_record(
+            id="delivery-batch-one",
+            credential_id=cred_one.id,
+            transaction_id=tx_one.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.PENDING,
+            canvas_account_id=platform.canvas_account_id,
+            metadata=_canvas_binding_metadata(binding_id=binding.id, platform_id=platform.id),
+        )
+        record_two = _make_delivery_record(
+            id="delivery-batch-two",
+            credential_id=cred_two.id,
+            transaction_id=tx_two.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.PENDING,
+            canvas_account_id=platform.canvas_account_id,
+            metadata=_canvas_binding_metadata(binding_id=binding.id, platform_id=platform.id),
+        )
+        await repo.save_transaction(tx_one)
+        await repo.save_transaction(tx_two)
+        await repo.save_credential(cred_one)
+        await repo.save_credential(cred_two)
+        await repo.save_delivery_record(record_one)
+        await repo.save_delivery_record(record_two)
+
+        monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.example.test/api/publish")
+
+        published_ids: list[str] = []
+
+        class FakeResponse:
+            status_code = 201
+            headers = {}
+            text = "{}"
+
+            def __init__(self, credential_id: str):
+                self._credential_id = credential_id
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": f"mirror-{self._credential_id}", "issuer_id": "issuer-elevenid"}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json=None, headers=None):
+                credential_id = json["credential"]["id"]
+                published_ids.append(credential_id)
+                return FakeResponse(credential_id)
+
+        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+
+        response = await routes.process_pending_canvas_mirror_deliveries(
+            organization_id="org-1",
+            limit=1,
+            retry_failed=False,
+            repo=repo,
+        )
+
+        records_one = await repo.list_delivery_records_for_credential(cred_one.id)
+        records_two = await repo.list_delivery_records_for_credential(cred_two.id)
+
+        assert response.processed_count == 1
+        assert response.delivered_count == 1
+        assert response.failed_count == 0
+        assert response.metrics["publish.delivered"] == 1
+        assert response.metrics["publish.failed"] == 0
+        assert published_ids == ["cred-batch-one"]
+        assert records_one[0].status == CredentialDeliveryStatus.DELIVERED
+        assert records_two[0].status == CredentialDeliveryStatus.PENDING
+
+    async def test_batch_processor_retries_failed_records_when_requested(self, repo, monkeypatch):
+        from issuance.infrastructure.adapters import canvas_credentials_adapter
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+        tx = _make_transaction(
+            id="tx-batch-retry",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-batch-retry", transaction_id=tx.id)
+        failed_record = _make_delivery_record(
+            id="delivery-batch-retry",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.FAILED,
+            canvas_account_id=platform.canvas_account_id,
+            last_error="previous publish failure",
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                publish_attempts=1,
+            ),
+        )
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(failed_record)
+
+        monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.example.test/api/publish")
+
+        class FakeResponse:
+            status_code = 201
+            headers = {}
+            text = "{}"
+
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"id": "mirror-cred-batch-retry", "issuer_id": "issuer-elevenid"}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, json=None, headers=None):
+                return FakeResponse()
+
+        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+
+        response = await routes.process_pending_canvas_mirror_deliveries(
+            organization_id="org-1",
+            limit=10,
+            retry_failed=True,
+            repo=repo,
+        )
+
+        records = await repo.list_delivery_records_for_credential(cred.id)
+        retried_record = next(
+            record for record in records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        )
+
+        assert response.processed_count == 1
+        assert response.delivered_count == 1
+        assert response.failed_count == 0
+        assert response.metrics["publish.delivered"] == 1
+        assert retried_record.status == CredentialDeliveryStatus.DELIVERED
+        assert retried_record.external_credential_id == "mirror-cred-batch-retry"
+        assert retried_record.metadata["publish_attempts"] == 2
+
+    async def test_batch_processor_emits_alert_event_metrics_and_webhook_for_critical_publish_failure(self, repo, monkeypatch, caplog):
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+        tx = _make_transaction(
+            id="tx-batch-critical-alert",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-batch-critical-alert", transaction_id=tx.id)
+        failed_record = _make_delivery_record(
+            id="delivery-batch-critical-alert",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.FAILED,
+            canvas_account_id=platform.canvas_account_id,
+            last_error="previous publish failure",
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                publish_attempts=4,
+            ),
+        )
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(failed_record)
+
+        async def failing_publish(*args, **kwargs):
+            raise RuntimeError("Canvas publish still unavailable")
+
+        webhook_payloads = []
+
+        async def fake_webhook(**kwargs):
+            webhook_payloads.append(kwargs)
+
+        monkeypatch.setattr(routes, "publish_canvas_credential_mirror", failing_publish)
+        monkeypatch.setattr(routes, "_post_canvas_mirror_alert_webhook", fake_webhook)
+        caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+        response = await routes.run_canvas_mirror_publish_batch(
+            repo,
+            organization_id="org-1",
+            limit=10,
+            retry_failed=True,
+        )
+
+        updated = (await repo.list_delivery_records_for_credential(cred.id))[0]
+        alert_events = [
+            event for event in repo._events
+            if event.event_type == EventType.CANVAS_MIRROR_ALERT_EMITTED
+        ]
+        metric_logs = [
+            record for record in caplog.records
+            if getattr(record, "mip_event", None) == "canvas_mirror_metrics"
+        ]
+        alert_logs = [
+            record for record in caplog.records
+            if getattr(record, "mip_event", None) == "canvas_mirror_alert"
+        ]
+
+        assert response.processed_count == 1
+        assert response.failed_count == 1
+        assert response.metrics["publish.failed"] == 1
+        assert updated.metadata["publish_attempts"] == 5
+        assert alert_events
+        assert alert_events[0].metadata["severity"] == "critical"
+        assert alert_events[0].metadata["delivery_record_id"] == failed_record.id
+        assert metric_logs[0].metrics["publish.failed"] == 1
+        assert alert_logs[0].canvas_mirror_alert["severity"] == "critical"
+        assert webhook_payloads[0]["organization_id"] == "org-1"
+        assert webhook_payloads[0]["alerts"][0].delivery_record_id == failed_record.id
+
+    async def test_batch_processor_blocks_publish_when_profile_disables_mirror_ops(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(
+            id="tx-batch-ops-disabled",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        cred = _make_credential(id="cred-batch-ops-disabled", transaction_id=tx.id)
+        pending_record = _make_delivery_record(
+            id="delivery-batch-ops-disabled",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.PENDING,
+            canvas_account_id="canvas-account-1",
+            metadata={
+                "queue": "canvas_credentials_mirror",
+                "canvas_platform_id": "platform-1",
+                "canvas_program_binding_id": "binding-1",
+                "deployment_profile_id": "deployment-profile-1",
+                "canvas_feature_flags": {
+                    "enable_canvas_mirror_publish": True,
+                    "enable_canvas_mirror_ops": False,
+                },
+            },
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(pending_record)
+
+        async def unexpected_publish(*args, **kwargs):
+            raise AssertionError("Canvas publish should not run when mirror ops are disabled")
+
+        monkeypatch.setattr(routes, "publish_canvas_credential_mirror", unexpected_publish)
+
+        response = await routes.run_canvas_mirror_publish_batch(
+            repo,
+            organization_id="org-1",
+            limit=10,
+            retry_failed=True,
+        )
+        updated = (await repo.list_delivery_records_for_credential(cred.id))[0]
+
+        assert response.processed_count == 1
+        assert response.delivered_count == 0
+        assert response.failed_count == 1
+        assert response.blocked_count == 1
+        assert response.metrics["publish.blocked"] == 1
+        assert updated.status == CredentialDeliveryStatus.FAILED
+        assert updated.last_error == "Canvas mirror operations are disabled by deployment profile"
+        assert updated.metadata["canvas_feature_gate_blocked"] is True
+        assert updated.metadata["canvas_feature_gate"] == "enable_canvas_mirror_ops"
+        assert updated.metadata["retryable"] is False
+        assert updated.metadata.get("publish_attempts") is None
+
+
+class TestCanvasMirrorOps:
+    async def test_process_failed_status_syncs_retries_only_failed_records(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+        tx_failed = _make_transaction(id="tx-sync-retry-failed", status=IssuanceStatus.ISSUED)
+        tx_clean = _make_transaction(id="tx-sync-retry-clean", status=IssuanceStatus.ISSUED)
+        cred_failed = _make_credential(
+            id="cred-sync-retry-failed",
+            transaction_id=tx_failed.id,
+            status=CredentialStatus.SUSPENDED,
+            status_updated_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+        )
+        cred_clean = _make_credential(
+            id="cred-sync-retry-clean",
+            transaction_id=tx_clean.id,
+            status=CredentialStatus.ACTIVE,
+            status_updated_at=datetime(2026, 3, 3, tzinfo=timezone.utc),
+        )
+        failed_record = _make_delivery_record(
+            id="delivery-sync-retry-failed",
+            credential_id=cred_failed.id,
+            transaction_id=tx_failed.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            external_credential_id="canvas-cred-failed",
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                **{
+                "published_at": "2026-03-01T10:00:00+00:00",
+                "status_sync_attempts": 1,
+                "last_status_sync_action": "suspend",
+                "last_status_sync_error": "Canvas status endpoint unavailable",
+                "last_status_sync_error_at": "2026-03-01T11:00:00+00:00",
+                },
+            ),
+        )
+        clean_record = _make_delivery_record(
+            id="delivery-sync-retry-clean",
+            credential_id=cred_clean.id,
+            transaction_id=tx_clean.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            external_credential_id="canvas-cred-clean",
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                **{
+                "published_at": "2026-03-01T09:00:00+00:00",
+                "status_sync_attempts": 1,
+                "last_status_sync_action": "reinstate",
+                "status_synced_at": "2026-03-01T09:30:00+00:00",
+                "last_status_sync_error": None,
+                },
+            ),
+        )
+
+        await repo.save_transaction(tx_failed)
+        await repo.save_transaction(tx_clean)
+        await repo.save_credential(cred_failed)
+        await repo.save_credential(cred_clean)
+        await repo.save_delivery_record(failed_record)
+        await repo.save_delivery_record(clean_record)
+
+        captured: list[str] = []
+
+        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None):
+            captured.append(delivery_record.id)
+            assert lifecycle_action == "suspend"
+            return types.SimpleNamespace(metadata={
+                "status_sync_url": "https://canvas.example.test/status-sync",
+                "status_sync_http_status": 200,
+                "status_synced_at": "2026-03-02T12:00:00+00:00",
+                "status_sync_response": {"ok": True},
+            })
+
+        monkeypatch.setattr(routes, "sync_canvas_credential_status", fake_sync_canvas_credential_status)
+
+        response = await routes.process_failed_canvas_mirror_status_syncs(
+            organization_id="org-1",
+            limit=10,
+            repo=repo,
+        )
+
+        failed_records = await repo.list_delivery_records_for_credential(cred_failed.id)
+        clean_records = await repo.list_delivery_records_for_credential(cred_clean.id)
+        updated_failed = failed_records[0]
+        untouched_clean = clean_records[0]
+
+        assert response.processed_count == 1
+        assert response.synced_count == 1
+        assert response.failed_count == 0
+        assert response.metrics["status_sync.synced"] == 1
+        assert response.metrics["status_sync.failed"] == 0
+        assert response.metrics["status_sync.retry_succeeded"] == 1
+        assert captured == ["delivery-sync-retry-failed"]
+        assert updated_failed.metadata["status_sync_attempts"] == 2
+        assert updated_failed.metadata["last_status_sync_error"] is None
+        assert updated_failed.metadata["status_synced_at"] == "2026-03-02T12:00:00+00:00"
+        assert untouched_clean.metadata["status_sync_attempts"] == 1
+        assert untouched_clean.metadata["status_synced_at"] == "2026-03-01T09:30:00+00:00"
+
+    async def test_process_failed_status_syncs_persists_retry_failure(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+        tx = _make_transaction(id="tx-sync-retry-still-fails", status=IssuanceStatus.ISSUED)
+        cred = _make_credential(
+            id="cred-sync-retry-still-fails",
+            transaction_id=tx.id,
+            status=CredentialStatus.REVOKED,
+            revoked_at=datetime(2026, 3, 4, tzinfo=timezone.utc),
+            revocation_reason="policy violation",
+            status_updated_at=datetime(2026, 3, 4, tzinfo=timezone.utc),
+        )
+        record = _make_delivery_record(
+            id="delivery-sync-retry-still-fails",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                **{
+                "status_sync_attempts": 1,
+                "last_status_sync_action": "revoke",
+                "last_status_sync_error": "old error",
+                "last_status_sync_error_at": "2026-03-04T12:00:00+00:00",
+                },
+            ),
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(record)
+
+        async def failing_sync(*args, **kwargs):
+            raise RuntimeError("Canvas still unavailable")
+
+        monkeypatch.setattr(routes, "sync_canvas_credential_status", failing_sync)
+
+        response = await routes.process_failed_canvas_mirror_status_syncs(
+            organization_id="org-1",
+            limit=10,
+            repo=repo,
+        )
+
+        updated = (await repo.list_delivery_records_for_credential(cred.id))[0]
+
+        assert response.processed_count == 1
+        assert response.synced_count == 0
+        assert response.failed_count == 1
+        assert response.metrics["status_sync.failed"] == 1
+        assert response.metrics["status_sync.retry_failed"] == 1
+        assert updated.metadata["status_sync_attempts"] == 2
+        assert updated.metadata["last_status_sync_action"] == "revoke"
+        assert updated.metadata["last_status_sync_error"] == "Canvas still unavailable"
+        assert updated.last_error == "Canvas still unavailable"
+
+    async def test_process_failed_status_syncs_blocks_when_profile_disables_mirror_ops(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+        tx = _make_transaction(id="tx-sync-ops-disabled", status=IssuanceStatus.ISSUED)
+        cred = _make_credential(
+            id="cred-sync-ops-disabled",
+            transaction_id=tx.id,
+            status=CredentialStatus.SUSPENDED,
+            status_updated_at=datetime(2026, 3, 8, tzinfo=timezone.utc),
+        )
+        record = _make_delivery_record(
+            id="delivery-sync-ops-disabled",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            external_credential_id="canvas-sync-ops-disabled",
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                **{
+                "published_at": "2026-03-08T09:00:00+00:00",
+                "last_status_sync_action": "suspend",
+                "last_status_sync_error": "previous sync failure",
+                "last_status_sync_error_at": "2026-03-08T10:00:00+00:00",
+                "deployment_profile_id": "deployment-profile-1",
+                "canvas_feature_flags": {
+                    "enable_canvas_mirror_publish": True,
+                    "enable_canvas_mirror_ops": False,
+                },
+                },
+            ),
+        )
+
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(record)
+
+        async def unexpected_sync(*args, **kwargs):
+            raise AssertionError("Canvas lifecycle sync should not run when mirror ops are disabled")
+
+        monkeypatch.setattr(routes, "sync_canvas_credential_status", unexpected_sync)
+
+        response = await routes.run_canvas_mirror_status_sync_batch(
+            repo,
+            organization_id="org-1",
+            limit=10,
+        )
+        updated = (await repo.list_delivery_records_for_credential(cred.id))[0]
+
+        assert response.processed_count == 1
+        assert response.synced_count == 0
+        assert response.failed_count == 1
+        assert response.blocked_count == 1
+        assert response.metrics["status_sync.blocked"] == 1
+        assert response.metrics["status_sync.retry_blocked"] == 1
+        assert updated.status == CredentialDeliveryStatus.DELIVERED
+        assert updated.last_error == "Canvas mirror operations are disabled by deployment profile"
+        assert updated.metadata["canvas_feature_gate_blocked"] is True
+        assert updated.metadata["canvas_feature_gate"] == "enable_canvas_mirror_ops"
+        assert updated.metadata["last_status_sync_error"] == updated.last_error
+        assert updated.metadata.get("status_sync_attempts") is None
+
+    async def test_canvas_mirror_automation_cycle_processes_publish_and_status_sync(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        platform, binding = await _save_canvas_program_target(repo)
+        publish_tx = _make_transaction(
+            id="tx-automation-publish",
+            status=IssuanceStatus.ISSUED,
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        publish_cred = _make_credential(id="cred-automation-publish", transaction_id=publish_tx.id)
+        pending_record = _make_delivery_record(
+            id="delivery-automation-publish",
+            credential_id=publish_cred.id,
+            transaction_id=publish_tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.PENDING,
+            canvas_account_id=platform.canvas_account_id,
+            metadata=_canvas_binding_metadata(binding_id=binding.id, platform_id=platform.id),
+        )
+        sync_tx = _make_transaction(id="tx-automation-sync", status=IssuanceStatus.ISSUED)
+        sync_cred = _make_credential(
+            id="cred-automation-sync",
+            transaction_id=sync_tx.id,
+            status=CredentialStatus.SUSPENDED,
+            status_updated_at=datetime(2026, 3, 7, tzinfo=timezone.utc),
+        )
+        failed_sync_record = _make_delivery_record(
+            id="delivery-automation-sync",
+            credential_id=sync_cred.id,
+            transaction_id=sync_tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            delivery_mode="wallet_plus_canvas_mirror",
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            external_credential_id="canvas-automation-sync",
+            metadata=_canvas_binding_metadata(
+                binding_id=binding.id,
+                platform_id=platform.id,
+                **{
+                "published_at": "2026-03-07T09:00:00+00:00",
+                "last_status_sync_action": "suspend",
+                "last_status_sync_error": "previous sync failure",
+                "last_status_sync_error_at": "2026-03-07T10:00:00+00:00",
+                },
+            ),
+        )
+
+        await repo.save_transaction(publish_tx)
+        await repo.save_transaction(sync_tx)
+        await repo.save_credential(publish_cred)
+        await repo.save_credential(sync_cred)
+        await repo.save_delivery_record(pending_record)
+        await repo.save_delivery_record(failed_sync_record)
+
+        captured_publish: list[str] = []
+        captured_sync: list[str] = []
+
+        async def fake_publish_canvas_credential_mirror(*, credential, transaction, platform, delivery_record):
+            captured_publish.append(delivery_record.id)
+            return types.SimpleNamespace(
+                external_credential_id=f"mirror-{credential.id}",
+                external_issuer_id="issuer-elevenid",
+                metadata={"published_at": "2026-03-07T12:00:00+00:00"},
+            )
+
+        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None):
+            captured_sync.append(delivery_record.id)
+            assert lifecycle_action == "suspend"
+            return types.SimpleNamespace(metadata={
+                "status_sync_http_status": 200,
+                "status_synced_at": "2026-03-07T12:05:00+00:00",
+            })
+
+        monkeypatch.setattr(routes, "publish_canvas_credential_mirror", fake_publish_canvas_credential_mirror)
+        monkeypatch.setattr(routes, "sync_canvas_credential_status", fake_sync_canvas_credential_status)
+
+        response = await routes.run_canvas_mirror_automation_cycle(
+            repo,
+            organization_id="org-1",
+            limit=10,
+            retry_failed=True,
+        )
+
+        updated_publish = (await repo.list_delivery_records_for_credential(publish_cred.id))[0]
+        updated_sync = (await repo.list_delivery_records_for_credential(sync_cred.id))[0]
+
+        assert response.organization_id == "org-1"
+        assert response.processed_count == 2
+        assert response.failed_count == 0
+        assert response.metrics["automation.processed"] == 2
+        assert response.metrics["publish.delivered"] == 1
+        assert response.metrics["status_sync.synced"] == 1
+        assert response.publish.processed_count == 1
+        assert response.publish.delivered_count == 1
+        assert response.status_sync.processed_count == 1
+        assert response.status_sync.synced_count == 1
+        assert captured_publish == ["delivery-automation-publish"]
+        assert captured_sync == ["delivery-automation-sync"]
+        assert updated_publish.status == CredentialDeliveryStatus.DELIVERED
+        assert updated_publish.external_credential_id == "mirror-cred-automation-publish"
+        assert updated_sync.metadata["last_status_sync_error"] is None
+        assert updated_sync.metadata["status_synced_at"] == "2026-03-07T12:05:00+00:00"
+
+    async def test_canvas_mirror_health_counts_publish_and_sync_states(self, repo):
+        from issuance.infrastructure.api import routes
+
+        pending = _make_delivery_record(
+            id="delivery-health-pending",
+            organization_id="org-1",
+            credential_id="cred-health-pending",
+            transaction_id="tx-health-pending",
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.PENDING,
+            metadata={},
+        )
+        failed_publish = _make_delivery_record(
+            id="delivery-health-failed",
+            organization_id="org-1",
+            credential_id="cred-health-failed",
+            transaction_id="tx-health-failed",
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.FAILED,
+            last_error="publish failed",
+            metadata={
+                "publish_attempts": 4,
+                "last_error_at": "2026-03-05T08:00:00+00:00",
+            },
+        )
+        delivered_ok = _make_delivery_record(
+            id="delivery-health-ok",
+            organization_id="org-1",
+            credential_id="cred-health-ok",
+            transaction_id="tx-health-ok",
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            metadata={
+                "published_at": "2026-03-05T09:00:00+00:00",
+                "status_synced_at": "2026-03-05T10:00:00+00:00",
+                "last_status_sync_error": None,
+            },
+        )
+        delivered_sync_failed = _make_delivery_record(
+            id="delivery-health-sync-failed",
+            organization_id="org-1",
+            credential_id="cred-health-sync-failed",
+            transaction_id="tx-health-sync-failed",
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            metadata={
+                "published_at": "2026-03-05T11:00:00+00:00",
+                "status_sync_attempts": 5,
+                "last_status_sync_action": "suspend",
+                "last_status_sync_error": "sync failed",
+                "last_status_sync_error_at": "2026-03-05T12:00:00+00:00",
+            },
+        )
+        other_org = _make_delivery_record(
+            id="delivery-health-other-org",
+            organization_id="org-2",
+            credential_id="cred-health-other-org",
+            transaction_id="tx-health-other-org",
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            metadata={"published_at": "2026-03-06T09:00:00+00:00"},
+        )
+
+        await repo.save_delivery_record(pending)
+        await repo.save_delivery_record(failed_publish)
+        await repo.save_delivery_record(delivered_ok)
+        await repo.save_delivery_record(delivered_sync_failed)
+        await repo.save_delivery_record(other_org)
+
+        response = await routes.get_canvas_mirror_health("org-1", repo)
+
+        assert response.organization_id == "org-1"
+        assert response.pending_publish_count == 1
+        assert response.failed_publish_count == 1
+        assert response.delivered_count == 2
+        assert response.lifecycle_sync_failed_count == 1
+        assert response.lifecycle_sync_ok_count == 1
+        assert response.last_successful_publish_at == "2026-03-05T11:00:00+00:00"
+        assert response.last_lifecycle_sync_failure_at == "2026-03-05T12:00:00+00:00"
+        assert response.last_lifecycle_sync_success_at == "2026-03-05T10:00:00+00:00"
+        assert response.alert_thresholds == {
+            "warning_attempts": 3,
+            "critical_attempts": 5,
+        }
+        assert response.repeated_publish_failure_count == 1
+        assert response.repeated_lifecycle_sync_failure_count == 1
+        assert response.warning_alert_count == 1
+        assert response.critical_alert_count == 1
+        assert response.alert_count == 2
+        assert response.metrics["publish_failure_attempts_total"] == 4
+        assert response.metrics["status_sync_failure_attempts_total"] == 5
+        assert response.alerts[0].alert_type == "lifecycle_sync_failure"
+        assert response.alerts[0].severity == "critical"
+        assert response.alerts[0].attempt_count == 5
+        assert response.alerts[1].alert_type == "publish_failure"
+        assert response.alerts[1].severity == "warning"
+        assert response.alerts[1].last_error == "publish failed"
+
+
+class TestCanvasMirrorLifecycleSync:
+    async def test_revoke_syncs_delivered_canvas_mirror(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(id="tx-status-sync", status=IssuanceStatus.ISSUED)
+        cred = _make_credential(id="cred-status-sync", transaction_id=tx.id)
+        platform, binding = await _save_canvas_program_target(repo)
+        delivery = _make_delivery_record(
+            id="delivery-status-sync",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            external_credential_id="canvas-cred-1",
+            external_issuer_id="issuer-elevenid",
+            metadata=_canvas_binding_metadata(binding_id=binding.id, platform_id=platform.id),
+        )
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(delivery)
+
+        captured: dict[str, object] = {}
+
+        async def fake_delegate(*args, **kwargs):
+            return {"ok": True}
+
+        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None):
+            captured["credential_status"] = credential.status.value
+            captured["canvas_platform_id"] = platform.id
+            captured["delivery_record_id"] = delivery_record.id
+            captured["lifecycle_action"] = lifecycle_action
+            captured["reason"] = reason
+            return types.SimpleNamespace(metadata={
+                "status_sync_url": "https://canvas.example.test/status-sync",
+                "status_sync_http_status": 200,
+                "status_sync_response": {"ok": True},
+                "status_sync_request_id": "sync-req-1",
+                "status_synced_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+        monkeypatch.setattr(routes, "_delegate_to_revocation_profile", fake_delegate)
+        monkeypatch.setattr(routes, "sync_canvas_credential_status", fake_sync_canvas_credential_status)
+
+        response = await routes.revoke_credential(
+            cred.id,
+            routes.CredentialStatusRequest(reason="policy violation"),
+            repo,
+        )
+
+        updated = await repo.get_credential(cred.id)
+        records = await repo.list_delivery_records_for_credential(cred.id)
+        synced_record = next(record for record in records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS)
+
+        assert response["status"] == "revoked"
+        assert updated is not None and updated.status == CredentialStatus.REVOKED
+        assert captured == {
+            "credential_status": "revoked",
+            "canvas_platform_id": "platform-1",
+            "delivery_record_id": "delivery-status-sync",
+            "lifecycle_action": "revoke",
+            "reason": "policy violation",
+        }
+        assert synced_record.status == CredentialDeliveryStatus.DELIVERED
+        assert synced_record.last_error is None
+        assert synced_record.metadata["status_sync_attempts"] == 1
+        assert synced_record.metadata["last_status_sync_action"] == "revoke"
+        assert synced_record.metadata["last_synced_credential_status"] == "revoked"
+        assert synced_record.metadata["status_sync_http_status"] == 200
+
+    async def test_suspend_keeps_canonical_state_when_canvas_sync_fails(self, repo, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(id="tx-status-sync-fail", status=IssuanceStatus.ISSUED)
+        cred = _make_credential(id="cred-status-sync-fail", transaction_id=tx.id)
+        platform, binding = await _save_canvas_program_target(repo)
+        delivery = _make_delivery_record(
+            id="delivery-status-sync-fail",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            status=CredentialDeliveryStatus.DELIVERED,
+            canvas_account_id=platform.canvas_account_id,
+            external_credential_id="canvas-cred-2",
+            metadata=_canvas_binding_metadata(binding_id=binding.id, platform_id=platform.id),
+        )
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(delivery)
+
+        async def fake_delegate(*args, **kwargs):
+            return {"ok": True}
+
+        async def failing_sync(*args, **kwargs):
+            raise RuntimeError("Canvas status endpoint unavailable")
+
+        monkeypatch.setattr(routes, "_delegate_to_revocation_profile", fake_delegate)
+        monkeypatch.setattr(routes, "sync_canvas_credential_status", failing_sync)
+
+        response = await routes.suspend_credential(
+            cred.id,
+            routes.CredentialStatusRequest(reason="investigating"),
+            repo,
+        )
+
+        updated = await repo.get_credential(cred.id)
+        records = await repo.list_delivery_records_for_credential(cred.id)
+        synced_record = next(record for record in records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS)
+
+        assert response["status"] == "suspended"
+        assert updated is not None and updated.status == CredentialStatus.SUSPENDED
+        assert synced_record.status == CredentialDeliveryStatus.DELIVERED
+        assert synced_record.last_error == "Canvas status endpoint unavailable"
+        assert synced_record.metadata["status_sync_attempts"] == 1
+        assert synced_record.metadata["last_status_sync_action"] == "suspend"
+        assert synced_record.metadata["last_synced_credential_status"] == "suspended"
+        assert synced_record.metadata["last_status_sync_error"] == "Canvas status endpoint unavailable"
 
 
 # ============================================================================
@@ -703,6 +2141,45 @@ class TestRustIntegrationOrgIdValidation:
         assert captured["algorithm"] == "ES256"
         assert credential_id.startswith("urn:uuid:")
 
+    async def test_remote_sd_jwt_accepts_caller_supplied_credential_status(self):
+        from issuance.application.rust_integration import (
+            base64url_decode,
+            create_sd_jwt_vc_with_remote_signing,
+        )
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        supplied_credential_id = "urn:uuid:00000000-0000-0000-0000-000000000123"
+        credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+            issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
+            signing_service_id="managed-openbao-transit",
+            remote_sign=fake_remote_sign,
+            subject_id="did:key:z6Mk_subject",
+            credential_type="https://beta.elevenidllc.com/credentials/access_badge",
+            claims_json=json.dumps(
+                {
+                    "name": "Alice",
+                    "credentialStatus": {
+                        "type": "BitstringStatusListEntry",
+                        "statusPurpose": "revocation",
+                        "statusListIndex": "42",
+                        "statusListCredential": "https://beta.elevenidllc.com/v1/status-list",
+                    },
+                }
+            ),
+            algorithm="ES256",
+            credential_id=supplied_credential_id,
+        )
+
+        jwt = credential.split("~", 1)[0]
+        encoded_payload = jwt.split(".")[1]
+        payload = json.loads(base64url_decode(encoded_payload))
+
+        assert credential_id == supplied_credential_id
+        assert payload["jti"] == supplied_credential_id
+        assert payload["credentialStatus"]["statusListIndex"] == "42"
+
     async def test_grpc_remote_signing_helper_uses_org_scoped_did_context(self, monkeypatch):
         from issuance.application.rust_integration import base64url_decode
 
@@ -834,6 +2311,17 @@ class TestIssuanceTransactionIssuerDidOverride:
         )
         assert tx.issuer_profile_id == "ip-elevenid"
         assert tx.issuer_mode == "elevenid_managed"
+
+    def test_delivery_mode_defaults_to_wallet_only(self):
+        tx = _make_transaction()
+        assert tx.delivery_mode == "wallet_only"
+
+    def test_delivery_mode_stores_canvas_mirror_configuration(self):
+        tx = _make_transaction(
+            delivery_mode="wallet_plus_canvas_mirror",
+        )
+        assert tx.delivery_mode == "wallet_plus_canvas_mirror"
+        assert tx.should_mirror_to_canvas is True
 
     def test_effective_issuer_did_with_override(self):
         """When issuer_did_override is set, it should be preferred over a
