@@ -8,8 +8,9 @@ import os
 import uuid
 from typing import Any
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, utils
@@ -33,18 +34,24 @@ from issuance.application.rust_integration import (
 from issuance.domain.entities import (
     Application,
     ApplicationStatus,
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
+    DeliveryTarget,
     IssuanceEvent,
     EventType,
     CanvasLtiLaunchState,
     CanvasPlatform,
     CanvasProgramBinding,
+    OrganizationIntegrationSecret,
 )
 from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.adapters.canvas_credentials_adapter import (
+    CanvasCredentialsConfigValidationResult,
     CanvasEvidenceEventResponse,
     process_canvas_ags_score_event,
     process_canvas_evidence_event,
     process_canvas_nrps_membership_event,
+    validate_canvas_credentials_config,
 )
 from issuance.infrastructure.api.routes import (
     _verify_management_api_key,
@@ -147,6 +154,82 @@ class CanvasProgramBindingResponse(BaseModel):
     enabled: bool
     created_at: str
     updated_at: str
+
+
+class CanvasCredentialsValidationRequest(BaseModel):
+    organization_id: str | None = None
+    canvas_credentials: dict[str, Any] = Field(default_factory=dict)
+
+
+class CanvasIntegrationSecretCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str
+    name: str
+    provider: str = "canvas_credentials"
+    purpose: str = "api_token"
+    secret_value: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class CanvasIntegrationSecretUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    secret_value: str | None = None
+    metadata: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class CanvasIntegrationSecretResponse(BaseModel):
+    id: str
+    organization_id: str
+    name: str
+    provider: str
+    purpose: str
+    secret_ref: str
+    secret_hint: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool
+    created_at: str
+    updated_at: str
+    last_used_at: str | None = None
+
+
+class CanvasScopeDiscoveryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    course_id: str | None = None
+    api_token_env: str | None = None
+    api_token_file: str | None = None
+    include_courses: bool = True
+    include_assignments: bool = True
+    include_quizzes: bool = True
+    include_modules: bool = True
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class CanvasScopeItem(BaseModel):
+    id: str
+    name: str
+    type: str
+    url: str | None = None
+    published: bool | None = None
+    points_possible: float | None = None
+
+
+class CanvasScopeDiscoveryResponse(BaseModel):
+    platform_id: str
+    organization_id: str
+    canvas_base_url: str
+    course_id: str | None = None
+    courses: list[CanvasScopeItem] = Field(default_factory=list)
+    assignments: list[CanvasScopeItem] = Field(default_factory=list)
+    quizzes: list[CanvasScopeItem] = Field(default_factory=list)
+    modules: list[CanvasScopeItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    fetched_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class CanvasPlatformSandboxProbeResponse(BaseModel):
@@ -375,6 +458,147 @@ def _binding_to_response(
         created_at=binding.created_at.isoformat(),
         updated_at=binding.updated_at.isoformat(),
     )
+
+
+def _secret_to_response(secret: OrganizationIntegrationSecret) -> CanvasIntegrationSecretResponse:
+    return CanvasIntegrationSecretResponse(
+        id=secret.id,
+        organization_id=secret.organization_id,
+        name=secret.name,
+        provider=secret.provider,
+        purpose=secret.purpose,
+        secret_ref=secret.secret_ref,
+        secret_hint=secret.secret_hint,
+        metadata=secret.metadata or {},
+        enabled=secret.enabled,
+        created_at=secret.created_at.isoformat(),
+        updated_at=secret.updated_at.isoformat(),
+        last_used_at=secret.last_used_at.isoformat() if secret.last_used_at else None,
+    )
+
+
+def _read_secret_file(file_path: str | None) -> str:
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def _canvas_admin_token(request: CanvasScopeDiscoveryRequest) -> str:
+    if request.api_token_env:
+        token = os.environ.get(request.api_token_env.strip(), "").strip()
+        if token:
+            return token
+    if request.api_token_file:
+        token = _read_secret_file(request.api_token_file.strip())
+        if token:
+            return token
+    token = os.environ.get("CANVAS_ADMIN_API_TOKEN", "").strip()
+    if token:
+        return token
+    token_file = os.environ.get("CANVAS_ADMIN_API_TOKEN_FILE", "").strip()
+    if token_file:
+        return _read_secret_file(token_file)
+    return ""
+
+
+def _canvas_api_base(platform: CanvasPlatform) -> str:
+    raw_base = (platform.canvas_base_url or "").strip()
+    if not raw_base:
+        raise HTTPException(status_code=400, detail="Canvas platform requires canvas_base_url for admin discovery")
+    parsed = urlparse(raw_base)
+    if parsed.scheme != "https":
+        allow_local_http = os.environ.get("CANVAS_ALLOW_HTTP_ADMIN_DISCOVERY", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not allow_local_http or parsed.hostname not in {"localhost", "127.0.0.1"}:
+            raise HTTPException(status_code=400, detail="Canvas admin discovery requires an HTTPS Canvas base URL")
+    return raw_base.rstrip("/")
+
+
+def _canvas_collection_url(base_url: str, path: str) -> str:
+    return urljoin(f"{base_url}/", f"api/v1/{path.lstrip('/')}")
+
+
+async def _fetch_canvas_api_collection(
+    client: httpx.AsyncClient,
+    *,
+    base_url: str,
+    token: str,
+    path: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    url = _canvas_collection_url(base_url, path)
+    items: list[dict[str, Any]] = []
+    params: dict[str, Any] | None = {"per_page": min(max(limit, 1), 100)}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    while url and len(items) < limit:
+        response = await client.get(url, headers=headers, params=params)
+        if response.status_code in {401, 403}:
+            raise HTTPException(status_code=401, detail="Canvas admin token was rejected")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Canvas admin discovery failed with HTTP {response.status_code}",
+            ) from exc
+        payload = response.json()
+        if isinstance(payload, list):
+            page_items = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+            page_items = payload["items"]
+        else:
+            raise HTTPException(status_code=502, detail="Canvas admin discovery returned an unexpected response")
+        items.extend(item for item in page_items if isinstance(item, dict))
+        next_url = response.links.get("next", {}).get("url") if response.links else None
+        url = next_url if next_url and len(items) < limit else ""
+        params = None
+    return items[:limit]
+
+
+def _canvas_scope_item(raw: dict[str, Any], item_type: str) -> CanvasScopeItem | None:
+    raw_id = raw.get("id") or raw.get("quiz_id") or raw.get("module_id")
+    if raw_id is None:
+        return None
+    name = (
+        raw.get("name")
+        or raw.get("title")
+        or raw.get("course_code")
+        or raw.get("workflow_state")
+        or str(raw_id)
+    )
+    points = raw.get("points_possible")
+    try:
+        points_possible = float(points) if points is not None else None
+    except (TypeError, ValueError):
+        points_possible = None
+    published = raw.get("published")
+    if published is None and "workflow_state" in raw:
+        published = raw.get("workflow_state") == "available"
+    return CanvasScopeItem(
+        id=str(raw_id),
+        name=str(name),
+        type=item_type,
+        url=raw.get("html_url") or raw.get("url"),
+        published=published if isinstance(published, bool) else None,
+        points_possible=points_possible,
+    )
+
+
+def _canvas_scope_items(raw_items: list[dict[str, Any]], item_type: str) -> list[CanvasScopeItem]:
+    items: list[CanvasScopeItem] = []
+    for raw in raw_items:
+        item = _canvas_scope_item(raw, item_type)
+        if item is not None:
+            items.append(item)
+    return items
 
 
 async def _validate_program_binding_request(
@@ -1492,6 +1716,98 @@ async def refresh_canvas_platform_jwks(
 
 
 @canvas_integration_router.post(
+    "/platforms/{platform_id}/scope-discovery",
+    response_model=CanvasScopeDiscoveryResponse,
+    summary="Discover Canvas courses and activities for program binding setup",
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def discover_canvas_scope(
+    platform_id: str,
+    request: CanvasScopeDiscoveryRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasScopeDiscoveryResponse:
+    platform = await repo.get_canvas_platform(platform_id)
+    if platform is None:
+        raise HTTPException(status_code=404, detail="Canvas platform not found")
+    base_url = _canvas_api_base(platform)
+    token = _canvas_admin_token(request)
+    if not token:
+        raise HTTPException(
+            status_code=400,
+            detail="Canvas admin discovery requires api_token_env, api_token_file, CANVAS_ADMIN_API_TOKEN, or CANVAS_ADMIN_API_TOKEN_FILE",
+        )
+
+    course_id = (request.course_id or "").strip() or None
+    warnings: list[str] = []
+    courses: list[CanvasScopeItem] = []
+    assignments: list[CanvasScopeItem] = []
+    quizzes: list[CanvasScopeItem] = []
+    modules: list[CanvasScopeItem] = []
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        if request.include_courses:
+            courses = _canvas_scope_items(
+                await _fetch_canvas_api_collection(
+                    client,
+                    base_url=base_url,
+                    token=token,
+                    path="courses",
+                    limit=request.limit,
+                ),
+                "course",
+            )
+        if course_id:
+            quoted_course_id = quote(course_id, safe="")
+            if request.include_assignments:
+                assignments = _canvas_scope_items(
+                    await _fetch_canvas_api_collection(
+                        client,
+                        base_url=base_url,
+                        token=token,
+                        path=f"courses/{quoted_course_id}/assignments",
+                        limit=request.limit,
+                    ),
+                    "assignment",
+                )
+            if request.include_quizzes:
+                quizzes = _canvas_scope_items(
+                    await _fetch_canvas_api_collection(
+                        client,
+                        base_url=base_url,
+                        token=token,
+                        path=f"courses/{quoted_course_id}/quizzes",
+                        limit=request.limit,
+                    ),
+                    "quiz",
+                )
+            if request.include_modules:
+                modules = _canvas_scope_items(
+                    await _fetch_canvas_api_collection(
+                        client,
+                        base_url=base_url,
+                        token=token,
+                        path=f"courses/{quoted_course_id}/modules",
+                        limit=request.limit,
+                    ),
+                    "module",
+                )
+        elif request.include_assignments or request.include_quizzes or request.include_modules:
+            warnings.append("Set course_id and run discovery again to import assignments, quizzes, and modules.")
+
+    return CanvasScopeDiscoveryResponse(
+        platform_id=platform.id,
+        organization_id=platform.organization_id,
+        canvas_base_url=base_url,
+        course_id=course_id,
+        courses=courses,
+        assignments=assignments,
+        quizzes=quizzes,
+        modules=modules,
+        warnings=warnings,
+    )
+
+
+@canvas_integration_router.post(
     "/platforms/{platform_id}/program-bindings",
     response_model=CanvasProgramBindingResponse,
     summary="Create Canvas program binding",
@@ -1602,6 +1918,119 @@ async def delete_canvas_program_binding(
     if binding is None:
         raise HTTPException(status_code=404, detail="Canvas program binding not found")
     await repo.delete_canvas_program_binding(binding_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@canvas_integration_router.post(
+    "/canvas-credentials/validate",
+    response_model=CanvasCredentialsConfigValidationResult,
+    summary="Validate Canvas Credentials provider configuration",
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def validate_canvas_credentials_provider(
+    request: CanvasCredentialsValidationRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasCredentialsConfigValidationResult:
+    """Validate Canvas Credentials provider settings without publishing a credential."""
+
+    delivery_record = CredentialDeliveryRecord(
+        organization_id=request.organization_id or "",
+        delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+        delivery_mode="wallet_plus_canvas_mirror",
+        status=CredentialDeliveryStatus.PENDING,
+        metadata={"canvas_credentials": dict(request.canvas_credentials or {})},
+    )
+    return await validate_canvas_credentials_config(
+        delivery_record,
+        secret_resolver=repo.get_integration_secret_value,
+    )
+
+
+@canvas_integration_router.post(
+    "/integration-secrets",
+    response_model=CanvasIntegrationSecretResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Canvas integration secret",
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def create_canvas_integration_secret(
+    request: CanvasIntegrationSecretCreate,
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasIntegrationSecretResponse:
+    """Create an encrypted organization integration secret and return only its reference."""
+
+    secret = OrganizationIntegrationSecret(
+        organization_id=request.organization_id,
+        name=request.name.strip(),
+        provider=request.provider.strip() or "canvas_credentials",
+        purpose=request.purpose.strip() or "api_token",
+        secret_value=request.secret_value,
+        metadata=dict(request.metadata or {}),
+        enabled=request.enabled,
+    )
+    if not secret.name:
+        raise HTTPException(status_code=400, detail="Secret name is required")
+    if not secret.secret_value:
+        raise HTTPException(status_code=400, detail="Secret value is required")
+    await repo.save_integration_secret(secret)
+    stored = await repo.get_integration_secret(secret.id)
+    return _secret_to_response(stored or secret)
+
+
+@canvas_integration_router.get(
+    "/integration-secrets",
+    response_model=list[CanvasIntegrationSecretResponse],
+    summary="List Canvas integration secrets",
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def list_canvas_integration_secrets(
+    organization_id: str = Query(...),
+    provider: str | None = Query(default="canvas_credentials"),
+    repo: IIssuanceRepository = Depends(),
+) -> list[CanvasIntegrationSecretResponse]:
+    secrets = await repo.list_integration_secrets(organization_id, provider=provider)
+    return [_secret_to_response(secret) for secret in secrets]
+
+
+@canvas_integration_router.put(
+    "/integration-secrets/{secret_id}",
+    response_model=CanvasIntegrationSecretResponse,
+    summary="Update Canvas integration secret",
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def update_canvas_integration_secret(
+    secret_id: str,
+    request: CanvasIntegrationSecretUpdate,
+    repo: IIssuanceRepository = Depends(),
+) -> CanvasIntegrationSecretResponse:
+    secret = await repo.get_integration_secret(secret_id)
+    if secret is None:
+        raise HTTPException(status_code=404, detail="Integration secret not found")
+    if request.name is not None:
+        secret.name = request.name.strip()
+    if request.metadata is not None:
+        secret.metadata = dict(request.metadata or {})
+    if request.enabled is not None:
+        secret.enabled = request.enabled
+    if request.secret_value is not None:
+        secret.secret_value = request.secret_value
+        secret.secret_hint = f"...{request.secret_value[-4:]}" if request.secret_value else secret.secret_hint
+    await repo.save_integration_secret(secret)
+    stored = await repo.get_integration_secret(secret.id)
+    return _secret_to_response(stored or secret)
+
+
+@canvas_integration_router.delete(
+    "/integration-secrets/{secret_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete Canvas integration secret",
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def delete_canvas_integration_secret(
+    secret_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> Response:
+    await repo.delete_integration_secret(secret_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

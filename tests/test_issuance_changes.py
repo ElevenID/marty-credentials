@@ -1493,7 +1493,7 @@ class TestCanvasMirrorOps:
 
         captured: list[str] = []
 
-        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None):
+        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None, secret_resolver=None):
             captured.append(delivery_record.id)
             assert lifecycle_action == "suspend"
             return types.SimpleNamespace(metadata={
@@ -1711,7 +1711,7 @@ class TestCanvasMirrorOps:
         captured_publish: list[str] = []
         captured_sync: list[str] = []
 
-        async def fake_publish_canvas_credential_mirror(*, credential, transaction, platform, delivery_record):
+        async def fake_publish_canvas_credential_mirror(*, credential, transaction, platform, delivery_record, secret_resolver=None):
             captured_publish.append(delivery_record.id)
             return types.SimpleNamespace(
                 external_credential_id=f"mirror-{credential.id}",
@@ -1719,7 +1719,7 @@ class TestCanvasMirrorOps:
                 metadata={"published_at": "2026-03-07T12:00:00+00:00"},
             )
 
-        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None):
+        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None, secret_resolver=None):
             captured_sync.append(delivery_record.id)
             assert lifecycle_action == "suspend"
             return types.SimpleNamespace(metadata={
@@ -1883,7 +1883,7 @@ class TestCanvasMirrorLifecycleSync:
         async def fake_delegate(*args, **kwargs):
             return {"ok": True}
 
-        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None):
+        async def fake_sync_canvas_credential_status(*, credential, platform, delivery_record, lifecycle_action, reason=None, secret_resolver=None):
             captured["credential_status"] = credential.status.value
             captured["canvas_platform_id"] = platform.id
             captured["delivery_record_id"] = delivery_record.id

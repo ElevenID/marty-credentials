@@ -279,6 +279,27 @@ canvas_program_bindings_table = Table(
     schema="issuance_service",
 )
 
+organization_integration_secrets_table = Table(
+    "organization_integration_secrets",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column("name", String(255), nullable=False),
+    Column("provider", String(80), nullable=False),
+    Column("purpose", String(80), nullable=False, server_default="api_token"),
+    Column("encrypted_secret_value", Text, nullable=False),
+    Column("secret_hint", String(80), nullable=True),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("last_used_at", DateTime(timezone=True), nullable=True),
+    Index("ix_org_integration_secrets_organization_id", "organization_id"),
+    Index("ix_org_integration_secrets_provider", "provider"),
+    Index("ux_org_integration_secrets_org_provider_name", "organization_id", "provider", "name", unique=True),
+    schema="issuance_service",
+)
+
 canvas_lti_launch_states_table = Table(
     "canvas_lti_launch_states",
     mapper_registry.metadata,

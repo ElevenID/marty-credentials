@@ -1618,6 +1618,7 @@ async def _sync_canvas_lifecycle_delivery_record(
             delivery_record=record,
             lifecycle_action=lifecycle_action,
             reason=reason,
+            secret_resolver=repo.get_integration_secret_value,
         )
     except Exception as exc:  # noqa: BLE001
         record.last_error = str(exc)
@@ -1750,6 +1751,7 @@ async def _process_canvas_mirror_delivery_record(
             transaction=transaction,
             platform=target.platform,
             delivery_record=record,
+            secret_resolver=repo.get_integration_secret_value,
         )
     except Exception as exc:  # noqa: BLE001
         record.status = CredentialDeliveryStatus.FAILED

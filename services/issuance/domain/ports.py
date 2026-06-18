@@ -22,6 +22,7 @@ from issuance.domain.entities import (
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
+    OrganizationIntegrationSecret,
 )
 
 
@@ -262,6 +263,35 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def delete_canvas_program_binding(self, binding_id: str) -> None:
         """Delete a Canvas program binding."""
+        pass
+
+    @abstractmethod
+    async def save_integration_secret(self, secret: OrganizationIntegrationSecret) -> None:
+        """Persist or rotate an organization integration secret."""
+        pass
+
+    @abstractmethod
+    async def get_integration_secret(self, secret_id: str) -> OrganizationIntegrationSecret | None:
+        """Look up integration secret metadata by ID without exposing plaintext."""
+        pass
+
+    @abstractmethod
+    async def list_integration_secrets(
+        self,
+        organization_id: str,
+        provider: str | None = None,
+    ) -> list[OrganizationIntegrationSecret]:
+        """List organization integration secret metadata."""
+        pass
+
+    @abstractmethod
+    async def get_integration_secret_value(self, organization_id: str, secret_id: str) -> str | None:
+        """Resolve a plaintext integration secret for runtime use."""
+        pass
+
+    @abstractmethod
+    async def delete_integration_secret(self, secret_id: str) -> None:
+        """Delete an organization integration secret."""
         pass
 
     @abstractmethod

@@ -19,6 +19,7 @@ from issuance.domain.entities import (
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
+    OrganizationIntegrationSecret,
 )
 from issuance.domain.ports import IIssuanceRepository
 
@@ -49,6 +50,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._canvas_lti_launch_states: dict[str, CanvasLtiLaunchState] = {}
         self._canvas_platforms: dict[str, CanvasPlatform] = {}
         self._canvas_program_bindings: dict[str, CanvasProgramBinding] = {}
+        self._integration_secrets: dict[str, OrganizationIntegrationSecret] = {}
         self._delivery_records: dict[str, CredentialDeliveryRecord] = {}
         self._evidence_facts: dict[str, EvidenceFact] = {}
         self._approval_policy_sets: dict[tuple[str, str], ApprovalPolicySet] = {}
@@ -323,6 +325,78 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
 
     async def delete_canvas_program_binding(self, binding_id: str) -> None:
         self._canvas_program_bindings.pop(binding_id, None)
+
+    async def save_integration_secret(self, secret: OrganizationIntegrationSecret) -> None:
+        existing = self._integration_secrets.get(secret.id)
+        if existing is not None:
+            secret.created_at = existing.created_at
+            if not secret.secret_value:
+                secret.secret_value = existing.secret_value
+        secret.updated_at = datetime.now(timezone.utc)
+        if not secret.secret_hint and secret.secret_value:
+            secret.secret_hint = f"...{secret.secret_value[-4:]}"
+        self._integration_secrets[secret.id] = secret
+
+    async def get_integration_secret(self, secret_id: str) -> OrganizationIntegrationSecret | None:
+        secret = self._integration_secrets.get(secret_id)
+        if secret is None:
+            return None
+        return OrganizationIntegrationSecret(
+            id=secret.id,
+            organization_id=secret.organization_id,
+            name=secret.name,
+            provider=secret.provider,
+            purpose=secret.purpose,
+            secret_value="",
+            secret_hint=secret.secret_hint,
+            metadata=dict(secret.metadata or {}),
+            enabled=secret.enabled,
+            created_at=secret.created_at,
+            updated_at=secret.updated_at,
+            last_used_at=secret.last_used_at,
+        )
+
+    async def list_integration_secrets(
+        self,
+        organization_id: str,
+        provider: str | None = None,
+    ) -> list[OrganizationIntegrationSecret]:
+        secrets = [
+            secret
+            for secret in self._integration_secrets.values()
+            if secret.organization_id == organization_id
+            and (provider is None or secret.provider == provider)
+        ]
+        return sorted(
+            [
+                OrganizationIntegrationSecret(
+                    id=secret.id,
+                    organization_id=secret.organization_id,
+                    name=secret.name,
+                    provider=secret.provider,
+                    purpose=secret.purpose,
+                    secret_value="",
+                    secret_hint=secret.secret_hint,
+                    metadata=dict(secret.metadata or {}),
+                    enabled=secret.enabled,
+                    created_at=secret.created_at,
+                    updated_at=secret.updated_at,
+                    last_used_at=secret.last_used_at,
+                )
+                for secret in secrets
+            ],
+            key=lambda secret: secret.created_at,
+        )
+
+    async def get_integration_secret_value(self, organization_id: str, secret_id: str) -> str | None:
+        secret = self._integration_secrets.get(secret_id)
+        if secret is None or secret.organization_id != organization_id or not secret.enabled:
+            return None
+        secret.last_used_at = datetime.now(timezone.utc)
+        return secret.secret_value
+
+    async def delete_integration_secret(self, secret_id: str) -> None:
+        self._integration_secrets.pop(secret_id, None)
 
     async def save_canvas_lti_launch_state(self, launch_state: CanvasLtiLaunchState) -> None:
         self._canvas_lti_launch_states[launch_state.state] = launch_state

@@ -53,6 +53,7 @@ _CANVAS_STATUS_SYNC_TIMEOUT_SECONDS = float(
 )
 _CANVAS_CREDENTIALS_DEFAULT_API_BASE_URL = "https://api.badgr.io"
 _CANVAS_CREDENTIALS_REAL_PROVIDERS = {"badgr_api", "canvas_credentials_api"}
+CanvasSecretResolver = Callable[[str, str], Awaitable[str | None]]
 
 
 class CanvasCredentialEvent(BaseModel):
@@ -187,6 +188,24 @@ class CanvasCredentialsStatusSyncResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class CanvasCredentialsConfigValidationResult(BaseModel):
+    """Safe validation result for Canvas Credentials provider configuration."""
+
+    ok: bool
+    provider: str
+    api_base_url: str | None = None
+    assertion_scope: str | None = None
+    issuer_id: str | None = None
+    badgeclass_id: str | None = None
+    token_configured: bool = False
+    validation_url: str | None = None
+    status_code: int | None = None
+    request_id: str | None = None
+    error: str | None = None
+    response_excerpt: dict[str, Any] | None = None
+    validated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 def _read_secret_value(name: str) -> str:
     direct = os.environ.get(name)
     if direct:
@@ -241,12 +260,39 @@ def _canvas_credentials_config_value(
     return ""
 
 
-def _canvas_credentials_secret_value(
+def _canvas_credentials_secret_reference(source: dict[str, Any]) -> str:
+    return str(
+        source.get("api_token_secret_id")
+        or source.get("api_token_secret_ref")
+        or source.get("api_token_ref")
+        or source.get("canvas_credentials_api_token_secret_id")
+        or source.get("canvas_credentials_api_token_secret_ref")
+        or ""
+    ).strip()
+
+
+def _integration_secret_id_from_ref(value: str) -> str:
+    ref = value.strip()
+    if ref.startswith("org_secret://"):
+        return ref.rstrip("/").split("/")[-1]
+    return ref
+
+
+async def _canvas_credentials_secret_value(
     delivery_record: CredentialDeliveryRecord | None,
     *,
     default_secret_name: str,
+    secret_resolver: CanvasSecretResolver | None = None,
 ) -> str:
     for source in _canvas_credentials_metadata_sources(delivery_record):
+        secret_ref = _canvas_credentials_secret_reference(source)
+        if secret_ref and secret_resolver and delivery_record is not None:
+            secret = await secret_resolver(
+                delivery_record.organization_id,
+                _integration_secret_id_from_ref(secret_ref),
+            )
+            if secret:
+                return secret
         direct = source.get("api_token") or source.get("canvas_credentials_api_token")
         if direct is not None and str(direct).strip():
             return str(direct).strip()
@@ -474,6 +520,36 @@ def _badgr_assertion_url(
     )
 
 
+def _badgr_validation_url(
+    *,
+    delivery_record: CredentialDeliveryRecord,
+    scope: str,
+    badgeclass_id: str | None,
+    issuer_id: str | None,
+    api_base_url: str,
+) -> str:
+    template = _canvas_credentials_config_value(
+        delivery_record,
+        "validation_url_template",
+        "validate_url_template",
+        "canvas_credentials_validation_url_template",
+        env_names=("CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",),
+    )
+    if template:
+        return template.format(
+            api_base_url=api_base_url,
+            scope=quote(scope, safe=""),
+            badgeclass_id=quote(badgeclass_id or "", safe=""),
+            issuer_id=quote(issuer_id or "", safe=""),
+        )
+    id_or_entity_id = issuer_id if scope == "issuers" else badgeclass_id
+    if not id_or_entity_id:
+        if scope == "issuers":
+            raise RuntimeError("CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'")
+        raise RuntimeError("CANVAS_CREDENTIALS_BADGECLASS_ID is required for Canvas Credentials validation")
+    return f"{api_base_url}/v2/{quote(scope, safe='')}/{quote(id_or_entity_id, safe='')}"
+
+
 def _badgr_revoke_url(external_credential_id: str, *, api_base_url: str) -> str:
     template = (os.environ.get("CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE") or "").strip()
     if template:
@@ -518,7 +594,7 @@ def _build_elevenid_provenance_url(
         params["canvas_account_id"] = platform.canvas_account_id
     if credential.organization_id:
         params["organization_id"] = credential.organization_id
-    return f"{_public_marty_base_url()}/verify/canvas-credentials?{urlencode(params)}"
+    return f"{_public_marty_base_url()}/console/org/operate/verify?{urlencode(params)}"
 
 
 def _canvas_credentials_recipient_identity(
@@ -693,16 +769,140 @@ def _canvas_credentials_headers(api_token: str) -> dict[str, str]:
     return headers
 
 
+async def validate_canvas_credentials_config(
+    delivery_record: CredentialDeliveryRecord,
+    secret_resolver: CanvasSecretResolver | None = None,
+) -> CanvasCredentialsConfigValidationResult:
+    """Validate Canvas Credentials provider configuration without publishing an assertion."""
+
+    provider = _canvas_credentials_provider(delivery_record)
+    if provider == "bridge":
+        token = await _canvas_credentials_secret_value(
+            delivery_record,
+            default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+            secret_resolver=secret_resolver,
+        )
+        try:
+            publish_url = _normalize_publish_url()
+        except RuntimeError as exc:
+            return CanvasCredentialsConfigValidationResult(
+                ok=False,
+                provider=provider,
+                token_configured=bool(token),
+                error=str(exc),
+            )
+        return CanvasCredentialsConfigValidationResult(
+            ok=True,
+            provider=provider,
+            token_configured=bool(token),
+            validation_url=publish_url,
+        )
+
+    if provider not in _CANVAS_CREDENTIALS_REAL_PROVIDERS:
+        return CanvasCredentialsConfigValidationResult(
+            ok=False,
+            provider=provider,
+            error=f"Unsupported Canvas Credentials provider: {provider}",
+        )
+
+    try:
+        api_base_url = _normalize_canvas_credentials_api_base_url(delivery_record)
+        scope = _canvas_credentials_assertion_scope(delivery_record)
+        issuer_id = _canvas_credentials_issuer_id(delivery_record)
+        badgeclass_id = _canvas_credentials_badgeclass_id(delivery_record)
+        api_token = await _canvas_credentials_secret_value(
+            delivery_record,
+            default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+            secret_resolver=secret_resolver,
+        )
+        validation_url = _badgr_validation_url(
+            delivery_record=delivery_record,
+            scope=scope,
+            badgeclass_id=badgeclass_id,
+            issuer_id=issuer_id,
+            api_base_url=api_base_url,
+        )
+    except RuntimeError as exc:
+        return CanvasCredentialsConfigValidationResult(
+            ok=False,
+            provider=provider,
+            api_base_url=_canvas_credentials_config_value(
+                delivery_record,
+                "api_base_url",
+                "base_url",
+                "canvas_credentials_api_base_url",
+                "canvas_credentials_base_url",
+                env_names=("CANVAS_CREDENTIALS_API_BASE_URL", "CANVAS_CREDENTIALS_BASE_URL"),
+            )
+            or _CANVAS_CREDENTIALS_DEFAULT_API_BASE_URL,
+            token_configured=bool(
+                await _canvas_credentials_secret_value(
+                    delivery_record,
+                    default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+                    secret_resolver=secret_resolver,
+                )
+            ),
+            error=str(exc),
+        )
+
+    if not api_token:
+        return CanvasCredentialsConfigValidationResult(
+            ok=False,
+            provider=provider,
+            api_base_url=api_base_url,
+            assertion_scope=scope,
+            issuer_id=issuer_id,
+            badgeclass_id=badgeclass_id,
+            token_configured=False,
+            validation_url=validation_url,
+            error="CANVAS_CREDENTIALS_API_TOKEN is required for Canvas Credentials validation",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
+            response = await client.get(validation_url, headers=_canvas_credentials_headers(api_token))
+    except httpx.HTTPError as exc:
+        return CanvasCredentialsConfigValidationResult(
+            ok=False,
+            provider=provider,
+            api_base_url=api_base_url,
+            assertion_scope=scope,
+            issuer_id=issuer_id,
+            badgeclass_id=badgeclass_id,
+            token_configured=True,
+            validation_url=validation_url,
+            error=f"Canvas Credentials validation request failed: {exc}",
+        )
+
+    ok = 200 <= response.status_code < 300
+    return CanvasCredentialsConfigValidationResult(
+        ok=ok,
+        provider=provider,
+        api_base_url=api_base_url,
+        assertion_scope=scope,
+        issuer_id=issuer_id,
+        badgeclass_id=badgeclass_id,
+        token_configured=True,
+        validation_url=validation_url,
+        status_code=response.status_code,
+        request_id=response.headers.get("x-request-id"),
+        error=None if ok else f"Canvas Credentials validation failed with HTTP {response.status_code}",
+        response_excerpt=None if ok else _response_json_or_excerpt(response),
+    )
+
+
 async def _publish_canvas_badgr_assertion(
     *,
     credential: IssuedCredential,
     transaction: IssuanceTransaction,
     platform: CanvasPlatform,
     delivery_record: CredentialDeliveryRecord,
+    secret_resolver: CanvasSecretResolver | None = None,
 ) -> CanvasCredentialsPublishResult:
-    api_token = _canvas_credentials_secret_value(
+    api_token = await _canvas_credentials_secret_value(
         delivery_record,
         default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+        secret_resolver=secret_resolver,
     )
     if not api_token:
         raise RuntimeError("CANVAS_CREDENTIALS_API_TOKEN is required for real Canvas Credentials publish")
@@ -774,17 +974,38 @@ async def _sync_canvas_badgr_assertion_status(
     delivery_record: CredentialDeliveryRecord,
     lifecycle_action: str,
     reason: str | None,
+    secret_resolver: CanvasSecretResolver | None = None,
 ) -> CanvasCredentialsStatusSyncResult:
-    if lifecycle_action not in {"revoke", "revoked"}:
+    normalized_action = lifecycle_action.strip().lower()
+    if normalized_action in {"suspend", "suspended", "reinstate", "reinstated"}:
+        return CanvasCredentialsStatusSyncResult(
+            metadata={
+                "provider": "badgr_api",
+                "status_sync_mode": "canonical_provenance_only",
+                "status_sync_skipped": True,
+                "status_sync_reason": (
+                    "Canvas Credentials API does not expose suspend/reinstate operations; "
+                    "canonical ElevenID status and provenance remain authoritative."
+                ),
+                "status_synced_at": datetime.now(timezone.utc).isoformat(),
+                "canvas_credentials_lifecycle_mapping": {
+                    "requested_action": normalized_action,
+                    "external_action": None,
+                    "canonical_status": credential.status.value,
+                },
+            }
+        )
+    if normalized_action not in {"revoke", "revoked"}:
         raise RuntimeError(
-            "Canvas Credentials API supports assertion revocation, but not suspend/reinstate lifecycle sync"
+            f"Unsupported Canvas Credentials lifecycle action: {lifecycle_action}"
         )
     if not delivery_record.external_credential_id:
         raise RuntimeError("Canvas Credentials revoke requires external_credential_id")
 
-    api_token = _canvas_credentials_secret_value(
+    api_token = await _canvas_credentials_secret_value(
         delivery_record,
         default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+        secret_resolver=secret_resolver,
     )
     if not api_token:
         raise RuntimeError("CANVAS_CREDENTIALS_API_TOKEN is required for real Canvas Credentials status sync")
@@ -829,6 +1050,7 @@ async def publish_canvas_credential_mirror(
     transaction: IssuanceTransaction,
     platform: CanvasPlatform,
     delivery_record: CredentialDeliveryRecord,
+    secret_resolver: CanvasSecretResolver | None = None,
 ) -> CanvasCredentialsPublishResult:
     """Publish a canonical issued credential to the Canvas Credentials bridge/API."""
 
@@ -838,12 +1060,14 @@ async def publish_canvas_credential_mirror(
             transaction=transaction,
             platform=platform,
             delivery_record=delivery_record,
+            secret_resolver=secret_resolver,
         )
 
     publish_url = _normalize_publish_url()
-    api_token = _canvas_credentials_secret_value(
+    api_token = await _canvas_credentials_secret_value(
         delivery_record,
         default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+        secret_resolver=secret_resolver,
     )
     issuer_id = _canvas_credentials_issuer_id(delivery_record)
     payload = _build_canvas_publish_payload(
@@ -904,6 +1128,7 @@ async def sync_canvas_credential_status(
     delivery_record: CredentialDeliveryRecord,
     lifecycle_action: str,
     reason: str | None = None,
+    secret_resolver: CanvasSecretResolver | None = None,
 ) -> CanvasCredentialsStatusSyncResult:
     """Propagate canonical credential lifecycle changes to Canvas Credentials."""
 
@@ -913,12 +1138,14 @@ async def sync_canvas_credential_status(
             delivery_record=delivery_record,
             lifecycle_action=lifecycle_action,
             reason=reason,
+            secret_resolver=secret_resolver,
         )
 
     sync_url = _normalize_status_sync_url()
-    api_token = _canvas_credentials_secret_value(
+    api_token = await _canvas_credentials_secret_value(
         delivery_record,
         default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
+        secret_resolver=secret_resolver,
     )
     issuer_id = delivery_record.external_issuer_id or _canvas_credentials_issuer_id(delivery_record)
     payload = _build_canvas_status_sync_payload(

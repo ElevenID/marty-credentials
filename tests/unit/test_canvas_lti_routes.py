@@ -141,6 +141,136 @@ async def test_create_canvas_program_binding_persists_canvas_credentials_config(
 
 
 @pytest.mark.asyncio
+async def test_canvas_integration_secret_can_validate_canvas_credentials_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas-bridge.example/publish")
+
+    secret = await canvas_routes.create_canvas_integration_secret(
+        canvas_routes.CanvasIntegrationSecretCreate(
+            organization_id="org-1",
+            name="Canvas Credentials API token",
+            provider="canvas_credentials",
+            purpose="api_token",
+            secret_value="canvas-secret-token",
+        ),
+        repo=repo,
+    )
+
+    assert secret.secret_ref == f"org_secret://org-1/{secret.id}"
+    assert secret.secret_hint == "...oken"
+    assert await repo.get_integration_secret_value("org-1", secret.id) == "canvas-secret-token"
+
+    validation = await canvas_routes.validate_canvas_credentials_provider(
+        request=canvas_routes.CanvasCredentialsValidationRequest(
+            organization_id="org-1",
+            canvas_credentials={
+                "provider": "bridge",
+                "api_token_secret_id": secret.id,
+            }
+        ),
+        repo=repo,
+    )
+
+    assert validation.ok is True
+    assert validation.token_configured is True
+
+
+@pytest.mark.asyncio
+async def test_validate_canvas_credentials_provider_reports_missing_bridge_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
+
+    response = await canvas_routes.validate_canvas_credentials_provider(
+        request=canvas_routes.CanvasCredentialsValidationRequest(
+            organization_id="org-1",
+            canvas_credentials={"provider": "bridge"},
+        ),
+        repo=InMemoryIssuanceRepository(),
+    )
+
+    assert response.ok is False
+    assert response.provider == "bridge"
+    assert "CANVAS_CREDENTIALS_PUBLISH_URL" in response.error
+
+
+@pytest.mark.asyncio
+async def test_discover_canvas_scope_uses_admin_api_token_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    platform = CanvasPlatform(
+        id="canvas-platform-discovery",
+        organization_id="org-123",
+        canvas_account_id="canvas-acct-1",
+        canvas_base_url="https://canvas.example.edu",
+    )
+    await repo.save_canvas_platform(platform)
+    monkeypatch.setenv("CANVAS_ADMIN_TOKEN_TEST", "canvas-token")
+    calls: list[str] = []
+
+    async def fake_fetch(_client, *, base_url: str, token: str, path: str, limit: int) -> list[dict[str, object]]:
+        assert base_url == "https://canvas.example.edu"
+        assert token == "canvas-token"
+        assert limit == 25
+        calls.append(path)
+        if path == "courses":
+            return [{"id": 101, "name": "Interoperability 101"}]
+        if path == "courses/101/assignments":
+            return [{"id": 201, "name": "Badge assignment", "points_possible": 100, "published": True}]
+        if path == "courses/101/quizzes":
+            return [{"id": 301, "title": "Badge quiz", "points_possible": 100}]
+        if path == "courses/101/modules":
+            return [{"id": 401, "name": "Badge module", "workflow_state": "available"}]
+        return []
+
+    monkeypatch.setattr(canvas_routes, "_fetch_canvas_api_collection", fake_fetch)
+
+    response = await canvas_routes.discover_canvas_scope(
+        platform.id,
+        request=canvas_routes.CanvasScopeDiscoveryRequest(
+            course_id="101",
+            api_token_env="CANVAS_ADMIN_TOKEN_TEST",
+            limit=25,
+        ),
+        repo=repo,
+    )
+
+    assert calls == [
+        "courses",
+        "courses/101/assignments",
+        "courses/101/quizzes",
+        "courses/101/modules",
+    ]
+    assert response.courses[0].id == "101"
+    assert response.assignments[0].name == "Badge assignment"
+    assert response.quizzes[0].name == "Badge quiz"
+    assert response.modules[0].published is True
+
+
+@pytest.mark.asyncio
+async def test_discover_canvas_scope_requires_secret_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    platform = CanvasPlatform(
+        id="canvas-platform-discovery-no-token",
+        organization_id="org-123",
+        canvas_account_id="canvas-acct-1",
+        canvas_base_url="https://canvas.example.edu",
+    )
+    await repo.save_canvas_platform(platform)
+    monkeypatch.delenv("CANVAS_ADMIN_API_TOKEN", raising=False)
+    monkeypatch.delenv("CANVAS_ADMIN_API_TOKEN_FILE", raising=False)
+
+    with pytest.raises(HTTPException) as exc:
+        await canvas_routes.discover_canvas_scope(
+            platform.id,
+            request=canvas_routes.CanvasScopeDiscoveryRequest(course_id="101"),
+            repo=repo,
+        )
+
+    assert exc.value.status_code == 400
+    assert "Canvas admin discovery requires" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_probe_canvas_platform_sandbox_persists_rust_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = InMemoryIssuanceRepository()
     platform = CanvasPlatform(

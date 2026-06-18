@@ -32,6 +32,7 @@ from issuance.domain.entities import (
     IssuedCredential,
     CredentialStatus,
     EventType,
+    OrganizationIntegrationSecret,
 )
 from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.models import (
@@ -47,6 +48,7 @@ from issuance.infrastructure.models import (
     issued_credentials_table,
     issuance_events_table,
     issuance_transactions_table,
+    organization_integration_secrets_table,
 )
 
 # Key for HMAC-SHA256 token hashing.  Falls back to a deterministic
@@ -64,6 +66,28 @@ if not _TOKEN_HMAC_KEY_RAW:
     _TOKEN_HMAC_KEY_RAW = "marty-token-hmac-default-key"
 _TOKEN_HMAC_KEY: bytes = _TOKEN_HMAC_KEY_RAW.encode()
 logger = logging.getLogger(__name__)
+_integration_secret_encryption = None
+
+
+def _get_integration_secret_encryption():
+    """Return AES-GCM encryption for organization integration secrets."""
+    global _integration_secret_encryption
+    if _integration_secret_encryption is None:
+        try:
+            from status_list.infrastructure.security.encryption import SymmetricEncryption
+        except ImportError as exc:  # pragma: no cover - deployment packaging guard
+            raise RuntimeError("status_list encryption package is required for integration secrets") from exc
+        env_name = os.environ.get("INTEGRATION_SECRET_MASTER_KEY_ENV", "INTEGRATION_SECRET_MASTER_KEY")
+        if not os.environ.get(env_name):
+            key_file = os.environ.get(f"{env_name}_FILE")
+            if key_file:
+                try:
+                    with open(key_file, "r", encoding="utf-8") as handle:
+                        os.environ[env_name] = handle.read().strip()
+                except OSError as exc:
+                    raise RuntimeError(f"{env_name}_FILE could not be read: {key_file}") from exc
+        _integration_secret_encryption = SymmetricEncryption.from_env(env_name)
+    return _integration_secret_encryption
 
 
 def _hash_token(raw_token: str | None) -> str | None:
@@ -206,6 +230,23 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             created_at=row.created_at,
             expires_at=row.expires_at,
             consumed_at=row.consumed_at,
+        )
+
+    @staticmethod
+    def _row_to_integration_secret(row) -> OrganizationIntegrationSecret:
+        return OrganizationIntegrationSecret(
+            id=row.id,
+            organization_id=row.organization_id,
+            name=row.name,
+            provider=row.provider,
+            purpose=row.purpose,
+            secret_value="",
+            secret_hint=row.secret_hint,
+            metadata=row.metadata or {},
+            enabled=bool(row.enabled),
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            last_used_at=row.last_used_at,
         )
 
     @staticmethod
@@ -1296,6 +1337,108 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 canvas_program_bindings_table.c.id == binding_id
             )
             await session.execute(stmt)
+            await session.commit()
+
+    async def save_integration_secret(self, secret: OrganizationIntegrationSecret) -> None:
+        encryption = _get_integration_secret_encryption()
+        now = datetime.now(timezone.utc)
+        async with self._session_factory() as session:
+            existing_result = await session.execute(
+                select(organization_integration_secrets_table).where(
+                    organization_integration_secrets_table.c.id == secret.id
+                )
+            )
+            existing = existing_result.first()
+            encrypted_value = (
+                encryption.encrypt(secret.secret_value)
+                if secret.secret_value
+                else (existing.encrypted_secret_value if existing else None)
+            )
+            if not encrypted_value:
+                raise ValueError("secret_value is required when creating an integration secret")
+            secret_hint = secret.secret_hint
+            if not secret_hint and secret.secret_value:
+                secret_hint = f"...{secret.secret_value[-4:]}"
+            data = {
+                "id": secret.id,
+                "organization_id": secret.organization_id,
+                "name": secret.name,
+                "provider": secret.provider,
+                "purpose": secret.purpose or "api_token",
+                "encrypted_secret_value": encrypted_value,
+                "secret_hint": secret_hint,
+                "metadata": secret.metadata or {},
+                "enabled": secret.enabled,
+                "created_at": existing.created_at if existing else secret.created_at,
+                "updated_at": now,
+                "last_used_at": secret.last_used_at if secret.last_used_at else (existing.last_used_at if existing else None),
+            }
+            stmt = (
+                pg_insert(organization_integration_secrets_table)
+                .values(**data)
+                .on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                )
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+    async def get_integration_secret(self, secret_id: str) -> OrganizationIntegrationSecret | None:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(organization_integration_secrets_table).where(
+                    organization_integration_secrets_table.c.id == secret_id
+                )
+            )
+            row = result.first()
+            return self._row_to_integration_secret(row) if row else None
+
+    async def list_integration_secrets(
+        self,
+        organization_id: str,
+        provider: str | None = None,
+    ) -> list[OrganizationIntegrationSecret]:
+        async with self._session_factory() as session:
+            conditions = [organization_integration_secrets_table.c.organization_id == organization_id]
+            if provider is not None:
+                conditions.append(organization_integration_secrets_table.c.provider == provider)
+            stmt = (
+                select(organization_integration_secrets_table)
+                .where(and_(*conditions))
+                .order_by(organization_integration_secrets_table.c.created_at)
+            )
+            result = await session.execute(stmt)
+            return [self._row_to_integration_secret(row) for row in result.all()]
+
+    async def get_integration_secret_value(self, organization_id: str, secret_id: str) -> str | None:
+        encryption = _get_integration_secret_encryption()
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(organization_integration_secrets_table).where(
+                    organization_integration_secrets_table.c.id == secret_id,
+                    organization_integration_secrets_table.c.organization_id == organization_id,
+                    organization_integration_secrets_table.c.enabled == True,  # noqa: E712
+                )
+            )
+            row = result.first()
+            if row is None:
+                return None
+            await session.execute(
+                update(organization_integration_secrets_table)
+                .where(organization_integration_secrets_table.c.id == secret_id)
+                .values(last_used_at=datetime.now(timezone.utc))
+            )
+            await session.commit()
+        return encryption.decrypt(row.encrypted_secret_value)
+
+    async def delete_integration_secret(self, secret_id: str) -> None:
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(organization_integration_secrets_table).where(
+                    organization_integration_secrets_table.c.id == secret_id
+                )
+            )
             await session.commit()
 
     async def save_canvas_lti_launch_state(self, launch_state: CanvasLtiLaunchState) -> None:

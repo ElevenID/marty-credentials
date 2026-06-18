@@ -199,6 +199,32 @@ class CanvasProgramBinding:
 
 
 @dataclass
+class OrganizationIntegrationSecret:
+    """Organization-owned encrypted integration secret metadata.
+
+    The plaintext value is only populated on write/read-for-use paths; list/read
+    responses should expose metadata and secret references, never the token.
+    """
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    organization_id: str = ""
+    name: str = ""
+    provider: str = ""
+    purpose: str = "api_token"
+    secret_value: str = ""
+    secret_hint: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    enabled: bool = True
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_used_at: datetime | None = None
+
+    @property
+    def secret_ref(self) -> str:
+        return f"org_secret://{self.organization_id}/{self.id}"
+
+
+@dataclass
 class CanvasLtiLaunchState:
     """Server-owned nonce/state for a Canvas LTI 1.3 launch."""
 
