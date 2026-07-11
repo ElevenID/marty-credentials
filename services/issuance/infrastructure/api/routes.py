@@ -809,6 +809,7 @@ def _allowed_credential_issuer_audience_paths(org_id: str) -> tuple[str, ...]:
         f"/org/{org_id}/spruce",
         f"/org/{org_id}/credential-manager",
         f"/org/{org_id}/apple-wallet",
+        f"/org/{org_id}/waltid",
     )
 
 

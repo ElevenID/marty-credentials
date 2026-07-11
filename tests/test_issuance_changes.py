@@ -468,6 +468,10 @@ class TestProofAudienceMatching:
             f"https://beta.elevenidllc.com/org/{org_id}/apple-wallet",
             org_id,
         )
+        assert _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}/waltid",
+            org_id,
+        )
 
     def test_rejects_unknown_org_issuer_path(self):
         from issuance.infrastructure.api.routes import _proof_audience_matches_org_issuer
