@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -52,6 +52,7 @@ from issuance.infrastructure.api.routes import (
     ApplicationRejection,
     ApplicationResponse,
     ApplicationTemplateCreate,
+    ApplicationTemplatePatch,
     ApplicationTemplateResponse,
     EvidenceSubmission,
     _verify_management_api_key,
@@ -198,32 +199,7 @@ def _available_external_api_checks(template: ApplicationTemplate | None) -> list
 # Application Template Endpoints
 # ============================================================================
 
-@application_template_router.post("", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
-async def create_application_template(
-    request: ApplicationTemplateCreate,
-    repo: IIssuanceRepository = Depends(),
-) -> ApplicationTemplateResponse:
-    """Create an Application Template defining how users apply for credentials."""
-    template = ApplicationTemplate(
-        organization_id=request.organization_id,
-        name=request.name,
-        description=request.description,
-        credential_template_id=request.credential_template_id,
-        form_fields=request.form_fields,
-        evidence_requirements=request.evidence_requirements,
-        claim_collection_rules=request.claim_collection_rules,
-        required_checks=request.required_checks,
-        approval_strategy=request.approval_strategy,
-        approval_policy_set_id=request.approval_policy_set_id,
-        application_validity_days=request.application_validity_days,
-        auto_approval_rules=request.auto_approval_rules,
-        ui_config=request.ui_config,
-        notification_config=request.notification_config,
-    )
-    await repo.save_application_template(template)
-    
-    logger.info(f"Created application template {template.id} for organization {template.organization_id}")
-    
+def _template_response(template: ApplicationTemplate) -> ApplicationTemplateResponse:
     return ApplicationTemplateResponse(
         id=template.id,
         organization_id=template.organization_id,
@@ -237,13 +213,100 @@ async def create_application_template(
         approval_strategy=template.approval_strategy,
         approval_policy_set_id=template.approval_policy_set_id,
         application_validity_days=template.application_validity_days,
-        auto_approval_rules=template.auto_approval_rules,
         ui_config=template.ui_config,
         notification_config=template.notification_config,
         status=template.status,
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
     )
+
+
+async def _application_template_validation_errors(
+    template: ApplicationTemplate,
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+
+    def add(section: str, field: str, code: str, message: str) -> None:
+        errors.append({"section": section, "field": field, "code": code, "message": message})
+
+    if not template.credential_template_id:
+        add("credential_template", "credential_template_id", "REQUIRED", "Select a Credential Template.")
+        credential_template = None
+    else:
+        credential_template = None
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
+                )
+            if response.status_code == 200:
+                credential_template = response.json()
+            else:
+                add("credential_template", "credential_template_id", "NOT_FOUND", "Credential Template was not found.")
+        except Exception:
+            add("credential_template", "credential_template_id", "UNAVAILABLE", "Credential Template validation is unavailable.")
+
+    if credential_template:
+        if str(credential_template.get("organization_id") or "") != template.organization_id:
+            add("credential_template", "credential_template_id", "WRONG_ORGANIZATION", "Credential Template belongs to another organization.")
+        if str(credential_template.get("status") or "").upper() != "ACTIVE":
+            add("credential_template", "credential_template_id", "NOT_ACTIVE", "Credential Template must be active.")
+
+    if not template.form_fields:
+        add("form_fields", "form_fields", "REQUIRED", "Add at least one form field.")
+
+    credential_claims = {
+        str(claim.get("name") or claim.get("field_id") or "")
+        for claim in ((credential_template or {}).get("claims") or [])
+        if isinstance(claim, dict)
+    }
+    seen_fields: set[str] = set()
+    for index, field in enumerate(template.form_fields):
+        field_id = str(field.get("field_id") or "")
+        if field_id in seen_fields:
+            add("form_fields", f"form_fields.{index}.field_id", "DUPLICATE", "Field IDs must be unique.")
+        seen_fields.add(field_id)
+        if field.get("field_type") == "SELECT" and not field.get("options"):
+            add("form_fields", f"form_fields.{index}.options", "REQUIRED", "Select fields require options.")
+        if field.get("minimum") is not None and field.get("maximum") is not None and field["minimum"] > field["maximum"]:
+            add("form_fields", f"form_fields.{index}.minimum", "INVALID_RANGE", "Minimum cannot exceed maximum.")
+        claim_mapping = str(field.get("claim_mapping") or "")
+        if claim_mapping and credential_claims and claim_mapping not in credential_claims:
+            add("claim_mappings", f"form_fields.{index}.claim_mapping", "UNKNOWN_CLAIM", "Claim mapping is not defined by the Credential Template.")
+
+    if template.approval_strategy == "RULES_BASED" and not template.approval_policy_set_id:
+        add("approval", "approval_policy_set_id", "REQUIRED", "Rules-based approval requires an approval Policy Set.")
+    if not 1 <= template.application_validity_days <= 3650:
+        add("validity", "application_validity_days", "OUT_OF_RANGE", "Validity must be between 1 and 3650 days.")
+    return errors
+
+@application_template_router.post("", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
+async def create_application_template(
+    request: ApplicationTemplateCreate,
+    repo: IIssuanceRepository = Depends(),
+) -> ApplicationTemplateResponse:
+    """Create an Application Template defining how users apply for credentials."""
+    template = ApplicationTemplate(
+        organization_id=request.organization_id,
+        name=request.name,
+        description=request.description,
+        credential_template_id=request.credential_template_id,
+        form_fields=[field.model_dump(exclude_none=True) for field in request.form_fields],
+        evidence_requirements=request.evidence_requirements,
+        claim_collection_rules=request.claim_collection_rules,
+        required_checks=[check.model_dump(exclude_none=True) for check in request.required_checks],
+        approval_strategy=request.approval_strategy,
+        approval_policy_set_id=request.approval_policy_set_id,
+        application_validity_days=request.application_validity_days,
+        ui_config=request.ui_config,
+        notification_config=request.notification_config,
+        status="DRAFT",
+    )
+    await repo.save_application_template(template)
+    
+    logger.info(f"Created application template {template.id} for organization {template.organization_id}")
+    
+    return _template_response(template)
 
 
 @application_template_router.get("", response_model=list[ApplicationTemplateResponse], dependencies=[Depends(_verify_management_api_key)])
@@ -254,29 +317,7 @@ async def list_application_templates(
     """List all application templates for an organization."""
     templates = await repo.list_application_templates(organization_id)
     
-    return [
-        ApplicationTemplateResponse(
-            id=t.id,
-            organization_id=t.organization_id,
-            name=t.name,
-            description=t.description,
-            credential_template_id=t.credential_template_id,
-            form_fields=t.form_fields,
-            evidence_requirements=t.evidence_requirements,
-            claim_collection_rules=t.claim_collection_rules,
-            required_checks=t.required_checks,
-            approval_strategy=t.approval_strategy,
-            approval_policy_set_id=t.approval_policy_set_id,
-            application_validity_days=t.application_validity_days,
-            auto_approval_rules=t.auto_approval_rules,
-            ui_config=t.ui_config,
-            notification_config=t.notification_config,
-            status=t.status,
-            created_at=t.created_at.isoformat(),
-            updated_at=t.updated_at.isoformat(),
-        )
-        for t in templates
-    ]
+    return [_template_response(template) for template in templates]
 
 
 @application_template_router.get("/{template_id}", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
@@ -289,78 +330,97 @@ async def get_application_template(
     if not template:
         raise HTTPException(status_code=404, detail="Application template not found")
     
-    return ApplicationTemplateResponse(
-        id=template.id,
-        organization_id=template.organization_id,
-        name=template.name,
-        description=template.description,
-        credential_template_id=template.credential_template_id,
-        form_fields=template.form_fields,
-        evidence_requirements=template.evidence_requirements,
-        claim_collection_rules=template.claim_collection_rules,
-        required_checks=template.required_checks,
-        approval_strategy=template.approval_strategy,
-        approval_policy_set_id=template.approval_policy_set_id,
-        application_validity_days=template.application_validity_days,
-        auto_approval_rules=template.auto_approval_rules,
-        ui_config=template.ui_config,
-        notification_config=template.notification_config,
-        status=template.status,
-        created_at=template.created_at.isoformat(),
-        updated_at=template.updated_at.isoformat(),
-    )
+    return _template_response(template)
 
 
-@application_template_router.put("/{template_id}", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
+@application_template_router.patch("/{template_id}", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def update_application_template(
     template_id: str,
-    request: ApplicationTemplateCreate,
+    request: ApplicationTemplatePatch,
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationTemplateResponse:
-    """Update an existing application template."""
+    """Patch a draft Application Template."""
     template = await repo.get_application_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Application template not found")
+    if template.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only draft Application Templates can be edited")
 
-    template.name = request.name
-    template.description = request.description
-    template.credential_template_id = request.credential_template_id
-    template.form_fields = request.form_fields
-    template.evidence_requirements = request.evidence_requirements
-    template.claim_collection_rules = request.claim_collection_rules
-    template.required_checks = request.required_checks
-    template.approval_strategy = request.approval_strategy
-    template.approval_policy_set_id = request.approval_policy_set_id
-    template.application_validity_days = request.application_validity_days
-    template.auto_approval_rules = request.auto_approval_rules
-    template.ui_config = request.ui_config
-    template.notification_config = request.notification_config
+    changes = request.model_dump(exclude_unset=True)
+    for key, value in changes.items():
+        if key == "form_fields" and value is not None:
+            value = [field.model_dump(exclude_none=True) if hasattr(field, "model_dump") else field for field in request.form_fields or []]
+        elif key == "required_checks" and value is not None:
+            value = [check.model_dump(exclude_none=True) if hasattr(check, "model_dump") else check for check in request.required_checks or []]
+        setattr(template, key, value)
     template.updated_at = datetime.now(timezone.utc)
-
     await repo.save_application_template(template)
-
     logger.info(f"Updated application template {template.id}")
+    return _template_response(template)
 
-    return ApplicationTemplateResponse(
-        id=template.id,
-        organization_id=template.organization_id,
-        name=template.name,
-        description=template.description,
-        credential_template_id=template.credential_template_id,
-        form_fields=template.form_fields,
-        evidence_requirements=template.evidence_requirements,
-        claim_collection_rules=template.claim_collection_rules,
-        required_checks=template.required_checks,
-        approval_strategy=template.approval_strategy,
-        approval_policy_set_id=template.approval_policy_set_id,
-        application_validity_days=template.application_validity_days,
-        auto_approval_rules=template.auto_approval_rules,
-        ui_config=template.ui_config,
-        notification_config=template.notification_config,
-        status=template.status,
-        created_at=template.created_at.isoformat(),
-        updated_at=template.updated_at.isoformat(),
-    )
+
+@application_template_router.post("/{template_id}/validate", dependencies=[Depends(_verify_management_api_key)])
+async def validate_application_template(
+    template_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> dict[str, Any]:
+    template = await repo.get_application_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Application template not found")
+    errors = await _application_template_validation_errors(template)
+    return {"valid": not errors, "errors": errors}
+
+
+@application_template_router.post("/{template_id}/activate", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
+async def activate_application_template(
+    template_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> ApplicationTemplateResponse:
+    template = await repo.get_application_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Application template not found")
+    if template.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only draft Application Templates can be activated")
+    errors = await _application_template_validation_errors(template)
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "APPLICATION_TEMPLATE_INVALID", "errors": errors},
+        )
+    template.status = "ACTIVE"
+    template.updated_at = datetime.now(timezone.utc)
+    await repo.save_application_template(template)
+    return _template_response(template)
+
+
+@application_template_router.post("/{template_id}/deprecate", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
+async def deprecate_application_template(
+    template_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> ApplicationTemplateResponse:
+    template = await repo.get_application_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Application template not found")
+    if template.status != "ACTIVE":
+        raise HTTPException(status_code=409, detail="Only active Application Templates can be deprecated")
+    template.status = "DEPRECATED"
+    template.updated_at = datetime.now(timezone.utc)
+    await repo.save_application_template(template)
+    return _template_response(template)
+
+
+@application_template_router.delete("/{template_id}", status_code=204, dependencies=[Depends(_verify_management_api_key)])
+async def delete_application_template(
+    template_id: str,
+    repo: IIssuanceRepository = Depends(),
+) -> Response:
+    template = await repo.get_application_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Application template not found")
+    if template.status != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only draft Application Templates can be deleted")
+    await repo.delete_application_template(template_id)
+    return Response(status_code=204)
 
 
 # ============================================================================
@@ -376,6 +436,8 @@ async def create_application(
     template = await repo.get_application_template(request.application_template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Application template not found")
+    if template.status != "ACTIVE":
+        raise HTTPException(status_code=422, detail="Application template must be active")
     
     applicant_data = request.applicant_data
     applicant_identifier = (
@@ -589,7 +651,7 @@ async def run_external_evidence_api_check(
         requirements=template.evidence_requirements,
         source="external_evidence_api",
         audit_metadata={"check_id": check_id},
-        connector=None,
+        binding=None,
         evaluate_policy=True,
         issue_on_permit=request.issue_on_permit,
         auto_issue_on_permit=auto_issue_enabled,

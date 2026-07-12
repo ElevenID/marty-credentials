@@ -143,7 +143,6 @@ application_templates_table = Table(
     Column("approval_strategy", String, nullable=False, default="auto"),
     Column("approval_policy_set_id", String, nullable=True),
     Column("application_validity_days", Integer, nullable=False, default=30),
-    Column("auto_approval_rules", JSON, nullable=False, default=list),
     Column("ui_config", JSON, nullable=False, default=dict),
     Column("notification_config", JSON, nullable=False, default=dict),
     Column("status", String, nullable=False, default="active"),
@@ -185,6 +184,38 @@ applications_table = Table(
 )
 
 # Issuance Events table — append-only audit/lifecycle log
+physical_document_jobs_table = Table(
+    "physical_document_jobs",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column("flow_execution_id", String, nullable=False),
+    Column("application_id", String, nullable=False, unique=True),
+    Column("application_template_id", String, nullable=False),
+    Column("credential_template_id", String, nullable=False),
+    Column("delivery_destination_profile_id", String(128), nullable=False),
+    Column("document_type", String(3), nullable=False),
+    Column("country_code", String(3), nullable=False),
+    Column("secure_artifact_ciphertext", Text, nullable=False),
+    Column("secure_artifact_reference", String(512), nullable=False),
+    Column("sod_sha256", String(64), nullable=True),
+    Column("bureau_job_id", String(255), nullable=True),
+    Column("tracking_number", String(255), nullable=True),
+    Column("status", String(40), nullable=False, default="DRAFT"),
+    Column("quality_result", JSON, nullable=True),
+    Column("error_code", String(128), nullable=True),
+    Column("error_message", String(1024), nullable=True),
+    Column("submitted_at", DateTime(timezone=True), nullable=True),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_physical_document_jobs_organization_id", "organization_id"),
+    Index("ix_physical_document_jobs_flow_execution_id", "flow_execution_id"),
+    Index("ix_physical_document_jobs_status", "status"),
+    Index("ix_physical_document_jobs_bureau_job_id", "bureau_job_id"),
+    schema="issuance_service",
+)
+
 issuance_events_table = Table(
     "issuance_events",
     mapper_registry.metadata,

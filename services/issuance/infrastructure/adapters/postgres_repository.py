@@ -897,7 +897,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "approval_strategy": template.approval_strategy,
                 "approval_policy_set_id": template.approval_policy_set_id,
                 "application_validity_days": template.application_validity_days,
-                "auto_approval_rules": template.auto_approval_rules,
                 "ui_config": template.ui_config,
                 "notification_config": template.notification_config,
                 "status": template.status,
@@ -944,7 +943,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 approval_strategy=row.approval_strategy,
                 approval_policy_set_id=getattr(row, "approval_policy_set_id", None),
                 application_validity_days=row.application_validity_days,
-                auto_approval_rules=row.auto_approval_rules or [],
                 ui_config=row.ui_config or {},
                 notification_config=row.notification_config or {},
                 status=row.status,
@@ -967,6 +965,16 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     templates.append(template)
             
             return templates
+
+    async def delete_application_template(self, template_id: str) -> bool:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                application_templates_table.delete().where(
+                    application_templates_table.c.id == template_id
+                )
+            )
+            await session.commit()
+            return bool(result.rowcount)
     
     # Application methods
     async def save_application(self, app: Application) -> None:

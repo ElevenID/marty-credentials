@@ -153,6 +153,11 @@ class IIssuanceRepository(ABC):
     async def list_application_templates(self, org_id: str) -> list[ApplicationTemplate]:
         """List application templates for an organization."""
         pass
+
+    @abstractmethod
+    async def delete_application_template(self, template_id: str) -> bool:
+        """Delete an application template and return whether it existed."""
+        pass
     
     # Application methods
     @abstractmethod

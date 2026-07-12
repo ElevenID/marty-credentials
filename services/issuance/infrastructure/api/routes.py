@@ -10,13 +10,13 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from issuance.application.rust_integration import (
     create_sd_jwt_vc_with_remote_signing,
@@ -498,22 +498,68 @@ class CredentialResponse(BaseModel):
     nonce_expires_in: int | None = None
 
 
+class ApplicationFormField(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    label: str = Field(min_length=1, max_length=256)
+    field_type: Literal[
+        "TEXT", "DATE", "DATETIME", "SELECT", "FILE_UPLOAD",
+        "INTEGER", "NUMBER", "BOOLEAN", "EMAIL", "URL",
+    ]
+    required: bool
+    claim_mapping: str | None = None
+    validation_pattern: str | None = None
+    options: list[str] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    placeholder: str | None = None
+    hint: str | None = None
+
+
+class RequiredApplicationCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_type: str = Field(min_length=1)
+    is_required: bool = True
+    order: int = Field(ge=1)
+    config: dict[str, Any] = Field(default_factory=dict)
+    external_provider: str | None = None
+
+
 class ApplicationTemplateCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str
-    name: str
+    name: str = Field(min_length=1, max_length=128)
     description: str | None = None
     credential_template_id: str | None = None
-    form_fields: list[dict[str, Any]] = []
-    evidence_requirements: list[Any] = []
-    claim_collection_rules: list[dict[str, Any]] = []
-    # Pluggable vetting checks: {check_type, custom_name, is_required, order, config, external_provider, webhook_url}
-    required_checks: list[dict[str, Any]] = []
-    approval_strategy: str = "auto"
+    form_fields: list[ApplicationFormField] = Field(default_factory=list)
+    evidence_requirements: list[Any] = Field(default_factory=list)
+    claim_collection_rules: list[dict[str, Any]] = Field(default_factory=list)
+    required_checks: list[RequiredApplicationCheck] = Field(default_factory=list)
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "MANUAL"
     approval_policy_set_id: str | None = None
-    application_validity_days: int = 30
-    auto_approval_rules: list[dict[str, Any]] = []
-    ui_config: dict[str, Any] = {}
-    notification_config: dict[str, Any] = {}
+    application_validity_days: int = Field(default=30, ge=1, le=3650)
+    ui_config: dict[str, Any] = Field(default_factory=dict)
+    notification_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ApplicationTemplatePatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    description: str | None = None
+    credential_template_id: str | None = None
+    form_fields: list[ApplicationFormField] | None = None
+    evidence_requirements: list[Any] | None = None
+    claim_collection_rules: list[dict[str, Any]] | None = None
+    required_checks: list[RequiredApplicationCheck] | None = None
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = None
+    approval_policy_set_id: str | None = None
+    application_validity_days: int | None = Field(default=None, ge=1, le=3650)
+    ui_config: dict[str, Any] | None = None
+    notification_config: dict[str, Any] | None = None
 
 
 # ── DIDComm v2 models ─────────────────────────────────────────────────────
@@ -553,7 +599,6 @@ class ApplicationTemplateResponse(BaseModel):
     approval_strategy: str
     approval_policy_set_id: str | None = None
     application_validity_days: int
-    auto_approval_rules: list[dict[str, Any]]
     ui_config: dict[str, Any]
     notification_config: dict[str, Any]
     status: str

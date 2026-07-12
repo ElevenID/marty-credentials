@@ -191,6 +191,10 @@ from issuance.infrastructure.api.routes import (
     issued_credential_router,
     run_canvas_mirror_automation_loop,
 )
+from issuance.infrastructure.api.physical_document_routes import (
+    configure_physical_document_store,
+    physical_document_router,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -244,6 +248,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresIssuanceRepository(session_factory)
     configure_issuer_key_store(session_factory)
+    configure_physical_document_store(session_factory)
     logger.info("PostgreSQL adapter initialized for issuance service")
 
     # Start gRPC server
@@ -280,6 +285,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await grpc_server.stop(grace=5)
             logger.info("gRPC server stopped")
         configure_issuer_key_store(None)
+        configure_physical_document_store(None)
         await engine.dispose()
 
 
@@ -312,6 +318,7 @@ def create_app() -> FastAPI:
     app.include_router(issued_credential_router)
     app.include_router(application_template_router)
     app.include_router(application_router)
+    app.include_router(physical_document_router)
     
     # Override FastAPI dependency injection
     app.dependency_overrides[IIssuanceRepository] = get_repo

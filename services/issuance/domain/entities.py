@@ -431,10 +431,9 @@ class ApplicationTemplate:
     required_checks: list[dict[str, Any]] = field(default_factory=list)
     
     # Workflow configuration
-    approval_strategy: str = "auto"
+    approval_strategy: str = "MANUAL"
     approval_policy_set_id: str | None = None
     application_validity_days: int = 30
-    auto_approval_rules: list[dict[str, Any]] = field(default_factory=list)
     
     # UI configuration
     ui_config: dict[str, Any] = field(default_factory=dict)
@@ -443,7 +442,7 @@ class ApplicationTemplate:
     # Metadata
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    status: str = "active"
+    status: str = "DRAFT"
 
 
 @dataclass

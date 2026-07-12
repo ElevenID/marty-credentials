@@ -185,6 +185,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     
     async def list_application_templates(self, org_id: str) -> list[ApplicationTemplate]:
         return [t for t in self._application_templates.values() if t.organization_id == org_id]
+
+    async def delete_application_template(self, template_id: str) -> bool:
+        return self._application_templates.pop(template_id, None) is not None
     
     async def save_application(self, app: Application) -> None:
         self._applications[app.id] = app
