@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -44,6 +44,17 @@ def test_native_extension_capability_contract_accepts_complete_module(monkeypatc
     monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: complete_module)
 
     rust_integration.validate_marty_rs_capabilities()
+
+
+def test_native_extension_uses_maturin_package_name(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    extension = SimpleNamespace()
+    package = ModuleType("_marty_rs")
+    package._marty_rs = extension
+    monkeypatch.setitem(sys.modules, "_marty_rs", package)
+
+    assert rust_integration.get_marty_rs() is extension
 
 
 def test_native_extension_capability_contract_rejects_incomplete_module(monkeypatch) -> None:
