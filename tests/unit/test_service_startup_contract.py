@@ -50,9 +50,9 @@ def test_native_extension_uses_maturin_package_name(monkeypatch) -> None:
     from issuance.application import rust_integration
 
     extension = SimpleNamespace()
-    package = ModuleType("_marty_rs")
+    package = ModuleType("marty_rs")
     package._marty_rs = extension
-    monkeypatch.setitem(sys.modules, "_marty_rs", package)
+    monkeypatch.setitem(sys.modules, "marty_rs", package)
 
     assert rust_integration.get_marty_rs() is extension
 

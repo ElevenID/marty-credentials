@@ -181,7 +181,7 @@ def get_marty_rs():
         ImportError: If marty-rs bindings are not available.
     """
     try:
-        from _marty_rs import _marty_rs
+        from marty_rs import _marty_rs
         return _marty_rs
     except ImportError as e:
         logger.error("marty-rs bindings not available - credential signing will fail")
