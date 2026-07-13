@@ -1,4 +1,4 @@
-"""MIP 0.2 physical ICAO document production endpoints."""
+"""MIP 0.3.1 physical ICAO document production endpoints."""
 
 from __future__ import annotations
 

@@ -35,6 +35,8 @@ class IssuanceTransaction:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     organization_id: str = ""
     credential_template_id: str = ""
+    revocation_profile_id: str | None = None
+    renewal_of_credential_id: str | None = None
     applicant_id: str | None = None
     application_id: str | None = None
     subject_did: str | None = None
@@ -61,6 +63,9 @@ class IssuanceTransaction:
     selective_disclosure_claims: list[str] = field(default_factory=list)  # SD-JWT selectively disclosable claims
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"  # SD-JWT payload structure
     wallet_configs: list[dict] = field(default_factory=list)  # [{wallet_id, deep_link_scheme}, ...]
+    validity_days: int = 365
+    renewable: bool = False
+    renewal_window_days: int = 30
     
     # Timing
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -334,6 +339,8 @@ class IssuedCredential:
     subject_did: str | None = None
     issuer_did: str | None = None
     revocation_profile_id: str | None = None
+    renewed_from_credential_id: str | None = None
+    renewed_to_credential_id: str | None = None
     status_list_entries: list[dict[str, Any]] = field(default_factory=list)
     
     # Credential data

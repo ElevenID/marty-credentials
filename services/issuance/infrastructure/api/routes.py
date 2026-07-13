@@ -257,7 +257,7 @@ def _did_resolution_failure_detail(tx: IssuanceTransaction, exc: Exception) -> s
 # Routers
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
 application_template_router = APIRouter(prefix="/v1/application-templates", tags=["application-templates"])
-application_router = APIRouter(prefix="/v1/applications", tags=["applications"])
+internal_application_router = APIRouter(prefix="/internal/applications", tags=["internal-applications"])
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["issued-credentials"])
 
 # ---------------------------------------------------------------------------
@@ -455,6 +455,15 @@ class IssuanceResponse(BaseModel):
     expires_at: str
 
 
+class CredentialRenewalOfferResponse(BaseModel):
+    source_credential_id: str
+    transaction_id: str
+    credential_offer_uri: str
+    credential_offer_uris: dict[str, str] = {}
+    credential_offer_labels: dict[str, str] = {}
+    expires_at: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "Bearer"
@@ -473,11 +482,11 @@ class TokenResponse(BaseModel):
 
 
 class CredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     format: str | None = None
     # OID4VCI v1 §8.2: proofs is an object mapping proof_type -> list[str]
     proofs: dict[str, list[str]] | None = None
-    # Legacy draft support — kept for backward compatibility
-    proof: dict[str, Any] | None = None
     # v1: identify credential by config id or credential_identifier from token response
     credential_configuration_id: str | None = None
     credential_identifier: str | None = None
@@ -527,6 +536,39 @@ class RequiredApplicationCheck(BaseModel):
     external_provider: str | None = None
 
 
+class ApplicationEvidenceRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_id: str = Field(min_length=1)
+    evidence_type: Literal[
+        "DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION",
+        "EXTERNAL_FACT", "EXTERNAL_API",
+    ]
+    description: str
+    required: bool
+    accepted_formats: list[str] | None = None
+    max_file_size_bytes: int | None = Field(default=None, ge=1)
+    provider: str | None = None
+    fact_type: str | None = None
+    scope: dict[str, Any] | None = None
+    pass_rule: dict[str, Any] | None = None
+    verification_method: str | None = None
+    freshness: dict[str, Any] | None = None
+    manual_fallback: bool | None = None
+    api: dict[str, Any] | None = None
+    expected_response: dict[str, Any] | None = None
+    response_mapping: dict[str, Any] | None = None
+    auto_issue_on_permit: bool | None = None
+
+
+class ClaimCollectionRule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_name: str = Field(min_length=1)
+    source: Literal["FORM_FIELD", "EVIDENCE_EXTRACTION", "EXTERNAL_API", "SYSTEM"]
+    source_config: dict[str, Any] = Field(default_factory=dict)
+
+
 class ApplicationTemplateCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -535,8 +577,8 @@ class ApplicationTemplateCreate(BaseModel):
     description: str | None = None
     credential_template_id: str | None = None
     form_fields: list[ApplicationFormField] = Field(default_factory=list)
-    evidence_requirements: list[Any] = Field(default_factory=list)
-    claim_collection_rules: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_requirements: list[ApplicationEvidenceRequirement] = Field(default_factory=list)
+    claim_collection_rules: list[ClaimCollectionRule] = Field(default_factory=list)
     required_checks: list[RequiredApplicationCheck] = Field(default_factory=list)
     approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "MANUAL"
     approval_policy_set_id: str | None = None
@@ -552,8 +594,8 @@ class ApplicationTemplatePatch(BaseModel):
     description: str | None = None
     credential_template_id: str | None = None
     form_fields: list[ApplicationFormField] | None = None
-    evidence_requirements: list[Any] | None = None
-    claim_collection_rules: list[dict[str, Any]] | None = None
+    evidence_requirements: list[ApplicationEvidenceRequirement] | None = None
+    claim_collection_rules: list[ClaimCollectionRule] | None = None
     required_checks: list[RequiredApplicationCheck] | None = None
     approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = None
     approval_policy_set_id: str | None = None
@@ -635,13 +677,15 @@ class EvidenceSubmission(BaseModel):
 
 
 class ApplicationApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     review_notes: str | None = None
-    reviewer_id: str | None = None
 
 
 class ApplicationRejection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     review_notes: str
-    reviewer_id: str | None = None
 
 
 class CredentialStatusRequest(BaseModel):
@@ -650,6 +694,7 @@ class CredentialStatusRequest(BaseModel):
 
 class CredentialStatusResponse(BaseModel):
     id: str
+    issuer_did: str | None = None
     status: str
     status_updated_at: str
     reason: str | None = None
@@ -763,6 +808,7 @@ class CanvasMirrorProvenanceResponse(BaseModel):
 
 class IssuedCredentialRecordResponse(BaseModel):
     id: str
+    organization_id: str
     credential_id: str
     credential_type: str
     credential_format: str
@@ -770,6 +816,11 @@ class IssuedCredentialRecordResponse(BaseModel):
     credential_template_id: str
     application_id: str | None = None
     revocation_profile_id: str | None = None
+    renewed_from_credential_id: str | None = None
+    renewed_to_credential_id: str | None = None
+    renewable: bool = False
+    renewal_eligible_at: str | None = None
+    can_renew: bool = False
     subject_id: str
     subject_claims_hash: str | None = None
     issued_at: str
@@ -964,25 +1015,33 @@ def _revocation_index_from_credential(credential: IssuedCredential) -> int | Non
 async def _allocate_credential_status_list_entries(
     *,
     credential_id: str,
+    organization_id: str,
     credential_format: str,
     revocation_profile_id: str | None = None,
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    profile_id = revocation_profile_id or _default_revocation_profile_id()
+    profile_id = (revocation_profile_id or "").strip()
+    if not profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail="The Credential Template has no Revocation Profile.",
+        )
     service_url = (
         os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or ""
     ).strip().rstrip("/")
     if not service_url:
-        logger.info(
-            "Skipping status-list allocation for credential %s because REVOCATION_PROFILE_SERVICE_URL is not configured",
-            credential_id,
+        raise HTTPException(
+            status_code=503,
+            detail="Revocation Profile service is unavailable.",
         )
-        return None, []
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
                 f"{service_url}/internal/revocation-profiles/{profile_id}/allocate-index",
-                json={"credential_format": credential_format},
+                json={
+                    "organization_id": organization_id,
+                    "credential_format": credential_format,
+                },
             )
             response.raise_for_status()
             payload = response.json()
@@ -993,17 +1052,35 @@ async def _allocate_credential_status_list_entries(
             profile_id,
             exc,
         )
-        return None, []
+        raise HTTPException(
+            status_code=503,
+            detail="Credential status allocation failed.",
+        ) from exc
 
     index = payload.get("index")
     status_list_url = payload.get("status_list_url")
+    response_organization_id = payload.get("organization_id")
+    if response_organization_id != organization_id:
+        logger.error(
+            "Status-list allocation organization mismatch for credential %s: expected=%s actual=%s",
+            credential_id,
+            organization_id,
+            response_organization_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Credential status allocation returned the wrong organization.",
+        )
     if index is None or not status_list_url:
         logger.warning(
             "Status-list allocation response for credential %s was incomplete: %s",
             credential_id,
             payload,
         )
-        return None, []
+        raise HTTPException(
+            status_code=503,
+            detail="Credential status allocation returned an incomplete response.",
+        )
 
     return profile_id, [
         {
@@ -1015,6 +1092,46 @@ async def _allocate_credential_status_list_entries(
             "status_purpose": "revocation",
         }
     ]
+
+
+async def _require_active_revocation_profile_binding(
+    *,
+    organization_id: str,
+    revocation_profile_id: str | None,
+) -> None:
+    profile_id = str(revocation_profile_id or "").strip()
+    if not profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Credential Templates must reference an active Revocation Profile before issuance.",
+        )
+
+    import grpc
+    from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
+    from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
+
+    target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
+    try:
+        async with grpc.aio.insecure_channel(target) as channel:
+            response = await rp_grpc.RevocationProfileServiceStub(channel).GetRevocationProfile(
+                rp_pb2.GetRevocationProfileRequest(profile_id=profile_id),
+                timeout=3.0,
+            )
+    except grpc.aio.AioRpcError as exc:
+        if exc.code() == grpc.StatusCode.NOT_FOUND:
+            raise HTTPException(status_code=422, detail="Revocation Profile not found.") from exc
+        raise HTTPException(status_code=503, detail="Revocation Profile validation is unavailable.") from exc
+
+    if response.organization_id != organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="The Revocation Profile belongs to another organization.",
+        )
+    if str(response.status or "").strip().lower() != "active":
+        raise HTTPException(
+            status_code=422,
+            detail="Credential Templates must reference an active Revocation Profile before issuance.",
+        )
 
 
 def _subject_claims_hash(tx: IssuanceTransaction | None) -> str | None:
@@ -1054,8 +1171,14 @@ async def _issued_credential_to_protocol(
     protocol_status = _credential_status_to_protocol(cred.status, valid_until)
     credential_type = (tx.credential_type if tx and tx.credential_type else "unknown")
     updated_at = cred.status_updated_at if cred.status_updated_at else cred.issued_at
+    renewal_eligible_at = (
+        valid_until - timedelta(days=tx.renewal_window_days)
+        if tx and tx.renewable and valid_until
+        else None
+    )
     return IssuedCredentialRecordResponse(
         id=cred.id,
+        organization_id=cred.organization_id,
         credential_id=cred.id,
         credential_type=credential_type,
         credential_format=_credential_format_to_protocol(tx, cred),
@@ -1063,6 +1186,18 @@ async def _issued_credential_to_protocol(
         credential_template_id=cred.credential_template_id,
         application_id=tx.application_id if tx else None,
         revocation_profile_id=cred.revocation_profile_id,
+        renewed_from_credential_id=cred.renewed_from_credential_id,
+        renewed_to_credential_id=cred.renewed_to_credential_id,
+        renewable=bool(tx and tx.renewable),
+        renewal_eligible_at=renewal_eligible_at.isoformat() if renewal_eligible_at else None,
+        can_renew=bool(
+            tx
+            and tx.renewable
+            and renewal_eligible_at
+            and datetime.now(timezone.utc) >= renewal_eligible_at
+            and cred.status == CredentialStatus.ACTIVE
+            and not cred.renewed_to_credential_id
+        ),
         subject_id=subject_id,
         subject_claims_hash=_subject_claims_hash(tx),
         issued_at=issued_at.isoformat(),
@@ -2203,7 +2338,11 @@ async def initiate_issuance(
     zk_predicate_claims: list[str] = []
     selective_disclosure_claims: list[str] = []
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
+    revocation_profile_id: str | None = None
     wallet_configs: list[dict] = []
+    validity_days = 365
+    renewable = False
+    renewal_window_days = 30
     if request.credential_template_id:
         _tmpl_resolved = False
         # Try gRPC first
@@ -2228,7 +2367,11 @@ async def initiate_issuance(
             zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
             selective_disclosure_claims = list(tmpl_resp.selective_disclosure_fields) if tmpl_resp.selective_disclosure_fields else []
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+            revocation_profile_id = tmpl_resp.revocation_profile_id or None
             wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
+            validity_days = tmpl_resp.validity_rules.default_validity_days or 365
+            renewable = bool(tmpl_resp.validity_rules.renewable)
+            renewal_window_days = tmpl_resp.validity_rules.renewal_window_days or 30
             logger.info(f"Fetched credential type from template (gRPC): {credential_type} vct={credential_vct}")
             logger.info(f"Template wallet_configs_json: {tmpl_resp.wallet_configs_json}")
             logger.info(f"Parsed wallet_configs ({len(wallet_configs)} entries): {[wc.get('wallet_id') for wc in wallet_configs]}")
@@ -2265,12 +2408,27 @@ async def initiate_issuance(
             zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
             selective_disclosure_claims = tmpl.get("selective_disclosure_fields") or []
             credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
+            revocation_profile_id = tmpl.get("revocation_profile_id") or None
             wallet_configs = tmpl.get("wallet_configs") or []
+            validity_rules = tmpl.get("validity_rules") or {}
+            validity_days = int(validity_rules.get("default_validity_days") or 0)
+            if validity_days <= 0:
+                ttl_seconds = int(validity_rules.get("ttl_seconds") or 0)
+                validity_days = max(ttl_seconds // 86400, 1) if ttl_seconds else 365
+            renewable = bool(validity_rules.get("renewable", False))
+            renewal_window_days = int(validity_rules.get("renewal_window_days") or 0)
+            if renewal_window_days <= 0:
+                reissue_seconds = int(validity_rules.get("reissue_within_seconds") or 0)
+                renewal_window_days = max(reissue_seconds // 86400, 1) if reissue_seconds else 30
 
     # Derive vct fallback if not already resolved
     if not credential_vct:
         credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
 
+    await _require_active_revocation_profile_binding(
+        organization_id=request.organization_id,
+        revocation_profile_id=revocation_profile_id,
+    )
     # Store vct in claims under a reserved key so the credential endpoint can
     # use it at signing time without a second template lookup.
     merged_claims = {**request.claims, "_vct": credential_vct}
@@ -2329,6 +2487,7 @@ async def initiate_issuance(
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
         credential_template_id=effective_credential_template_id,
+        revocation_profile_id=revocation_profile_id,
         applicant_id=request.applicant_id,
         subject_did=request.subject_did,
         issuer_profile_id=issuer_profile_id or None,
@@ -2342,6 +2501,9 @@ async def initiate_issuance(
         selective_disclosure_claims=selective_disclosure_claims,
         credential_payload_format=credential_payload_format,
         wallet_configs=wallet_configs,
+        validity_days=validity_days,
+        renewable=renewable,
+        renewal_window_days=renewal_window_days,
     )
     if not (tx.issuer_did_override and tx.signing_service_id):
         await apply_remote_issuer_context(
@@ -2477,6 +2639,37 @@ async def initiate_issuance(
         pre_auth_code=tx.pre_auth_code,
         expires_at=tx.expires_at.isoformat(),
     )
+
+
+async def _finalize_credential_renewal(
+    tx: IssuanceTransaction,
+    renewed_credential: IssuedCredential,
+    repo: IIssuanceRepository,
+) -> None:
+    source_id = str(tx.renewal_of_credential_id or "").strip()
+    if not source_id:
+        return
+
+    source = await repo.get_credential(source_id)
+    if not source:
+        raise HTTPException(status_code=409, detail="Renewal source credential no longer exists.")
+    if source.organization_id != renewed_credential.organization_id:
+        raise HTTPException(status_code=409, detail="Renewal source organization mismatch.")
+    if source.status != CredentialStatus.ACTIVE:
+        raise HTTPException(status_code=409, detail="Only an active credential can complete renewal.")
+
+    await revoke_credential(
+        source.id,
+        CredentialStatusRequest(reason="Superseded by renewed credential"),
+        repo,
+    )
+    source = await repo.get_credential(source.id)
+    if not source:
+        raise HTTPException(status_code=409, detail="Renewal source credential no longer exists.")
+    source.renewed_to_credential_id = renewed_credential.id
+    renewed_credential.renewed_from_credential_id = source.id
+    await repo.save_credential(source)
+    await repo.save_credential(renewed_credential)
 
 
 # ── Authorization Endpoint (OID4VCI §5) ──────────────────────────────────
@@ -3049,22 +3242,15 @@ async def issue_credential(
         f"cred_type={credential_type} status={tx.status}"
     )
 
-    # Extract holder DID (subject) from the proof JWT sent by the wallet.
-    # OID4VCI v1 §8.2: proofs is {"jwt": ["eyJ...", ...]} (object with type -> list).
-    # Legacy draft format used proof: {"proof_type": "jwt", "jwt": "eyJ..."} (single object).
-    # We resolve the first jwt proof from either format.
+    # Extract holder DID (subject) from the OID4VCI v1 proof JWT.
     holder_did: str | None = None
 
     def _extract_proof_jwt(req: CredentialRequest) -> str | None:
-        """Return the first JWT proof string regardless of v1/legacy format."""
-        # v1: proofs.jwt is a list of JWT strings
+        """Return the first JWT from the canonical proofs object."""
         if req.proofs:
             jwt_list = req.proofs.get("jwt", [])
             if jwt_list:
                 return jwt_list[0]
-        # Legacy: proof.proof_type == "jwt" and proof.jwt is a string
-        if req.proof and req.proof.get("proof_type") == "jwt":
-            return req.proof.get("jwt")
         return None
 
     proof_jwt = _extract_proof_jwt(request)
@@ -3114,7 +3300,7 @@ async def issue_credential(
     # Verify proof JWT signature via Rust + extract holder DID
     # Pass issuer_url as None to let the Rust layer use the URL embedded in the proof's aud;
     # full aud validation requires the public gateway URL which is available via ISSUER_BASE_URL.
-    ok, did_from_proof, verify_err = verify_proof_jwt(
+    ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
         proof_jwt, expected_nonce=tx.nonce or None
     )
     if not ok and verify_err and "nonce" in verify_err.lower():
@@ -3130,7 +3316,7 @@ async def issue_credential(
             logger.info(f"[credential] rid={rid} nonce pool fallback: proof_nonce={_proof_nonce!r}")
             if _proof_nonce and await _nonce_pool.consume(_proof_nonce):
                 logger.info(f"[credential] rid={rid} nonce pool hit — retrying proof verification with pool nonce")
-                ok, did_from_proof, verify_err = verify_proof_jwt(
+                ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
                     proof_jwt, expected_nonce=_proof_nonce
                 )
             else:
@@ -3305,7 +3491,9 @@ async def issue_credential(
         credential_id = f"urn:uuid:{uuid.uuid4()}"
         revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
             credential_id=credential_id,
+            organization_id=tx.organization_id,
             credential_format=_credential_format_for_revocation_profile(tx, effective_request_format),
+            revocation_profile_id=tx.revocation_profile_id,
         )
         signing_claims = dict(clean_claims)
         credential_status_claim = _status_list_entries_to_credential_status_claim(status_list_entries)
@@ -3318,6 +3506,7 @@ async def issue_credential(
             signing_service_id=tx.signing_service_id,
             remote_sign=_remote_sign,
             subject_id=holder_did or tx.subject_did,
+            holder_jwk=holder_jwk,
             credential_type=signing_credential_type,
             claims_json=json.dumps(signing_claims),
             expiration_seconds=31536000,  # 1 year
@@ -3337,7 +3526,7 @@ async def issue_credential(
             tx.nonce = None
             tx.complete()
             await repo.save_transaction(tx)
-            expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+            expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=tx.validity_days)
             issued_credential = IssuedCredential(
                 id=credential_id,
                 transaction_id=tx.id,
@@ -3347,6 +3536,7 @@ async def issue_credential(
                 subject_did=holder_did or tx.subject_did,
                 issuer_did=effective_issuer_did,
                 revocation_profile_id=revocation_profile_id,
+                renewed_from_credential_id=tx.renewal_of_credential_id,
                 status_list_entries=status_list_entries,
                 credential_jwt=jwt_credential,
                 credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
@@ -3355,6 +3545,7 @@ async def issue_credential(
                 expires_at=expires_at,
             )
             await repo.save_credential(issued_credential)
+            await _finalize_credential_renewal(tx, issued_credential, repo)
             await repo.save_event(IssuanceEvent(
                 transaction_id=tx.id,
                 application_id=tx.application_id,
@@ -3523,7 +3714,9 @@ async def _didcomm_sign_and_deliver(
     credential_id = f"urn:uuid:{uuid.uuid4()}"
     revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
         credential_id=credential_id,
+        organization_id=tx.organization_id,
         credential_format=_credential_format_for_revocation_profile(tx, effective_request_format),
+        revocation_profile_id=tx.revocation_profile_id,
     )
     signing_claims = dict(clean_claims)
     credential_status_claim = _status_list_entries_to_credential_status_claim(status_list_entries)
@@ -3602,7 +3795,7 @@ async def _didcomm_sign_and_deliver(
         tx.nonce = None
         tx.complete()
         await repo.save_transaction(tx)
-        expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+        expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=tx.validity_days)
         issued_credential = IssuedCredential(
             id=credential_id,
             transaction_id=tx.id,
@@ -3612,6 +3805,7 @@ async def _didcomm_sign_and_deliver(
             subject_did=holder_did,
             issuer_did=effective_issuer_did_dc,
             revocation_profile_id=revocation_profile_id,
+            renewed_from_credential_id=tx.renewal_of_credential_id,
             status_list_entries=status_list_entries,
             credential_jwt=jwt_credential,
             credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
@@ -3620,6 +3814,7 @@ async def _didcomm_sign_and_deliver(
             expires_at=expires_at,
         )
         await repo.save_credential(issued_credential)
+        await _finalize_credential_renewal(tx, issued_credential, repo)
         await repo.save_event(IssuanceEvent(
             transaction_id=tx.id,
             application_id=tx.application_id,
@@ -4058,6 +4253,7 @@ async def _delegate_to_revocation_profile(
             response = await client.post(
                 f"{service_url}/internal/revocation-profiles/{profile_id}/process-revocation",
                 json={
+                    "organization_id": credential.organization_id if credential else "",
                     "credential_id": credential_id,
                     "index": status_list_index,
                     "status": status_value,
@@ -4117,6 +4313,7 @@ async def revoke_credential(
     
     return {
         "id": cred.id,
+        "issuer_did": cred.issuer_did,
         "status": cred.status.value,
         "status_updated_at": cred.status_updated_at.isoformat(),
         "reason": request.reason,
@@ -4226,6 +4423,7 @@ async def get_credential_status(
     
     return {
         "id": cred.id,
+        "issuer_did": cred.issuer_did,
         "status": cred.status.value,
         "status_updated_at": cred.status_updated_at.isoformat(),
         "reason": cred.revocation_reason,
@@ -4560,6 +4758,73 @@ async def reinstate_issued_credential(
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
     return await _issued_credential_to_protocol(cred, repo)
+
+
+@issued_credential_router.post(
+    "/{credential_id}/renew",
+    response_model=CredentialRenewalOfferResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def renew_issued_credential(
+    credential_id: str,
+    http_request: Request,
+    repo: IIssuanceRepository = Depends(),
+) -> CredentialRenewalOfferResponse:
+    source = await repo.get_credential(credential_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    if source.status != CredentialStatus.ACTIVE:
+        raise HTTPException(status_code=409, detail="Only active credentials can be renewed.")
+    if source.renewed_to_credential_id:
+        raise HTTPException(status_code=409, detail="Credential has already been renewed.")
+
+    source_tx = await repo.get_transaction(source.transaction_id)
+    if not source_tx:
+        raise HTTPException(status_code=409, detail="Source issuance transaction is unavailable.")
+    if not source_tx.renewable:
+        raise HTTPException(status_code=409, detail="Credential Template does not allow renewal.")
+    if not source.expires_at:
+        raise HTTPException(status_code=409, detail="Credential has no renewal eligibility date.")
+
+    eligible_at = source.expires_at - timedelta(days=source_tx.renewal_window_days)
+    if datetime.now(timezone.utc) < eligible_at:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RENEWAL_NOT_YET_AVAILABLE",
+                "message": "Credential is outside its renewal window.",
+                "eligible_at": eligible_at.isoformat(),
+            },
+        )
+
+    offer = await initiate_issuance(
+        InitiateIssuanceRequest(
+            organization_id=source.organization_id,
+            credential_template_id=source.credential_template_id,
+            applicant_id=source.applicant_id,
+            subject_did=source.subject_did,
+            issuer_profile_id=source_tx.issuer_profile_id,
+            issuer_mode=source_tx.issuer_mode,
+            delivery_mode=source_tx.delivery_mode,
+            claims=dict(source_tx.claims),
+        ),
+        http_request=http_request,
+        repo=repo,
+    )
+    renewal_tx = await repo.get_transaction(offer.id)
+    if not renewal_tx:
+        raise HTTPException(status_code=503, detail="Renewal transaction was not persisted.")
+    renewal_tx.renewal_of_credential_id = source.id
+    renewal_tx.application_id = source_tx.application_id
+    await repo.save_transaction(renewal_tx)
+    return CredentialRenewalOfferResponse(
+        source_credential_id=source.id,
+        transaction_id=offer.id,
+        credential_offer_uri=offer.credential_offer_uri,
+        credential_offer_uris=offer.credential_offer_uris,
+        credential_offer_labels=offer.credential_offer_labels,
+        expires_at=offer.expires_at,
+    )
 
 
 # Continued in next part...

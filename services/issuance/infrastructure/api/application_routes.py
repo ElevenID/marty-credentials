@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -56,12 +57,14 @@ from issuance.infrastructure.api.routes import (
     ApplicationTemplateResponse,
     EvidenceSubmission,
     _verify_management_api_key,
+    _require_active_revocation_profile_binding,
     apply_remote_issuer_context,
-    application_router,
+    internal_application_router,
     application_template_router,
 )
 
 logger = logging.getLogger(__name__)
+_INTERNAL_REVIEWER_ID = "issuance-management-api"
 
 
 class IssuanceEventResponse(BaseModel):
@@ -184,10 +187,7 @@ def _available_external_api_checks(template: ApplicationTemplate | None) -> list
                 "fact_type": requirement.get("fact_type") or "",
                 "required": requirement.get("required", True) is not False,
                 "verification_method": requirement.get("verification_method") or "EXTERNAL_API_RESPONSE",
-                "auto_issue_on_permit": bool(
-                    requirement.get("auto_issue_on_permit")
-                    or requirement.get("auto_approve_on_evidence")
-                ),
+                "auto_issue_on_permit": bool(requirement.get("auto_issue_on_permit")),
                 "api_method": str(api.get("method") or "POST").upper(),
                 "scope": requirement.get("scope") if isinstance(requirement.get("scope"), dict) else {},
             }
@@ -223,6 +223,7 @@ def _template_response(template: ApplicationTemplate) -> ApplicationTemplateResp
 
 async def _application_template_validation_errors(
     template: ApplicationTemplate,
+    repo: IIssuanceRepository,
 ) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
 
@@ -251,6 +252,13 @@ async def _application_template_validation_errors(
             add("credential_template", "credential_template_id", "WRONG_ORGANIZATION", "Credential Template belongs to another organization.")
         if str(credential_template.get("status") or "").upper() != "ACTIVE":
             add("credential_template", "credential_template_id", "NOT_ACTIVE", "Credential Template must be active.")
+        if not str(credential_template.get("revocation_profile_id") or "").strip():
+            add(
+                "credential_template",
+                "credential_template_id",
+                "REVOCATION_PROFILE_REQUIRED",
+                "Credential Template must reference an active Revocation Profile.",
+            )
 
     if not template.form_fields:
         add("form_fields", "form_fields", "REQUIRED", "Add at least one form field.")
@@ -262,7 +270,19 @@ async def _application_template_validation_errors(
     }
     seen_fields: set[str] = set()
     for index, field in enumerate(template.form_fields):
+        if not isinstance(field, dict):
+            add("form_fields", f"form_fields.{index}", "INVALID", "Form fields must use the canonical object shape.")
+            continue
         field_id = str(field.get("field_id") or "")
+        if not field_id:
+            add("form_fields", f"form_fields.{index}.field_id", "REQUIRED", "Field ID is required.")
+        if not str(field.get("label") or "").strip():
+            add("form_fields", f"form_fields.{index}.label", "REQUIRED", "Field label is required.")
+        if str(field.get("field_type") or "") not in {
+            "TEXT", "DATE", "DATETIME", "SELECT", "FILE_UPLOAD",
+            "INTEGER", "NUMBER", "BOOLEAN", "EMAIL", "URL",
+        }:
+            add("form_fields", f"form_fields.{index}.field_type", "INVALID", "Select a canonical field type.")
         if field_id in seen_fields:
             add("form_fields", f"form_fields.{index}.field_id", "DUPLICATE", "Field IDs must be unique.")
         seen_fields.add(field_id)
@@ -270,14 +290,109 @@ async def _application_template_validation_errors(
             add("form_fields", f"form_fields.{index}.options", "REQUIRED", "Select fields require options.")
         if field.get("minimum") is not None and field.get("maximum") is not None and field["minimum"] > field["maximum"]:
             add("form_fields", f"form_fields.{index}.minimum", "INVALID_RANGE", "Minimum cannot exceed maximum.")
+        validation_pattern = field.get("validation_pattern")
+        if validation_pattern:
+            try:
+                re.compile(str(validation_pattern))
+            except re.error:
+                add("form_fields", f"form_fields.{index}.validation_pattern", "INVALID_PATTERN", "Validation pattern is not a valid regular expression.")
         claim_mapping = str(field.get("claim_mapping") or "")
         if claim_mapping and credential_claims and claim_mapping not in credential_claims:
             add("claim_mappings", f"form_fields.{index}.claim_mapping", "UNKNOWN_CLAIM", "Claim mapping is not defined by the Credential Template.")
 
-    if template.approval_strategy == "RULES_BASED" and not template.approval_policy_set_id:
-        add("approval", "approval_policy_set_id", "REQUIRED", "Rules-based approval requires an approval Policy Set.")
+    seen_evidence: set[str] = set()
+    evidence_types = {
+        "DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION",
+        "EXTERNAL_FACT", "EXTERNAL_API",
+    }
+    for index, requirement in enumerate(template.evidence_requirements):
+        if not isinstance(requirement, dict):
+            add("evidence", f"evidence_requirements.{index}", "INVALID", "Evidence must use the canonical object shape.")
+            continue
+        evidence_id = str(requirement.get("evidence_id") or "").strip()
+        evidence_type = str(requirement.get("evidence_type") or "")
+        if not evidence_id:
+            add("evidence", f"evidence_requirements.{index}.evidence_id", "REQUIRED", "Evidence ID is required.")
+        elif evidence_id in seen_evidence:
+            add("evidence", f"evidence_requirements.{index}.evidence_id", "DUPLICATE", "Evidence IDs must be unique.")
+        seen_evidence.add(evidence_id)
+        if evidence_type not in evidence_types:
+            add("evidence", f"evidence_requirements.{index}.evidence_type", "INVALID", "Select a canonical evidence type.")
+        if not str(requirement.get("description") or "").strip():
+            add("evidence", f"evidence_requirements.{index}.description", "REQUIRED", "Evidence description is required.")
+        if not isinstance(requirement.get("required"), bool):
+            add("evidence", f"evidence_requirements.{index}.required", "REQUIRED", "Evidence required state must be explicit.")
+        if evidence_type in {"EXTERNAL_FACT", "EXTERNAL_API"}:
+            if not str(requirement.get("provider") or "").strip():
+                add("evidence", f"evidence_requirements.{index}.provider", "REQUIRED", "External evidence provider is required.")
+            if not str(requirement.get("fact_type") or "").strip():
+                add("evidence", f"evidence_requirements.{index}.fact_type", "REQUIRED", "External evidence fact type is required.")
+        if evidence_type == "EXTERNAL_API":
+            api = requirement.get("api")
+            if not isinstance(api, dict) or not str(api.get("url") or "").strip():
+                add("evidence", f"evidence_requirements.{index}.api.url", "REQUIRED", "External API URL is required.")
+
+    valid_sources = {"FORM_FIELD", "EVIDENCE_EXTRACTION", "EXTERNAL_API", "SYSTEM"}
+    valid_system_fields = {
+        "applicant.user_id", "applicant.email", "applicant.given_name", "applicant.family_name",
+        "application.id", "application.reference_number", "application.organization_id",
+        "current.date", "current.datetime", "validity.expiry_date",
+        "template.name", "template.description", "constant",
+    }
+    for index, rule in enumerate(template.claim_collection_rules):
+        if not isinstance(rule, dict):
+            add("claim_mappings", f"claim_collection_rules.{index}", "INVALID", "Claim rules must use the canonical object shape.")
+            continue
+        if not str(rule.get("claim_name") or "").strip():
+            add("claim_mappings", f"claim_collection_rules.{index}.claim_name", "REQUIRED", "Claim name is required.")
+        source = str(rule.get("source") or "")
+        if source not in valid_sources:
+            add("claim_mappings", f"claim_collection_rules.{index}.source", "INVALID", "Select a canonical claim source.")
+        source_config = rule.get("source_config")
+        if not isinstance(source_config, dict):
+            add("claim_mappings", f"claim_collection_rules.{index}.source_config", "INVALID", "Claim source configuration must be an object.")
+        elif source == "FORM_FIELD" and source_config.get("field_id") not in seen_fields:
+            add("claim_mappings", f"claim_collection_rules.{index}.source_config.field_id", "UNKNOWN_FIELD", "Claim source must reference a configured form field.")
+        elif source == "SYSTEM":
+            system_field = str(source_config.get("system_field") or "")
+            if system_field not in valid_system_fields:
+                add("claim_mappings", f"claim_collection_rules.{index}.source_config.system_field", "INVALID", "Select a supported system claim source.")
+            elif system_field == "constant" and "value" not in source_config:
+                add("claim_mappings", f"claim_collection_rules.{index}.source_config.value", "REQUIRED", "Constant system claims require a value.")
+
+    seen_check_orders: set[int] = set()
+    for index, check in enumerate(template.required_checks):
+        if not isinstance(check, dict) or not str(check.get("check_type") or "").strip():
+            add("required_checks", f"required_checks.{index}.check_type", "REQUIRED", "Check type is required.")
+            continue
+        order = check.get("order")
+        if not isinstance(order, int) or order < 1:
+            add("required_checks", f"required_checks.{index}.order", "INVALID", "Check order must be a positive integer.")
+        elif order in seen_check_orders:
+            add("required_checks", f"required_checks.{index}.order", "DUPLICATE", "Check order values must be unique.")
+        else:
+            seen_check_orders.add(order)
+
+    if template.approval_strategy == "RULES_BASED":
+        if not template.approval_policy_set_id:
+            add("approval", "approval_policy_set_id", "REQUIRED", "Rules-based approval requires an approval Policy Set.")
+        else:
+            policy_set = await repo.get_approval_policy_set(
+                template.organization_id,
+                template.approval_policy_set_id,
+            )
+            if policy_set is None:
+                add("approval", "approval_policy_set_id", "NOT_FOUND", "Approval Policy Set was not found.")
+            elif str(policy_set.policy_type).upper() != "APPROVAL_RULES":
+                add("approval", "approval_policy_set_id", "WRONG_TYPE", "Policy Set must have type APPROVAL_RULES.")
+            elif str(policy_set.status).upper() != "ACTIVE":
+                add("approval", "approval_policy_set_id", "NOT_ACTIVE", "Approval Policy Set must be active.")
     if not 1 <= template.application_validity_days <= 3650:
         add("validity", "application_validity_days", "OUT_OF_RANGE", "Validity must be between 1 and 3650 days.")
+    if not isinstance(template.notification_config, dict):
+        add("notifications", "notification_config", "INVALID", "Notification configuration must be an object.")
+    if not isinstance(template.ui_config, dict):
+        add("preview", "ui_config", "INVALID", "UI configuration must be an object.")
     return errors
 
 @application_template_router.post("", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
@@ -292,8 +407,8 @@ async def create_application_template(
         description=request.description,
         credential_template_id=request.credential_template_id,
         form_fields=[field.model_dump(exclude_none=True) for field in request.form_fields],
-        evidence_requirements=request.evidence_requirements,
-        claim_collection_rules=request.claim_collection_rules,
+        evidence_requirements=[item.model_dump(exclude_none=True) for item in request.evidence_requirements],
+        claim_collection_rules=[item.model_dump(exclude_none=True) for item in request.claim_collection_rules],
         required_checks=[check.model_dump(exclude_none=True) for check in request.required_checks],
         approval_strategy=request.approval_strategy,
         approval_policy_set_id=request.approval_policy_set_id,
@@ -350,6 +465,10 @@ async def update_application_template(
     for key, value in changes.items():
         if key == "form_fields" and value is not None:
             value = [field.model_dump(exclude_none=True) if hasattr(field, "model_dump") else field for field in request.form_fields or []]
+        elif key == "evidence_requirements" and value is not None:
+            value = [item.model_dump(exclude_none=True) for item in request.evidence_requirements or []]
+        elif key == "claim_collection_rules" and value is not None:
+            value = [item.model_dump(exclude_none=True) for item in request.claim_collection_rules or []]
         elif key == "required_checks" and value is not None:
             value = [check.model_dump(exclude_none=True) if hasattr(check, "model_dump") else check for check in request.required_checks or []]
         setattr(template, key, value)
@@ -367,7 +486,7 @@ async def validate_application_template(
     template = await repo.get_application_template(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Application template not found")
-    errors = await _application_template_validation_errors(template)
+    errors = await _application_template_validation_errors(template, repo)
     return {"valid": not errors, "errors": errors}
 
 
@@ -381,7 +500,7 @@ async def activate_application_template(
         raise HTTPException(status_code=404, detail="Application template not found")
     if template.status != "DRAFT":
         raise HTTPException(status_code=409, detail="Only draft Application Templates can be activated")
-    errors = await _application_template_validation_errors(template)
+    errors = await _application_template_validation_errors(template, repo)
     if errors:
         raise HTTPException(
             status_code=422,
@@ -427,7 +546,7 @@ async def delete_application_template(
 # Application Endpoints
 # ============================================================================
 
-@application_router.post("", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.post("", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def create_application(
     request: ApplicationCreate,
     repo: IIssuanceRepository = Depends(),
@@ -475,7 +594,7 @@ async def create_application(
     )
 
 
-@application_router.get("", response_model=list[ApplicationResponse], dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.get("", response_model=list[ApplicationResponse], dependencies=[Depends(_verify_management_api_key)])
 async def list_applications(
     organization_id: str = Query(...),
     status: str = Query(None),
@@ -511,7 +630,7 @@ async def list_applications(
     ]
 
 
-@application_router.get("/{application_id}", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.get("/{application_id}", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application(
     application_id: str,
     repo: IIssuanceRepository = Depends(),
@@ -539,7 +658,7 @@ async def get_application(
     )
 
 
-@application_router.get("/{application_id}/evidence-facts", response_model=list[EvidenceFactResponse], dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.get("/{application_id}/evidence-facts", response_model=list[EvidenceFactResponse], dependencies=[Depends(_verify_management_api_key)])
 async def list_application_evidence_facts(
     application_id: str,
     repo: IIssuanceRepository = Depends(),
@@ -553,7 +672,7 @@ async def list_application_evidence_facts(
     return [_evidence_fact_to_response(fact) for fact in facts]
 
 
-@application_router.get("/{application_id}/evidence-summary", response_model=ApplicationEvidenceSummaryResponse, dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.get("/{application_id}/evidence-summary", response_model=ApplicationEvidenceSummaryResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application_evidence_summary(
     application_id: str,
     repo: IIssuanceRepository = Depends(),
@@ -580,7 +699,7 @@ async def get_application_evidence_summary(
     )
 
 
-@application_router.post(
+@internal_application_router.post(
     "/{application_id}/evidence/api-checks/{check_id}/run",
     response_model=ExternalEvidenceApiCheckResponse,
     dependencies=[Depends(_verify_management_api_key)],
@@ -626,10 +745,7 @@ async def run_external_evidence_api_check(
         "response_metadata": check_result.response_metadata,
         "checked_at": evidence_fact.created_at.isoformat(),
     }
-    auto_issue_enabled = bool(
-        requirement.get("auto_issue_on_permit")
-        or requirement.get("auto_approve_on_evidence")
-    )
+    auto_issue_enabled = bool(requirement.get("auto_issue_on_permit"))
     transition = await persist_evidence_fact_and_apply_policy(
         repo=repo,
         app=app,
@@ -678,7 +794,7 @@ async def run_external_evidence_api_check(
     )
 
 
-@application_router.post("/evidence/reconcile", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.post("/evidence/reconcile", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
 async def reconcile_application_evidence(
     request: EvidenceReconciliationRequest,
     repo: IIssuanceRepository = Depends(),
@@ -701,7 +817,7 @@ async def reconcile_application_evidence(
     return result.to_dict()
 
 
-@application_router.get("/evidence/reconciliation-report", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.get("/evidence/reconciliation-report", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
 async def get_application_evidence_reconciliation_report(
     organization_id: str = Query(...),
     limit: int = Query(100),
@@ -716,7 +832,7 @@ async def get_application_evidence_reconciliation_report(
     return result.to_dict()
 
 
-@application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.post("/{application_id}/submit-evidence", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def submit_evidence(
     application_id: str,
     evidence: EvidenceSubmission,
@@ -757,7 +873,7 @@ async def submit_evidence(
     )
 
 
-@application_router.post("/{application_id}/approve", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.post("/{application_id}/approve", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def approve_application(
     application_id: str,
     approval: ApplicationApproval,
@@ -805,7 +921,7 @@ async def approve_application(
         repo=repo,
         app=app,
         template=template,
-        reviewer_id=approval.reviewer_id,
+        reviewer_id=_INTERNAL_REVIEWER_ID,
         review_notes=approval.review_notes,
         credential_context=CredentialContext(
             credential_type=credential_type,
@@ -834,7 +950,7 @@ async def approve_application(
     )
 
 
-@application_router.post("/{application_id}/reject", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
+@internal_application_router.post("/{application_id}/reject", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def reject_application(
     application_id: str,
     rejection: ApplicationRejection,
@@ -850,7 +966,7 @@ async def reject_application(
     
     app.status = ApplicationStatus.REJECTED
     app.review_notes = rejection.review_notes
-    app.reviewer_id = rejection.reviewer_id
+    app.reviewer_id = _INTERNAL_REVIEWER_ID
     app.reviewed_at = datetime.now(timezone.utc)
     await repo.save_application(app)
     
@@ -1095,6 +1211,35 @@ async def _get_or_refresh_transaction(
     template: "ApplicationTemplate | None",
 ) -> IssuanceTransaction:
     """Return a reusable transaction or create a fresh one for single-use offers."""
+    credential_template_id = template.credential_template_id if template else None
+    revocation_profile_id: str | None = None
+    if credential_template_id:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{credential_template_id}"
+                )
+        except httpx.HTTPError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Credential Template validation is unavailable.",
+            ) from exc
+        if response.status_code == 404:
+            raise HTTPException(status_code=422, detail="Credential Template not found.")
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=503,
+                detail="Credential Template validation is unavailable.",
+            )
+        credential_template = response.json()
+        revocation_profile_id = str(
+            credential_template.get("revocation_profile_id") or ""
+        ).strip() or None
+        await _require_active_revocation_profile_binding(
+            organization_id=app.organization_id,
+            revocation_profile_id=revocation_profile_id,
+        )
+
     tx: IssuanceTransaction | None = None
     if app.issuance_transaction_id:
         tx = await repo.get_transaction(app.issuance_transaction_id)
@@ -1102,6 +1247,7 @@ async def _get_or_refresh_transaction(
     if tx and tx.status == IssuanceStatus.PENDING and not tx.is_expired:
         delivery_before = tx.delivery_mode
         tx.delivery_mode = delivery_mode_from_integration_context(app.integration_context)
+        tx.revocation_profile_id = revocation_profile_id
         before = (tx.issuer_did_override, tx.signing_service_id)
         await apply_remote_issuer_context(tx)
         if before != (tx.issuer_did_override, tx.signing_service_id) or delivery_before != tx.delivery_mode:
@@ -1109,7 +1255,6 @@ async def _get_or_refresh_transaction(
         return tx
 
     # Create a fresh transaction
-    credential_template_id = (template.credential_template_id if template else None)
     tx = IssuanceTransaction(
         organization_id=app.organization_id,
         credential_template_id=credential_template_id,
@@ -1118,6 +1263,7 @@ async def _get_or_refresh_transaction(
         subject_did=None,
         delivery_mode=delivery_mode_from_integration_context(app.integration_context),
         claims=app.form_data,
+        revocation_profile_id=revocation_profile_id,
     )
     await apply_remote_issuer_context(tx)
     await repo.save_transaction(tx)
@@ -1127,7 +1273,7 @@ async def _get_or_refresh_transaction(
     return tx
 
 
-@application_router.post(
+@internal_application_router.post(
     "/{application_id}/issuance-offer",
     response_model=IssuanceOfferResponse,
     summary="Generate Wallet Invite (Admin)",
@@ -1224,10 +1370,11 @@ async def generate_issuance_offer(
     )
 
 
-@application_router.get(
+@internal_application_router.get(
     "/{application_id}/issuance-offer",
     response_model=IssuanceOfferResponse,
     summary="Get Wallet Invite (Applicant)",
+    dependencies=[Depends(_verify_management_api_key)],
 )
 async def get_issuance_offer(
     application_id: str,
@@ -1321,7 +1468,7 @@ async def get_issuance_offer(
     )
 
 
-@application_router.get(
+@internal_application_router.get(
     "/{application_id}/issuance-events",
     response_model=list[IssuanceEventResponse],
     summary="List Issuance Events (Admin)",

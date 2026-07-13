@@ -17,7 +17,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from issuance.domain.ports import IIssuanceRepository
-from issuance.application.rust_integration import configure_issuer_key_store
+from issuance.application.rust_integration import (
+    configure_issuer_key_store,
+    validate_marty_rs_capabilities,
+)
 
 # ── Staged-rollout feature flag ───────────────────────────────────────────────
 # Set VDSNC_RUST_ENABLED=false in an environment to suppress VDS-NC credential
@@ -182,7 +185,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 from issuance.infrastructure.api.canvas_routes import canvas_integration_router
 from issuance.infrastructure.api.application_routes import (
-    application_router,
+    internal_application_router,
     application_template_router,
 )
 from issuance.infrastructure.api.routes import (
@@ -235,6 +238,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle management."""
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+    validate_marty_rs_capabilities()
+    logger.info("Canonical marty-rs capability contract verified")
     
     # Initialize PostgreSQL adapter
     config = get_config()
@@ -317,7 +322,7 @@ def create_app() -> FastAPI:
     app.include_router(canvas_integration_router)
     app.include_router(issued_credential_router)
     app.include_router(application_template_router)
-    app.include_router(application_router)
+    app.include_router(internal_application_router)
     app.include_router(physical_document_router)
     
     # Override FastAPI dependency injection
@@ -865,4 +870,4 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=SERVICE_PORT, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT, reload=False)

@@ -5,6 +5,7 @@ import hmac
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
@@ -51,19 +52,24 @@ from issuance.infrastructure.models import (
     organization_integration_secrets_table,
 )
 
-# Key for HMAC-SHA256 token hashing.  Falls back to a deterministic
-# default so that existing rows remain queryable even when the env var
-# is absent (e.g. local dev), but production deployments MUST set this
-# to a securely-generated random value.
-_TOKEN_HMAC_KEY_RAW = os.environ.get("TOKEN_HMAC_KEY", "")
-if not _TOKEN_HMAC_KEY_RAW:
-    import warnings
-    warnings.warn(
-        "TOKEN_HMAC_KEY is not set — using insecure default. "
-        "Set TOKEN_HMAC_KEY to a securely-generated random value in production.",
-        stacklevel=1,
-    )
-    _TOKEN_HMAC_KEY_RAW = "marty-token-hmac-default-key"
+def _read_required_secret(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+
+    secret_file = os.environ.get(f"{name}_FILE", "").strip()
+    if secret_file:
+        try:
+            value = Path(secret_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError(f"{name}_FILE could not be read: {secret_file}") from exc
+        if value:
+            return value
+
+    raise RuntimeError(f"{name} or {name}_FILE is required")
+
+
+_TOKEN_HMAC_KEY_RAW = _read_required_secret("TOKEN_HMAC_KEY")
 _TOKEN_HMAC_KEY: bytes = _TOKEN_HMAC_KEY_RAW.encode()
 logger = logging.getLogger(__name__)
 _integration_secret_encryption = None
@@ -290,6 +296,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             id=row.id,
             organization_id=row.organization_id,
             credential_template_id=row.credential_template_id,
+            revocation_profile_id=getattr(row, "revocation_profile_id", None),
+            renewal_of_credential_id=getattr(row, "renewal_of_credential_id", None),
             applicant_id=row.applicant_id,
             application_id=row.application_id,
             subject_did=row.subject_did,
@@ -308,6 +316,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             selective_disclosure_claims=list(getattr(row, 'selective_disclosure_claims', None) or []),
             credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
             wallet_configs=list(row.wallet_configs or []),
+            validity_days=getattr(row, "validity_days", None) or 365,
+            renewable=bool(getattr(row, "renewable", False)),
+            renewal_window_days=getattr(row, "renewal_window_days", None) or 30,
             created_at=row.created_at,
             expires_at=row.expires_at,
             issued_at=row.issued_at,
@@ -322,6 +333,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "id": tx.id,
                 "organization_id": tx.organization_id,
                 "credential_template_id": tx.credential_template_id,
+                "revocation_profile_id": tx.revocation_profile_id,
+                "renewal_of_credential_id": tx.renewal_of_credential_id,
                 "applicant_id": tx.applicant_id,
                 "application_id": tx.application_id,
                 "subject_did": tx.subject_did,
@@ -340,6 +353,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "selective_disclosure_claims": tx.selective_disclosure_claims or [],
                 "credential_payload_format": tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
                 "wallet_configs": tx.wallet_configs or [],
+                "validity_days": tx.validity_days,
+                "renewable": tx.renewable,
+                "renewal_window_days": tx.renewal_window_days,
                 "created_at": tx.created_at,
                 "expires_at": tx.expires_at,
                 "issued_at": tx.issued_at,
@@ -525,6 +541,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "subject_did": cred.subject_did,
                 "issuer_did": cred.issuer_did,
                 "revocation_profile_id": cred.revocation_profile_id,
+                "renewed_from_credential_id": cred.renewed_from_credential_id,
+                "renewed_to_credential_id": cred.renewed_to_credential_id,
                 "status_list_entries": cred.status_list_entries,
                 "credential_jwt": cred.credential_jwt,
                 "credential_hash": cred.credential_hash,
@@ -570,6 +588,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 subject_did=row.subject_did,
                 issuer_did=row.issuer_did,
                 revocation_profile_id=getattr(row, "revocation_profile_id", None),
+                renewed_from_credential_id=getattr(row, "renewed_from_credential_id", None),
+                renewed_to_credential_id=getattr(row, "renewed_to_credential_id", None),
                 status_list_entries=getattr(row, "status_list_entries", None) or [],
                 credential_jwt=row.credential_jwt,
                 credential_hash=row.credential_hash,
@@ -602,6 +622,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 subject_did=row.subject_did,
                 issuer_did=row.issuer_did,
                 revocation_profile_id=getattr(row, "revocation_profile_id", None),
+                renewed_from_credential_id=getattr(row, "renewed_from_credential_id", None),
+                renewed_to_credential_id=getattr(row, "renewed_to_credential_id", None),
                 status_list_entries=getattr(row, "status_list_entries", None) or [],
                 credential_jwt=row.credential_jwt,
                 credential_hash=row.credential_hash,

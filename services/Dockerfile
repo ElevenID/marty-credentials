@@ -49,6 +49,7 @@ COPY marty-core/marty-iso18013 ./marty-core/marty-iso18013/
 COPY marty-core/marty-zkp ./marty-core/marty-zkp/
 COPY marty-core/marty-oid4vci ./marty-core/marty-oid4vci/
 COPY marty-core/marty-didcomm ./marty-core/marty-didcomm/
+COPY marty-core/marty-test-wallet ./marty-core/marty-test-wallet/
 
 # Copy longfellow-zk C++ library (required by marty-zkp build.rs)
 COPY longfellow-zk/lib ./longfellow-zk/lib

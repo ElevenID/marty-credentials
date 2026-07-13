@@ -374,7 +374,7 @@ def _build_context(
     provider = latest.provider if latest else "canvas"
     requirement_auto_issue = any(
         isinstance(requirement, dict)
-        and bool(requirement.get("auto_issue_on_permit") or requirement.get("auto_approve_on_evidence"))
+        and bool(requirement.get("auto_issue_on_permit"))
         for requirement in requirements
     )
     return {
