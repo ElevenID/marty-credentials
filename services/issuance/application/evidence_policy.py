@@ -11,6 +11,7 @@ from issuance.domain.entities import (
     Application,
     ApplicationTemplate,
     ApprovalPolicySet,
+    CanvasEvidenceRequirement,
     EvidenceFact,
 )
 
@@ -41,10 +42,17 @@ class EvidencePolicyDecision:
         }
 
 
+def _requirement_mapping(requirement: Any) -> dict[str, Any]:
+    if isinstance(requirement, CanvasEvidenceRequirement):
+        return requirement.to_dict()
+    return requirement if isinstance(requirement, dict) else {}
+
+
 def _requirement_type(requirement: Any) -> str:
     if isinstance(requirement, str):
         return requirement
-    if isinstance(requirement, dict):
+    requirement = _requirement_mapping(requirement)
+    if requirement:
         for key in ("fact_type", "evidence_type", "type"):
             value = requirement.get(key)
             if isinstance(value, str) and value:
@@ -53,24 +61,43 @@ def _requirement_type(requirement: Any) -> str:
 
 
 def _requirement_scope(requirement: Any) -> dict[str, Any]:
-    if not isinstance(requirement, dict):
+    requirement = _requirement_mapping(requirement)
+    if not requirement:
         return {}
     scope = requirement.get("scope") or requirement.get("canvas_scope") or {}
     return scope if isinstance(scope, dict) else {}
 
 
 def _requirement_provider(requirement: Any) -> str:
-    if not isinstance(requirement, dict):
+    requirement = _requirement_mapping(requirement)
+    if not requirement:
         return ""
     provider = requirement.get("provider")
     return provider if isinstance(provider, str) else ""
 
 
 def _requirement_verification_method(requirement: Any) -> str:
-    if not isinstance(requirement, dict):
+    requirement = _requirement_mapping(requirement)
+    if not requirement:
         return ""
     method = requirement.get("verification_method")
     return method if isinstance(method, str) else ""
+
+
+def _requirement_source(requirement: Any) -> str:
+    requirement = _requirement_mapping(requirement)
+    if not requirement:
+        return ""
+    source = requirement.get("source")
+    return source if isinstance(source, str) else ""
+
+
+def _requirement_id(requirement: Any) -> str:
+    requirement = _requirement_mapping(requirement)
+    if not requirement:
+        return ""
+    requirement_id = requirement.get("requirement_id")
+    return requirement_id if isinstance(requirement_id, str) else ""
 
 
 def _fact_verified(fact: EvidenceFact) -> bool:
@@ -261,7 +288,8 @@ def _path_condition_satisfied(fact: EvidenceFact, condition: Any) -> bool:
 
 
 def _pass_rule_satisfied(fact: EvidenceFact, requirement: Any) -> bool:
-    if not isinstance(requirement, dict):
+    requirement = _requirement_mapping(requirement)
+    if not requirement:
         return True
     pass_rule = requirement.get("pass_rule")
     if not isinstance(pass_rule, dict) or not pass_rule:
@@ -300,6 +328,13 @@ def _pass_rule_satisfied(fact: EvidenceFact, requirement: Any) -> bool:
 
 
 def _fact_satisfies_requirement(fact: EvidenceFact, requirement: Any) -> bool:
+    requirement_id = _requirement_id(requirement)
+    if requirement_id and fact.requirement_id and fact.requirement_id != requirement_id:
+        return False
+    requirement_source = _requirement_source(requirement)
+    fact_source = str((fact.source or {}).get("source") or "")
+    if requirement_source and fact_source != requirement_source:
+        return False
     requirement_provider = _requirement_provider(requirement)
     if requirement_provider and fact.provider != requirement_provider:
         return False
@@ -318,6 +353,36 @@ def _fact_satisfies_requirement(fact: EvidenceFact, requirement: Any) -> bool:
     return _fact_verified(fact) and _pass_rule_satisfied(fact, requirement)
 
 
+def current_evidence_heads(facts: list[EvidenceFact]) -> list[EvidenceFact]:
+    """Return only the newest revision of every logical evidence key.
+
+    Repository callers should prefer ``list_current_evidence_facts_for_application``.
+    This defensive reduction keeps policy correct for older callers that still
+    provide the immutable revision history.
+    """
+
+    heads: dict[str, EvidenceFact] = {}
+    for fact in facts:
+        logical_key = fact.logical_key or fact.id
+        current = heads.get(logical_key)
+        if current is None:
+            heads[logical_key] = fact
+            continue
+        fact_order = (fact.effective_at or fact.observed_at, fact.observed_at, fact.created_at, fact.id)
+        current_order = (
+            current.effective_at or current.observed_at,
+            current.observed_at,
+            current.created_at,
+            current.id,
+        )
+        if fact_order > current_order:
+            heads[logical_key] = fact
+    return sorted(
+        heads.values(),
+        key=lambda fact: (fact.observed_at, fact.created_at, fact.id),
+    )
+
+
 def _summarize_requirements(
     *,
     requirements: list[Any],
@@ -326,7 +391,7 @@ def _summarize_requirements(
     required_requirements = [
         requirement
         for requirement in requirements
-        if not (isinstance(requirement, dict) and requirement.get("required") is False)
+        if _requirement_mapping(requirement).get("required", True) is not False
     ]
     if required_requirements:
         effective_requirements = required_requirements
@@ -339,12 +404,17 @@ def _summarize_requirements(
     for requirement in effective_requirements:
         requirement_provider = _requirement_provider(requirement)
         requirement_type = _requirement_type(requirement)
+        requirement_source = _requirement_source(requirement)
         requirement_scope = _requirement_scope(requirement)
         type_matches = [
             fact for fact in facts
             if (
                 (not requirement_provider or fact.provider == requirement_provider)
                 and (not requirement_type or fact.fact_type == requirement_type)
+                and (
+                    not requirement_source
+                    or str((fact.source or {}).get("source") or "") == requirement_source
+                )
             )
         ]
         if requirement_scope and not any(
@@ -373,8 +443,7 @@ def _build_context(
     verified_count = sum(1 for fact in facts if _fact_verified(fact))
     provider = latest.provider if latest else "canvas"
     requirement_auto_issue = any(
-        isinstance(requirement, dict)
-        and bool(requirement.get("auto_issue_on_permit") or requirement.get("auto_approve_on_evidence"))
+        bool(_requirement_mapping(requirement).get("auto_issue_on_permit"))
         for requirement in requirements
     )
     return {
@@ -455,6 +524,7 @@ def evaluate_application_evidence_policy(
 ) -> EvidencePolicyDecision:
     """Evaluate whether normalized facts permit application approval."""
 
+    facts = current_evidence_heads(facts)
     context = _build_context(
         app=app,
         binding=binding,

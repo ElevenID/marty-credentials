@@ -26,11 +26,6 @@ from marty_proto.v1 import (
 
 logger = logging.getLogger(__name__)
 
-try:
-    from marty_common import MARTY_DEFAULT_REVOCATION_PROFILE_ID
-except Exception:  # pragma: no cover - local fallback for isolated issuance tests
-    MARTY_DEFAULT_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
-
 REVOCATION_PROFILE_SERVICE_URL = os.environ.get(
     "REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"
 )
@@ -70,14 +65,6 @@ def _key_purpose_for_credential_format(credential_format: str) -> str:
     if credential_format == "vds_nc":
         return "vdsnc_signing"
     return "vc_jwt_issuer"
-
-
-def _default_revocation_profile_id() -> str:
-    return (
-        os.environ.get("MARTY_DEFAULT_REVOCATION_PROFILE_ID")
-        or os.environ.get("REVOCATION_PROFILE_ID")
-        or MARTY_DEFAULT_REVOCATION_PROFILE_ID
-    )
 
 
 def _revocation_index_from_credential(credential: Any) -> int | None:
@@ -127,6 +114,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
     tx: Any,
     *,
     subject_id: str | None,
+    holder_jwk: dict[str, Any] | None = None,
     credential_type: str,
     claims_json: str,
     credential_format: str,
@@ -156,6 +144,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
         signing_service_id=tx.signing_service_id,
         remote_sign=_remote_sign,
         subject_id=subject_id,
+        holder_jwk=holder_jwk,
         credential_type=credential_type,
         claims_json=claims_json,
         expiration_seconds=31536000,
@@ -233,6 +222,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             zk_predicate_claims: list[str] = []
             credential_payload_format = "w3c_vcdm_v2_sd_jwt"
             wallet_configs: list[dict] = []
+            revocation_profile_id: str | None = None
+            validity_days = 365
+            renewable = False
+            renewal_window_days = 30
 
             if request.credential_template_id:
                 # Fetch template via gRPC (CredentialTemplateService.GetTemplate)
@@ -261,6 +254,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
                     credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
                     wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
+                    revocation_profile_id = str(tmpl_resp.revocation_profile_id or "").strip() or None
+                    validity_days = tmpl_resp.validity_rules.default_validity_days or 365
+                    renewable = bool(tmpl_resp.validity_rules.renewable)
+                    renewal_window_days = tmpl_resp.validity_rules.renewal_window_days or 30
                 except grpc.RpcError as e:
                     if hasattr(e, 'code') and e.code() == grpc.StatusCode.NOT_FOUND:
                         context.set_code(grpc.StatusCode.NOT_FOUND)
@@ -295,6 +292,52 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
                     credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
                     wallet_configs = tmpl.get("wallet_configs") or []
+                    revocation_profile_id = str(tmpl.get("revocation_profile_id") or "").strip() or None
+                    validity_rules = tmpl.get("validity_rules") or {}
+                    ttl_seconds = int(validity_rules.get("ttl_seconds") or 0)
+                    validity_days = int(validity_rules.get("default_validity_days") or 0) or (
+                        max(ttl_seconds // 86400, 1) if ttl_seconds else 365
+                    )
+                    renewable = bool(validity_rules.get("renewable", False))
+                    reissue_seconds = int(validity_rules.get("reissue_within_seconds") or 0)
+                    renewal_window_days = int(validity_rules.get("renewal_window_days") or 0) or (
+                        max(reissue_seconds // 86400, 1) if reissue_seconds else 30
+                    )
+
+            if not revocation_profile_id:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details("Credential Template must reference an active Revocation Profile.")
+                return pb2.IssuanceResponse()
+
+            try:
+                import grpc.aio as grpc_aio
+                from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
+                from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
+
+                rp_grpc_target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
+                async with grpc_aio.insecure_channel(rp_grpc_target) as channel:
+                    profile = await rp_grpc.RevocationProfileServiceStub(channel).GetRevocationProfile(
+                        rp_pb2.GetRevocationProfileRequest(profile_id=revocation_profile_id),
+                        timeout=3.0,
+                    )
+            except grpc.RpcError as exc:
+                missing = exc.code() == grpc.StatusCode.NOT_FOUND
+                context.set_code(grpc.StatusCode.NOT_FOUND if missing else grpc.StatusCode.UNAVAILABLE)
+                context.set_details(
+                    "Revocation Profile not found."
+                    if missing
+                    else "Revocation Profile validation is unavailable."
+                )
+                return pb2.IssuanceResponse()
+
+            if profile.organization_id != request.organization_id:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details("The Revocation Profile belongs to another organization.")
+                return pb2.IssuanceResponse()
+            if str(profile.status or "").strip().lower() != "active":
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details("Credential Template must reference an active Revocation Profile.")
+                return pb2.IssuanceResponse()
 
             if not credential_vct:
                 credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
@@ -337,6 +380,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 zk_predicate_claims=zk_predicate_claims,
                 credential_payload_format=credential_payload_format,
                 wallet_configs=wallet_configs,
+                revocation_profile_id=revocation_profile_id,
+                validity_days=validity_days,
+                renewable=renewable,
+                renewal_window_days=renewal_window_days,
             )
             await repo.save_transaction(tx)
 
@@ -479,18 +526,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     context.set_details(str(exc))
                     return pb2.TokenResponse()
 
-                auth_session.mark_exchanged(
-                    access_token=token_resp["access_token"],
-                    nonce=token_resp.get("nonce", ""),
-                )
+                auth_session.mark_exchanged(access_token=token_resp["access_token"])
                 await repo.save_authorization_session(auth_session)
 
                 return pb2.TokenResponse(
                     access_token=token_resp["access_token"],
                     token_type="Bearer",
                     expires_in=token_resp.get("expires_in", 1800),
-                    c_nonce=token_resp.get("nonce", ""),
-                    nonce=token_resp.get("nonce", ""),
                 )
 
             # Pre-authorized code flow
@@ -528,7 +570,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             token_resp = oid4vci_create_token_response(request.pre_authorized_code, 1800)
 
             tx.access_token = token_resp["access_token"]
-            tx.nonce = token_resp.get("nonce", "")
+            tx.nonce = None
             tx.status = IssuanceStatus.AUTHORIZED
             await repo.save_transaction(tx)
 
@@ -536,8 +578,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 access_token=token_resp["access_token"],
                 token_type="Bearer",
                 expires_in=token_resp.get("expires_in", 1800),
-                c_nonce=token_resp.get("nonce", ""),
-                nonce=token_resp.get("nonce", ""),
             )
         except Exception as exc:
             logger.exception("ExchangeToken failed")
@@ -616,7 +656,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 return pb2.IssueCredentialResponse()
 
             # Verify proof JWT
-            ok, holder_did, verify_err = verify_proof_jwt(
+            ok, holder_did, holder_jwk, verify_err = verify_proof_jwt(
                 proof_jwt, expected_nonce=tx.nonce or None
             )
             if not ok:
@@ -670,6 +710,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
                     tx,
                     subject_id=holder_did or tx.subject_did,
+                    holder_jwk=holder_jwk,
                     credential_type=signing_credential_type,
                     claims_json=json.dumps(clean_claims),
                     credential_format=remote_credential_format,
@@ -723,7 +764,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             response = pb2.IssueCredentialResponse(
                 credentials=[pb2.CredentialEntry(format=response_format, credential=jwt_credential)],
                 notification_id=str(_uuid.uuid4()),
-                c_nonce=tx.nonce or "",
             )
 
             await self._emit_credential_event(
@@ -1076,11 +1116,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         # Map action to status for RevocationProfile contract
         action_to_status = {"revoke": "revoked", "suspend": "suspended", "reinstate": "reinstated"}
         revocation_status = action_to_status.get(action, action)
-        revocation_profile_id = getattr(cred, "revocation_profile_id", None) or _default_revocation_profile_id()
+        revocation_profile_id = getattr(cred, "revocation_profile_id", None)
         status_list_index = _revocation_index_from_credential(cred)
         try:
-            if status_list_index is None:
-                raise RuntimeError("credential has no allocated status-list entry")
+            if not revocation_profile_id or status_list_index is None:
+                raise RuntimeError("credential has no Revocation Profile and allocated status-list entry")
             import grpc.aio as grpc_aio
             from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
             from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
@@ -1091,6 +1131,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 resp = await rp_stub.ProcessRevocation(
                     rp_pb2.ProcessRevocationRequest(
                         profile_id=revocation_profile_id,
+                        organization_id=cred.organization_id,
                         credential_id=credential_id,
                         index=status_list_index,
                         status=revocation_status,
@@ -1102,8 +1143,8 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 logger.warning(f"RevocationProfile gRPC returned error for {action}: {resp.error}")
         except Exception as e:
             logger.warning(f"RevocationProfile gRPC failed for {action}, falling back to HTTP: {e}")
-            if status_list_index is None:
-                logger.warning("Skipping RevocationProfile HTTP fallback because credential has no status-list entry")
+            if not revocation_profile_id or status_list_index is None:
+                logger.warning("Skipping RevocationProfile HTTP fallback because credential has no bound profile and status-list entry")
                 status_list_index = -1
             try:
                 import httpx
@@ -1112,6 +1153,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         await client.post(
                             f"{REVOCATION_PROFILE_SERVICE_URL}/internal/revocation-profiles/{revocation_profile_id}/process-revocation",
                             json={
+                                "organization_id": cred.organization_id,
                                 "credential_id": credential_id,
                                 "index": status_list_index,
                                 "status": revocation_status,

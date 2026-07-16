@@ -39,6 +39,8 @@ env/
 htmlcov/
 .tox/
 .nox/
+tests/artifacts/canvas-portable-migration/*
+!tests/artifacts/canvas-portable-migration/.gitkeep
 
 # Type checking
 .mypy_cache/

@@ -709,6 +709,7 @@ class RevocationProfileInteractions:
     @staticmethod
     def process_revocation(
         profile_id: str,
+        organization_id: str,
         credential_id: str,
         index: int,
         status: str = "revoked",
@@ -722,6 +723,7 @@ class RevocationProfileInteractions:
             path=f"/internal/revocation-profiles/{profile_id}/process-revocation",
             request_headers=auth_headers(),
             request_body={
+                "organization_id": organization_id,
                 "credential_id": credential_id,
                 "index": index,
                 "status": status,
@@ -731,6 +733,7 @@ class RevocationProfileInteractions:
             response_status=200,
             response_body={
                 "success": True,
+                "organization_id": organization_id,
                 "status_list_url": match.like("https://issuer.example/status-lists/1"),
                 "index": index,
             },
@@ -739,6 +742,7 @@ class RevocationProfileInteractions:
     @staticmethod
     def allocate_index(
         profile_id: str,
+        organization_id: str,
         credential_format: str = "sd_jwt_vc",
     ) -> PactInteraction:
         """Internal endpoint: allocate a status list index."""
@@ -749,10 +753,12 @@ class RevocationProfileInteractions:
             path=f"/internal/revocation-profiles/{profile_id}/allocate-index",
             request_headers=auth_headers(),
             request_body={
+                "organization_id": organization_id,
                 "credential_format": credential_format,
             },
             response_status=200,
             response_body={
+                "organization_id": organization_id,
                 "index": match.like(42),
                 "status_list_url": match.like("https://issuer.example/status-lists/1"),
             },

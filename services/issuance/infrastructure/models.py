@@ -1,7 +1,22 @@
 """SQLAlchemy models for Issuance Service."""
 
-from datetime import datetime, timezone
-from sqlalchemy import Column, String, DateTime, Boolean, JSON, Integer, Table, Index, Text, ForeignKey
+from datetime import UTC, datetime
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+    text,
+)
 from sqlalchemy.orm import registry
 
 mapper_registry = registry()
@@ -9,7 +24,7 @@ mapper_registry = registry()
 
 def utcnow():
     """Helper function for timezone-aware timestamps."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # Issuance Transactions table
@@ -19,6 +34,8 @@ issuance_transactions_table = Table(
     Column("id", String, primary_key=True),
     Column("organization_id", String, nullable=False),
     Column("credential_template_id", String, nullable=False),
+    Column("revocation_profile_id", String, nullable=True),
+    Column("renewal_of_credential_id", String, nullable=True),
     Column("applicant_id", String, nullable=True),
     Column("application_id", String, nullable=True),
     Column("subject_did", String, nullable=True),
@@ -30,6 +47,7 @@ issuance_transactions_table = Table(
     Column("issuer_mode", String, nullable=False, default="org_managed"),
     Column("issuer_did_override", String, nullable=True),
     Column("signing_service_id", String, nullable=True),
+    Column("reserved_credential_id", String, nullable=True),
     Column("delivery_mode", String(40), nullable=False, server_default="wallet_only"),
     Column("claims", JSON, nullable=False, default=dict),
     Column("credential_type", String, nullable=True),
@@ -37,6 +55,9 @@ issuance_transactions_table = Table(
     Column("selective_disclosure_claims", JSON, nullable=True, default=list),
     Column("credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"),
     Column("wallet_configs", JSON, nullable=True, server_default="[]"),
+    Column("validity_days", Integer, nullable=False, server_default="365"),
+    Column("renewable", Boolean, nullable=False, server_default="false"),
+    Column("renewal_window_days", Integer, nullable=False, server_default="30"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("issued_at", DateTime(timezone=True), nullable=True),
@@ -63,6 +84,8 @@ issued_credentials_table = Table(
     Column("subject_did", String, nullable=True),
     Column("issuer_did", String, nullable=True),
     Column("revocation_profile_id", String, nullable=True),
+    Column("renewed_from_credential_id", String, nullable=True),
+    Column("renewed_to_credential_id", String, nullable=True),
     Column("status_list_entries", JSON, nullable=False, default=list),
     Column("credential_jwt", String, nullable=False),
     Column("credential_hash", String, nullable=False),
@@ -76,6 +99,8 @@ issued_credentials_table = Table(
     Index("ix_issued_credentials_organization_id", "organization_id"),
     Index("ix_issued_credentials_status", "status"),
     Index("ix_issued_credentials_applicant_id", "applicant_id"),
+    Index("ux_issued_credentials_transaction_id", "transaction_id", unique=True),
+    Index("ux_issued_credentials_tenant_id", "organization_id", "id", unique=True),
     schema="issuance_service"
 )
 
@@ -119,11 +144,111 @@ evidence_facts_table = Table(
     Column("assertion", JSON, nullable=False, default=dict),
     Column("verification", JSON, nullable=False, default=dict),
     Column("source", JSON, nullable=False, default=dict),
+    Column("requirement_id", String, nullable=True),
+    Column("logical_key", String(64), nullable=False),
+    Column("source_revision", String, nullable=False),
+    Column("payload_hash", String(64), nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("effective_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column(
+        "superseded_fact_id",
+        String,
+        ForeignKey("issuance_service.evidence_facts.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Index("ix_evidence_facts_organization_id", "organization_id"),
     Index("ix_evidence_facts_application_id", "application_id"),
     Index("ix_evidence_facts_provider", "provider"),
     Index("ix_evidence_facts_fact_type", "fact_type"),
+    Index("ix_evidence_facts_application_logical_key", "application_id", "logical_key"),
+    Index(
+        "ix_evidence_facts_application_logical_payload",
+        "application_id",
+        "logical_key",
+        "payload_hash",
+    ),
+    Index("ux_evidence_facts_tenant_id", "organization_id", "id", unique=True),
+    Index(
+        "ux_evidence_facts_tenant_application_id",
+        "organization_id",
+        "application_id",
+        "id",
+        unique=True,
+    ),
+    Index(
+        "ux_evidence_facts_tenant_application_logical_id",
+        "organization_id",
+        "application_id",
+        "logical_key",
+        "id",
+        unique=True,
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id"],
+        ["issuance_service.applications.organization_id", "issuance_service.applications.id"],
+        name="fk_evidence_facts_tenant_application",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id", "logical_key", "superseded_fact_id"],
+        [
+            "issuance_service.evidence_facts.organization_id",
+            "issuance_service.evidence_facts.application_id",
+            "issuance_service.evidence_facts.logical_key",
+            "issuance_service.evidence_facts.id",
+        ],
+        name="fk_evidence_facts_tenant_superseded",
+    ),
+    CheckConstraint(
+        "logical_key <> '' AND source_revision <> '' AND payload_hash <> ''",
+        name="ck_evidence_facts_revision_metadata",
+    ),
+    schema="issuance_service",
+)
+
+evidence_fact_heads_table = Table(
+    "evidence_fact_heads",
+    mapper_registry.metadata,
+    Column("organization_id", String, nullable=False),
+    Column(
+        "application_id",
+        String,
+        ForeignKey("issuance_service.applications.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("logical_key", String(64), primary_key=True),
+    Column(
+        "fact_id",
+        String,
+        ForeignKey("issuance_service.evidence_facts.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_evidence_fact_heads_organization_id", "organization_id"),
+    Index("ix_evidence_fact_heads_fact_id", "fact_id"),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id"],
+        ["issuance_service.applications.organization_id", "issuance_service.applications.id"],
+        name="fk_evidence_fact_heads_tenant_application",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id", "logical_key", "fact_id"],
+        [
+            "issuance_service.evidence_facts.organization_id",
+            "issuance_service.evidence_facts.application_id",
+            "issuance_service.evidence_facts.logical_key",
+            "issuance_service.evidence_facts.id",
+        ],
+        name="fk_evidence_fact_heads_tenant_fact",
+        ondelete="CASCADE",
+    ),
+    CheckConstraint(
+        "btrim(logical_key) <> ''",
+        name="ck_evidence_fact_heads_logical_key",
+    ),
     schema="issuance_service",
 )
 
@@ -143,7 +268,6 @@ application_templates_table = Table(
     Column("approval_strategy", String, nullable=False, default="auto"),
     Column("approval_policy_set_id", String, nullable=True),
     Column("application_validity_days", Integer, nullable=False, default=30),
-    Column("auto_approval_rules", JSON, nullable=False, default=list),
     Column("ui_config", JSON, nullable=False, default=dict),
     Column("notification_config", JSON, nullable=False, default=dict),
     Column("status", String, nullable=False, default="active"),
@@ -151,6 +275,7 @@ application_templates_table = Table(
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Index("ix_application_templates_organization_id", "organization_id"),
     Index("ix_application_templates_status", "status"),
+    Index("ux_application_templates_tenant_id", "organization_id", "id", unique=True),
     schema="issuance_service"
 )
 
@@ -181,10 +306,44 @@ applications_table = Table(
     Index("ix_applications_status", "status"),
     Index("ix_applications_template_id", "application_template_id"),
     Index("ix_applications_applicant_identifier", "applicant_identifier"),
+    Index("ux_applications_tenant_id", "organization_id", "id", unique=True),
     schema="issuance_service"
 )
 
 # Issuance Events table — append-only audit/lifecycle log
+physical_document_jobs_table = Table(
+    "physical_document_jobs",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column("flow_execution_id", String, nullable=False),
+    Column("application_id", String, nullable=False, unique=True),
+    Column("application_template_id", String, nullable=False),
+    Column("credential_template_id", String, nullable=False),
+    Column("revocation_profile_id", String, nullable=True),
+    Column("delivery_destination_profile_id", String(128), nullable=False),
+    Column("document_type", String(3), nullable=False),
+    Column("country_code", String(3), nullable=False),
+    Column("secure_artifact_ciphertext", Text, nullable=False),
+    Column("secure_artifact_reference", String(512), nullable=False),
+    Column("sod_sha256", String(64), nullable=True),
+    Column("bureau_job_id", String(255), nullable=True),
+    Column("tracking_number", String(255), nullable=True),
+    Column("status", String(40), nullable=False, default="DRAFT"),
+    Column("quality_result", JSON, nullable=True),
+    Column("error_code", String(128), nullable=True),
+    Column("error_message", String(1024), nullable=True),
+    Column("submitted_at", DateTime(timezone=True), nullable=True),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_physical_document_jobs_organization_id", "organization_id"),
+    Index("ix_physical_document_jobs_flow_execution_id", "flow_execution_id"),
+    Index("ix_physical_document_jobs_status", "status"),
+    Index("ix_physical_document_jobs_bureau_job_id", "bureau_job_id"),
+    schema="issuance_service",
+)
+
 issuance_events_table = Table(
     "issuance_events",
     mapper_registry.metadata,
@@ -233,18 +392,36 @@ canvas_platforms_table = Table(
     Column("canvas_base_url", Text, nullable=True),
     Column("lti_client_id", Text, nullable=True),
     Column("lti_deployment_id", Text, nullable=True),
+    Column("lti_trust_profile", String(40), nullable=False, server_default="hosted_global"),
     Column("lti_issuer", Text, nullable=True),
     Column("lti_jwks_url", Text, nullable=True),
     Column("lti_jwks_json", JSON, nullable=True),
     Column("lti_jwks_fetched_at", DateTime(timezone=True), nullable=True),
     Column("lti_jwks_expires_at", DateTime(timezone=True), nullable=True),
     Column("lti_openid_configuration", JSON, nullable=True),
-    Column("enabled", Boolean, nullable=False, default=True),
+    Column("registration_status", String(40), nullable=False, server_default="draft"),
+    Column("connection_config", JSON, nullable=False, default=dict),
+    Column("capability_snapshot", JSON, nullable=False, default=dict),
+    Column("last_validated_at", DateTime(timezone=True), nullable=True),
+    Column("last_connection_error", Text, nullable=True),
+    Column("config_version", Integer, nullable=False, default=1),
+    Column("archived_at", DateTime(timezone=True), nullable=True),
+    Column("enabled", Boolean, nullable=False, default=False, server_default="false"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Index("ix_canvas_platforms_organization_id", "organization_id"),
     Index("ix_canvas_platforms_canvas_account_id", "canvas_account_id"),
     Index("ux_canvas_platforms_org_account", "organization_id", "canvas_account_id", unique=True),
+    Index("ux_canvas_platforms_tenant_id", "organization_id", "id", unique=True),
+    CheckConstraint("config_version >= 1", name="ck_canvas_platforms_config_version"),
+    CheckConstraint(
+        "registration_status IN ('draft', 'verified', 'installed', 'active', 'archived')",
+        name="ck_canvas_platforms_registration_status",
+    ),
+    CheckConstraint(
+        "archived_at IS NULL OR enabled = false",
+        name="ck_canvas_platforms_archival_state",
+    ),
     schema="issuance_service",
 )
 
@@ -268,7 +445,14 @@ canvas_program_bindings_table = Table(
     Column("deployment_profile_id", String, nullable=True),
     Column("feature_flags", JSON, nullable=False, default=dict),
     Column("canvas_credentials", JSON, nullable=False, default=dict),
-    Column("enabled", Boolean, nullable=False, default=True),
+    Column("config_version", Integer, nullable=False, default=1),
+    Column("validated_config_version", Integer, nullable=True),
+    Column("readiness_checks", JSON, nullable=False, default=list),
+    Column("readiness_validated_at", DateTime(timezone=True), nullable=True),
+    Column("activated_at", DateTime(timezone=True), nullable=True),
+    Column("archived_at", DateTime(timezone=True), nullable=True),
+    Column("credential_template_snapshot", JSON, nullable=False, default=dict),
+    Column("enabled", Boolean, nullable=False, default=False, server_default="false"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Index("ix_canvas_program_bindings_organization_id", "organization_id"),
@@ -276,6 +460,659 @@ canvas_program_bindings_table = Table(
     Index("ix_canvas_program_bindings_application_template_id", "application_template_id"),
     Index("ix_canvas_program_bindings_credential_template_id", "credential_template_id"),
     Index("ix_canvas_program_bindings_deployment_profile_id", "deployment_profile_id"),
+    Index("ux_canvas_program_bindings_tenant_id", "organization_id", "id", unique=True),
+    CheckConstraint(
+        "config_version >= 1 AND (validated_config_version IS NULL OR "
+        "(validated_config_version >= 1 AND validated_config_version <= config_version))",
+        name="ck_canvas_program_bindings_config_versions",
+    ),
+    CheckConstraint(
+        "archived_at IS NULL OR enabled = false",
+        name="ck_canvas_program_bindings_archival_state",
+    ),
+    CheckConstraint(
+        "enabled = false OR (activated_at IS NOT NULL "
+        "AND validated_config_version = config_version)",
+        name="ck_canvas_program_bindings_activation_state",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "platform_id"],
+        [
+            "issuance_service.canvas_platforms.organization_id",
+            "issuance_service.canvas_platforms.id",
+        ],
+        name="fk_canvas_program_bindings_tenant_platform",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_template_id"],
+        [
+            "issuance_service.application_templates.organization_id",
+            "issuance_service.application_templates.id",
+        ],
+        name="fk_canvas_program_bindings_tenant_application_template",
+        ondelete="CASCADE",
+    ),
+    schema="issuance_service",
+)
+
+canvas_learner_identities_table = Table(
+    "canvas_learner_identities",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("deployment_id", String, nullable=False),
+    Column("lti_subject", String, nullable=False),
+    Column("canvas_user_id", String, nullable=True),
+    Column("sis_user_id", String, nullable=True),
+    Column("status", String(32), nullable=False, default="linked"),
+    Column("conflict_reason", Text, nullable=True),
+    Column("verified_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_learner_identities_organization_id", "organization_id"),
+    Index("ix_canvas_learner_identities_platform_id", "platform_id"),
+    Index("ux_canvas_learner_identities_tenant_id", "organization_id", "id", unique=True),
+    Index(
+        "ux_canvas_learner_identity_subject",
+        "platform_id",
+        "deployment_id",
+        "lti_subject",
+        unique=True,
+    ),
+    Index(
+        "ux_canvas_learner_identity_numeric_link",
+        "platform_id",
+        "deployment_id",
+        "canvas_user_id",
+        unique=True,
+        postgresql_where=text("status = 'linked' AND canvas_user_id IS NOT NULL"),
+    ),
+    CheckConstraint(
+        "status IN ('subject_verified', 'linked', 'quarantined')",
+        name="ck_canvas_learner_identities_status",
+    ),
+    CheckConstraint(
+        "btrim(deployment_id) <> '' AND btrim(lti_subject) <> ''",
+        name="ck_canvas_learner_identities_subject",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "platform_id"],
+        [
+            "issuance_service.canvas_platforms.organization_id",
+            "issuance_service.canvas_platforms.id",
+        ],
+        name="fk_canvas_learner_identities_tenant_platform",
+        ondelete="CASCADE",
+    ),
+    schema="issuance_service",
+)
+
+canvas_oauth_authorizations_table = Table(
+    "canvas_oauth_authorizations",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("canvas_base_url", Text, nullable=False),
+    Column("platform_config_version", Integer, nullable=False),
+    Column("client_id", Text, nullable=False),
+    Column("client_secret_ref", Text, nullable=False),
+    Column("state_hash", String(64), nullable=False, unique=True),
+    Column("capabilities", JSON, nullable=False, default=list),
+    Column("scopes", JSON, nullable=False, default=list),
+    Column("redirect_uri", Text, nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_oauth_authorizations_organization_id", "organization_id"),
+    Index("ix_canvas_oauth_authorizations_platform_id", "platform_id"),
+    Index("ix_canvas_oauth_authorizations_expiry", "expires_at", "consumed_at"),
+    CheckConstraint(
+        "length(state_hash) = 64",
+        name="ck_canvas_oauth_authorizations_state_hash",
+    ),
+    CheckConstraint(
+        "platform_config_version >= 1 AND left(lower(canvas_base_url), 8) = 'https://'",
+        name="ck_canvas_oauth_authorizations_platform_snapshot",
+    ),
+    CheckConstraint(
+        "left(client_secret_ref, length('org_secret://' || organization_id || '/')) "
+        "= 'org_secret://' || organization_id || '/'",
+        name="ck_canvas_oauth_authorizations_tenant_secret_ref",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "platform_id"],
+        [
+            "issuance_service.canvas_platforms.organization_id",
+            "issuance_service.canvas_platforms.id",
+        ],
+        name="fk_canvas_oauth_authorizations_tenant_platform",
+        ondelete="CASCADE",
+    ),
+    schema="issuance_service",
+)
+
+canvas_oauth_connections_table = Table(
+    "canvas_oauth_connections",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("canvas_base_url", Text, nullable=False),
+    Column("platform_config_version", Integer, nullable=False),
+    Column("client_id", Text, nullable=False),
+    Column("client_secret_ref", Text, nullable=False),
+    Column("capabilities", JSON, nullable=False, default=list),
+    Column("scopes", JSON, nullable=False, default=list),
+    Column("access_token_secret_ref", Text, nullable=True),
+    Column("refresh_token_secret_ref", Text, nullable=True),
+    Column("token_expires_at", DateTime(timezone=True), nullable=True),
+    Column("status", String(40), nullable=False, default="connected"),
+    Column("reauthorization_required", Boolean, nullable=False, default=False),
+    Column("refresh_lease_owner", String, nullable=True),
+    Column("refresh_lease_expires_at", DateTime(timezone=True), nullable=True),
+    Column("revoke_retry_count", Integer, nullable=False, default=0),
+    Column("revoke_retry_at", DateTime(timezone=True), nullable=True),
+    Column("revoke_last_error_code", String(120), nullable=True),
+    Column("connected_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("last_refreshed_at", DateTime(timezone=True), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ux_canvas_oauth_connections_platform", "organization_id", "platform_id", unique=True),
+    Index("ix_canvas_oauth_connections_status", "status", "reauthorization_required"),
+    Index("ix_canvas_oauth_connections_revoke_retry", "status", "revoke_retry_at"),
+    CheckConstraint(
+        "status IN ('connected', 'reauthorization_required', 'revocation_pending', 'disconnected')",
+        name="ck_canvas_oauth_connections_status",
+    ),
+    CheckConstraint(
+        "revoke_retry_count >= 0",
+        name="ck_canvas_oauth_connections_revoke_retry_count",
+    ),
+    CheckConstraint(
+        "(refresh_lease_owner IS NULL AND refresh_lease_expires_at IS NULL) "
+        "OR (refresh_lease_owner IS NOT NULL AND refresh_lease_expires_at IS NOT NULL)",
+        name="ck_canvas_oauth_connections_refresh_lease",
+    ),
+    CheckConstraint(
+        "platform_config_version >= 1 AND left(lower(canvas_base_url), 8) = 'https://'",
+        name="ck_canvas_oauth_connections_platform_snapshot",
+    ),
+    CheckConstraint(
+        "left(client_secret_ref, length('org_secret://' || organization_id || '/')) "
+        "= 'org_secret://' || organization_id || '/' "
+        "AND (access_token_secret_ref IS NULL OR "
+        "left(access_token_secret_ref, length('org_secret://' || organization_id || '/')) "
+        "= 'org_secret://' || organization_id || '/') "
+        "AND (refresh_token_secret_ref IS NULL OR "
+        "left(refresh_token_secret_ref, length('org_secret://' || organization_id || '/')) "
+        "= 'org_secret://' || organization_id || '/')",
+        name="ck_canvas_oauth_connections_tenant_secret_refs",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "platform_id"],
+        [
+            "issuance_service.canvas_platforms.organization_id",
+            "issuance_service.canvas_platforms.id",
+        ],
+        name="fk_canvas_oauth_connections_tenant_platform",
+        ondelete="CASCADE",
+    ),
+    schema="issuance_service",
+)
+
+canvas_evidence_sync_targets_table = Table(
+    "canvas_evidence_sync_targets",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "binding_id",
+        String,
+        ForeignKey("issuance_service.canvas_program_bindings.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("target_type", String(40), nullable=False),
+    Column("logical_key", String, nullable=False),
+    Column(
+        "application_id",
+        String,
+        ForeignKey("issuance_service.applications.id", ondelete="CASCADE"),
+        nullable=True,
+    ),
+    Column(
+        "candidate_id",
+        String,
+        ForeignKey("issuance_service.canvas_award_candidates.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("enabled", Boolean, nullable=False, default=True),
+    Column("schedule_seconds", Integer, nullable=False, default=900),
+    Column("next_run_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("last_enqueued_at", DateTime(timezone=True), nullable=True),
+    Column("last_succeeded_at", DateTime(timezone=True), nullable=True),
+    Column("config_version", Integer, nullable=False, default=1),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_sync_targets_organization_id", "organization_id"),
+    Index("ix_canvas_sync_targets_due", "enabled", "next_run_at"),
+    Index(
+        "ix_canvas_sync_targets_candidate_id",
+        "candidate_id",
+        postgresql_where=text("candidate_id IS NOT NULL"),
+    ),
+    Index("ux_canvas_sync_targets_org_logical", "organization_id", "logical_key", unique=True),
+    Index("ux_canvas_sync_targets_tenant_id", "organization_id", "id", unique=True),
+    CheckConstraint(
+        "target_type IN ('learner_application', 'background_roster', 'award_candidate', 'issued_drift')",
+        name="ck_canvas_sync_targets_type",
+    ),
+    CheckConstraint("schedule_seconds >= 60", name="ck_canvas_sync_targets_schedule"),
+    CheckConstraint("config_version >= 1", name="ck_canvas_sync_targets_config_version"),
+    CheckConstraint(
+        "btrim(logical_key) <> ''",
+        name="ck_canvas_sync_targets_logical_key",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "platform_id"],
+        [
+            "issuance_service.canvas_platforms.organization_id",
+            "issuance_service.canvas_platforms.id",
+        ],
+        name="fk_canvas_sync_targets_tenant_platform",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "binding_id"],
+        [
+            "issuance_service.canvas_program_bindings.organization_id",
+            "issuance_service.canvas_program_bindings.id",
+        ],
+        name="fk_canvas_sync_targets_tenant_binding",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id"],
+        ["issuance_service.applications.organization_id", "issuance_service.applications.id"],
+        name="fk_canvas_sync_targets_tenant_application",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "candidate_id"],
+        [
+            "issuance_service.canvas_award_candidates.organization_id",
+            "issuance_service.canvas_award_candidates.id",
+        ],
+        name="fk_canvas_sync_targets_tenant_candidate",
+    ),
+    schema="issuance_service",
+)
+
+canvas_evidence_sync_jobs_table = Table(
+    "canvas_evidence_sync_jobs",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "target_id",
+        String,
+        ForeignKey("issuance_service.canvas_evidence_sync_targets.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("status", String(32), nullable=False, default="queued"),
+    Column("attempt_count", Integer, nullable=False, default=0),
+    Column("max_attempts", Integer, nullable=False, default=8),
+    Column("available_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("lease_owner", String, nullable=True),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=True),
+    Column("last_error_code", String(120), nullable=True),
+    Column("last_error_summary", Text, nullable=True),
+    Column("result", JSON, nullable=False, default=dict),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("started_at", DateTime(timezone=True), nullable=True),
+    Column("completed_at", DateTime(timezone=True), nullable=True),
+    Index("ix_canvas_sync_jobs_organization_id", "organization_id"),
+    Index("ix_canvas_sync_jobs_claim", "status", "available_at", "lease_expires_at"),
+    Index(
+        "ux_canvas_sync_jobs_one_active_target",
+        "target_id",
+        unique=True,
+        postgresql_where=text("status IN ('queued', 'leased', 'retry')"),
+    ),
+    CheckConstraint(
+        "status IN ('queued', 'leased', 'retry', 'succeeded', 'dead_letter', 'cancelled')",
+        name="ck_canvas_sync_jobs_status",
+    ),
+    CheckConstraint(
+        "max_attempts >= 1 AND attempt_count >= 0 AND attempt_count <= max_attempts",
+        name="ck_canvas_sync_jobs_attempts",
+    ),
+    CheckConstraint(
+        "(status = 'leased' AND lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL) "
+        "OR (status <> 'leased' AND lease_owner IS NULL AND lease_expires_at IS NULL)",
+        name="ck_canvas_sync_jobs_lease",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "target_id"],
+        [
+            "issuance_service.canvas_evidence_sync_targets.organization_id",
+            "issuance_service.canvas_evidence_sync_targets.id",
+        ],
+        name="fk_canvas_sync_jobs_tenant_target",
+        ondelete="CASCADE",
+    ),
+    schema="issuance_service",
+)
+
+canvas_worker_heartbeats_table = Table(
+    "canvas_worker_heartbeats",
+    mapper_registry.metadata,
+    Column("worker_id", String, primary_key=True),
+    Column("role", String(80), nullable=False, default="canvas_sync"),
+    Column("started_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("last_heartbeat_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("metadata", JSON, nullable=False, default=dict),
+    Index("ix_canvas_worker_heartbeats_role_fresh", "role", "last_heartbeat_at"),
+    schema="issuance_service",
+)
+
+canvas_award_candidates_table = Table(
+    "canvas_award_candidates",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "binding_id",
+        String,
+        ForeignKey("issuance_service.canvas_program_bindings.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "learner_identity_id",
+        String,
+        ForeignKey("issuance_service.canvas_learner_identities.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("candidate_key", String, nullable=False),
+    Column("canvas_user_id", String, nullable=True),
+    Column("lti_subject", String, nullable=True),
+    Column("state", String(40), nullable=False, default="observed"),
+    Column(
+        "application_id",
+        String,
+        ForeignKey("issuance_service.applications.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column(
+        "claimed_credential_id",
+        String,
+        ForeignKey("issuance_service.issued_credentials.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("observed_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_award_candidates_organization_state", "organization_id", "state"),
+    Index("ix_canvas_award_candidates_binding_id", "binding_id"),
+    Index("ux_canvas_award_candidates_binding_key", "binding_id", "candidate_key", unique=True),
+    Index("ux_canvas_award_candidates_tenant_id", "organization_id", "id", unique=True),
+    CheckConstraint(
+        "state IN ('observed', 'identity_link_required', 'eligible', 'pending_claim', 'claimed', 'dismissed')",
+        name="ck_canvas_award_candidates_state",
+    ),
+    CheckConstraint(
+        "btrim(candidate_key) <> ''",
+        name="ck_canvas_award_candidates_key",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "platform_id"],
+        [
+            "issuance_service.canvas_platforms.organization_id",
+            "issuance_service.canvas_platforms.id",
+        ],
+        name="fk_canvas_award_candidates_tenant_platform",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "binding_id"],
+        [
+            "issuance_service.canvas_program_bindings.organization_id",
+            "issuance_service.canvas_program_bindings.id",
+        ],
+        name="fk_canvas_award_candidates_tenant_binding",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "learner_identity_id"],
+        [
+            "issuance_service.canvas_learner_identities.organization_id",
+            "issuance_service.canvas_learner_identities.id",
+        ],
+        name="fk_canvas_award_candidates_tenant_identity",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id"],
+        ["issuance_service.applications.organization_id", "issuance_service.applications.id"],
+        name="fk_canvas_award_candidates_tenant_application",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "claimed_credential_id"],
+        [
+            "issuance_service.issued_credentials.organization_id",
+            "issuance_service.issued_credentials.id",
+        ],
+        name="fk_canvas_award_candidates_tenant_credential",
+    ),
+    schema="issuance_service",
+)
+
+canvas_candidate_observations_table = Table(
+    "canvas_candidate_observations",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "candidate_id",
+        String,
+        ForeignKey("issuance_service.canvas_award_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("requirement_id", String, nullable=False),
+    Column("logical_key", String(64), nullable=False),
+    Column("assertion", JSON, nullable=False, default=dict),
+    Column("verification", JSON, nullable=False, default=dict),
+    Column("payload_hash", String(64), nullable=False),
+    Column(
+        "superseded_observation_id",
+        String,
+        ForeignKey("issuance_service.canvas_candidate_observations.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("is_current", Boolean, nullable=False, default=True),
+    Column("observed_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_canvas_candidate_observations_candidate", "candidate_id"),
+    Index(
+        "ux_canvas_candidate_observations_current",
+        "candidate_id",
+        "logical_key",
+        unique=True,
+        postgresql_where=text("is_current"),
+    ),
+    Index(
+        "ix_canvas_candidate_observations_payload",
+        "candidate_id",
+        "logical_key",
+        "payload_hash",
+    ),
+    Index("ux_canvas_candidate_observations_tenant_id", "organization_id", "id", unique=True),
+    Index(
+        "ux_canvas_candidate_observations_tenant_candidate_id",
+        "organization_id",
+        "candidate_id",
+        "id",
+        unique=True,
+    ),
+    Index(
+        "ux_canvas_candidate_observations_tenant_candidate_logical_id",
+        "organization_id",
+        "candidate_id",
+        "logical_key",
+        "id",
+        unique=True,
+    ),
+    CheckConstraint(
+        "btrim(requirement_id) <> '' AND btrim(logical_key) <> '' "
+        "AND btrim(payload_hash) <> ''",
+        name="ck_canvas_candidate_observations_revision",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "candidate_id"],
+        [
+            "issuance_service.canvas_award_candidates.organization_id",
+            "issuance_service.canvas_award_candidates.id",
+        ],
+        name="fk_canvas_candidate_observations_tenant_candidate",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "candidate_id", "logical_key", "superseded_observation_id"],
+        [
+            "issuance_service.canvas_candidate_observations.organization_id",
+            "issuance_service.canvas_candidate_observations.candidate_id",
+            "issuance_service.canvas_candidate_observations.logical_key",
+            "issuance_service.canvas_candidate_observations.id",
+        ],
+        name="fk_canvas_candidate_observations_tenant_superseded",
+    ),
+    schema="issuance_service",
+)
+
+evidence_policy_reviews_table = Table(
+    "evidence_policy_reviews",
+    mapper_registry.metadata,
+    Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=False),
+    Column(
+        "application_id",
+        String,
+        ForeignKey("issuance_service.applications.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "credential_id",
+        String,
+        ForeignKey("issuance_service.issued_credentials.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "binding_id",
+        String,
+        ForeignKey("issuance_service.canvas_program_bindings.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("status", String(32), nullable=False, default="open"),
+    Column("prior_decision", JSON, nullable=False, default=dict),
+    Column("current_decision", JSON, nullable=False, default=dict),
+    Column(
+        "triggering_fact_id",
+        String,
+        ForeignKey("issuance_service.evidence_facts.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("resolution_action", String(32), nullable=True),
+    Column("resolution_notes", Text, nullable=True),
+    Column("resolved_by", String, nullable=True),
+    Column("resolved_at", DateTime(timezone=True), nullable=True),
+    Column("resolution_claim_token", String(128), nullable=True),
+    Column("resolution_claim_action", String(32), nullable=True),
+    Column("resolution_claimed_at", DateTime(timezone=True), nullable=True),
+    Column("resolution_recovery_pending", Boolean, nullable=False, default=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_evidence_policy_reviews_organization_status", "organization_id", "status"),
+    Index("ix_evidence_policy_reviews_application_id", "application_id"),
+    Index(
+        "ux_evidence_policy_reviews_one_open_application",
+        "application_id",
+        unique=True,
+        postgresql_where=text("status = 'open'"),
+    ),
+    CheckConstraint(
+        "status IN ('open', 'dismissed', 'suspended', 'revoked', 'resolved')",
+        name="ck_evidence_policy_reviews_status",
+    ),
+    CheckConstraint(
+        "(resolution_claim_token IS NULL AND resolution_claim_action IS NULL "
+        "AND resolution_claimed_at IS NULL) OR "
+        "(status = 'open' AND resolution_claim_token IS NOT NULL "
+        "AND resolution_claim_action IN ('dismiss', 'suspend', 'revoke') "
+        "AND resolution_claimed_at IS NOT NULL)",
+        name="ck_evidence_policy_reviews_resolution_claim",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id"],
+        ["issuance_service.applications.organization_id", "issuance_service.applications.id"],
+        name="fk_evidence_policy_reviews_tenant_application",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "credential_id"],
+        [
+            "issuance_service.issued_credentials.organization_id",
+            "issuance_service.issued_credentials.id",
+        ],
+        name="fk_evidence_policy_reviews_tenant_credential",
+        ondelete="CASCADE",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "binding_id"],
+        [
+            "issuance_service.canvas_program_bindings.organization_id",
+            "issuance_service.canvas_program_bindings.id",
+        ],
+        name="fk_evidence_policy_reviews_tenant_binding",
+    ),
+    ForeignKeyConstraint(
+        ["organization_id", "application_id", "triggering_fact_id"],
+        [
+            "issuance_service.evidence_facts.organization_id",
+            "issuance_service.evidence_facts.application_id",
+            "issuance_service.evidence_facts.id",
+        ],
+        name="fk_evidence_policy_reviews_tenant_fact",
+    ),
     schema="issuance_service",
 )
 

@@ -24,6 +24,7 @@ class KeyAlgorithm(Enum):
     """Supported key algorithms."""
 
     ES256 = "ES256"
+    ES384 = "ES384"
     ES256K = "ES256K"
     EDDSA = "EdDSA"
 

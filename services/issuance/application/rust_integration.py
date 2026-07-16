@@ -183,17 +183,49 @@ def get_marty_rs():
     try:
         from marty_rs import _marty_rs
         return _marty_rs
-    except ImportError:
-        pass
-    try:
-        import _marty_rs
-        return _marty_rs
     except ImportError as e:
         logger.error("marty-rs bindings not available - credential signing will fail")
         raise ImportError(
             "marty-rs Python bindings are required for credential signing. "
             "Ensure the marty-bindings crate is built and installed."
         ) from e
+
+
+REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
+    {
+        "canvas_normalize_base_url",
+        "canvas_probe_lti_platform",
+        "didcomm_decrypt",
+        "didcomm_encrypt",
+        "didcomm_extract_endpoint",
+        "didcomm_pack_credential",
+        "didcomm_resolve_did",
+        "didcomm_unpack_message",
+        "lti_verify_launch_jwt",
+        "oid4vci_create_authorization_response",
+        "oid4vci_create_credential_offer",
+        "oid4vci_create_token_response",
+        "oid4vci_exchange_auth_code_for_token",
+        "oid4vci_sign_credential",
+        "oid4vci_verify_pkce_s256",
+        "oid4vci_verify_proof_jwt",
+    }
+)
+
+
+def validate_marty_rs_capabilities() -> None:
+    """Fail startup when the deployed native extension is not service-compatible."""
+    marty_rs = get_marty_rs()
+    missing = sorted(
+        capability
+        for capability in REQUIRED_MARTY_RS_CAPABILITIES
+        if not callable(getattr(marty_rs, capability, None))
+    )
+    if missing:
+        raise RuntimeError(
+            "marty-rs native extension is missing required capabilities: "
+            + ", ".join(missing)
+        )
 
 
 async def get_or_generate_issuer_key(organization_id: str = "default") -> dict:
@@ -352,6 +384,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     signing_service_id: str,
     remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
     subject_id: str | None,
+    holder_jwk: dict[str, Any] | None = None,
     credential_type: str,
     claims_json: str,
     expiration_seconds: int = 31536000,
@@ -387,7 +420,15 @@ async def create_sd_jwt_vc_with_remote_signing(
     }
     if subject_id:
         payload["sub"] = subject_id
-        payload["cnf"] = {"kid": subject_id}
+        if holder_jwk:
+            public_holder_jwk = {
+                key: value
+                for key, value in holder_jwk.items()
+                if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+            }
+            payload["cnf"] = {"jwk": public_holder_jwk}
+        else:
+            payload["cnf"] = {"kid": subject_id}
 
     disclosures: list[str] = []
     sd_hashes: list[str] = []
@@ -557,7 +598,7 @@ def verify_proof_jwt(
     proof_jwt: str,
     expected_nonce: str | None,
     issuer_url: str | None = None,
-) -> tuple[bool, str, str | None]:
+) -> tuple[bool, str, dict[str, Any] | None, str | None]:
     """Verify an OID4VCI proof JWT via Rust (full OID4VCI §8.2 verification).
 
     Delegates entirely to marty_rs.oid4vci_verify_proof_jwt which performs:
@@ -568,18 +609,19 @@ def verify_proof_jwt(
       - aud / iat / exp validation
 
     Returns:
-      (ok: bool, holder_did: str, error: str | None)
+      (ok: bool, holder_did: str, holder_public_jwk: dict | None, error: str | None)
     """
     try:
         marty_rs = get_marty_rs()
-        holder_did, _nonce = marty_rs.oid4vci_verify_proof_jwt(
+        holder_did, _nonce, holder_jwk_json = marty_rs.oid4vci_verify_proof_jwt(
             proof_jwt, expected_nonce, issuer_url,
         )
-        return True, holder_did, None
+        holder_jwk = json.loads(holder_jwk_json) if holder_jwk_json else None
+        return True, holder_did, holder_jwk, None
     except RuntimeError as e:
-        return False, "", str(e)
+        return False, "", None, str(e)
     except Exception as e:
-        return False, "", f"proof JWT error: {e}"
+        return False, "", None, f"proof JWT error: {e}"
 
 
 # ---------------------------------------------------------------------------

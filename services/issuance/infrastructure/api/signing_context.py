@@ -92,6 +92,50 @@ async def resolve_remote_issuer_context(
     return data if isinstance(data, dict) and data.get("ok") else None
 
 
+async def resolve_remote_issuer_did(
+    organization_id: str,
+    *,
+    issuer_did: str,
+    verification_method_id: str | None = None,
+    credential_format: str | None = None,
+    key_purpose: str | None = None,
+    algorithm: str | None = None,
+) -> dict[str, Any] | None:
+    """Resolve the published org-scoped DID verification method and public JWK."""
+
+    if not organization_id or not issuer_did:
+        return None
+    params: dict[str, str] = {
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+    }
+    if verification_method_id:
+        params["verification_method_id"] = verification_method_id
+    if credential_format:
+        params["credential_format"] = credential_format
+    if key_purpose:
+        params["key_purpose"] = key_purpose
+    if algorithm:
+        params["algorithm"] = algorithm
+
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
+        response = await client.get(
+            f"{_internal_signing_base_url()}/resolve-issuer-did",
+            params=params,
+            headers=_internal_headers(),
+        )
+    if response.status_code == 404:
+        return None
+    if response.status_code == 401:
+        raise RuntimeError("Internal signing API rejected the service API key")
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Issuer DID resolution failed (HTTP {response.status_code}): {_response_error_detail(response)}"
+        )
+    data = response.json()
+    return data if isinstance(data, dict) and data.get("ok") else None
+
+
 async def sign_payload_with_remote_service(
     *,
     organization_id: str,
@@ -99,6 +143,7 @@ async def sign_payload_with_remote_service(
     payload: bytes,
     algorithm: str | None = None,
     key_reference: str | None = None,
+    key_purpose: str | None = None,
 ) -> dict[str, Any]:
     """Ask the registered remote KMS service to sign a payload."""
     if not organization_id:
@@ -115,6 +160,8 @@ async def sign_payload_with_remote_service(
         body["algorithm"] = algorithm
     if key_reference:
         body["key_reference"] = key_reference
+    if key_purpose:
+        body["key_purpose"] = key_purpose
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(

@@ -6,6 +6,9 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
 _PYTHON = os.path.join(_REPO_ROOT, "python")
@@ -26,6 +29,19 @@ def test_credential_request_format_defaults_to_none() -> None:
     request = CredentialRequest.model_validate({})
 
     assert request.format is None
+
+
+def test_credential_request_accepts_only_canonical_proofs_object() -> None:
+    request = CredentialRequest.model_validate({"proofs": {"jwt": ["header.payload.signature"]}})
+
+    assert request.proofs == {"jwt": ["header.payload.signature"]}
+
+
+def test_credential_request_rejects_legacy_singular_proof() -> None:
+    with pytest.raises(ValidationError, match="proof"):
+        CredentialRequest.model_validate({
+            "proof": {"proof_type": "jwt", "jwt": "header.payload.signature"},
+        })
 
 
 def test_configuration_id_infers_expected_protocol_format() -> None:

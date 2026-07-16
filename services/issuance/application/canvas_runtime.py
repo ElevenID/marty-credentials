@@ -19,6 +19,7 @@ CANVAS_FEATURE_FLAG_KEYS = {
     "enable_canvas_deep_linking",
     "enable_canvas_ags",
     "enable_canvas_nrps",
+    "enable_background_awards",
 }
 
 _SCOPE_ALIASES = {
@@ -34,9 +35,11 @@ _SCOPE_ALIASES = {
     "canvas_module_id": ("module_id", "canvas_module_id"),
     "quiz_id": ("quiz_id", "canvas_quiz_id"),
     "canvas_quiz_id": ("quiz_id", "canvas_quiz_id"),
-    "user_id": ("user_id", "canvas_user_id", "subject_id"),
-    "canvas_user_id": ("user_id", "canvas_user_id", "subject_id"),
-    "subject_id": ("user_id", "canvas_user_id", "subject_id"),
+    # Canvas REST numeric IDs and opaque LTI subjects are different identity
+    # namespaces.  Never make a binding scoped to one match the other.
+    "user_id": ("user_id", "canvas_user_id"),
+    "canvas_user_id": ("user_id", "canvas_user_id"),
+    "subject_id": ("subject_id", "lti_subject"),
     "enrollment_id": ("enrollment_id", "canvas_enrollment_id"),
     "canvas_enrollment_id": ("enrollment_id", "canvas_enrollment_id"),
 }
@@ -142,23 +145,33 @@ def lti_verified_launch_to_canvas_scope(
 
     context = verified_launch.get("context") if isinstance(verified_launch.get("context"), dict) else {}
     raw_claims = verified_launch.get("raw_claims") if isinstance(verified_launch.get("raw_claims"), dict) else {}
+    custom = raw_claims.get("https://purl.imsglobal.org/spec/lti/claim/custom")
+    if not isinstance(custom, dict):
+        custom = raw_claims.get("custom") if isinstance(raw_claims.get("custom"), dict) else {}
     resource_link = raw_claims.get("https://purl.imsglobal.org/spec/lti/claim/resource_link")
     if not isinstance(resource_link, dict):
         resource_link = raw_claims.get("resource_link") if isinstance(raw_claims.get("resource_link"), dict) else {}
 
-    course_id = context.get("id") or context.get("context_id") or raw_claims.get("context_id")
+    course_id = (
+        custom.get("canvas_course_id")
+        or context.get("id")
+        or context.get("context_id")
+        or raw_claims.get("context_id")
+    )
     resource_link_id = resource_link.get("id") if isinstance(resource_link, dict) else None
     subject = verified_launch.get("subject") or raw_claims.get("sub")
+    canvas_user_id = custom.get("canvas_user_id")
     scope = {
-        "canvas_account_id": canvas_account_id,
+        "canvas_account_id": custom.get("canvas_account_id") or canvas_account_id,
         "course_id": course_id,
         "canvas_course_id": course_id,
         "canvas_context_id": course_id,
         "context_id": course_id,
         "resource_link_id": resource_link_id,
         "subject_id": subject,
-        "user_id": subject,
-        "canvas_user_id": subject,
+        "lti_subject": subject,
+        "user_id": canvas_user_id,
+        "canvas_user_id": canvas_user_id,
     }
     return {key: value for key, value in scope.items() if value is not None}
 

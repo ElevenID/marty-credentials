@@ -17,7 +17,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from issuance.domain.ports import IIssuanceRepository
-from issuance.application.rust_integration import configure_issuer_key_store
+from issuance.application.rust_integration import (
+    configure_issuer_key_store,
+    validate_marty_rs_capabilities,
+)
 
 # ── Staged-rollout feature flag ───────────────────────────────────────────────
 # Set VDSNC_RUST_ENABLED=false in an environment to suppress VDS-NC credential
@@ -181,8 +184,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             request_id_var.reset(token)
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 from issuance.infrastructure.api.canvas_routes import canvas_integration_router
+from issuance.infrastructure.api.canvas_operations_routes import canvas_operations_router
 from issuance.infrastructure.api.application_routes import (
-    application_router,
+    internal_application_router,
     application_template_router,
 )
 from issuance.infrastructure.api.routes import (
@@ -190,6 +194,10 @@ from issuance.infrastructure.api.routes import (
     issuance_router,
     issued_credential_router,
     run_canvas_mirror_automation_loop,
+)
+from issuance.infrastructure.api.physical_document_routes import (
+    configure_physical_document_store,
+    physical_document_router,
 )
 
 logging.basicConfig(
@@ -231,6 +239,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle management."""
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+    validate_marty_rs_capabilities()
+    logger.info("Canonical marty-rs capability contract verified")
     
     # Initialize PostgreSQL adapter
     config = get_config()
@@ -244,6 +254,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresIssuanceRepository(session_factory)
     configure_issuer_key_store(session_factory)
+    configure_physical_document_store(session_factory)
     logger.info("PostgreSQL adapter initialized for issuance service")
 
     # Start gRPC server
@@ -280,6 +291,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await grpc_server.stop(grace=5)
             logger.info("gRPC server stopped")
         configure_issuer_key_store(None)
+        configure_physical_document_store(None)
         await engine.dispose()
 
 
@@ -309,9 +321,11 @@ def create_app() -> FastAPI:
     # Register routers
     app.include_router(issuance_router)
     app.include_router(canvas_integration_router)
+    app.include_router(canvas_operations_router)
     app.include_router(issued_credential_router)
     app.include_router(application_template_router)
-    app.include_router(application_router)
+    app.include_router(internal_application_router)
+    app.include_router(physical_document_router)
     
     # Override FastAPI dependency injection
     app.dependency_overrides[IIssuanceRepository] = get_repo
@@ -858,4 +872,4 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=SERVICE_PORT, reload=True)
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT, reload=False)

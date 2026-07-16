@@ -4,7 +4,7 @@ Tests for the issuance service changes:
  - issued_credential_router CRUD endpoints
  - deferred credential endpoint (now actually returns credentials)
  - issue_credential idempotent retry (returns existing credential)
- - c_nonce_expires_in on TokenResponse
+ - OID4VCI Final token and nonce response separation
  - _credential_status_to_protocol helper
  - _subject_claims_hash helper
  - _credential_format_to_protocol helper
@@ -15,9 +15,7 @@ import hashlib
 import json
 import logging
 import types
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import pytest
 
@@ -54,6 +52,39 @@ from issuance.domain.entities import (
 from issuance.infrastructure.adapters.memory_repository import (
     InMemoryIssuanceRepository,
 )
+from issuance.infrastructure.models import issued_credentials_table, issuance_transactions_table
+
+
+def test_issuance_transaction_schema_tracks_revocation_profile():
+    column = issuance_transactions_table.c.revocation_profile_id
+
+    assert column.nullable is True
+    assert column.type.python_type is str
+
+
+def test_issuance_schema_tracks_credential_renewal():
+    assert issuance_transactions_table.c.renewal_of_credential_id.nullable is True
+    assert issuance_transactions_table.c.validity_days.type.python_type is int
+    assert issuance_transactions_table.c.renewable.type.python_type is bool
+    assert issued_credentials_table.c.renewed_from_credential_id.nullable is True
+    assert issued_credentials_table.c.renewed_to_credential_id.nullable is True
+
+
+def test_postgres_transaction_mapper_preserves_lifecycle_dependencies():
+    from types import SimpleNamespace
+    from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
+
+    source = _make_transaction(
+        revocation_profile_id="revocation-profile-1",
+        renewal_of_credential_id="credential-1",
+    )
+    row_data = {**source.__dict__, "status": source.status.value, "c_nonce": source.nonce}
+    row = SimpleNamespace(**row_data)
+
+    mapped = PostgresIssuanceRepository._row_to_transaction(row)
+
+    assert mapped.revocation_profile_id == "revocation-profile-1"
+    assert mapped.renewal_of_credential_id == "credential-1"
 
 
 # ============================================================================
@@ -293,6 +324,53 @@ class TestRemoteIssuerFailureDetail:
             "algorithm": None,
         }
 
+    async def test_required_remote_issuer_context_fails_on_incomplete_kms_profile(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        async def incomplete_context(*args, **kwargs):
+            return {
+                "issuer_did": "did:web:issuer.example",
+                "issuer_profile_id": "profile-1",
+                "signing_service_id": "service-1",
+                "verification_method_id": "did:web:issuer.example#key-1",
+                "issuer_profile": {"id": "profile-1", "status": "active"},
+            }
+
+        monkeypatch.setattr(routes, "resolve_remote_issuer_context", incomplete_context)
+        tx = _make_transaction()
+
+        with pytest.raises(RuntimeError, match="signing_key_reference"):
+            await routes.apply_required_remote_issuer_context(tx)
+
+    async def test_required_remote_issuer_context_attaches_complete_kms_profile(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        async def complete_context(*args, **kwargs):
+            return {
+                "issuer_did": "did:web:issuer.example",
+                "issuer_profile_id": "profile-1",
+                "signing_service_id": "service-1",
+                "signing_key_reference": "kms-key-1",
+                "verification_method_id": "did:web:issuer.example#key-1",
+                "issuer_profile": {
+                    "id": "profile-1",
+                    "status": "active",
+                    "issuer_did": "did:web:issuer.example",
+                    "signing_service_id": "service-1",
+                    "signing_key_reference": "kms-key-1",
+                },
+            }
+
+        monkeypatch.setattr(routes, "resolve_remote_issuer_context", complete_context)
+        tx = _make_transaction()
+
+        context = await routes.apply_required_remote_issuer_context(tx)
+
+        assert context["signing_key_reference"] == "kms-key-1"
+        assert tx.issuer_profile_id == "profile-1"
+        assert tx.issuer_did_override == "did:web:issuer.example"
+        assert tx.signing_service_id == "service-1"
+
     async def test_remote_signing_preserves_gateway_error_detail(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
 
@@ -468,6 +546,10 @@ class TestProofAudienceMatching:
             f"https://beta.elevenidllc.com/org/{org_id}/apple-wallet",
             org_id,
         )
+        assert _proof_audience_matches_org_issuer(
+            f"https://beta.elevenidllc.com/org/{org_id}/waltid",
+            org_id,
+        )
 
     def test_rejects_unknown_org_issuer_path(self):
         from issuance.infrastructure.api.routes import _proof_audience_matches_org_issuer
@@ -627,32 +709,24 @@ class TestIssuedCredentialToProtocol:
 
 
 # ============================================================================
-# 6. TokenResponse model — c_nonce_expires_in
+# 6. TokenResponse model — OID4VCI Final has no proof nonce
 # ============================================================================
 
 class TestTokenResponseModel:
-    def test_c_nonce_expires_in_default(self):
+    def test_token_response_excludes_nonce_fields(self):
         from issuance.infrastructure.api.routes import TokenResponse
         resp = TokenResponse(
             access_token="tok",
             token_type="bearer",
             expires_in=300,
-            c_nonce="nonce-1",
-            nonce="nonce-1",
         )
-        assert resp.c_nonce_expires_in == 300
+        assert "c_nonce" not in resp.model_dump()
+        assert "c_nonce_expires_in" not in resp.model_dump()
 
-    def test_c_nonce_expires_in_none(self):
-        from issuance.infrastructure.api.routes import TokenResponse
-        resp = TokenResponse(
-            access_token="tok",
-            token_type="bearer",
-            expires_in=300,
-            c_nonce="nonce-1",
-            c_nonce_expires_in=None,
-            nonce="nonce-1",
-        )
-        assert resp.c_nonce_expires_in is None
+    def test_nonce_response_contains_only_c_nonce(self):
+        from issuance.infrastructure.api.routes import NonceResponse
+        resp = NonceResponse(c_nonce="nonce-1")
+        assert resp.model_dump() == {"c_nonce": "nonce-1"}
 
 
 # ============================================================================
@@ -664,6 +738,7 @@ class TestIssuedCredentialRecordResponse:
         from issuance.infrastructure.api.routes import IssuedCredentialRecordResponse
         record = IssuedCredentialRecordResponse(
             id="cred-1",
+            organization_id="org-1",
             credential_id="cred-1",
             credential_type="VerifiableCredential",
             credential_format="SD_JWT_VC",
@@ -675,9 +750,113 @@ class TestIssuedCredentialRecordResponse:
             created_at="2026-03-15T00:00:00+00:00",
         )
         assert record.status_list_entries == []
+        assert record.organization_id == "org-1"
         assert record.deliveries == []
         assert record.credential_hash is None
         assert record.revoked_at is None
+
+
+class TestStatusListAllocationOrganizationScope:
+    async def test_rejects_allocation_without_template_revocation_profile(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        monkeypatch.setattr(
+            routes.httpx,
+            "AsyncClient",
+            lambda *args, **kwargs: pytest.fail("revocation service must not be called"),
+        )
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes._allocate_credential_status_list_entries(
+                credential_id="credential-1",
+                organization_id="org-1",
+                credential_format="sd_jwt_vc",
+                revocation_profile_id=None,
+            )
+
+        assert exc_info.value.status_code == 422
+
+    async def test_sends_org_scope_and_accepts_matching_allocation(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        captured = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "organization_id": "org-1",
+                    "index": 42,
+                    "status_list_url": "https://issuer.example/status/1",
+                }
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, url, json):
+                captured.update({"url": url, "json": json})
+                return FakeResponse()
+
+        monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+        monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
+
+        profile_id, entries = await routes._allocate_credential_status_list_entries(
+            credential_id="credential-1",
+            organization_id="org-1",
+            credential_format="sd_jwt_vc",
+            revocation_profile_id="profile-1",
+        )
+
+        assert captured["json"] == {
+            "organization_id": "org-1",
+            "credential_format": "sd_jwt_vc",
+        }
+        assert captured["url"].endswith("/internal/revocation-profiles/profile-1/allocate-index")
+        assert profile_id == "profile-1"
+        assert entries[0]["index"] == 42
+
+    async def test_rejects_mismatched_allocation_response(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "organization_id": "org-2",
+                    "index": 42,
+                    "status_list_url": "https://issuer.example/status/1",
+                }
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, _url, json):
+                return FakeResponse()
+
+        monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+        monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes._allocate_credential_status_list_entries(
+                credential_id="credential-1",
+                organization_id="org-1",
+                credential_format="sd_jwt_vc",
+                revocation_profile_id="profile-1",
+            )
+
+        assert exc_info.value.status_code == 503
 
 
 class TestDeliveryRecords:
@@ -872,8 +1051,12 @@ class TestDeliveryRecords:
 
 
 class TestCanvasMirrorPublishing:
+    @pytest.fixture(autouse=True)
+    def _enable_portable_canvas_pilot(self, monkeypatch):
+        monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+
     async def test_publish_canvas_mirror_marks_pending_record_delivered(self, repo, monkeypatch):
-        import httpx
 
         from issuance.infrastructure.adapters import canvas_credentials_adapter
         from issuance.infrastructure.api import routes
@@ -1120,6 +1303,11 @@ class TestCanvasMirrorPublishing:
 
 
 class TestCanvasMirrorBatchProcessing:
+    @pytest.fixture(autouse=True)
+    def _enable_portable_canvas_pilot(self, monkeypatch):
+        monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+
     async def test_batch_processor_processes_pending_records_with_limit(self, repo, monkeypatch):
         from issuance.infrastructure.adapters import canvas_credentials_adapter
         from issuance.infrastructure.api import routes
@@ -2119,12 +2307,20 @@ class TestRustIntegrationOrgIdValidation:
             return {"signature_raw_b64": "AQID", "algorithm": algorithm}
 
         verification_method_id = "did:web:beta.elevenidllc.com:orgs:acme#issuer-profile-v1"
+        holder_jwk = {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "holder-x",
+            "y": "holder-y",
+            "d": "must-not-be-issued",
+        }
 
         credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
             issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             signing_service_id="managed-openbao-transit",
             remote_sign=fake_remote_sign,
             subject_id="did:key:z6Mk_subject",
+            holder_jwk=holder_jwk,
             credential_type="https://beta.elevenidllc.com/credentials/access_badge",
             claims_json=json.dumps({"name": "Alice"}),
             algorithm="ES256",
@@ -2134,10 +2330,18 @@ class TestRustIntegrationOrgIdValidation:
 
         jwt = credential.split("~", 1)[0]
         encoded_header = jwt.split(".", 1)[0]
+        encoded_payload = jwt.split(".")[1]
         header = json.loads(base64url_decode(encoded_header))
+        payload = json.loads(base64url_decode(encoded_payload))
 
         assert header["kid"] == verification_method_id
         assert header["typ"] == "vc+sd-jwt"
+        assert payload["cnf"]["jwk"] == {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "holder-x",
+            "y": "holder-y",
+        }
         assert captured["algorithm"] == "ES256"
         assert credential_id.startswith("urn:uuid:")
 
@@ -2339,3 +2543,86 @@ class TestIssuanceTransactionIssuerDidOverride:
         legacy_did = "did:key:z6Mk_legacy"
         effective = tx.issuer_did_override or legacy_did
         assert effective == "did:key:z6Mk_legacy"
+
+
+async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypatch):
+    from types import SimpleNamespace
+    from issuance.infrastructure.api import routes
+
+    repo = _TestableRepo()
+    source_tx = _make_transaction(
+        status=IssuanceStatus.ISSUED,
+        renewable=True,
+        renewal_window_days=7,
+        validity_days=1,
+    )
+    source = _make_credential(
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    await repo.save_transaction(source_tx)
+    await repo.save_credential(source)
+
+    async def fake_initiate(_request, http_request, repo):
+        renewal_tx = _make_transaction(
+            id="tx-renewal",
+            status=IssuanceStatus.PENDING,
+            renewable=True,
+            renewal_window_days=7,
+            validity_days=1,
+        )
+        await repo.save_transaction(renewal_tx)
+        return routes.IssuanceResponse(
+            id=renewal_tx.id,
+            organization_id=renewal_tx.organization_id,
+            credential_template_id=renewal_tx.credential_template_id,
+            status=renewal_tx.status.value,
+            credential_offer_uri="openid-credential-offer://renewal",
+            pre_auth_code=renewal_tx.pre_auth_code,
+            expires_at=renewal_tx.expires_at.isoformat(),
+        )
+
+    monkeypatch.setattr(routes, "initiate_issuance", fake_initiate)
+
+    result = await routes.renew_issued_credential(
+        source.id,
+        SimpleNamespace(headers={}),
+        repo,
+    )
+
+    renewal_tx = await repo.get_transaction(result.transaction_id)
+    assert result.source_credential_id == source.id
+    assert result.credential_offer_uri == "openid-credential-offer://renewal"
+    assert renewal_tx is not None
+    assert renewal_tx.renewal_of_credential_id == source.id
+
+
+async def test_completed_renewal_supersedes_source_credential(monkeypatch):
+    from issuance.infrastructure.api import routes
+
+    repo = _TestableRepo()
+    source = _make_credential()
+    renewed = _make_credential(id="cred-renewed", transaction_id="tx-renewed")
+    renewal_tx = _make_transaction(
+        id="tx-renewed",
+        renewal_of_credential_id=source.id,
+    )
+    await repo.save_credential(source)
+    await repo.save_credential(renewed)
+
+    async def fake_revoke(credential_id, request, repo):
+        credential = await repo.get_credential(credential_id)
+        credential.status = CredentialStatus.REVOKED
+        credential.revoked = True
+        credential.revoked_at = datetime.now(timezone.utc)
+        credential.revocation_reason = request.reason
+        await repo.save_credential(credential)
+
+    monkeypatch.setattr(routes, "revoke_credential", fake_revoke)
+
+    await routes._finalize_credential_renewal(renewal_tx, renewed, repo)
+
+    stored_source = await repo.get_credential(source.id)
+    stored_renewed = await repo.get_credential(renewed.id)
+    assert stored_source.status == CredentialStatus.REVOKED
+    assert stored_source.renewed_to_credential_id == renewed.id
+    assert stored_renewed.renewed_from_credential_id == source.id
