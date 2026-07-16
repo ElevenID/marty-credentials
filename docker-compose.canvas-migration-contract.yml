@@ -1,0 +1,52 @@
+services:
+  postgres:
+    image: postgres:15.18-alpine@sha256:57e5b9f69e672385cdf630f42b1306b5ca934c9bf8278b5f8b1948533d75a20b
+    environment:
+      POSTGRES_DB: canvas_migration_contract
+      POSTGRES_USER: canvas_contract
+      POSTGRES_PASSWORD: canvas_contract_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canvas_contract -d canvas_migration_contract"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=512m
+    restart: "no"
+    networks:
+      - migration-contract
+
+  migration-contract:
+    build:
+      context: .
+      dockerfile: tests/canvas-migration-contract/Dockerfile
+      args:
+        CONTRACT_SOURCE_REVISION: ${CANVAS_MIGRATION_SOURCE_REVISION:-local-worktree}
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: false
+    environment:
+      DATABASE_URL: postgresql://canvas_contract:canvas_contract_only@postgres:5432/canvas_migration_contract
+      CONTRACT_RESULT_PATH: /artifacts/contract-result.json
+      CONTRACT_SOURCE_REVISION: ${CANVAS_MIGRATION_SOURCE_REVISION:-local-worktree}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ${CANVAS_MIGRATION_ARTIFACT_DIR:-./tests/artifacts/canvas-portable-migration}
+        target: /artifacts
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    networks:
+      - migration-contract
+
+networks:
+  migration-contract:
+    internal: true

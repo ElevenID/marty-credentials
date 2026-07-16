@@ -526,18 +526,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     context.set_details(str(exc))
                     return pb2.TokenResponse()
 
-                auth_session.mark_exchanged(
-                    access_token=token_resp["access_token"],
-                    nonce=token_resp.get("nonce", ""),
-                )
+                auth_session.mark_exchanged(access_token=token_resp["access_token"])
                 await repo.save_authorization_session(auth_session)
 
                 return pb2.TokenResponse(
                     access_token=token_resp["access_token"],
                     token_type="Bearer",
                     expires_in=token_resp.get("expires_in", 1800),
-                    c_nonce=token_resp.get("nonce", ""),
-                    nonce=token_resp.get("nonce", ""),
                 )
 
             # Pre-authorized code flow
@@ -575,7 +570,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             token_resp = oid4vci_create_token_response(request.pre_authorized_code, 1800)
 
             tx.access_token = token_resp["access_token"]
-            tx.nonce = token_resp.get("nonce", "")
+            tx.nonce = None
             tx.status = IssuanceStatus.AUTHORIZED
             await repo.save_transaction(tx)
 
@@ -583,8 +578,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 access_token=token_resp["access_token"],
                 token_type="Bearer",
                 expires_in=token_resp.get("expires_in", 1800),
-                c_nonce=token_resp.get("nonce", ""),
-                nonce=token_resp.get("nonce", ""),
             )
         except Exception as exc:
             logger.exception("ExchangeToken failed")
@@ -771,7 +764,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             response = pb2.IssueCredentialResponse(
                 credentials=[pb2.CredentialEntry(format=response_format, credential=jwt_credential)],
                 notification_id=str(_uuid.uuid4()),
-                c_nonce=tx.nonce or "",
             )
 
             await self._emit_credential_event(

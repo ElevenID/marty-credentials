@@ -137,6 +137,60 @@ jobs:
         working-directory: marty-credentials
         run: safety check
 
+  canvas-portable-migration:
+    name: Canvas PostgreSQL Migration Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CANVAS_MIGRATION_SOURCE_REVISION: ${{ github.sha }}
+      COMPOSE_PROJECT_NAME: canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          path: marty-credentials
+
+      - name: Validate disposable migration topology
+        working-directory: marty-credentials
+        run: docker compose --file docker-compose.canvas-migration-contract.yml config --quiet
+
+      - name: Build migration contract image
+        working-directory: marty-credentials
+        run: |
+          mkdir -p tests/artifacts/canvas-portable-migration
+          docker compose --file docker-compose.canvas-migration-contract.yml build --pull migration-contract
+
+      - name: Exercise upgrade and exact downgrade restoration
+        working-directory: marty-credentials
+        run: >-
+          docker compose --file docker-compose.canvas-migration-contract.yml
+          up --force-recreate --abort-on-container-exit
+          --exit-code-from migration-contract migration-contract
+
+      - name: Require successful sanitized contract evidence
+        working-directory: marty-credentials
+        run: |
+          test "$(jq -r '.status' tests/artifacts/canvas-portable-migration/contract-result.json)" = passed
+          test "$(jq -r '.baseline_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = derive_server_owned_claims
+          test "$(jq -r '.portable_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = portable_canvas_connections
+          test "$(jq -r '.execution_boundary' tests/artifacts/canvas-portable-migration/contract-result.json)" = docker_compose_one_shot
+          test "$(jq -r '.source_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = "$GITHUB_SHA"
+
+      - name: Upload Canvas migration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: marty-credentials/tests/artifacts/canvas-portable-migration/contract-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove disposable migration stack
+        if: always()
+        working-directory: marty-credentials
+        run: docker compose --file docker-compose.canvas-migration-contract.yml down --volumes --remove-orphans
+
   test-python:
     name: Python Tests
     runs-on: ${{ matrix.os }}

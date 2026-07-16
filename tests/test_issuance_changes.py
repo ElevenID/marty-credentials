@@ -4,7 +4,7 @@ Tests for the issuance service changes:
  - issued_credential_router CRUD endpoints
  - deferred credential endpoint (now actually returns credentials)
  - issue_credential idempotent retry (returns existing credential)
- - c_nonce_expires_in on TokenResponse
+ - OID4VCI Final token and nonce response separation
  - _credential_status_to_protocol helper
  - _subject_claims_hash helper
  - _credential_format_to_protocol helper
@@ -15,9 +15,7 @@ import hashlib
 import json
 import logging
 import types
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import pytest
 
@@ -325,6 +323,53 @@ class TestRemoteIssuerFailureDetail:
             "key_purpose": "mdoc_dsc",
             "algorithm": None,
         }
+
+    async def test_required_remote_issuer_context_fails_on_incomplete_kms_profile(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        async def incomplete_context(*args, **kwargs):
+            return {
+                "issuer_did": "did:web:issuer.example",
+                "issuer_profile_id": "profile-1",
+                "signing_service_id": "service-1",
+                "verification_method_id": "did:web:issuer.example#key-1",
+                "issuer_profile": {"id": "profile-1", "status": "active"},
+            }
+
+        monkeypatch.setattr(routes, "resolve_remote_issuer_context", incomplete_context)
+        tx = _make_transaction()
+
+        with pytest.raises(RuntimeError, match="signing_key_reference"):
+            await routes.apply_required_remote_issuer_context(tx)
+
+    async def test_required_remote_issuer_context_attaches_complete_kms_profile(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        async def complete_context(*args, **kwargs):
+            return {
+                "issuer_did": "did:web:issuer.example",
+                "issuer_profile_id": "profile-1",
+                "signing_service_id": "service-1",
+                "signing_key_reference": "kms-key-1",
+                "verification_method_id": "did:web:issuer.example#key-1",
+                "issuer_profile": {
+                    "id": "profile-1",
+                    "status": "active",
+                    "issuer_did": "did:web:issuer.example",
+                    "signing_service_id": "service-1",
+                    "signing_key_reference": "kms-key-1",
+                },
+            }
+
+        monkeypatch.setattr(routes, "resolve_remote_issuer_context", complete_context)
+        tx = _make_transaction()
+
+        context = await routes.apply_required_remote_issuer_context(tx)
+
+        assert context["signing_key_reference"] == "kms-key-1"
+        assert tx.issuer_profile_id == "profile-1"
+        assert tx.issuer_did_override == "did:web:issuer.example"
+        assert tx.signing_service_id == "service-1"
 
     async def test_remote_signing_preserves_gateway_error_detail(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
@@ -664,32 +709,24 @@ class TestIssuedCredentialToProtocol:
 
 
 # ============================================================================
-# 6. TokenResponse model — c_nonce_expires_in
+# 6. TokenResponse model — OID4VCI Final has no proof nonce
 # ============================================================================
 
 class TestTokenResponseModel:
-    def test_c_nonce_expires_in_default(self):
+    def test_token_response_excludes_nonce_fields(self):
         from issuance.infrastructure.api.routes import TokenResponse
         resp = TokenResponse(
             access_token="tok",
             token_type="bearer",
             expires_in=300,
-            c_nonce="nonce-1",
-            nonce="nonce-1",
         )
-        assert resp.c_nonce_expires_in == 300
+        assert "c_nonce" not in resp.model_dump()
+        assert "c_nonce_expires_in" not in resp.model_dump()
 
-    def test_c_nonce_expires_in_none(self):
-        from issuance.infrastructure.api.routes import TokenResponse
-        resp = TokenResponse(
-            access_token="tok",
-            token_type="bearer",
-            expires_in=300,
-            c_nonce="nonce-1",
-            c_nonce_expires_in=None,
-            nonce="nonce-1",
-        )
-        assert resp.c_nonce_expires_in is None
+    def test_nonce_response_contains_only_c_nonce(self):
+        from issuance.infrastructure.api.routes import NonceResponse
+        resp = NonceResponse(c_nonce="nonce-1")
+        assert resp.model_dump() == {"c_nonce": "nonce-1"}
 
 
 # ============================================================================
@@ -1014,8 +1051,12 @@ class TestDeliveryRecords:
 
 
 class TestCanvasMirrorPublishing:
+    @pytest.fixture(autouse=True)
+    def _enable_portable_canvas_pilot(self, monkeypatch):
+        monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+
     async def test_publish_canvas_mirror_marks_pending_record_delivered(self, repo, monkeypatch):
-        import httpx
 
         from issuance.infrastructure.adapters import canvas_credentials_adapter
         from issuance.infrastructure.api import routes
@@ -1262,6 +1303,11 @@ class TestCanvasMirrorPublishing:
 
 
 class TestCanvasMirrorBatchProcessing:
+    @pytest.fixture(autouse=True)
+    def _enable_portable_canvas_pilot(self, monkeypatch):
+        monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+        monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+
     async def test_batch_processor_processes_pending_records_with_limit(self, repo, monkeypatch):
         from issuance.infrastructure.adapters import canvas_credentials_adapter
         from issuance.infrastructure.api import routes

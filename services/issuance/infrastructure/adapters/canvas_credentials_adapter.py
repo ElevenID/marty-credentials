@@ -10,15 +10,17 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, Field, ValidationError
-
-from issuance.application.mip_integration_primitives import (
-    MipEvidenceReceipt,
-    canvas_completion_to_mip_evidence_receipt,
+from issuance.application.canvas_feature_flags import (
+    portable_canvas_enabled_for_organization,
+)
+from issuance.application.canvas_lti_services import (
+    CanvasLtiServiceError,
+    canvas_http_client,
+    validate_canvas_origin,
 )
 from issuance.application.canvas_runtime import (
     CanvasRuntimeConfig,
@@ -27,9 +29,13 @@ from issuance.application.canvas_runtime import (
     resolve_canvas_program_binding_for_scope,
 )
 from issuance.application.evidence_transition import persist_evidence_fact_and_apply_policy
+from issuance.application.mip_integration_primitives import (
+    MipEvidenceReceipt,
+    canvas_completion_to_mip_evidence_receipt,
+)
 from issuance.domain.entities import (
-    ApplicationStatus,
     Application,
+    ApplicationStatus,
     ApplicationTemplate,
     CanvasEventReceipt,
     CanvasPlatform,
@@ -39,7 +45,7 @@ from issuance.domain.entities import (
     IssuedCredential,
 )
 from issuance.domain.ports import IIssuanceRepository
-
+from pydantic import BaseModel, Field, ValidationError
 
 CANVAS_SIGNATURE_HEADER = "x-canvas-signature-256"
 CANVAS_TIMESTAMP_HEADER = "x-canvas-timestamp"
@@ -220,16 +226,6 @@ def _read_secret_value(name: str) -> str:
         return ""
 
 
-def _read_secret_file(file_path: str | None) -> str:
-    if not file_path:
-        return ""
-    try:
-        with open(file_path, "r", encoding="utf-8") as handle:
-            return handle.read().strip()
-    except OSError:
-        return ""
-
-
 def _canvas_credentials_metadata_sources(delivery_record: CredentialDeliveryRecord | None) -> list[dict[str, Any]]:
     if delivery_record is None or not isinstance(delivery_record.metadata, dict):
         return []
@@ -293,27 +289,9 @@ async def _canvas_credentials_secret_value(
             )
             if secret:
                 return secret
-        direct = source.get("api_token") or source.get("canvas_credentials_api_token")
-        if direct is not None and str(direct).strip():
-            return str(direct).strip()
-        env_name = (
-            source.get("api_token_env")
-            or source.get("api_token_secret_env")
-            or source.get("canvas_credentials_api_token_env")
-        )
-        if env_name is not None and str(env_name).strip():
-            secret = _read_secret_value(str(env_name).strip())
-            if secret:
-                return secret
-        file_path = (
-            source.get("api_token_file")
-            or source.get("api_token_secret_file")
-            or source.get("canvas_credentials_api_token_file")
-        )
-        if file_path is not None and str(file_path).strip():
-            secret = _read_secret_file(str(file_path).strip())
-            if secret:
-                return secret
+        # Tenant metadata must never select process environment variables,
+        # filesystem paths, or inline bearer values. Operator-wide fallback is
+        # intentionally limited to the fixed deployment secret below.
     return _read_secret_value(default_secret_name)
 
 
@@ -371,8 +349,37 @@ def _normalize_publish_url() -> str:
     return publish_url
 
 
+def _canvas_credentials_https_origin(value: str) -> str | None:
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        return None
+    return f"https://{parsed.hostname.lower()}{f':{port}' if port else ''}"
+
+
+def _canvas_credentials_allowed_api_origins() -> set[str]:
+    values = {"https://api.badgr.io"}
+    configured_base = (os.environ.get("CANVAS_CREDENTIALS_API_BASE_URL") or "").strip()
+    configured_origin = _canvas_credentials_https_origin(configured_base)
+    if configured_origin:
+        values.add(configured_origin)
+    for value in os.environ.get("CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST", "").split(","):
+        origin = _canvas_credentials_https_origin(value.strip())
+        if origin:
+            values.add(origin)
+    return values
+
+
 def _normalize_canvas_credentials_api_base_url(delivery_record: CredentialDeliveryRecord | None = None) -> str:
-    return (
+    value = (
         _canvas_credentials_config_value(
             delivery_record,
             "api_base_url",
@@ -383,6 +390,23 @@ def _normalize_canvas_credentials_api_base_url(delivery_record: CredentialDelive
         )
         or _CANVAS_CREDENTIALS_DEFAULT_API_BASE_URL
     ).strip().rstrip("/")
+    parsed = urlparse(value)
+    origin = _canvas_credentials_https_origin(value)
+    if (
+        origin is None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise RuntimeError("Canvas Credentials API base URL must be a trusted HTTPS URL")
+    try:
+        validated_origin = validate_canvas_origin(value)
+    except CanvasLtiServiceError as exc:
+        raise RuntimeError(str(exc)) from exc
+    if validated_origin != origin or origin not in _canvas_credentials_allowed_api_origins():
+        raise RuntimeError(
+            "Canvas Credentials API origin is not in CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST"
+        )
+    return value
 
 
 def _normalize_status_sync_url() -> str:
@@ -528,13 +552,9 @@ def _badgr_validation_url(
     issuer_id: str | None,
     api_base_url: str,
 ) -> str:
-    template = _canvas_credentials_config_value(
-        delivery_record,
-        "validation_url_template",
-        "validate_url_template",
-        "canvas_credentials_validation_url_template",
-        env_names=("CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",),
-    )
+    # Validation templates are operator configuration only; accepting one from
+    # tenant metadata would bypass the pinned API origin.
+    template = (os.environ.get("CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE") or "").strip()
     if template:
         return template.format(
             api_base_url=api_base_url,
@@ -722,7 +742,9 @@ def _build_canvas_publish_payload(
             "delivery_mode": delivery_record.delivery_mode,
             "application_id": transaction.application_id,
         },
-        "metadata": delivery_record.metadata or {},
+        "metadata": _sanitize_canvas_credentials_outbound_metadata(
+            delivery_record.metadata or {}
+        ),
     }
 
 
@@ -767,6 +789,35 @@ def _canvas_credentials_headers(api_token: str) -> dict[str, str]:
     if api_token:
         headers["Authorization"] = f"Bearer {api_token}"
     return headers
+
+
+_CANVAS_CREDENTIAL_SECRET_SELECTOR_KEYS = {
+    "api_token",
+    "canvas_credentials_api_token",
+    "api_token_env",
+    "api_token_secret_env",
+    "canvas_credentials_api_token_env",
+    "api_token_file",
+    "api_token_secret_file",
+    "canvas_credentials_api_token_file",
+    "api_token_secret_id",
+    "api_token_secret_ref",
+    "api_token_ref",
+    "canvas_credentials_api_token_secret_id",
+    "canvas_credentials_api_token_secret_ref",
+}
+
+
+def _sanitize_canvas_credentials_outbound_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _sanitize_canvas_credentials_outbound_metadata(item)
+            for key, item in value.items()
+            if str(key) not in _CANVAS_CREDENTIAL_SECRET_SELECTOR_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_canvas_credentials_outbound_metadata(item) for item in value]
+    return value
 
 
 async def validate_canvas_credentials_config(
@@ -859,8 +910,11 @@ async def validate_canvas_credentials_config(
         )
 
     try:
-        async with httpx.AsyncClient(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
-            response = await client.get(validation_url, headers=_canvas_credentials_headers(api_token))
+        async with canvas_http_client(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                validation_url,
+                headers=_canvas_credentials_headers(api_token),
+            )
     except httpx.HTTPError as exc:
         return CanvasCredentialsConfigValidationResult(
             ok=False,
@@ -928,8 +982,12 @@ async def _publish_canvas_badgr_assertion(
     headers = _canvas_credentials_headers(api_token)
 
     try:
-        async with httpx.AsyncClient(timeout=_CANVAS_PUBLISH_TIMEOUT_SECONDS) as client:
-            response = await client.post(assertion_url, json=payload, headers=headers)
+        async with canvas_http_client(timeout=_CANVAS_PUBLISH_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                assertion_url,
+                json=payload,
+                headers=headers,
+            )
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
         body = _truncate_text(exc.response.text or "")
@@ -1020,7 +1078,7 @@ async def _sync_canvas_badgr_assertion_status(
     headers = _canvas_credentials_headers(api_token)
 
     try:
-        async with httpx.AsyncClient(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
+        async with canvas_http_client(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
             response = await client.request("DELETE", revoke_url, json=payload, headers=headers)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -1044,6 +1102,41 @@ async def _sync_canvas_badgr_assertion_status(
     )
 
 
+def _require_canvas_delivery_ownership(
+    *,
+    credential: IssuedCredential,
+    platform: CanvasPlatform,
+    delivery_record: CredentialDeliveryRecord,
+    transaction: IssuanceTransaction | None = None,
+) -> None:
+    """Reject mixed-tenant or mismatched outbox aggregates before provider I/O."""
+
+    organization_id = str(delivery_record.organization_id or "").strip()
+    organization_ids = {
+        str(value or "").strip()
+        for value in (
+            organization_id,
+            credential.organization_id,
+            platform.organization_id,
+            transaction.organization_id if transaction is not None else organization_id,
+        )
+    }
+    identifiers_match = bool(
+        organization_id
+        and delivery_record.credential_id == credential.id
+        and delivery_record.transaction_id == credential.transaction_id
+        and (
+            transaction is None
+            or (
+                transaction.id == credential.transaction_id
+                and transaction.id == delivery_record.transaction_id
+            )
+        )
+    )
+    if organization_ids != {organization_id} or not identifiers_match:
+        raise RuntimeError("Canvas delivery resources are unavailable")
+
+
 async def publish_canvas_credential_mirror(
     *,
     credential: IssuedCredential,
@@ -1054,6 +1147,16 @@ async def publish_canvas_credential_mirror(
 ) -> CanvasCredentialsPublishResult:
     """Publish a canonical issued credential to the Canvas Credentials bridge/API."""
 
+    if not portable_canvas_enabled_for_organization(delivery_record.organization_id):
+        raise RuntimeError(
+            "Portable Canvas delivery is not enabled for this organization"
+        )
+    _require_canvas_delivery_ownership(
+        credential=credential,
+        transaction=transaction,
+        platform=platform,
+        delivery_record=delivery_record,
+    )
     if _is_real_canvas_credentials_provider(delivery_record):
         return await _publish_canvas_badgr_assertion(
             credential=credential,
@@ -1080,7 +1183,7 @@ async def publish_canvas_credential_mirror(
     headers = _canvas_credentials_headers(api_token)
 
     try:
-        async with httpx.AsyncClient(timeout=_CANVAS_PUBLISH_TIMEOUT_SECONDS) as client:
+        async with canvas_http_client(timeout=_CANVAS_PUBLISH_TIMEOUT_SECONDS) as client:
             response = await client.post(publish_url, json=payload, headers=headers)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:
@@ -1132,6 +1235,15 @@ async def sync_canvas_credential_status(
 ) -> CanvasCredentialsStatusSyncResult:
     """Propagate canonical credential lifecycle changes to Canvas Credentials."""
 
+    if not portable_canvas_enabled_for_organization(delivery_record.organization_id):
+        raise RuntimeError(
+            "Portable Canvas delivery is not enabled for this organization"
+        )
+    _require_canvas_delivery_ownership(
+        credential=credential,
+        platform=platform,
+        delivery_record=delivery_record,
+    )
     if _is_real_canvas_credentials_provider(delivery_record):
         return await _sync_canvas_badgr_assertion_status(
             credential=credential,
@@ -1159,7 +1271,7 @@ async def sync_canvas_credential_status(
     headers = _canvas_credentials_headers(api_token)
 
     try:
-        async with httpx.AsyncClient(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
+        async with canvas_http_client(timeout=_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS) as client:
             response = await client.post(sync_url, json=payload, headers=headers)
             response.raise_for_status()
     except httpx.HTTPStatusError as exc:

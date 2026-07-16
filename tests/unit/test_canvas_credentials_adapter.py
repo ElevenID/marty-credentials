@@ -61,6 +61,15 @@ from issuance.domain.entities import (
 CANVAS_SECRET = "canvas-test-secret"
 
 
+@pytest.fixture(autouse=True)
+def _enable_portable_canvas_pilot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv(
+        "CANVAS_PILOT_ORGANIZATION_IDS",
+        "org-123,org-from-binding,org-from-connector",
+    )
+
+
 def _sample_event(**overrides) -> dict[str, object]:
     payload: dict[str, object] = {
         "canvas_event_id": "evt-123",
@@ -316,6 +325,27 @@ class TestCanvasCredentialsRealApi:
             },
         )
 
+    async def test_delivery_rejects_mixed_tenant_aggregates_before_provider_io(
+        self,
+    ) -> None:
+        platform = self._platform()
+        platform.organization_id = "org-foreign"
+
+        with pytest.raises(RuntimeError, match="resources are unavailable"):
+            await publish_canvas_credential_mirror(
+                credential=self._issued_credential(),
+                transaction=self._transaction(),
+                platform=platform,
+                delivery_record=self._delivery_record(),
+            )
+        with pytest.raises(RuntimeError, match="resources are unavailable"):
+            await sync_canvas_credential_status(
+                credential=self._issued_credential(),
+                platform=platform,
+                delivery_record=self._delivery_record(),
+                lifecycle_action="suspend",
+            )
+
     async def test_publish_posts_badgr_assertion_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from issuance.infrastructure.adapters import canvas_credentials_adapter
 
@@ -364,7 +394,7 @@ class TestCanvasCredentialsRealApi:
                 captured["headers"] = headers
                 return FakeResponse()
 
-        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(canvas_credentials_adapter, "canvas_http_client", FakeClient)
 
         result = await publish_canvas_credential_mirror(
             credential=self._issued_credential(),
@@ -405,14 +435,17 @@ class TestCanvasCredentialsRealApi:
         monkeypatch.setenv("CANVAS_CREDENTIALS_API_BASE_URL", "https://api.global.badgr.test")
         monkeypatch.setenv("CANVAS_CREDENTIALS_API_TOKEN", "global-token")
         monkeypatch.setenv("CANVAS_CREDENTIALS_BADGECLASS_ID", "global-badgeclass")
-        monkeypatch.setenv("RECORD_CANVAS_CREDENTIALS_TOKEN", "record-token")
         monkeypatch.setenv("CANVAS_CREDENTIALS_PROVENANCE_BASE_URL", "https://verify.example")
+        monkeypatch.setenv(
+            "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+            "https://api.record.badgr.test",
+        )
 
         record = self._delivery_record()
         record.metadata["canvas_credentials"] = {
             "provider": "badgr_api",
             "api_base_url": "https://api.record.badgr.test",
-            "api_token_env": "RECORD_CANVAS_CREDENTIALS_TOKEN",
+            "api_token_secret_id": "record-secret",
             "issuer_id": "issuer-record-1",
             "badgeclass_id": "badgeclass-record-1",
             "assertion_scope": "badgeclasses",
@@ -455,13 +488,19 @@ class TestCanvasCredentialsRealApi:
                 captured["headers"] = headers
                 return FakeResponse()
 
-        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(canvas_credentials_adapter, "canvas_http_client", FakeClient)
+
+        async def resolve_secret(organization_id: str, secret_id: str) -> str | None:
+            assert organization_id == "org-123"
+            assert secret_id == "record-secret"
+            return "record-token"
 
         result = await publish_canvas_credential_mirror(
             credential=self._issued_credential(),
             transaction=self._transaction(),
             platform=self._platform(),
             delivery_record=record,
+            secret_resolver=resolve_secret,
         )
 
         assert result.external_credential_id == "assertion-record-1"
@@ -477,12 +516,15 @@ class TestCanvasCredentialsRealApi:
     ) -> None:
         from issuance.infrastructure.adapters import canvas_credentials_adapter
 
-        monkeypatch.setenv("RECORD_CANVAS_CREDENTIALS_TOKEN", "record-token")
+        monkeypatch.setenv(
+            "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+            "https://api.record.badgr.test",
+        )
         record = self._delivery_record()
         record.metadata["canvas_credentials"] = {
             "provider": "badgr_api",
             "api_base_url": "https://api.record.badgr.test",
-            "api_token_env": "RECORD_CANVAS_CREDENTIALS_TOKEN",
+            "api_token_secret_id": "record-secret",
             "issuer_id": "issuer-record-1",
             "badgeclass_id": "badgeclass-record-1",
             "assertion_scope": "badgeclasses",
@@ -512,9 +554,17 @@ class TestCanvasCredentialsRealApi:
                 captured["headers"] = headers
                 return FakeResponse()
 
-        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", FakeClient)
+        monkeypatch.setattr(canvas_credentials_adapter, "canvas_http_client", FakeClient)
 
-        result = await validate_canvas_credentials_config(record)
+        async def resolve_secret(organization_id: str, secret_id: str) -> str | None:
+            assert organization_id == "org-123"
+            assert secret_id == "record-secret"
+            return "record-token"
+
+        result = await validate_canvas_credentials_config(
+            record,
+            secret_resolver=resolve_secret,
+        )
 
         assert result.ok is True
         assert result.provider == "badgr_api"
@@ -528,6 +578,10 @@ class TestCanvasCredentialsRealApi:
 
     async def test_validate_real_api_reports_missing_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CANVAS_CREDENTIALS_API_TOKEN", raising=False)
+        monkeypatch.setenv(
+            "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+            "https://api.record.badgr.test",
+        )
         record = self._delivery_record()
         record.metadata["canvas_credentials"] = {
             "provider": "badgr_api",
@@ -540,6 +594,31 @@ class TestCanvasCredentialsRealApi:
         assert result.ok is False
         assert result.token_configured is False
         assert "CANVAS_CREDENTIALS_API_TOKEN" in result.error
+
+    async def test_tenant_metadata_cannot_select_environment_or_file_secrets(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("CANVAS_CREDENTIALS_API_TOKEN", raising=False)
+        monkeypatch.setenv("INTEGRATION_SECRET_MASTER_KEY", "must-not-be-used")
+        monkeypatch.setenv(
+            "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+            "https://api.record.badgr.test",
+        )
+        record = self._delivery_record()
+        record.metadata["canvas_credentials"] = {
+            "provider": "badgr_api",
+            "api_base_url": "https://api.record.badgr.test",
+            "api_token_env": "INTEGRATION_SECRET_MASTER_KEY",
+            "api_token_file": "C:/secrets/internal-api-key",
+            "badgeclass_id": "badgeclass-record-1",
+        }
+
+        result = await validate_canvas_credentials_config(record)
+
+        assert result.ok is False
+        assert result.token_configured is False
+        assert "CANVAS_CREDENTIALS_API_TOKEN" in (result.error or "")
 
     async def test_publish_real_api_requires_badgeclass(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
@@ -595,7 +674,11 @@ class TestCanvasCredentialsRealApi:
                 captured["headers"] = headers
                 return FakeResponse()
 
-        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+        monkeypatch.setattr(
+            canvas_credentials_adapter,
+            "canvas_http_client",
+            lambda *args, **kwargs: FakeClient(),
+        )
 
         result = await sync_canvas_credential_status(
             credential=self._issued_credential(),
@@ -620,7 +703,11 @@ class TestCanvasCredentialsRealApi:
             async def __aenter__(self):
                 raise AssertionError("suspend should not call the Canvas Credentials API")
 
-        monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", lambda *args, **kwargs: UnexpectedClient())
+        monkeypatch.setattr(
+            canvas_credentials_adapter,
+            "canvas_http_client",
+            lambda *args, **kwargs: UnexpectedClient(),
+        )
         credential = self._issued_credential()
         credential.status = CredentialStatus.SUSPENDED
 

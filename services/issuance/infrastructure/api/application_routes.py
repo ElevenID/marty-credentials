@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from fastapi import Depends, HTTPException, Query, Response
+from fastapi import Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -21,6 +21,10 @@ CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
 from issuance.application.application_approval import (
     CredentialContext,
     approve_application_for_issuance,
+)
+from issuance.application.canvas_issuance_guard import (
+    CanvasIssuanceGuardError,
+    canvas_approval_credential_context,
 )
 from issuance.application.evidence_reconciliation import (
     build_canvas_evidence_reconciliation_report,
@@ -37,11 +41,11 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    EventType,
     EvidenceFact,
     IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
-    EventType,
 )
 from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.adapters.delivery_records import (
@@ -56,15 +60,60 @@ from issuance.infrastructure.api.routes import (
     ApplicationTemplatePatch,
     ApplicationTemplateResponse,
     EvidenceSubmission,
-    _verify_management_api_key,
     _require_active_revocation_profile_binding,
-    apply_remote_issuer_context,
-    internal_application_router,
+    _verify_management_api_key,
     application_template_router,
+    apply_remote_issuer_context,
+    apply_required_remote_issuer_context,
+    internal_application_router,
 )
 
 logger = logging.getLogger(__name__)
 _INTERNAL_REVIEWER_ID = "issuance-management-api"
+
+
+def _trusted_application_organization_id(request: Request) -> str:
+    """Require the gateway-authenticated tenant on application management routes."""
+
+    organization_id = (request.headers.get("x-organization-id") or "").strip()
+    if not organization_id:
+        raise HTTPException(
+            status_code=400,
+            detail="X-Organization-ID is required for application management",
+        )
+    return organization_id
+
+
+def _application_management_organization_id(
+    trusted_organization_id: Any,
+    claimed_organization_id: str,
+) -> str:
+    """Recheck a caller-supplied organization against the trusted tenant."""
+
+    claimed = str(claimed_organization_id or "").strip()
+    if isinstance(trusted_organization_id, str) and trusted_organization_id.strip():
+        trusted = trusted_organization_id.strip()
+        if claimed != trusted:
+            raise HTTPException(status_code=404, detail="Application resource not found")
+        return trusted
+    # Direct unit invocation bypasses FastAPI dependency resolution.
+    return claimed
+
+
+async def _managed_application(
+    *,
+    repo: IIssuanceRepository,
+    application_id: str,
+    trusted_organization_id: Any,
+) -> Application:
+    app = await repo.get_application(application_id)
+    if app is None or (
+        isinstance(trusted_organization_id, str)
+        and trusted_organization_id.strip()
+        and app.organization_id != trusted_organization_id.strip()
+    ):
+        raise HTTPException(status_code=404, detail="Application not found")
+    return app
 
 
 class IssuanceEventResponse(BaseModel):
@@ -87,6 +136,13 @@ class EvidenceFactResponse(BaseModel):
     assertion: dict[str, Any]
     verification: dict[str, Any]
     source: dict[str, Any]
+    requirement_id: str | None = None
+    logical_key: str
+    source_revision: str
+    payload_hash: str
+    observed_at: str
+    effective_at: str | None = None
+    superseded_fact_id: str | None = None
     created_at: str
 
 
@@ -140,6 +196,13 @@ def _evidence_fact_to_response(fact: EvidenceFact) -> EvidenceFactResponse:
         assertion=fact.assertion,
         verification=fact.verification,
         source=fact.source,
+        requirement_id=fact.requirement_id,
+        logical_key=fact.logical_key,
+        source_revision=fact.source_revision,
+        payload_hash=fact.payload_hash,
+        observed_at=fact.observed_at.isoformat(),
+        effective_at=fact.effective_at.isoformat() if fact.effective_at else None,
+        superseded_fact_id=fact.superseded_fact_id,
         created_at=fact.created_at.isoformat(),
     )
 
@@ -549,12 +612,17 @@ async def delete_application_template(
 @internal_application_router.post("", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def create_application(
     request: ApplicationCreate,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationResponse:
     """Create a new application submission."""
     template = await repo.get_application_template(request.application_template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Application template not found")
+    _application_management_organization_id(
+        trusted_organization_id,
+        template.organization_id,
+    )
     if template.status != "ACTIVE":
         raise HTTPException(status_code=422, detail="Application template must be active")
     
@@ -599,9 +667,14 @@ async def list_applications(
     organization_id: str = Query(...),
     status: str = Query(None),
     application_template_id: str = Query(None),
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> list[ApplicationResponse]:
     """List applications with optional filters."""
+    organization_id = _application_management_organization_id(
+        trusted_organization_id,
+        organization_id,
+    )
     status_enum = ApplicationStatus(status) if status else None
     apps = await repo.list_applications(
         org_id=organization_id,
@@ -633,12 +706,15 @@ async def list_applications(
 @internal_application_router.get("/{application_id}", response_model=ApplicationResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application(
     application_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationResponse:
     """Get an application by ID."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     
     return ApplicationResponse(
         id=app.id,
@@ -661,12 +737,15 @@ async def get_application(
 @internal_application_router.get("/{application_id}/evidence-facts", response_model=list[EvidenceFactResponse], dependencies=[Depends(_verify_management_api_key)])
 async def list_application_evidence_facts(
     application_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> list[EvidenceFactResponse]:
     """List normalized MIP evidence facts for an application."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
 
     facts = await repo.list_evidence_facts_for_application(application_id)
     return [_evidence_fact_to_response(fact) for fact in facts]
@@ -675,12 +754,15 @@ async def list_application_evidence_facts(
 @internal_application_router.get("/{application_id}/evidence-summary", response_model=ApplicationEvidenceSummaryResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application_evidence_summary(
     application_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationEvidenceSummaryResponse:
     """Return application evidence facts and latest approval policy metadata."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
 
     facts = await repo.list_evidence_facts_for_application(application_id)
     template = await repo.get_application_template(app.application_template_id)
@@ -708,12 +790,15 @@ async def run_external_evidence_api_check(
     application_id: str,
     check_id: str,
     request: ExternalEvidenceApiCheckRequest,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ExternalEvidenceApiCheckResponse:
     """Run a user-defined external evidence API check and create a MIP fact."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
         raise HTTPException(status_code=400, detail=f"Cannot run evidence check for application in {app.status} status")
 
@@ -797,17 +882,24 @@ async def run_external_evidence_api_check(
 @internal_application_router.post("/evidence/reconcile", response_model=dict[str, Any], dependencies=[Depends(_verify_management_api_key)])
 async def reconcile_application_evidence(
     request: EvidenceReconciliationRequest,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> dict[str, Any]:
     """Recover Canvas evidence policy and approval-to-issuance transitions."""
+    organization_id = _application_management_organization_id(
+        trusted_organization_id,
+        request.organization_id,
+    )
     if request.application_id:
-        app = await repo.get_application(request.application_id)
-        if not app or app.organization_id != request.organization_id:
-            raise HTTPException(status_code=404, detail="Application not found for organization")
+        await _managed_application(
+            repo=repo,
+            application_id=request.application_id,
+            trusted_organization_id=trusted_organization_id,
+        )
 
     result = await reconcile_canvas_evidence_transitions(
         repo=repo,
-        organization_id=request.organization_id,
+        organization_id=organization_id,
         application_id=request.application_id,
         limit=max(1, min(request.limit, 1000)),
         dry_run=request.dry_run,
@@ -821,9 +913,14 @@ async def reconcile_application_evidence(
 async def get_application_evidence_reconciliation_report(
     organization_id: str = Query(...),
     limit: int = Query(100),
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> dict[str, Any]:
     """Return a dry-run Canvas evidence reconciliation report."""
+    organization_id = _application_management_organization_id(
+        trusted_organization_id,
+        organization_id,
+    )
     result = await build_canvas_evidence_reconciliation_report(
         repo=repo,
         organization_id=organization_id,
@@ -836,12 +933,15 @@ async def get_application_evidence_reconciliation_report(
 async def submit_evidence(
     application_id: str,
     evidence: EvidenceSubmission,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationResponse:
     """Submit evidence for an application."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot submit evidence for application in {app.status} status")
@@ -877,12 +977,15 @@ async def submit_evidence(
 async def approve_application(
     application_id: str,
     approval: ApplicationApproval,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationResponse:
     """Approve an application and trigger credential issuance."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot approve application in {app.status} status")
@@ -891,23 +994,50 @@ async def approve_application(
     if not template or not template.credential_template_id:
         raise HTTPException(status_code=400, detail="Application template missing credential template ID")
     
-    # Resolve the credential type from the template (needed for signing).
-    credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
-    credential_vct: str | None = None
     try:
-        ct_url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
-        async with httpx.AsyncClient(timeout=10.0) as _client:
-            _resp = await _client.get(ct_url)
-        if _resp.status_code < 400:
-            _tmpl = _resp.json()
-            credential_type = _tmpl.get("credential_type") or credential_type
-            raw_vct = _tmpl.get("vct") or ""
-            credential_vct = (
-                raw_vct if raw_vct.startswith("http")
-                else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-            )
-    except Exception:
-        pass
+        canvas_credential_context = await canvas_approval_credential_context(
+            repo=repo,
+            app=app,
+            template=template,
+        )
+    except CanvasIssuanceGuardError as exc:
+        logger.warning(
+            "[approve] Canvas readiness denied app=%s code=%s",
+            application_id,
+            exc.code,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Canvas application is not ready for approval",
+        ) from None
+
+    if canvas_credential_context is not None:
+        credential_context = canvas_credential_context
+        issuer_context_applier = apply_required_remote_issuer_context
+        credential_type = credential_context.credential_type
+    else:
+        # Preserve the historical non-Canvas approval contract.
+        credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
+        credential_vct: str | None = None
+        try:
+            ct_url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
+            async with httpx.AsyncClient(timeout=10.0) as _client:
+                _resp = await _client.get(ct_url)
+            if _resp.status_code < 400:
+                _tmpl = _resp.json()
+                credential_type = _tmpl.get("credential_type") or credential_type
+                raw_vct = _tmpl.get("vct") or ""
+                credential_vct = (
+                    raw_vct if raw_vct.startswith("http")
+                    else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                )
+        except Exception:
+            pass
+        credential_context = CredentialContext(
+            credential_type=credential_type,
+            credential_vct=credential_vct,
+        )
+        issuer_context_applier = apply_remote_issuer_context
 
     logger.info(
         "[approve] app=%s template=%s cred_type=%s form_data_keys=%s",
@@ -917,18 +1047,28 @@ async def approve_application(
         list(app.form_data.keys()) if app.form_data else [],
     )
 
-    tx = await approve_application_for_issuance(
-        repo=repo,
-        app=app,
-        template=template,
-        reviewer_id=_INTERNAL_REVIEWER_ID,
-        review_notes=approval.review_notes,
-        credential_context=CredentialContext(
-            credential_type=credential_type,
-            credential_vct=credential_vct,
-        ),
-        issuer_context_applier=apply_remote_issuer_context,
-    )
+    try:
+        tx = await approve_application_for_issuance(
+            repo=repo,
+            app=app,
+            template=template,
+            reviewer_id=_INTERNAL_REVIEWER_ID,
+            review_notes=approval.review_notes,
+            credential_context=credential_context,
+            issuer_context_applier=issuer_context_applier,
+        )
+    except (RuntimeError, ValueError) as exc:
+        if canvas_credential_context is None:
+            raise
+        logger.warning(
+            "[approve] Canvas issuer context denied app=%s error_type=%s",
+            application_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Canvas application is not ready for approval",
+        ) from None
     
     logger.info(f"Approved application {application_id}, created issuance transaction {tx.id}")
     
@@ -954,12 +1094,15 @@ async def approve_application(
 async def reject_application(
     application_id: str,
     rejection: ApplicationRejection,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationResponse:
     """Reject an application."""
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot reject application in {app.status} status")
@@ -1049,8 +1192,8 @@ def _build_wallet_offer_uris(
     SpruceKit (mso_mdoc / spruce-vc+sd-jwt) gets the /spruce issuer URL so its
     ProfilesCredentialConfiguration enum can parse the metadata without error.
     """
-    from issuance.infrastructure.api.routes import org_issuer_url, org_issuer_url_spruce
     from issuance.application.rust_integration import oid4vci_create_credential_offer
+    from issuance.infrastructure.api.routes import org_issuer_url, org_issuer_url_spruce
     uris: dict[str, str] = {}
     for wc in wallet_configs:
         wid = wc.get("wallet_id", "")
@@ -1211,6 +1354,44 @@ async def _get_or_refresh_transaction(
     template: "ApplicationTemplate | None",
 ) -> IssuanceTransaction:
     """Return a reusable transaction or create a fresh one for single-use offers."""
+    try:
+        canvas_credential_context = await canvas_approval_credential_context(
+            repo=repo,
+            app=app,
+            template=template,
+        )
+    except CanvasIssuanceGuardError as exc:
+        logger.warning(
+            "[issuance-offer] Canvas readiness denied app=%s code=%s",
+            app.id,
+            exc.code,
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Canvas application is not ready for issuance",
+        ) from None
+    if canvas_credential_context is not None:
+        try:
+            return await approve_application_for_issuance(
+                repo=repo,
+                app=app,
+                template=template,
+                reviewer_id=app.reviewer_id or _INTERNAL_REVIEWER_ID,
+                review_notes=app.review_notes or "Canvas issuance offer refreshed",
+                credential_context=canvas_credential_context,
+                issuer_context_applier=apply_required_remote_issuer_context,
+            )
+        except (RuntimeError, ValueError) as exc:
+            logger.warning(
+                "[issuance-offer] Canvas issuer context denied app=%s error_type=%s",
+                app.id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Canvas application is not ready for issuance",
+            ) from None
+
     credential_template_id = template.credential_template_id if template else None
     revocation_profile_id: str | None = None
     if credential_template_id:
@@ -1281,6 +1462,7 @@ async def _get_or_refresh_transaction(
 )
 async def generate_issuance_offer(
     application_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> IssuanceOfferResponse:
     """Generate (or refresh) a wallet credential offer for an approved application.
@@ -1292,9 +1474,11 @@ async def generate_issuance_offer(
     - email_payload: pre-built email subject/body for invite sending
     - expires_at: ISO-8601 expiry of the offer
     """
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
 
     if app.status != ApplicationStatus.APPROVED:
         raise HTTPException(
@@ -1324,7 +1508,6 @@ async def generate_issuance_offer(
     )
 
     # Enrich with wallet deep links
-    from urllib.parse import quote as url_quote
     raw_wallets = await _fetch_wallets_for_template(
         template.credential_template_id if template else None
     )
@@ -1378,6 +1561,7 @@ async def generate_issuance_offer(
 )
 async def get_issuance_offer(
     application_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> IssuanceOfferResponse:
     """Retrieve the current issuance offer for an application (applicant-facing).
@@ -1385,9 +1569,11 @@ async def get_issuance_offer(
     Returns 404 if no offer has been generated yet.
     Returns the offer with status='expired' if the offer PIN has expired.
     """
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    app = await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
 
     if app.status not in (ApplicationStatus.APPROVED, ApplicationStatus.ISSUED):
         raise HTTPException(
@@ -1476,6 +1662,7 @@ async def get_issuance_offer(
 )
 async def list_issuance_events(
     application_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> list[IssuanceEventResponse]:
     """List all lifecycle events for an application (admin audit timeline).
@@ -1483,9 +1670,11 @@ async def list_issuance_events(
     Returns events in chronological order: offer_generated, offer_viewed,
     offer_expired, credential_issued, etc.
     """
-    app = await repo.get_application(application_id)
-    if not app:
-        raise HTTPException(status_code=404, detail="Application not found")
+    await _managed_application(
+        repo=repo,
+        application_id=application_id,
+        trusted_organization_id=trusted_organization_id,
+    )
 
     events = await repo.list_events_for_application(application_id)
     return [

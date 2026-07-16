@@ -184,6 +184,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             request_id_var.reset(token)
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 from issuance.infrastructure.api.canvas_routes import canvas_integration_router
+from issuance.infrastructure.api.canvas_operations_routes import canvas_operations_router
 from issuance.infrastructure.api.application_routes import (
     internal_application_router,
     application_template_router,
@@ -320,6 +321,7 @@ def create_app() -> FastAPI:
     # Register routers
     app.include_router(issuance_router)
     app.include_router(canvas_integration_router)
+    app.include_router(canvas_operations_router)
     app.include_router(issued_credential_router)
     app.include_router(application_template_router)
     app.include_router(internal_application_router)
