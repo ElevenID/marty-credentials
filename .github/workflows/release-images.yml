@@ -1,0 +1,104 @@
+name: Release service images
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    strategy:
+      matrix:
+        include:
+          - service: issuance
+            dockerfile: services/Dockerfile
+          - service: verification
+            dockerfile: services/verification/Dockerfile
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Read immutable dependency versions
+        id: deps
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.schema == "marty.release-dependencies/v1"' release/dependencies.json >/dev/null
+          echo "marty_rs=$(jq -r '.["marty-rs"]' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+          echo "marty_msf=$(jq -r '.["marty-msf"]' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+          echo "marty_common=$(jq -r '.["marty-common"]' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}:${{ github.ref_name }}
+          build-args: |
+            MARTY_RS_VERSION=${{ steps.deps.outputs.marty_rs }}
+            MARTY_MSF_VERSION=${{ steps.deps.outputs.marty_msf }}
+            MARTY_COMMON_VERSION=${{ steps.deps.outputs.marty_common }}
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-name: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - name: Sign image by digest
+        env:
+          IMAGE: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: marty-credentials-${{ matrix.service }}.spdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-evidence-${{ matrix.service }}
+          path: marty-credentials-${{ matrix.service }}.spdx.json
+          retention-days: 7
+
+  attach-evidence:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: image-evidence-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create checksums
+        run: (cd release-assets && sha256sum * > SHA256SUMS)
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: release-assets/**
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          generate_release_notes: true
+          files: release-assets/**

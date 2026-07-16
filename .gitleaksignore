@@ -1,0 +1,16 @@
+﻿# Exact reviewed false positives from the pre-publication full-history audit.
+# Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
+
+7ffc688d631b8e2afb8604316331c1ce1f914186:tests/test_issuance_changes.py:generic-api-key:456
+7ffc688d631b8e2afb8604316331c1ce1f914186:tests/test_issuance_changes.py:generic-api-key:60
+7ffc688d631b8e2afb8604316331c1ce1f914186:tests/test_issuance_changes.py:generic-api-key:78
+7ffc688d631b8e2afb8604316331c1ce1f914186:tests/test_issuance_changes.py:generic-api-key:79
+8b0f53d57fa1d27c7c3cf03c92b7aea8cd9f92f7:services/verification/application/did_resolver.py:generic-api-key:340
+8b0f53d57fa1d27c7c3cf03c92b7aea8cd9f92f7:tests/test_issuance_changes.py:generic-api-key:689
+8b0f53d57fa1d27c7c3cf03c92b7aea8cd9f92f7:tests/test_issuance_changes.py:generic-api-key:771
+8b0f53d57fa1d27c7c3cf03c92b7aea8cd9f92f7:tests/test_phase4_did_resolution.py:generic-api-key:232
+8b0f53d57fa1d27c7c3cf03c92b7aea8cd9f92f7:tests/test_phase4_did_resolution.py:generic-api-key:50
+8b0f53d57fa1d27c7c3cf03c92b7aea8cd9f92f7:tests/test_phase4_did_resolution.py:generic-api-key:567
+ba438b1eb88c6682d5ad52fb81cb4d8c196d9080:tests/test_issuance_changes.py:generic-api-key:1112
+ba438b1eb88c6682d5ad52fb81cb4d8c196d9080:tests/test_issuance_changes.py:generic-api-key:2158
+fe5761f8e1160de925d22d64d21b70c87c8a94c0:services/issuance/TEST_RESULTS.md:generic-api-key:88

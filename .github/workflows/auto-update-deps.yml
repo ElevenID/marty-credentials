@@ -18,7 +18,7 @@ jobs:
     name: Update marty-core Dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
 
@@ -48,7 +48,7 @@ jobs:
           
           rm -f Cargo.toml.bak
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Update Cargo.lock
         working-directory: rust/marty-rs
@@ -102,7 +102,7 @@ jobs:
 
       - name: Create GitHub Issue on failure
         if: steps.tests.outcome == 'failure'
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
         with:
           script: |
             await github.rest.issues.create({

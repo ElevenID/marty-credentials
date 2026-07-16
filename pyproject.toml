@@ -68,10 +68,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/adamburdett/marty-credentials"
-Documentation = "https://github.com/adamburdett/marty-credentials#readme"
-Repository = "https://github.com/adamburdett/marty-credentials.git"
-Issues = "https://github.com/adamburdett/marty-credentials/issues"
+Homepage = "https://github.com/ElevenID/marty-credentials"
+Documentation = "https://github.com/ElevenID/marty-credentials#readme"
+Repository = "https://github.com/ElevenID/marty-credentials.git"
+Issues = "https://github.com/ElevenID/marty-credentials/issues"
 
 [tool.hatch.version]
 source = "vcs"

@@ -1,0 +1,6 @@
+{
+  "schema": "marty.release-dependencies/v1",
+  "marty-rs": "0.1.0",
+  "marty-msf": "1.0.0",
+  "marty-common": "0.1.0"
+}

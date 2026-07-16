@@ -66,7 +66,7 @@ credential = await adapter.issue_credential(claims, key_pair)
 
 ## Relationship to Marty Core
 
-This package depends on [marty-core](https://github.com/adamburdett/marty-core) for cryptographic primitives:
+This package depends on [marty-core](https://github.com/ElevenID/marty-core) for cryptographic primitives:
 
 - `marty-crypto`: Low-level cryptographic operations
 - `marty-verification`: Trust chain verification

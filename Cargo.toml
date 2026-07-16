@@ -6,24 +6,24 @@ members = ["rust/marty-rs"]
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.75"
-repository = "https://github.com/adamburdett/marty-credentials"
+rust-version = "1.87"
+repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core.git", rev = "56288cc3488af80b9a4c2f08b3535033d09b6e71", features = ["sod-builder"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core.git", rev = "56288cc3488af80b9a4c2f08b3535033d09b6e71" }
+marty-crypto = { version = "0.1.0", features = ["sod-builder"] }
+marty-verification = { version = "0.1.0" }
 
 # PEM encoding
 pem-rfc7468 = { version = "0.7", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core.git", rev = "56288cc3488af80b9a4c2f08b3535033d09b6e71" }
+marty-oid4vci = { version = "0.1.0" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
 
 # SSI ecosystem
-ssi = { version = "0.12.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1", "rsa"] }
-ssi-status = { version = "0.5", default-features = false }
+ssi = { version = "0.16.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1", "rsa"] }
+ssi-status = { version = "0.8.1", default-features = false }
 isomdl = { version = "0.2" }
 coset = { version = "0.3" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
@@ -63,6 +63,3 @@ tracing-error = { version = "0.2" }
 lto = true
 codegen-units = 1
 strip = true
-
-[patch.crates-io]
-core2 = { path = "vendor/core2-0.4.0" }
