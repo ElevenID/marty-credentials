@@ -122,3 +122,6 @@ marty-verification = { workspace = true, optional = true }
 
 # OID4VCI/OID4VP protocol engine from marty-core
 marty-oid4vci = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"
