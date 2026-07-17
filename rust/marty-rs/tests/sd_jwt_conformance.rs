@@ -436,3 +436,4 @@ fn holder_discloses_nothing() {
         "SD-JWT presentation must end with '~' even when no disclosures chosen"
     );
 }
+#![cfg(not(target_arch = "wasm32"))]
