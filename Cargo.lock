@@ -2604,6 +2604,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "10.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
+ "signature",
+ "simple_asn1 0.6.4",
+ "zeroize",
+]
+
+[[package]]
 name = "k256"
 version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2917,7 +2934,7 @@ dependencies = [
  "coset",
  "ed25519-dalek",
  "isomdl",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "p256",
  "p384",
  "rand 0.8.7",
@@ -2949,7 +2966,7 @@ dependencies = [
  "getrandom 0.2.17",
  "isomdl",
  "js-sys",
- "jsonwebtoken",
+ "jsonwebtoken 10.4.0",
  "marty-crypto",
  "marty-oid4vci",
  "marty-verification",
@@ -4379,7 +4396,7 @@ checksum = "4c0a7697fd7c1f168e07a1940e5e735294e68e36efc6857560cedbae80ffb889"
 dependencies = [
  "base64 0.21.7",
  "hmac",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "log",
  "rand 0.8.7",
  "serde",
