@@ -1,8 +1,9 @@
 # Public verification service image. Build context: marty-credentials repository root.
 FROM python:3.12-slim
 
-ARG MARTY_RS_VERSION=0.1.0
-ARG MARTY_MSF_VERSION=1.0.0
+ARG MARTY_RS_SHA256
+ARG MARTY_MSF_SHA256
+ARG MARTY_COMMON_SHA256
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
@@ -14,9 +15,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app:/app/services:/app/packages
 
 WORKDIR /app
-RUN pip install --no-cache-dir \
-      "marty-rs==${MARTY_RS_VERSION}" \
-      "marty-msf==${MARTY_MSF_VERSION}" \
+COPY release-deps /release-deps
+RUN echo "${MARTY_RS_SHA256}  /release-deps/marty_rs.whl" | sha256sum -c - \
+    && echo "${MARTY_MSF_SHA256}  /release-deps/marty_msf.whl" | sha256sum -c - \
+    && echo "${MARTY_COMMON_SHA256}  /release-deps/marty_common.whl" | sha256sum -c - \
+    && pip install --no-cache-dir /release-deps/*.whl \
       fastapi==0.109.0 \
       'uvicorn[standard]==0.27.0' \
       'sqlalchemy[asyncio]==2.0.25' \

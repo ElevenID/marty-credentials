@@ -1,6 +1,17 @@
 {
   "schema": "marty.release-dependencies/v1",
-  "marty-rs": "0.1.0",
-  "marty-msf": "1.0.0",
-  "marty-common": "0.1.0"
+  "marty-msf": {
+    "version": "1.0.0",
+    "repository": "ElevenID/marty-microservices-framework",
+    "tag": "v1.0.0",
+    "asset": "marty_msf-1.0.0-py3-none-any.whl",
+    "sha256": "8c6c0f8de961380ee0546787a498fd34a866746c8687e313f75281995bd6146d"
+  },
+  "marty-common": {
+    "version": "0.2.0",
+    "repository": "ElevenID/Marty",
+    "tag": "marty-common-v0.2.0",
+    "asset": "marty_common-0.2.0-py3-none-any.whl",
+    "sha256": "123452b401144ff2c7b13c4c8f2eea1370a34a60c259e49795d5dfe295747a2f"
+  }
 }

@@ -66,7 +66,9 @@ def test_native_extension_capability_contract_rejects_incomplete_module(monkeypa
         rust_integration.validate_marty_rs_capabilities()
 
 
-def test_issuance_image_copies_every_marty_core_workspace_member() -> None:
+def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "COPY marty-core/marty-test-wallet ./marty-core/marty-test-wallet/" in dockerfile
+    assert "COPY release-deps /release-deps" in dockerfile
+    assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
+    assert "COPY marty-core/" not in dockerfile

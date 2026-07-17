@@ -40,6 +40,9 @@ dependencies = [
     # PyPI publishing is intentionally disabled during the GitHub-only
     # bootstrap. Consume the versioned wheel attached to the v1.0.0 release.
     "marty-msf @ https://github.com/ElevenID/marty-microservices-framework/releases/download/v1.0.0/marty_msf-1.0.0-py3-none-any.whl",
+    # marty-common is bootstrapped from the Marty GitHub release until public
+    # registry publishing is enabled.
+    "marty-common @ https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.0/marty_common-0.2.0-py3-none-any.whl",
     "grpcio>=1.60.0",
     "protobuf>=4.25.0",
 ]

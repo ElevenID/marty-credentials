@@ -1,12 +1,17 @@
 name: Release service images
 
 on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+  repository_dispatch:
+    types: [credentials-release-published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub release tag to publish as images
+        required: true
+        type: string
 
 concurrency:
-  group: images-${{ github.ref }}
+  group: images-${{ github.event.client_payload.tag || inputs.tag }}
   cancel-in-progress: false
 
 permissions:
@@ -30,15 +35,39 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Read immutable dependency versions
+        with:
+          ref: ${{ github.event.client_payload.tag || inputs.tag }}
+      - name: Download and verify immutable release dependencies
         id: deps
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.client_payload.tag || inputs.tag }}
         run: |
           set -euo pipefail
           jq -e '.schema == "marty.release-dependencies/v1"' release/dependencies.json >/dev/null
-          echo "marty_rs=$(jq -r '.["marty-rs"]' release/dependencies.json)" >> "$GITHUB_OUTPUT"
-          echo "marty_msf=$(jq -r '.["marty-msf"]' release/dependencies.json)" >> "$GITHUB_OUTPUT"
-          echo "marty_common=$(jq -r '.["marty-common"]' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+          mkdir release-deps
+
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'marty_rs-*-manylinux*x86_64.whl' --dir release-deps
+          mv release-deps/marty_rs-*-manylinux*x86_64.whl release-deps/marty_rs.whl
+
+          for dependency in marty-msf marty-common; do
+            repository=$(jq -r ".[\"$dependency\"].repository" release/dependencies.json)
+            release_tag=$(jq -r ".[\"$dependency\"].tag" release/dependencies.json)
+            asset=$(jq -r ".[\"$dependency\"].asset" release/dependencies.json)
+            expected=$(jq -r ".[\"$dependency\"].sha256" release/dependencies.json)
+            gh release download "$release_tag" --repo "$repository" --pattern "$asset" --dir release-deps
+            echo "$expected  release-deps/$asset" | sha256sum -c -
+          done
+
+          mv "release-deps/$(jq -r '.["marty-msf"].asset' release/dependencies.json)" release-deps/marty_msf.whl
+          mv "release-deps/$(jq -r '.["marty-common"].asset' release/dependencies.json)" release-deps/marty_common.whl
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "marty_rs_sha256=$(sha256sum release-deps/marty_rs.whl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "marty_msf_sha256=$(jq -r '.["marty-msf"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+          echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
@@ -51,11 +80,15 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}:${{ github.ref_name }}
+          tags: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}:${{ steps.deps.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.deps.outputs.tag }}
           build-args: |
-            MARTY_RS_VERSION=${{ steps.deps.outputs.marty_rs }}
-            MARTY_MSF_VERSION=${{ steps.deps.outputs.marty_msf }}
-            MARTY_COMMON_VERSION=${{ steps.deps.outputs.marty_common }}
+            MARTY_RS_SHA256=${{ steps.deps.outputs.marty_rs_sha256 }}
+            MARTY_MSF_SHA256=${{ steps.deps.outputs.marty_msf_sha256 }}
+            MARTY_COMMON_SHA256=${{ steps.deps.outputs.marty_common_sha256 }}
           provenance: mode=max
           sbom: true
       - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
@@ -80,6 +113,17 @@ jobs:
           path: marty-credentials-${{ matrix.service }}.spdx.json
           retention-days: 7
 
+      - name: Record immutable image digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: printf '%s\n' "$DIGEST" > marty-credentials-${{ matrix.service }}.digest
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: image-digest-${{ matrix.service }}
+          path: marty-credentials-${{ matrix.service }}.digest
+          retention-days: 7
+
   attach-evidence:
     needs: publish
     runs-on: ubuntu-latest
@@ -90,7 +134,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          pattern: image-evidence-*
+          pattern: image-*
           path: release-assets
           merge-multiple: true
       - name: Create checksums
@@ -100,5 +144,6 @@ jobs:
           subject-path: release-assets/**
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
+          tag_name: ${{ github.event.client_payload.tag || inputs.tag }}
           generate_release_notes: true
           files: release-assets/**
