@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 //! IETF SD-JWT specification conformance tests.
 //!
 //! Tests the wire-format properties of SD-JWTs produced by the `sd-jwt-rs` crate
@@ -436,4 +438,3 @@ fn holder_discloses_nothing() {
         "SD-JWT presentation must end with '~' even when no disclosures chosen"
     );
 }
-#![cfg(not(target_arch = "wasm32"))]
