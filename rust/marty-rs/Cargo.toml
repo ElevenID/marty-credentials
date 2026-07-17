@@ -13,6 +13,15 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["python"]
+native = [
+    "dep:marty-crypto",
+    "dep:marty-verification",
+    "dep:marty-oid4vci",
+    "sd-jwt-rs",
+    "jsonwebtoken",
+    "p256",
+    "sha2",
+]
 python = [
     "pyo3",
     "dep:marty-crypto",

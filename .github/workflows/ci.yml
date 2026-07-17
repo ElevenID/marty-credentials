@@ -39,7 +39,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test --locked --all-features
+        # Python and WASM bindings are exercised in their dedicated jobs. PyO3's
+        # extension-module mode intentionally does not link libpython, so it
+        # cannot be linked into a native Rust test harness.
+        run: cargo test --locked --no-default-features --features native
 
       - name: Run clippy
         # PyO3 0.22's generated wrappers trigger this lint on Rust 1.93+.
@@ -240,13 +243,13 @@ jobs:
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM (web target)
-        run: wasm-pack build --locked --target web --features wasm
+        run: wasm-pack build --locked --target web --no-default-features --features wasm
 
       - name: Build WASM (nodejs target)
-        run: wasm-pack build --locked --target nodejs --features wasm
+        run: wasm-pack build --locked --target nodejs --no-default-features --features wasm
 
       - name: Build WASM (bundler target)
-        run: wasm-pack build --locked --target bundler --features wasm
+        run: wasm-pack build --locked --target bundler --no-default-features --features wasm
 
       - name: Test WASM
-        run: wasm-pack test --node --features wasm
+        run: wasm-pack test --node --no-default-features --features wasm

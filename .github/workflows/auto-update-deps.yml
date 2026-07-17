@@ -58,7 +58,7 @@ jobs:
         id: tests
         continue-on-error: true
         working-directory: rust/marty-rs
-        run: cargo test --all-features
+        run: cargo test --locked --no-default-features --features native
 
       - name: Auto-bump version
         if: steps.tests.outcome == 'success'

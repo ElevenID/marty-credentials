@@ -72,13 +72,13 @@ jobs:
           mkdir -p ../../dist/wasm
           
           # Build for web
-          wasm-pack build --target web --features wasm --out-dir ../../dist/wasm/web
+          wasm-pack build --locked --target web --no-default-features --features wasm --out-dir ../../dist/wasm/web
           
           # Build for nodejs
-          wasm-pack build --target nodejs --features wasm --out-dir ../../dist/wasm/nodejs
+          wasm-pack build --locked --target nodejs --no-default-features --features wasm --out-dir ../../dist/wasm/nodejs
           
           # Build for bundler
-          wasm-pack build --target bundler --features wasm --out-dir ../../dist/wasm/bundler
+          wasm-pack build --locked --target bundler --no-default-features --features wasm --out-dir ../../dist/wasm/bundler
 
       - name: Create WASM archive
         run: |
