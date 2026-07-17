@@ -53,7 +53,7 @@ jobs:
           args: --locked --release --out ../../dist --features python
           sccache: 'true'
           manylinux: auto
-          before-script-linux: yum install -y perl-IPC-Cmd
+          before-script-linux: yum install -y perl-IPC-Cmd perl-Time-Piece
 
       - name: Upload wheels
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
