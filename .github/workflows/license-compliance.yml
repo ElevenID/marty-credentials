@@ -140,7 +140,7 @@ jobs:
 
       - name: Generate CycloneDX SBOM
         working-directory: marty-credentials
-        run: cargo cyclonedx --format json --output-cdx sbom.cdx.json
+        run: cargo cyclonedx --format json --override-filename sbom.cdx
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

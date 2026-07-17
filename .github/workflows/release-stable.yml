@@ -84,8 +84,9 @@ jobs:
 
       - name: Generate SBOM
         run: |
-          cargo install cargo-cyclonedx
-          cargo cyclonedx --format json --output-cdx ../../dist/marty-rs-sbom.json
+          cargo install cargo-cyclonedx --locked
+          cargo cyclonedx --format json --override-filename marty-rs-sbom
+          mv marty-rs-sbom.json ../../dist/marty-rs-sbom.json
 
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
