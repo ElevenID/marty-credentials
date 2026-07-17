@@ -30,8 +30,8 @@ RUN echo "${MARTY_RS_SHA256}  /release-deps/${MARTY_RS_WHEEL}" | sha256sum -c - 
       'uvicorn[standard]==0.27.0' \
       'sqlalchemy[asyncio]==2.0.25' \
       asyncpg==0.29.0 \
-      pydantic==2.5.3 \
-      pydantic-settings==2.1.0 \
+      pydantic==2.11.7 \
+      pydantic-settings==2.11.0 \
       httpx==0.26.0 \
       redis==5.0.1 \
       python-multipart==0.0.6 \
