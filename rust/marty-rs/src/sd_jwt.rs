@@ -273,7 +273,7 @@ fn python_to_json(py_value: &Bound<'_, PyAny>) -> PyResult<Value> {
         Ok(json!(b))
     } else if py_value.is_none() {
         Ok(Value::Null)
-    } else if let Ok(dict) = py_value.downcast::<PyDict>() {
+    } else if let Ok(dict) = py_value.cast::<PyDict>() {
         let mut map = serde_json::Map::new();
         for (key, value) in dict.iter() {
             let key_str: String = key.extract()?;

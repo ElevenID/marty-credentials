@@ -2,6 +2,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use pyo3::IntoPyObjectExt;
 
 /// Wrapper for marty_verification::mdoc::DeviceResponse
 #[pyclass]
@@ -36,7 +37,7 @@ impl DeviceResponse {
     }
 
     /// Get all fields from the mDL namespace as a dictionary
-    pub fn get_mdl_fields(&self, py: Python) -> PyResult<PyObject> {
+    pub fn get_mdl_fields(&self, py: Python) -> PyResult<Py<PyAny>> {
         let fields = self.inner.get_mdl_fields().map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
                 "Failed to extract fields: {}",
@@ -44,7 +45,7 @@ impl DeviceResponse {
             ))
         })?;
 
-        let result = PyDict::new_bound(py);
+        let result = PyDict::new(py);
         for (key, value) in fields {
             let py_value = json_to_python(py, &value)?;
             result.set_item(key, py_value)?;
@@ -53,7 +54,7 @@ impl DeviceResponse {
     }
 
     /// Get a specific element from the mDL namespace
-    pub fn get_mdl_element(&self, element_id: &str, py: Python) -> PyResult<Option<PyObject>> {
+    pub fn get_mdl_element(&self, element_id: &str, py: Python) -> PyResult<Option<Py<PyAny>>> {
         match self.inner.get_mdl_element(element_id) {
             Some(value) => Ok(Some(json_to_python(py, &value)?)),
             None => Ok(None),
@@ -76,12 +77,12 @@ impl DeviceResponse {
     }
 
     /// Get all namespaces and their items
-    pub fn get_all_namespaces(&self, py: Python) -> PyResult<PyObject> {
-        let result = PyDict::new_bound(py);
+    pub fn get_all_namespaces(&self, py: Python) -> PyResult<Py<PyAny>> {
+        let result = PyDict::new(py);
 
         for doc in &self.inner.documents {
             for (ns_name, items) in &doc.namespaces {
-                let ns_dict = PyDict::new_bound(py);
+                let ns_dict = PyDict::new(py);
                 for item in items {
                     let py_value = json_to_python(py, &item.element_value)?;
                     ns_dict.set_item(&item.element_identifier, py_value)?;
@@ -102,7 +103,7 @@ pub fn parse_device_response(cbor_bytes: Vec<u8>) -> PyResult<DeviceResponse> {
 
 /// Verify an mDoc and return the extracted fields
 #[pyfunction]
-pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<PyObject> {
+pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<Py<PyAny>> {
     let response = marty_verification::mdoc::parse_device_response(&cbor_bytes).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to parse: {}", e))
     })?;
@@ -114,7 +115,7 @@ pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<PyObject> {
         ))
     })?;
 
-    let result = PyDict::new_bound(py);
+    let result = PyDict::new(py);
     for (key, value) in fields {
         let py_value = json_to_python(py, &value)?;
         result.set_item(key, py_value)?;
@@ -123,35 +124,35 @@ pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<PyObject> {
 }
 
 /// Convert serde_json::Value to Python object
-fn json_to_python(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
+fn json_to_python(py: Python, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
     use serde_json::Value;
 
     match value {
         Value::Null => Ok(py.None()),
-        Value::Bool(b) => Ok(b.to_object(py)),
+        Value::Bool(b) => Ok(b.into_py_any(py)?),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Ok(i.to_object(py))
+                Ok(i.into_py_any(py)?)
             } else if let Some(u) = n.as_u64() {
-                Ok(u.to_object(py))
+                Ok(u.into_py_any(py)?)
             } else if let Some(f) = n.as_f64() {
-                Ok(f.to_object(py))
+                Ok(f.into_py_any(py)?)
             } else {
                 Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "Invalid number",
                 ))
             }
         }
-        Value::String(s) => Ok(s.to_object(py)),
+        Value::String(s) => Ok(s.into_py_any(py)?),
         Value::Array(arr) => {
-            let py_list = pyo3::types::PyList::empty_bound(py);
+            let py_list = pyo3::types::PyList::empty(py);
             for item in arr {
                 py_list.append(json_to_python(py, item)?)?;
             }
             Ok(py_list.into())
         }
         Value::Object(obj) => {
-            let py_dict = PyDict::new_bound(py);
+            let py_dict = PyDict::new(py);
             for (k, v) in obj {
                 py_dict.set_item(k, json_to_python(py, v)?)?;
             }

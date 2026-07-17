@@ -31,7 +31,7 @@ pub fn python_to_cbor_value(py_value: &Bound<'_, PyAny>) -> PyResult<CborValue> 
         Ok(CborValue::Null)
     } else if let Ok(bytes) = py_value.extract::<Vec<u8>>() {
         Ok(CborValue::Bytes(bytes))
-    } else if let Ok(dict) = py_value.downcast::<PyDict>() {
+    } else if let Ok(dict) = py_value.cast::<PyDict>() {
         let mut map = Vec::new();
         for (key, value) in dict.iter() {
             let key_cbor = python_to_cbor_value(&key)?;
