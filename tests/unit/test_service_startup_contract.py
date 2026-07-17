@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import sys
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -50,9 +50,7 @@ def test_native_extension_uses_maturin_package_name(monkeypatch) -> None:
     from issuance.application import rust_integration
 
     extension = SimpleNamespace()
-    package = ModuleType("marty_rs")
-    package._marty_rs = extension
-    monkeypatch.setitem(sys.modules, "marty_rs", package)
+    monkeypatch.setitem(sys.modules, "_marty_rs", extension)
 
     assert rust_integration.get_marty_rs() is extension
 
