@@ -45,7 +45,7 @@ jobs:
         with:
           working-directory: rust/marty-rs
           target: ${{ matrix.target }}
-          args: --release --out ../../dist --features python
+          args: --locked --release --out ../../dist --features python
           sccache: 'true'
           manylinux: auto
 
@@ -72,9 +72,9 @@ jobs:
         run: |
           mkdir -p ../../dist/wasm
           
-          wasm-pack build --target web --features wasm --out-dir ../../dist/wasm/web
-          wasm-pack build --target nodejs --features wasm --out-dir ../../dist/wasm/nodejs
-          wasm-pack build --target bundler --features wasm --out-dir ../../dist/wasm/bundler
+          wasm-pack build --locked --target web --no-default-features --features wasm --out-dir ../../dist/wasm/web
+          wasm-pack build --locked --target nodejs --no-default-features --features wasm --out-dir ../../dist/wasm/nodejs
+          wasm-pack build --locked --target bundler --no-default-features --features wasm --out-dir ../../dist/wasm/bundler
 
       - name: Create WASM archive
         run: |
@@ -129,7 +129,7 @@ jobs:
 
       - name: Run Rust tests
         working-directory: rust/marty-rs
-        run: cargo test --all-features
+        run: cargo test --locked --all-features
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -139,7 +139,8 @@ jobs:
         run: |
           pip install maturin[patchelf] pytest
           cd rust/marty-rs
-          maturin develop --features python
+          maturin build --locked --features python --interpreter python --out dist
+          python -c "import pathlib, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(next(pathlib.Path('dist').glob('*.whl')))])"
           cd ../..
           pip install -e .
           pytest tests/
