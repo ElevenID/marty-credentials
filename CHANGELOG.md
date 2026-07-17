@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [unreleased] - 2026-07-17
 
+## [unreleased] - 2026-07-17
+
 ### Bug Fixes
 
 - **release**: Package WASM with current toolchain ([b52ea24](b52ea24be7da95ad03f1f200b8fcee3f03343faf))
