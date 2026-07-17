@@ -174,8 +174,8 @@ jobs:
           else
             TAG="${GITHUB_REF#refs/tags/}"
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
         env:
           GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
 
@@ -189,7 +189,7 @@ jobs:
           mkdir -p final-release
           find release-artifacts -type f -exec cp {} final-release/ \;
           cd final-release
-          sha256sum * > SHA256SUMS
+          sha256sum ./* > SHA256SUMS
 
       - name: Generate release notes
         run: |
