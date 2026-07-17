@@ -6,11 +6,13 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   cleanup:
     name: Cleanup Old Pre-1.0 Releases
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Cleanup old pre-release artifacts
