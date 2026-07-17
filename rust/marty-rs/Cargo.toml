@@ -11,6 +11,12 @@ name = "_marty_rs"
 # cdylib for both PyO3 and wasm-bindgen
 crate-type = ["cdylib", "rlib"]
 
+# wasm-pack currently bundles a Binaryen validator that does not recognize
+# the bulk-memory instructions emitted by the supported Rust toolchain.
+# Keep rustc/wasm-bindgen validation enabled and skip only that optimizer.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [features]
 default = ["python"]
 native = [
