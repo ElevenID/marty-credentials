@@ -12,7 +12,7 @@ repository = "https://github.com/ElevenID/marty-credentials"
 [workspace.dependencies]
 # Core crates from marty-core
 marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "bffe151c2b57550ad703345d55d37a0ca339e35e", features = ["sod-builder"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "bffe151c2b57550ad703345d55d37a0ca339e35e" }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "bffe151c2b57550ad703345d55d37a0ca339e35e", default-features = false }
 
 # PEM encoding
 pem-rfc7468 = { version = "0.7", features = ["alloc"] }

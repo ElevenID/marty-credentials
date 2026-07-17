@@ -1,3 +1,4 @@
+#[cfg(feature = "python")]
 use base64::Engine;
 
 // Error module (only for python - has tracing dependencies)

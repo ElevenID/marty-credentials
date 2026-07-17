@@ -45,8 +45,9 @@ jobs:
         run: cargo test --locked --no-default-features --features native
 
       - name: Run clippy
-        # PyO3 0.22's generated wrappers trigger this lint on Rust 1.93+.
-        run: cargo clippy --locked --all-features -- -D warnings -A clippy::useless-conversion
+        # Python and WASM features target different link environments and must
+        # not be combined in one all-features build.
+        run: cargo clippy --locked --no-default-features --features native -- -D warnings
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -201,7 +202,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install maturin[patchelf] pytest pytest-asyncio
+          pip install maturin pytest pytest-asyncio
 
       - name: Build Python package
         working-directory: marty-credentials/rust/marty-rs

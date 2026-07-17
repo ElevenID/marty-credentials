@@ -16,6 +16,7 @@ default = ["python"]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",
+    "marty-verification/default",
     "dep:marty-oid4vci",
     "sd-jwt-rs",
     "jsonwebtoken",
@@ -26,6 +27,7 @@ python = [
     "pyo3",
     "dep:marty-crypto",
     "dep:marty-verification",
+    "marty-verification/default",
     "dep:marty-oid4vci",
     "tokio",
     "isomdl",
@@ -45,6 +47,7 @@ python = [
     "serde_cbor"
 ]
 wasm = [
+    "dep:marty-crypto",
     "dep:marty-verification",
     "wasm-bindgen",
     "wasm-bindgen-futures",

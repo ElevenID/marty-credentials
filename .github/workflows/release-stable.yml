@@ -138,7 +138,7 @@ jobs:
 
       - name: Install and test Python package
         run: |
-          pip install maturin[patchelf] pytest
+          pip install maturin pytest
           cd rust/marty-rs
           maturin build --locked --features python --interpreter python --out dist
           python -c "import pathlib, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(next(pathlib.Path('dist').glob('*.whl')))])"

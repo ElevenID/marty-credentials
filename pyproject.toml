@@ -37,7 +37,9 @@ dependencies = [
     "python-json-logger>=2.0",
     "redis>=5.0",
     "cbor2>=5.6.0",
-    "marty-msf>=1.0.0",
+    # PyPI publishing is intentionally disabled during the GitHub-only
+    # bootstrap. Consume the versioned wheel attached to the v1.0.0 release.
+    "marty-msf @ https://github.com/ElevenID/marty-microservices-framework/releases/download/v1.0.0/marty_msf-1.0.0-py3-none-any.whl",
     "grpcio>=1.60.0",
     "protobuf>=4.25.0",
 ]
@@ -75,6 +77,9 @@ Issues = "https://github.com/ElevenID/marty-credentials/issues"
 
 [tool.hatch.version]
 source = "vcs"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["python/marty_credentials", "python/status_list"]

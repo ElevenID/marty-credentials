@@ -121,7 +121,7 @@ jobs:
               1. Review test failures in the workflow run
               2. Manually update dependencies in rust/marty-rs/Cargo.toml
               3. Run: \`cargo update -p marty-crypto -p marty-verification -p marty-secure-storage\`
-              4. Run tests: \`cargo test --all-features\`
+              4. Run tests: \`cargo test --no-default-features --features native\`
               5. Once fixed, manually bump version and create release tag
               
               Check workflow logs for detailed test failure information.
