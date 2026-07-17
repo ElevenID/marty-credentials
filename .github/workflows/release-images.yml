@@ -50,7 +50,7 @@ jobs:
 
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
             --pattern 'marty_rs-*-manylinux*x86_64.whl' --dir release-deps
-          mv release-deps/marty_rs-*-manylinux*x86_64.whl release-deps/marty_rs.whl
+          marty_rs_wheel="$(basename "$(compgen -G 'release-deps/marty_rs-*-manylinux*x86_64.whl')")"
 
           for dependency in marty-msf marty-common; do
             repository=$(jq -r ".[\"$dependency\"].repository" release/dependencies.json)
@@ -61,11 +61,11 @@ jobs:
             echo "$expected  release-deps/$asset" | sha256sum -c -
           done
 
-          mv "release-deps/$(jq -r '.["marty-msf"].asset' release/dependencies.json)" release-deps/marty_msf.whl
-          mv "release-deps/$(jq -r '.["marty-common"].asset' release/dependencies.json)" release-deps/marty_common.whl
-
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "marty_rs_sha256=$(sha256sum release-deps/marty_rs.whl | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "marty_rs_wheel=$marty_rs_wheel" >> "$GITHUB_OUTPUT"
+          echo "marty_msf_wheel=$(jq -r '.["marty-msf"].asset' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+          echo "marty_common_wheel=$(jq -r '.["marty-common"].asset' release/dependencies.json)" >> "$GITHUB_OUTPUT"
+          echo "marty_rs_sha256=$(sha256sum "release-deps/$marty_rs_wheel" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "marty_msf_sha256=$(jq -r '.["marty-msf"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
           echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
@@ -86,6 +86,9 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.deps.outputs.tag }}
           build-args: |
+            MARTY_RS_WHEEL=${{ steps.deps.outputs.marty_rs_wheel }}
+            MARTY_MSF_WHEEL=${{ steps.deps.outputs.marty_msf_wheel }}
+            MARTY_COMMON_WHEEL=${{ steps.deps.outputs.marty_common_wheel }}
             MARTY_RS_SHA256=${{ steps.deps.outputs.marty_rs_sha256 }}
             MARTY_MSF_SHA256=${{ steps.deps.outputs.marty_msf_sha256 }}
             MARTY_COMMON_SHA256=${{ steps.deps.outputs.marty_common_sha256 }}
