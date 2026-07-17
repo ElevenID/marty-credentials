@@ -2953,6 +2953,7 @@ dependencies = [
  "marty-crypto",
  "marty-oid4vci",
  "marty-verification",
+ "openssl",
  "p256",
  "pem-rfc7468 0.7.0",
  "pyo3",

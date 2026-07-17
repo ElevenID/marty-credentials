@@ -125,3 +125,9 @@ marty-oid4vci = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+# Python wheels must be portable and cannot rely on a host OpenSSL package.
+# Enabling the vendored feature here also applies to native-tls pulled in by
+# marty-verification's LDAP client.
+[target.'cfg(target_os = "linux")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }

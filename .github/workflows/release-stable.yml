@@ -31,6 +31,11 @@ jobs:
         exclude:
           - os: windows-latest
             target: aarch64
+          # manylinux2014's cross compiler cannot build the current ring and
+          # aws-lc ARM assembly. Keep native macOS ARM coverage and publish
+          # Linux x86_64 until this can move to a native ARM runner.
+          - os: ubuntu-latest
+            target: aarch64
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -48,6 +53,7 @@ jobs:
           args: --locked --release --out ../../dist --features python
           sccache: 'true'
           manylinux: auto
+          before-script-linux: yum install -y perl-IPC-Cmd
 
       - name: Upload wheels
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
