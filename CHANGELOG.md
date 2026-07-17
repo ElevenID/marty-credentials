@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Bug Fixes
 
+- **release**: Package WASM with current toolchain ([b52ea24](b52ea24be7da95ad03f1f200b8fcee3f03343faf))
+
+## [unreleased] - 2026-07-17
+
+### Bug Fixes
+
 - **status-list**: Use PyModule::new_bound for PyO3 0.22 compatibility ([432f25a](432f25a048fcc51f2aad076d6e2840f37f5228c9))
 - Checkout marty-core in CI for path dependencies ([31c7834](31c78342a38cf368ab45f77f6b800bf3c488733d))
 - Correct GitHub Packages URL in beta workflow ([6d2d752](6d2d752349fd7be207c59796d4ea59c6ca2ec840))
