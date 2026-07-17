@@ -45,7 +45,7 @@ pub fn create_mdoc(
     // Add all namespaces
     for (ns_name, claims) in namespaces.iter() {
         let ns_str: String = ns_name.extract()?;
-        let claims_dict = claims.downcast::<PyDict>()?;
+        let claims_dict = claims.cast::<PyDict>()?;
         builder.add_namespace(ns_str, claims_dict)?;
     }
 
@@ -110,7 +110,7 @@ pub fn prepare_mdoc_for_hsm(
     // Add all namespaces
     for (ns_name, claims) in namespaces.iter() {
         let ns_str: String = ns_name.extract()?;
-        let claims_dict = claims.downcast::<PyDict>()?;
+        let claims_dict = claims.cast::<PyDict>()?;
         builder.add_namespace(ns_str, claims_dict)?;
     }
 
