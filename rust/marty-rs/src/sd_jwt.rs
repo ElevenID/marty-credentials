@@ -113,7 +113,7 @@ impl SdJwtBuilder {
             .issue_sd_jwt(
                 Value::Object(user_claims),
                 sd_strategy,
-                None, // No holder key binding
+                None,  // No holder key binding
                 false, // No decoy claims
                 SDJWTSerializationFormat::Compact,
             )
@@ -160,15 +160,13 @@ impl SdJwtPresentation {
         audience: Option<String>,
         algorithm: Option<String>,
     ) -> PyResult<String> {
-        let mut holder =
-            SDJWTHolder::new(self.sd_jwt.clone(), SDJWTSerializationFormat::Compact).map_err(
-                |e| {
-                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                        "Failed to parse SD-JWT: {}",
-                        e
-                    ))
-                },
-            )?;
+        let mut holder = SDJWTHolder::new(self.sd_jwt.clone(), SDJWTSerializationFormat::Compact)
+            .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to parse SD-JWT: {}",
+                e
+            ))
+        })?;
 
         // Create presentation
         let presentation = match (holder_key_pem, nonce, audience) {
@@ -184,13 +182,9 @@ impl SdJwtPresentation {
                     Some(alg),
                 )
             }
-            (None, None, None) => holder.create_presentation(
-                self.claims_to_disclose.clone(),
-                None,
-                None,
-                None,
-                None,
-            ),
+            (None, None, None) => {
+                holder.create_presentation(self.claims_to_disclose.clone(), None, None, None, None)
+            }
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
                     "Either provide all of (holder_key_pem, nonce, audience) or none",
@@ -238,10 +232,10 @@ impl SdJwtVerifier {
         let alg = self.algorithm.clone();
 
         // Create the key resolver callback
+        #[allow(clippy::type_complexity)]
         let cb_get_issuer_key: Box<dyn Fn(&str, &Header) -> DecodingKey> =
             Box::new(move |_issuer: &str, _header: &Header| {
-                create_decoding_key(&public_key_pem, &alg)
-                    .expect("Failed to create decoding key")
+                create_decoding_key(&public_key_pem, &alg).expect("Failed to create decoding key")
             });
 
         let verifier = SDJWTVerifier::new(

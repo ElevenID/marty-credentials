@@ -7,8 +7,8 @@
 //! - [`issue_emrtd_passport_self_signed`] — testing / bootstrapping; generates
 //!   a fresh CSCA and DSC internally.
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 
 use marty_crypto::cert_builder::{create_csca_certificate, create_dsc_certificate};
 use marty_crypto::keygen::KeyType;
@@ -119,10 +119,7 @@ fn build_credential(
 }
 
 /// DER → PEM helper using `pem_rfc7468`.
-fn der_to_pem(
-    der: &[u8],
-    label: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+fn der_to_pem(der: &[u8], label: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     pem_rfc7468::encode_string(label, pem_rfc7468::LineEnding::LF, der)
         .map_err(|e| format!("PEM encode error: {e}").into())
 }

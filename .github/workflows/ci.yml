@@ -27,11 +27,6 @@ jobs:
         with:
           path: marty-credentials
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          repository: ElevenID/marty-core
-          path: marty-core
-
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo
@@ -44,10 +39,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo test --locked --all-features
 
       - name: Run clippy
-        run: cargo clippy --all-features -- -D warnings
+        # PyO3 0.22's generated wrappers trigger this lint on Rust 1.93+.
+        run: cargo clippy --locked --all-features -- -D warnings -A clippy::useless-conversion
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -59,11 +55,6 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           path: marty-credentials
-
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          repository: ElevenID/marty-core
-          path: marty-core
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
@@ -151,6 +142,7 @@ jobs:
         working-directory: marty-credentials
         run: |
           mkdir -p tests/artifacts/canvas-portable-migration
+          chmod 0777 tests/artifacts/canvas-portable-migration
           docker compose --file docker-compose.canvas-migration-contract.yml build --pull migration-contract
 
       - name: Exercise upgrade and exact downgrade restoration
@@ -196,11 +188,6 @@ jobs:
         with:
           path: marty-credentials
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          repository: ElevenID/marty-core
-          path: marty-core
-
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
@@ -215,7 +202,14 @@ jobs:
 
       - name: Build Python package
         working-directory: marty-credentials/rust/marty-rs
-        run: maturin develop --features python
+        run: maturin build --locked --features python --interpreter python --out dist
+
+      - name: Install Python bindings
+        working-directory: marty-credentials/rust/marty-rs
+        run: >-
+          python -c "import pathlib, subprocess, sys;
+          subprocess.check_call([sys.executable, '-m', 'pip', 'install',
+          str(next(pathlib.Path('dist').glob('*.whl')))])"
 
       - name: Install Python package
         working-directory: marty-credentials
@@ -240,24 +234,19 @@ jobs:
         with:
           path: marty-credentials
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          repository: ElevenID/marty-core
-          path: marty-core
-
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
 
       - name: Build WASM (web target)
-        run: wasm-pack build --target web --features wasm
+        run: wasm-pack build --locked --target web --features wasm
 
       - name: Build WASM (nodejs target)
-        run: wasm-pack build --target nodejs --features wasm
+        run: wasm-pack build --locked --target nodejs --features wasm
 
       - name: Build WASM (bundler target)
-        run: wasm-pack build --target bundler --features wasm
+        run: wasm-pack build --locked --target bundler --features wasm
 
       - name: Test WASM
         run: wasm-pack test --node --features wasm

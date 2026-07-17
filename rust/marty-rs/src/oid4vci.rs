@@ -11,8 +11,8 @@ use marty_oid4vci::formats;
 use marty_oid4vci::issuer::IssuanceEngine;
 use marty_oid4vci::metadata;
 use marty_oid4vci::types::{
-    CredentialClaims, CredentialFormat, CredentialTypeConfig, ClaimDefinition,
-    IssuerConfig, IssuerKey, OfferConfig, SigningAlgorithm, ZkPredicateBinding,
+    ClaimDefinition, CredentialClaims, CredentialFormat, CredentialTypeConfig, IssuerConfig,
+    IssuerKey, OfferConfig, SigningAlgorithm, ZkPredicateBinding,
 };
 use marty_oid4vci::verifier::VerificationEngine;
 
@@ -51,12 +51,9 @@ pub fn create_verifiable_credential(
     mdoc_doctype: Option<String>,
     zk_predicate_claims: Option<Vec<String>>,
 ) -> PyResult<(String, String)> {
-    let claims: HashMap<String, serde_json::Value> = serde_json::from_str(&claims_json)
-        .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Invalid claims JSON: {}",
-                e
-            ))
+    let claims: HashMap<String, serde_json::Value> =
+        serde_json::from_str(&claims_json).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid claims JSON: {}", e))
         })?;
 
     let cred_format = CredentialFormat::from_str_loose(format).ok_or_else(|| {
@@ -75,10 +72,8 @@ pub fn create_verifiable_credential(
         algorithm,
     };
 
-    let zk_predicate_bindings = normalize_zk_predicate_claims(
-        &claims,
-        zk_predicate_claims.unwrap_or_default(),
-    );
+    let zk_predicate_bindings =
+        normalize_zk_predicate_claims(&claims, zk_predicate_claims.unwrap_or_default());
 
     let cred_claims = CredentialClaims {
         subject_id,
@@ -100,15 +95,13 @@ pub fn create_verifiable_credential(
     let credential_str = match &signed {
         marty_oid4vci::types::SignedCredential::JwtVcJson { jwt, .. } => jwt.clone(),
         marty_oid4vci::types::SignedCredential::SdJwt { compact, .. } => compact.clone(),
-        marty_oid4vci::types::SignedCredential::MsoMdoc { issuer_signed_b64, .. } => {
-            issuer_signed_b64.clone()
-        }
-        marty_oid4vci::types::SignedCredential::ZkMdoc { issuer_signed_b64, .. } => {
-            issuer_signed_b64.clone()
-        }
-        marty_oid4vci::types::SignedCredential::VdsNc { barcode_data, .. } => {
-            barcode_data.clone()
-        }
+        marty_oid4vci::types::SignedCredential::MsoMdoc {
+            issuer_signed_b64, ..
+        } => issuer_signed_b64.clone(),
+        marty_oid4vci::types::SignedCredential::ZkMdoc {
+            issuer_signed_b64, ..
+        } => issuer_signed_b64.clone(),
+        marty_oid4vci::types::SignedCredential::VdsNc { barcode_data, .. } => barcode_data.clone(),
     };
 
     Ok((credential_str, signed.credential_id().to_string()))
@@ -134,7 +127,9 @@ fn normalize_zk_predicate_claims(
     let mut all_json_bindings = true;
     for item in &raw {
         match serde_json::from_str::<ZkPredicateBinding>(item) {
-            Ok(binding) if !binding.claim_name.is_empty() && !binding.supported_predicates.is_empty() => {
+            Ok(binding)
+                if !binding.claim_name.is_empty() && !binding.supported_predicates.is_empty() =>
+            {
                 json_bindings.push(binding);
             }
             _ => {
@@ -180,7 +175,10 @@ fn normalize_zk_predicate_claims(
             return vec![ZkPredicateBinding::multi("birth_date", predicates)];
         }
         if let Some(first_claim_name) = claims.keys().next() {
-            return vec![ZkPredicateBinding::multi(first_claim_name.clone(), predicates)];
+            return vec![ZkPredicateBinding::multi(
+                first_claim_name.clone(),
+                predicates,
+            )];
         }
     }
 
@@ -277,8 +275,8 @@ pub fn generate_issuer_metadata(
     issuer_name: String,
     credential_types_json: String,
 ) -> PyResult<String> {
-    let raw_types: Vec<serde_json::Value> = serde_json::from_str(&credential_types_json)
-        .map_err(|e| {
+    let raw_types: Vec<serde_json::Value> =
+        serde_json::from_str(&credential_types_json).map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Invalid credential types JSON: {}",
                 e
@@ -309,9 +307,7 @@ pub fn generate_issuer_metadata(
                 .get("format")
                 .and_then(|v| v.as_str())
                 .unwrap_or("jwt_vc_json");
-            vec![
-                CredentialFormat::from_str_loose(fmt_str).unwrap_or(CredentialFormat::JwtVcJson),
-            ]
+            vec![CredentialFormat::from_str_loose(fmt_str).unwrap_or(CredentialFormat::JwtVcJson)]
         };
 
         // Parse claims
@@ -401,10 +397,7 @@ pub fn create_presentation_definition(
 ///
 /// Returns JSON string with (presentation_definition, challenge_session_id, nonce).
 #[pyfunction]
-pub fn create_zk_age_verification(
-    verifier_id: String,
-    response_uri: String,
-) -> PyResult<String> {
+pub fn create_zk_age_verification(verifier_id: String, response_uri: String) -> PyResult<String> {
     let engine = VerificationEngine::new(verifier_id, response_uri);
 
     let challenge = engine
@@ -531,13 +524,22 @@ pub fn verify_vp_token_jwt(
 
 /// Register OID4VCI/OID4VP functions as a sub-module.
 pub fn register_oid4vci_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
-    parent.add_function(pyo3::wrap_pyfunction!(create_verifiable_credential, parent)?)?;
+    parent.add_function(pyo3::wrap_pyfunction!(
+        create_verifiable_credential,
+        parent
+    )?)?;
     parent.add_function(pyo3::wrap_pyfunction!(create_credential_offer, parent)?)?;
     parent.add_function(pyo3::wrap_pyfunction!(generate_offer_uri, parent)?)?;
     parent.add_function(pyo3::wrap_pyfunction!(generate_issuer_metadata, parent)?)?;
-    parent.add_function(pyo3::wrap_pyfunction!(create_presentation_definition, parent)?)?;
+    parent.add_function(pyo3::wrap_pyfunction!(
+        create_presentation_definition,
+        parent
+    )?)?;
     parent.add_function(pyo3::wrap_pyfunction!(create_zk_age_verification, parent)?)?;
-    parent.add_function(pyo3::wrap_pyfunction!(verify_presentation_structure, parent)?)?;
+    parent.add_function(pyo3::wrap_pyfunction!(
+        verify_presentation_structure,
+        parent
+    )?)?;
     parent.add_function(pyo3::wrap_pyfunction!(verify_vp_token_jwt, parent)?)?;
     Ok(())
 }

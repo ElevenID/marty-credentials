@@ -53,7 +53,7 @@ impl TokenStatusList {
 
         // Calculate byte size based on bits per entry
         let entries_per_byte = 8 / bits as usize;
-        let byte_size = (size + entries_per_byte - 1) / entries_per_byte;
+        let byte_size = size.div_ceil(entries_per_byte);
 
         Ok(Self {
             bits,
@@ -80,7 +80,7 @@ impl TokenStatusList {
         let entries_per_byte = 8 / self.bits as usize;
         let byte_index = index / entries_per_byte;
         let bit_offset = (index % entries_per_byte) * self.bits as usize;
-        let mask = (1u8 << self.bits) - 1;
+        let mask = ((1u16 << self.bits) - 1) as u8;
 
         let value = (self.data[byte_index] >> (8 - self.bits as usize - bit_offset)) & mask;
         Ok(value)
@@ -110,7 +110,7 @@ impl TokenStatusList {
         let entries_per_byte = 8 / self.bits as usize;
         let byte_index = index / entries_per_byte;
         let bit_offset = (index % entries_per_byte) * self.bits as usize;
-        let mask = (1u8 << self.bits) - 1;
+        let mask = ((1u16 << self.bits) - 1) as u8;
 
         // Clear existing bits
         self.data[byte_index] &= !(mask << (8 - self.bits as usize - bit_offset));
@@ -256,7 +256,7 @@ impl BitstringStatusList {
     /// A new BitstringStatusList with all entries set to 0 (not revoked)
     #[new]
     pub fn new(size: usize) -> Self {
-        let byte_size = (size + 7) / 8;
+        let byte_size = size.div_ceil(8);
         Self {
             data: vec![0u8; byte_size],
             size,

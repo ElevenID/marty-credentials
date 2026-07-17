@@ -22,7 +22,7 @@
 //! # Example
 //!
 //! ```rust
-//! use marty_rs::error::{MartyError, MartyResult};
+//! use _marty_rs::{MartyError, MartyResult};
 //!
 //! fn sign_credential(data: &[u8]) -> MartyResult<Vec<u8>> {
 //!     // ... operation that might fail
@@ -746,7 +746,7 @@ impl From<base64::DecodeError> for MartyError {
 /// # Example
 ///
 /// ```rust
-/// use marty_rs::error::init_tracing;
+/// use _marty_rs::init_tracing;
 /// init_tracing();
 /// ```
 pub fn init_tracing() {

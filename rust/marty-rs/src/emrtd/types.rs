@@ -43,7 +43,10 @@ impl EmrtdIssuanceRequest {
         Self {
             country_code: country_code.into(),
             organization: org.into(),
-            data_groups: vec![EmrtdDataGroup { number: 1, content: dg1 }],
+            data_groups: vec![EmrtdDataGroup {
+                number: 1,
+                content: dg1,
+            }],
         }
     }
 }

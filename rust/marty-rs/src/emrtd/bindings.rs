@@ -5,10 +5,12 @@
 //! - `issue_emrtd_passport(request_json, csca_cert_pem, csca_key_pem) -> str`
 //! - `issue_emrtd_passport_self_signed(request_json) -> str`
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 
-use super::issuance::{issue_emrtd_passport as issue, issue_emrtd_passport_self_signed as issue_self_signed};
+use super::issuance::{
+    issue_emrtd_passport as issue, issue_emrtd_passport_self_signed as issue_self_signed,
+};
 use super::types::EmrtdIssuanceRequest;
 
 /// Issue an eMRTD credential using an existing CSCA.
@@ -64,7 +66,7 @@ pub fn issue_emrtd_passport_self_signed(request_json: &str) -> PyResult<String> 
 // ============================================================================
 
 fn pem_to_der(pem: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let (_, der) = pem_rfc7468::decode_vec(pem.as_bytes())
-        .map_err(|e| format!("PEM decode error: {e}"))?;
+    let (_, der) =
+        pem_rfc7468::decode_vec(pem.as_bytes()).map_err(|e| format!("PEM decode error: {e}"))?;
     Ok(der)
 }

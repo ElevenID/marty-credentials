@@ -47,7 +47,6 @@ tests/artifacts/canvas-portable-migration/*
 
 # Rust
 target/
-Cargo.lock
 *.rlib
 
 # WASM build artifacts

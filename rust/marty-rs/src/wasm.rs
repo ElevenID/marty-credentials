@@ -6,10 +6,9 @@
 //! Build with: wasm-pack build --target web --features wasm --no-default-features
 
 use base64::Engine;
-use serde::{Deserialize, Serialize};
+use marty_verification::error::VerificationError;
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
-use marty_verification::error::VerificationError;
 
 // Set up console error panic hook for better debugging
 #[wasm_bindgen(start)]
@@ -48,7 +47,7 @@ pub fn generate_p256_key() -> Result<String, JsValue> {
     let did = format!("did:jwk:{}", encoded);
     let key_id = format!(
         "key_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..16]
     );
 
     let result = serde_json::json!({
@@ -81,7 +80,7 @@ pub fn generate_ed25519_key() -> Result<String, JsValue> {
     let did = format!("did:key:z{}", bs58::encode(multicodec).into_string());
     let key_id = format!(
         "key_{}",
-        uuid::Uuid::new_v4().to_string().replace("-", "")[..16].to_string()
+        &uuid::Uuid::new_v4().to_string().replace("-", "")[..16]
     );
 
     let result = serde_json::json!({
@@ -245,8 +244,7 @@ pub fn create_credential_offer(
 /// JSON: { "issued": true, "version": "2.0", "credential": {...}, "warnings": [...] }
 #[wasm_bindgen]
 pub fn open_badge_ob2_issue(request_json: &str) -> Result<String, JsValue> {
-    marty_verification::open_badges::issue_ob2_json(request_json)
-        .map_err(verification_error_to_js)
+    marty_verification::open_badges::issue_ob2_json(request_json).map_err(verification_error_to_js)
 }
 
 /// Verify an Open Badges v2 assertion.
@@ -258,8 +256,7 @@ pub fn open_badge_ob2_issue(request_json: &str) -> Result<String, JsValue> {
 /// JSON: { "valid": true|false, "version": "2.0", "errors": [...], "warnings": [...] }
 #[wasm_bindgen]
 pub fn open_badge_ob2_verify(request_json: &str) -> Result<String, JsValue> {
-    marty_verification::open_badges::verify_ob2_json(request_json)
-        .map_err(verification_error_to_js)
+    marty_verification::open_badges::verify_ob2_json(request_json).map_err(verification_error_to_js)
 }
 
 /// Issue an Open Badges v3 credential with Data Integrity proof.
@@ -303,8 +300,7 @@ pub async fn open_badge_ob3_verify(request_json: &str) -> Result<String, JsValue
 /// JSON: normalized DTC record
 #[wasm_bindgen]
 pub fn dtc_create(request_json: &str) -> Result<String, JsValue> {
-    marty_verification::dtc::create_dtc_json(request_json)
-        .map_err(verification_error_to_js)
+    marty_verification::dtc::create_dtc_json(request_json).map_err(verification_error_to_js)
 }
 
 /// Sign a DTC payload (JSON in/out).
@@ -316,8 +312,7 @@ pub fn dtc_create(request_json: &str) -> Result<String, JsValue> {
 /// JSON: signed DTC record
 #[wasm_bindgen]
 pub fn dtc_sign(request_json: &str) -> Result<String, JsValue> {
-    marty_verification::dtc::sign_dtc_json(request_json)
-        .map_err(verification_error_to_js)
+    marty_verification::dtc::sign_dtc_json(request_json).map_err(verification_error_to_js)
 }
 
 /// Verify a DTC payload (JSON in/out).
@@ -329,8 +324,7 @@ pub fn dtc_sign(request_json: &str) -> Result<String, JsValue> {
 /// JSON: verification result
 #[wasm_bindgen]
 pub fn dtc_verify(request_json: &str) -> Result<String, JsValue> {
-    marty_verification::dtc::verify_dtc_json(request_json)
-        .map_err(verification_error_to_js)
+    marty_verification::dtc::verify_dtc_json(request_json).map_err(verification_error_to_js)
 }
 
 /// Generate a credential offer URI for QR code display

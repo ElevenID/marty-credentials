@@ -41,7 +41,6 @@ pub use marty_verification::{
     Jurisdiction, MdlVerificationResult, SignatureStatus, TrustAnchor, TrustPurpose, TrustRegistry,
 };
 
-
 // =============================================================================
 // Python bindings (only compiled with python feature)
 // =============================================================================
@@ -122,10 +121,13 @@ mod python_bindings {
     /// use_pss: If true, marks the key for RSA-PSS (PS256/384/512). If false, PKCS#1 v1.5 (RS256/384/512).
     #[pyfunction]
     #[pyo3(signature = (key_size=2048, use_pss=false))]
-    pub fn generate_rsa_key(key_size: Option<u32>, use_pss: Option<bool>) -> PyResult<(String, String)> {
-        use ssi::jwk::{Algorithm, RSAParams};
-        use rsa::{RsaPrivateKey, traits::PublicKeyParts, traits::PrivateKeyParts};
+    pub fn generate_rsa_key(
+        key_size: Option<u32>,
+        use_pss: Option<bool>,
+    ) -> PyResult<(String, String)> {
         use rand::rngs::OsRng;
+        use rsa::{traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey};
+        use ssi::jwk::{Algorithm, RSAParams};
 
         let bits = key_size.unwrap_or(2048);
         if bits != 2048 && bits != 3072 && bits != 4096 {
@@ -134,8 +136,12 @@ mod python_bindings {
             ));
         }
 
-        let private_key = RsaPrivateKey::new(&mut OsRng, bits as usize)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("RSA key generation failed: {}", e)))?;
+        let private_key = RsaPrivateKey::new(&mut OsRng, bits as usize).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "RSA key generation failed: {}",
+                e
+            ))
+        })?;
 
         // Convert to JWK format (SSI 0.12 uses descriptive field names)
         let n = private_key.n().to_bytes_be();
@@ -289,7 +295,7 @@ mod python_bindings {
         }
 
         let (_, alg_str) = get_algorithm_for_jwk(&jwk)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
         let header = serde_json::json!({ "alg": alg_str, "typ": "JWT" });
 
         let header_str = serde_json::to_string(&header).map_err(|e| {
@@ -312,7 +318,7 @@ mod python_bindings {
 
         let message = format!("{}.{}", header_b64, payload_b64);
         let signature = sign_message(&jwk, message.as_bytes())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e))?;
+            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
 
         Ok(format!("{}.{}", message, signature))
     }

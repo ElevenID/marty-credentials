@@ -9,16 +9,16 @@
 //! | [`issuance`]  | `issue_emrtd_passport`, `issue_emrtd_passport_self_signed` |
 //! | [`bindings`]  | PyO3 `#[pyfunction]` wrappers                       |
 
-pub mod types;
 pub mod builder;
 pub mod issuance;
+pub mod types;
 
 #[cfg(feature = "python")]
 pub mod bindings;
 
-pub use types::{EmrtdCredential, EmrtdDataGroup, EmrtdIssuanceRequest};
 pub use builder::EmrtdPassportBuilder;
 pub use issuance::{issue_emrtd_passport, issue_emrtd_passport_self_signed};
+pub use types::{EmrtdCredential, EmrtdDataGroup, EmrtdIssuanceRequest};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

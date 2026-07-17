@@ -11,12 +11,12 @@ repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { version = "0.1.0", features = ["sod-builder"] }
-marty-verification = { version = "0.1.0" }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "bffe151c2b57550ad703345d55d37a0ca339e35e", features = ["sod-builder"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "bffe151c2b57550ad703345d55d37a0ca339e35e" }
 
 # PEM encoding
 pem-rfc7468 = { version = "0.7", features = ["alloc"] }
-marty-oid4vci = { version = "0.1.0" }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "bffe151c2b57550ad703345d55d37a0ca339e35e" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }

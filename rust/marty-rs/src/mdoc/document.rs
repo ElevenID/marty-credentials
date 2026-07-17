@@ -2,8 +2,8 @@
 
 use super::helpers::{create_issuer_auth, der_to_cose_signature};
 use ciborium::Value as CborValue;
-use isomdl::definitions::issuer_signed::IssuerSignedItem;
 use isomdl::definitions::helpers::{NonEmptyMap, NonEmptyVec, Tag24};
+use isomdl::definitions::issuer_signed::IssuerSignedItem;
 use pyo3::prelude::*;
 use std::collections::BTreeMap;
 
@@ -61,11 +61,8 @@ impl MdocPreparedForHsm {
         let issuer_auth = create_issuer_auth(&self.tbs_data, &cose_signature)?;
 
         // Build DeviceResponse structure
-        let cbor_bytes = build_device_response(
-            &self.doc_type,
-            &self.issuer_signed_items,
-            &issuer_auth,
-        )?;
+        let cbor_bytes =
+            build_device_response(&self.doc_type, &self.issuer_signed_items, &issuer_auth)?;
 
         Ok(MdocSignedDocument {
             doc_type: self.doc_type.clone(),
@@ -83,7 +80,7 @@ fn build_device_response(
     issuer_auth: &[u8],
 ) -> PyResult<Vec<u8>> {
     // Parse issuer_auth as CBOR value (keep it as-is for issuer_auth field)
-    let issuer_auth_cbor: CborValue = ciborium::from_reader(&issuer_auth[..]).map_err(|e| {
+    let issuer_auth_cbor: CborValue = ciborium::from_reader(issuer_auth).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
             "Failed to parse issuer_auth: {}",
             e
@@ -93,22 +90,23 @@ fn build_device_response(
     // Build namespaces map with Tag24-wrapped items using isomdl types
     let mut namespaces = BTreeMap::new();
     for (ns_name, items) in issuer_signed_items {
-        let tagged_items: Result<Vec<Tag24<IssuerSignedItem>>, _> = items
-            .iter()
-            .map(|item| Tag24::new(item.clone()))
-            .collect();
-        
+        let tagged_items: Result<Vec<Tag24<IssuerSignedItem>>, _> =
+            items.iter().map(|item| Tag24::new(item.clone())).collect();
+
         let tagged_items = tagged_items.map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Failed to create Tag24: {}", e))
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Failed to create Tag24: {}",
+                e
+            ))
         })?;
-        
+
         let items_vec = NonEmptyVec::try_from(tagged_items).map_err(|_| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>("Namespace must have at least one item")
         })?;
-        
+
         namespaces.insert(ns_name.clone(), items_vec);
     }
-    
+
     let namespaces_map = NonEmptyMap::try_from(namespaces).map_err(|_| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>("Must have at least one namespace")
     })?;
@@ -118,10 +116,16 @@ fn build_device_response(
         (CborValue::Text("nameSpaces".to_string()), {
             // Let isomdl serialize the NonEmptyMap with proper Tag24 wrapping
             let mut ns_bytes = Vec::new();
-            ciborium::ser::into_writer(&namespaces_map, &mut ns_bytes)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("CBOR serialization failed: {e}")))?;
-            ciborium::from_reader(&ns_bytes[..])
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("CBOR round-trip failed: {e}")))?
+            ciborium::ser::into_writer(&namespaces_map, &mut ns_bytes).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "CBOR serialization failed: {e}"
+                ))
+            })?;
+            ciborium::from_reader(&ns_bytes[..]).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "CBOR round-trip failed: {e}"
+                ))
+            })?
         }),
         (CborValue::Text("issuerAuth".to_string()), issuer_auth_cbor),
     ]);
@@ -132,37 +136,67 @@ fn build_device_response(
     let empty_device_namespaces = {
         let empty_map = BTreeMap::<String, Vec<u8>>::new();
         let mut bytes = Vec::new();
-        ciborium::ser::into_writer(&empty_map, &mut bytes)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("CBOR serialization failed: {e}")))?;
+        ciborium::ser::into_writer(&empty_map, &mut bytes).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "CBOR serialization failed: {e}"
+            ))
+        })?;
         bytes
     };
-    
+
     // Create minimal COSE_Sign1 structure [protected, unprotected, payload, signature]
     // Tag 18 is COSE_Sign1 per RFC 8152
-    let empty_cose_sign1 = CborValue::Tag(18, Box::new(CborValue::Array(vec![
-        CborValue::Bytes(vec![]), // empty protected headers
-        CborValue::Map(vec![]),  // empty unprotected headers
-        CborValue::Null,  // no payload for device auth
-        CborValue::Bytes(vec![]), // empty signature (for testing)
-    ])));
-    
-    let document_cbor = CborValue::Map(vec![
-        (CborValue::Text("docType".to_string()), CborValue::Text(doc_type.to_string())),
-        (CborValue::Text("issuerSigned".to_string()), issuer_signed_cbor),
-        (CborValue::Text("deviceSigned".to_string()), CborValue::Map(vec![
-            (CborValue::Text("nameSpaces".to_string()), 
-             CborValue::Tag(24, Box::new(CborValue::Bytes(empty_device_namespaces)))),
-            (CborValue::Text("deviceAuth".to_string()), CborValue::Map(vec![
-                (CborValue::Text("deviceSignature".to_string()), empty_cose_sign1),
-            ])),
+    let empty_cose_sign1 = CborValue::Tag(
+        18,
+        Box::new(CborValue::Array(vec![
+            CborValue::Bytes(vec![]), // empty protected headers
+            CborValue::Map(vec![]),   // empty unprotected headers
+            CborValue::Null,          // no payload for device auth
+            CborValue::Bytes(vec![]), // empty signature (for testing)
         ])),
+    );
+
+    let document_cbor = CborValue::Map(vec![
+        (
+            CborValue::Text("docType".to_string()),
+            CborValue::Text(doc_type.to_string()),
+        ),
+        (
+            CborValue::Text("issuerSigned".to_string()),
+            issuer_signed_cbor,
+        ),
+        (
+            CborValue::Text("deviceSigned".to_string()),
+            CborValue::Map(vec![
+                (
+                    CborValue::Text("nameSpaces".to_string()),
+                    CborValue::Tag(24, Box::new(CborValue::Bytes(empty_device_namespaces))),
+                ),
+                (
+                    CborValue::Text("deviceAuth".to_string()),
+                    CborValue::Map(vec![(
+                        CborValue::Text("deviceSignature".to_string()),
+                        empty_cose_sign1,
+                    )]),
+                ),
+            ]),
+        ),
     ]);
 
     // Wrap in DeviceResponse for test compatibility
     let device_response_cbor = CborValue::Map(vec![
-        (CborValue::Text("version".to_string()), CborValue::Text("1.0".to_string())),
-        (CborValue::Text("documents".to_string()), CborValue::Array(vec![document_cbor])),
-        (CborValue::Text("status".to_string()), CborValue::Integer(0.into())),
+        (
+            CborValue::Text("version".to_string()),
+            CborValue::Text("1.0".to_string()),
+        ),
+        (
+            CborValue::Text("documents".to_string()),
+            CborValue::Array(vec![document_cbor]),
+        ),
+        (
+            CborValue::Text("status".to_string()),
+            CborValue::Integer(0.into()),
+        ),
     ]);
 
     // Serialize DeviceResponse to CBOR bytes

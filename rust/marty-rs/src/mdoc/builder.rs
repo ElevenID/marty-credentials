@@ -33,11 +33,7 @@ impl MdocBuilder {
     }
 
     /// Add a namespace with claims
-    pub fn add_namespace(
-        &mut self,
-        namespace: String,
-        claims: &Bound<'_, PyDict>,
-    ) -> PyResult<()> {
+    pub fn add_namespace(&mut self, namespace: String, claims: &Bound<'_, PyDict>) -> PyResult<()> {
         let mut namespace_claims = BTreeMap::new();
 
         for (key, value) in claims.iter() {

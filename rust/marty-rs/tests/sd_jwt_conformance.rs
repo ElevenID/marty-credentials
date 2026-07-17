@@ -15,11 +15,11 @@
 //!  §6  Key binding JWT — bound SD-JWT has KB-JWT appended
 //!  §7  Verification — SDJWTVerifier accepts valid presentations
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use jsonwebtoken::{EncodingKey, Header};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use jsonwebtoken::EncodingKey;
 use sd_jwt_rs::{
     issuer::ClaimsForSelectiveDisclosureStrategy, SDJWTHolder, SDJWTIssuer,
-    SDJWTSerializationFormat, SDJWTVerifier,
+    SDJWTSerializationFormat,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -34,13 +34,15 @@ fn test_ec_key_pem() -> String {
 
     // Fixed 32-byte seed for reproducibility across test runs.
     let seed = [
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20u8,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20u8,
     ];
     let secret = SecretKey::from_bytes((&seed).into()).expect("fixed test key");
-    secret.to_pkcs8_pem(p256::pkcs8::LineEnding::LF).expect("to PEM").to_string()
+    secret
+        .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
+        .expect("to PEM")
+        .to_string()
 }
 
 fn make_issuer(alg: &str) -> SDJWTIssuer {
@@ -161,10 +163,7 @@ fn disclosure_is_base64url_of_json_array() {
     let parts: Vec<&str> = sd_jwt.split('~').collect();
     // Middle parts are disclosures
     let disclosures: Vec<&str> = parts[1..parts.len() - 1].to_vec();
-    assert!(
-        !disclosures.is_empty(),
-        "must have at least one disclosure"
-    );
+    assert!(!disclosures.is_empty(), "must have at least one disclosure");
 
     for disc_b64 in disclosures {
         let decoded = URL_SAFE_NO_PAD
@@ -252,7 +251,9 @@ fn payload_sd_array_contains_disclosure_hashes() {
 
     // Decode the JWS payload (part 1)
     let payload_b64 = jws_parts[1];
-    let payload_bytes = URL_SAFE_NO_PAD.decode(payload_b64).expect("payload base64url");
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .expect("payload base64url");
     let payload: Value = serde_json::from_slice(&payload_bytes).expect("payload json");
 
     // Must have `_sd` array
@@ -382,11 +383,11 @@ fn holder_discloses_one_of_two_claims() {
     let mut claims_to_disclose = Map::new();
     claims_to_disclose.insert("given_name".to_string(), Value::Bool(true));
 
-    let holder = SDJWTHolder::new(sd_jwt, SDJWTSerializationFormat::Compact)
-        .expect("SDJWTHolder");
+    let mut holder =
+        SDJWTHolder::new(sd_jwt, SDJWTSerializationFormat::Compact).expect("SDJWTHolder");
     let presentation = holder
         .create_presentation(
-            Value::Object(claims_to_disclose),
+            claims_to_disclose,
             None, // no nonce
             None, // no audience
             None, // no holder key
@@ -417,11 +418,11 @@ fn holder_discloses_nothing() {
         )
         .expect("issue");
 
-    let holder = SDJWTHolder::new(sd_jwt, SDJWTSerializationFormat::Compact)
-        .expect("SDJWTHolder");
+    let mut holder =
+        SDJWTHolder::new(sd_jwt, SDJWTSerializationFormat::Compact).expect("SDJWTHolder");
     let presentation = holder
         .create_presentation(
-            Value::Object(Map::new()), // disclose nothing
+            Map::new(), // disclose nothing
             None,
             None,
             None,

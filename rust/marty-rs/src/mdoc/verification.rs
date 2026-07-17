@@ -14,22 +14,36 @@ impl DeviceResponse {
     /// Parse a DeviceResponse from CBOR bytes
     #[staticmethod]
     pub fn from_cbor(cbor_bytes: Vec<u8>) -> PyResult<Self> {
-        let response = marty_verification::mdoc::parse_device_response(&cbor_bytes)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to parse DeviceResponse: {}", e)))?;
-        
+        let response =
+            marty_verification::mdoc::parse_device_response(&cbor_bytes).map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to parse DeviceResponse: {}",
+                    e
+                ))
+            })?;
+
         Ok(Self { inner: response })
     }
 
     /// Get all document types in this response
     pub fn document_types(&self) -> PyResult<Vec<String>> {
-        Ok(self.inner.documents.iter().map(|d| d.doc_type.clone()).collect())
+        Ok(self
+            .inner
+            .documents
+            .iter()
+            .map(|d| d.doc_type.clone())
+            .collect())
     }
 
     /// Get all fields from the mDL namespace as a dictionary
     pub fn get_mdl_fields(&self, py: Python) -> PyResult<PyObject> {
-        let fields = self.inner.get_mdl_fields()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to extract fields: {}", e)))?;
-        
+        let fields = self.inner.get_mdl_fields().map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to extract fields: {}",
+                e
+            ))
+        })?;
+
         let result = PyDict::new_bound(py);
         for (key, value) in fields {
             let py_value = json_to_python(py, &value)?;
@@ -64,7 +78,7 @@ impl DeviceResponse {
     /// Get all namespaces and their items
     pub fn get_all_namespaces(&self, py: Python) -> PyResult<PyObject> {
         let result = PyDict::new_bound(py);
-        
+
         for doc in &self.inner.documents {
             for (ns_name, items) in &doc.namespaces {
                 let ns_dict = PyDict::new_bound(py);
@@ -75,7 +89,7 @@ impl DeviceResponse {
                 result.set_item(ns_name, ns_dict)?;
             }
         }
-        
+
         Ok(result.into())
     }
 }
@@ -89,12 +103,17 @@ pub fn parse_device_response(cbor_bytes: Vec<u8>) -> PyResult<DeviceResponse> {
 /// Verify an mDoc and return the extracted fields
 #[pyfunction]
 pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<PyObject> {
-    let response = marty_verification::mdoc::parse_device_response(&cbor_bytes)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to parse: {}", e)))?;
-    
-    let fields = response.get_mdl_fields()
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to extract fields: {}", e)))?;
-    
+    let response = marty_verification::mdoc::parse_device_response(&cbor_bytes).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Failed to parse: {}", e))
+    })?;
+
+    let fields = response.get_mdl_fields().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "Failed to extract fields: {}",
+            e
+        ))
+    })?;
+
     let result = PyDict::new_bound(py);
     for (key, value) in fields {
         let py_value = json_to_python(py, &value)?;
@@ -106,7 +125,7 @@ pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<PyObject> {
 /// Convert serde_json::Value to Python object
 fn json_to_python(py: Python, value: &serde_json::Value) -> PyResult<PyObject> {
     use serde_json::Value;
-    
+
     match value {
         Value::Null => Ok(py.None()),
         Value::Bool(b) => Ok(b.to_object(py)),
@@ -220,9 +239,9 @@ pub fn verify_mdoc_signature(
             last_error = Some("No issuer certificate in cert chain".to_string());
             continue;
         }
-        
+
         let issuer_cert_der = &doc.issuer_cert_chain[0];
-        
+
         // Get MSO from document
         let mso = match &doc.mso {
             Some(m) => m,
@@ -239,7 +258,9 @@ pub fn verify_mdoc_signature(
                 // Signature is valid, now check if issuer is trusted
                 if !trusted_certs_der.is_empty() {
                     // Check if issuer cert matches any trusted cert
-                    issuer_verified = trusted_certs_der.iter().any(|trusted| trusted == issuer_cert_der);
+                    issuer_verified = trusted_certs_der
+                        .iter()
+                        .any(|trusted| trusted == issuer_cert_der);
                     if !issuer_verified {
                         // Try to verify cert chain
                         // TODO: Implement full chain verification using marty-verification
