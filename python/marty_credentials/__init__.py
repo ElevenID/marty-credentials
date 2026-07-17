@@ -4,7 +4,7 @@ Marty Credentials
 Credential domain logic and adapters for the Marty ecosystem.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # Core types
