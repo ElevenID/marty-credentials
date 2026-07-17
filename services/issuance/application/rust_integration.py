@@ -181,15 +181,20 @@ def get_marty_rs():
         ImportError: If marty-rs bindings are not available.
     """
     try:
-        import _marty_rs
+        from marty_rs import _marty_rs
 
         return _marty_rs
     except ImportError as e:
-        logger.error("marty-rs bindings not available - credential signing will fail")
-        raise ImportError(
-            "marty-rs Python bindings are required for credential signing. "
-            "Ensure the marty-bindings crate is built and installed."
-        ) from e
+        try:
+            import _marty_rs
+
+            return _marty_rs
+        except ImportError:
+            logger.error("marty-rs bindings not available - credential signing will fail")
+            raise ImportError(
+                "marty-rs Python bindings are required for credential signing. "
+                "Ensure the marty-bindings crate is built and installed."
+            ) from e
 
 
 REQUIRED_MARTY_RS_CAPABILITIES = frozenset(

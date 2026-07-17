@@ -48,11 +48,7 @@ jobs:
           jq -e '.schema == "marty.release-dependencies/v1"' release/dependencies.json >/dev/null
           mkdir release-deps
 
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --pattern 'marty_rs-*-manylinux*x86_64.whl' --dir release-deps
-          marty_rs_wheel="$(basename "$(compgen -G 'release-deps/marty_rs-*-manylinux*x86_64.whl')")"
-
-          for dependency in marty-msf marty-common; do
+          for dependency in marty-rs marty-msf marty-common; do
             repository=$(jq -r ".[\"$dependency\"].repository" release/dependencies.json)
             release_tag=$(jq -r ".[\"$dependency\"].tag" release/dependencies.json)
             asset=$(jq -r ".[\"$dependency\"].asset" release/dependencies.json)
@@ -62,10 +58,10 @@ jobs:
           done
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "marty_rs_wheel=$marty_rs_wheel" >> "$GITHUB_OUTPUT"
+          echo "marty_rs_wheel=$(jq -r '.["marty-rs"].asset' release/dependencies.json)" >> "$GITHUB_OUTPUT"
           echo "marty_msf_wheel=$(jq -r '.["marty-msf"].asset' release/dependencies.json)" >> "$GITHUB_OUTPUT"
           echo "marty_common_wheel=$(jq -r '.["marty-common"].asset' release/dependencies.json)" >> "$GITHUB_OUTPUT"
-          echo "marty_rs_sha256=$(sha256sum "release-deps/$marty_rs_wheel" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "marty_rs_sha256=$(jq -r '.["marty-rs"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
           echo "marty_msf_sha256=$(jq -r '.["marty-msf"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
           echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
