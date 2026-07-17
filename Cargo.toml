@@ -19,7 +19,7 @@ pem-rfc7468 = { version = "0.7", features = ["alloc"] }
 marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", tag = "v0.1.1" }
 
 # PyO3 for Python bindings
-pyo3 = { version = "0.22.6", features = ["extension-module", "abi3-py311"] }
+pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
 
 # SSI ecosystem
 ssi = { version = "0.16.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1", "rsa"] }
