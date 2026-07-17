@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -46,10 +47,21 @@ def test_native_extension_capability_contract_accepts_complete_module(monkeypatc
     rust_integration.validate_marty_rs_capabilities()
 
 
-def test_native_extension_uses_maturin_package_name(monkeypatch) -> None:
+def test_native_extension_uses_marty_core_package_name(monkeypatch) -> None:
     from issuance.application import rust_integration
 
     extension = SimpleNamespace()
+    package = SimpleNamespace(_marty_rs=extension)
+    monkeypatch.setitem(sys.modules, "marty_rs", package)
+
+    assert rust_integration.get_marty_rs() is extension
+
+
+def test_native_extension_supports_legacy_top_level_module(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    extension = SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "marty_rs", None)
     monkeypatch.setitem(sys.modules, "_marty_rs", extension)
 
     assert rust_integration.get_marty_rs() is extension
@@ -66,7 +78,11 @@ def test_native_extension_capability_contract_rejects_incomplete_module(monkeypa
 
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
 
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
+    assert "validate_marty_rs_capabilities()" in dockerfile
     assert "COPY marty-core/" not in dockerfile
+    assert dependencies["marty-rs"]["repository"] == "ElevenID/marty-core"
+    assert dependencies["marty-rs"]["asset"].startswith("marty_rs-")
