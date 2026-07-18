@@ -56,7 +56,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6
         with:
           name: marty-credentials-python
           path: dist
@@ -70,7 +70,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6
         with:
           pattern: marty-rs-*
           path: dist
@@ -86,7 +86,7 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6
         with:
           pattern: marty-*
           path: release
