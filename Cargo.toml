@@ -26,7 +26,7 @@ ssi-crypto = { version = "0.2.1", default-features = false, features = ["secp256
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1"] }
 ssi-status = { version = "0.8.1", default-features = false }
 isomdl = { version = "0.2" }
-coset = { version = "0.3" }
+coset = { version = "0.4" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # SD-JWT
