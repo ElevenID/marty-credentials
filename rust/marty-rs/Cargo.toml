@@ -114,7 +114,7 @@ jsonwebtoken = { workspace = true, optional = true }
 # Crypto for signatures
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"], optional = true }
 ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
-sha2 = { version = "0.10", optional = true }
+sha2 = { version = "0.11", optional = true }
 serde_cbor = { version = "0.11", optional = true }
 
 # From marty-core
