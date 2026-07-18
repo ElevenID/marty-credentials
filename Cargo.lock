@@ -1047,7 +1047,7 @@ dependencies = [
  "const-oid",
  "der_derive",
  "flagset",
- "pem-rfc7468",
+ "pem-rfc7468 0.7.0",
  "zeroize",
 ]
 
@@ -1369,7 +1369,7 @@ dependencies = [
  "generic-array",
  "group",
  "hkdf",
- "pem-rfc7468",
+ "pem-rfc7468 0.7.0",
  "pkcs8",
  "rand_core 0.6.4",
  "sec1",
@@ -2142,7 +2142,7 @@ dependencies = [
  "isomdl-macros",
  "p256",
  "p384",
- "pem-rfc7468",
+ "pem-rfc7468 0.7.0",
  "rand 0.8.7",
  "sec1",
  "serde",
@@ -2740,7 +2740,7 @@ dependencies = [
  "p384",
  "p521",
  "pbkdf2",
- "pem-rfc7468",
+ "pem-rfc7468 0.7.0",
  "pkcs5",
  "pkcs8",
  "rand 0.8.7",
@@ -2807,7 +2807,7 @@ dependencies = [
  "marty-verification",
  "openssl",
  "p256",
- "pem-rfc7468",
+ "pem-rfc7468 1.0.0",
  "pyo3",
  "rand 0.8.7",
  "rsa",
@@ -2860,7 +2860,7 @@ dependencies = [
  "p256",
  "p384",
  "p521",
- "pem-rfc7468",
+ "pem-rfc7468 0.7.0",
  "pkcs8",
  "rand 0.8.7",
  "reqwest",
@@ -3358,6 +3358,15 @@ name = "pem-rfc7468"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88b39c9bfcfc231068454382784bb460aae594343fb030d46e9f50a645418412"
+dependencies = [
+ "base64ct",
+]
+
+[[package]]
+name = "pem-rfc7468"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6305423e0e7738146434843d1694d621cce767262b2a86910beab705e4493d9"
 dependencies = [
  "base64ct",
 ]

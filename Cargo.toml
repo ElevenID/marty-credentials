@@ -15,7 +15,7 @@ marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "a60b081b
 marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "a60b081b6206724e0121da561372c4bb759aec97", default-features = false }
 
 # PEM encoding
-pem-rfc7468 = { version = "0.7", features = ["alloc"] }
+pem-rfc7468 = { version = "1.0", features = ["alloc"] }
 marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "a60b081b6206724e0121da561372c4bb759aec97" }
 
 # PyO3 for Python bindings
