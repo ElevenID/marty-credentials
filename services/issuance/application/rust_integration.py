@@ -405,8 +405,7 @@ async def create_sd_jwt_vc_with_remote_signing(
 
     Args:
         credential_format: OID4VCI format string (e.g. ``"spruce-vc+sd-jwt"``)
-            used in the credential response metadata.  The JWT ``typ`` header
-            is always ``"vc+sd-jwt"`` per RFC 9596 §3.2.1 regardless of this value.
+        used in the credential response metadata and JWT ``typ`` header.
     """
     claims = json.loads(claims_json or "{}")
     if not isinstance(claims, dict):
@@ -452,12 +451,12 @@ async def create_sd_jwt_vc_with_remote_signing(
         # Sort the _sd digests for deterministic output, matching sd-jwt-rs issuer behavior.
         payload["_sd"] = sorted(sd_hashes)
 
-    # RFC 9596 §3.2.1: the JWT typ header MUST be "vc+sd-jwt" for SD-JWT VCs.
-    # The credential_format (e.g. "spruce-vc+sd-jwt", "dc+sd-jwt") is the OID4VCI
-    # format identifier used in metadata/responses, NOT the JWT typ header.
+    # SD-JWT VC format identifiers must remain consistent with the OID4VCI
+    # credential configuration selected by the wallet. The Final OID4VCI
+    # profile exercised by the official suite requires ``dc+sd-jwt``.
     header = {
         "alg": algorithm or "ES256",
-        "typ": "vc+sd-jwt",
+        "typ": "dc+sd-jwt" if credential_format == "dc+sd-jwt" else "vc+sd-jwt",
         "kid": verification_method_id or _remote_issuer_kid(issuer_did, signing_service_id, signing_key_reference),
     }
     encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))

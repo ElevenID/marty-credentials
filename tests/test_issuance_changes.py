@@ -2366,7 +2366,7 @@ class TestRustIntegrationOrgIdValidation:
         payload = json.loads(base64url_decode(encoded_payload))
 
         assert header["kid"] == verification_method_id
-        assert header["typ"] == "vc+sd-jwt"
+        assert header["typ"] == "dc+sd-jwt"
         assert payload["cnf"]["jwk"] == {
             "kty": "EC",
             "crv": "P-256",
