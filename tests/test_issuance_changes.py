@@ -74,7 +74,7 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "scope": "default",
         "doctype": "org.iso.18013.5.1.mDL",
         "cryptographic_binding_methods_supported": ["did:key", "jwk"],
-        "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+        "credential_signing_alg_values_supported": [-7, -8],
         "proof_types_supported": {
             "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
         },

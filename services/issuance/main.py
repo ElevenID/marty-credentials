@@ -365,6 +365,7 @@ def create_app() -> FastAPI:
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
+        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
@@ -383,7 +384,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -497,6 +498,7 @@ def create_app() -> FastAPI:
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
+        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
@@ -514,7 +516,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -525,7 +527,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -563,6 +565,7 @@ def create_app() -> FastAPI:
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
+        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
 
         # Pull distinct credential types from the issuance DB — self-contained,
         # no external auth required, and grows automatically with new templates.
@@ -610,7 +613,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -654,7 +657,7 @@ def create_app() -> FastAPI:
                 "doctype": "org.iso.18013.5.1.mDL",
                 "scope": "mso_mdoc",
                 "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
+                "credential_signing_alg_values_supported": _mdoc_signing_algs,
                 "proof_types_supported": _proof_types,
                 "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
             }
@@ -734,7 +737,7 @@ def create_app() -> FastAPI:
                     "scope": "default",
                     "doctype": "org.iso.18013.5.1.mDL",
                     "cryptographic_binding_methods_supported": ["did:key", "jwk"],
-                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "credential_signing_alg_values_supported": [-7, -8],
                     "proof_types_supported": _proof_types,
                     "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 }
