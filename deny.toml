@@ -22,10 +22,8 @@ unmaintained = "workspace"
 yanked = "warn"
 # A list of advisory IDs to ignore
 ignore = [
-    # pyo3 0.22.x → 0.24.x is a breaking change
-    { id = "RUSTSEC-2025-0020", reason = "PyO3 0.22→0.24 breaking change; tracked for next major upgrade" },
-    # rsa Marvin attack — no patched version available; transitive via ssi
-    { id = "RUSTSEC-2023-0071", reason = "no safe upgrade available; transitive via ssi crate" },
+    # RSA remains required by supported credentials and is isolated behind Marty adapters.
+    { id = "RUSTSEC-2023-0071", reason = "required behind Marty crypto adapters; no patched RustCrypto release" },
     # serde_cbor unmaintained — transitive via ssi; no replacement in dep tree
     { id = "RUSTSEC-2021-0127", reason = "transitive via ssi crate; tracked for ssi replacement" },
 ]

@@ -5,7 +5,7 @@ use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
 
 /// Wrapper for marty_verification::mdoc::DeviceResponse
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct DeviceResponse {
     inner: marty_verification::mdoc::DeviceResponse,
 }
@@ -162,7 +162,7 @@ fn json_to_python(py: Python, value: &serde_json::Value) -> PyResult<Py<PyAny>> 
 }
 
 /// Result of mDoc signature verification
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct MdocVerificationResult {
     #[pyo3(get)]

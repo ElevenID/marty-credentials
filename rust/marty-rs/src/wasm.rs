@@ -37,7 +37,7 @@ fn verification_error_to_js(err: Box<VerificationError>) -> JsValue {
 /// Returns JSON: { "did": "did:jwk:...", "jwk": {...}, "keyId": "..." }
 #[wasm_bindgen]
 pub fn generate_p256_key() -> Result<String, JsValue> {
-    use ssi::jwk::JWK;
+    use ssi_jwk::JWK;
 
     let jwk = JWK::generate_p256();
     let jwk_str = serde_json::to_string(&jwk)
@@ -64,7 +64,7 @@ pub fn generate_p256_key() -> Result<String, JsValue> {
 /// Returns JSON: { "did": "did:key:...", "jwk": {...}, "keyId": "..." }
 #[wasm_bindgen]
 pub fn generate_ed25519_key() -> Result<String, JsValue> {
-    use ssi::jwk::{Params, JWK};
+    use ssi_jwk::{Params, JWK};
 
     let jwk = JWK::generate_ed25519()
         .map_err(|e| JsValue::from_str(&format!("Failed to generate key: {:?}", e)))?;
@@ -119,7 +119,7 @@ pub fn create_verifiable_credential(
     expiration_seconds: Option<i64>,
 ) -> Result<String, JsValue> {
     use chrono::{Duration, Utc};
-    use ssi::jwk::JWK;
+    use ssi_jwk::JWK;
 
     let jwk: JWK = serde_json::from_str(issuer_jwk_json)
         .map_err(|e| JsValue::from_str(&format!("Invalid JWK: {}", e)))?;
@@ -374,7 +374,7 @@ pub fn create_presentation(
     nonce: Option<String>,
 ) -> Result<String, JsValue> {
     use chrono::Utc;
-    use ssi::jwk::JWK;
+    use ssi_jwk::JWK;
 
     let jwk: JWK = serde_json::from_str(holder_jwk_json)
         .map_err(|e| JsValue::from_str(&format!("Invalid JWK: {}", e)))?;
@@ -576,8 +576,8 @@ pub fn extract_credentials_from_vp(vp_jwt: &str) -> Result<String, JsValue> {
 // Helper Functions
 // =============================================================================
 
-fn get_algorithm_for_jwk_wasm(jwk: &ssi::jwk::JWK) -> Result<&'static str, JsValue> {
-    use ssi::jwk::Params;
+fn get_algorithm_for_jwk_wasm(jwk: &ssi_jwk::JWK) -> Result<&'static str, JsValue> {
+    use ssi_jwk::Params;
 
     match &jwk.params {
         Params::OKP(_) => Ok("EdDSA"),
@@ -594,12 +594,12 @@ fn get_algorithm_for_jwk_wasm(jwk: &ssi::jwk::JWK) -> Result<&'static str, JsVal
 }
 
 fn sign_jwt(
-    jwk: &ssi::jwk::JWK,
+    jwk: &ssi_jwk::JWK,
     header: &serde_json::Value,
     payload: &serde_json::Value,
 ) -> Result<String, JsValue> {
-    use ssi::crypto::{AlgorithmInstance, SecretKey};
-    use ssi::jwk::Params;
+    use ssi_crypto::{AlgorithmInstance, SecretKey};
+    use ssi_jwk::Params;
 
     let header_str = serde_json::to_string(header)
         .map_err(|e| JsValue::from_str(&format!("Failed to serialize header: {}", e)))?;

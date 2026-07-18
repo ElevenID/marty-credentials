@@ -50,8 +50,8 @@ pub use marty_verification::{
 mod python_bindings {
     use super::*;
     use pyo3::prelude::*;
-    use ssi::crypto::{AlgorithmInstance, SecretKey};
-    use ssi::jwk::{Params, JWK};
+    use ssi_crypto::{AlgorithmInstance, SecretKey};
+    use ssi_jwk::{Params, JWK};
 
     /// Formats the sum of two numbers as string.
     #[pyfunction]
@@ -128,7 +128,7 @@ mod python_bindings {
     ) -> PyResult<(String, String)> {
         use rand::rngs::OsRng;
         use rsa::{traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey};
-        use ssi::jwk::{Algorithm, RSAParams};
+        use ssi_jwk::{Algorithm, RSAParams};
 
         let bits = key_size.unwrap_or(2048);
         if bits != 2048 && bits != 3072 && bits != 4096 {
@@ -153,11 +153,11 @@ mod python_bindings {
         let q = primes.get(1).map(|q| q.to_bytes_be()).unwrap_or_default();
 
         let rsa_params = RSAParams {
-            modulus: Some(ssi::jwk::Base64urlUInt(n)),
-            exponent: Some(ssi::jwk::Base64urlUInt(e)),
-            private_exponent: Some(ssi::jwk::Base64urlUInt(d)),
-            first_prime_factor: Some(ssi::jwk::Base64urlUInt(p)),
-            second_prime_factor: Some(ssi::jwk::Base64urlUInt(q)),
+            modulus: Some(ssi_jwk::Base64urlUInt(n)),
+            exponent: Some(ssi_jwk::Base64urlUInt(e)),
+            private_exponent: Some(ssi_jwk::Base64urlUInt(d)),
+            first_prime_factor: Some(ssi_jwk::Base64urlUInt(p)),
+            second_prime_factor: Some(ssi_jwk::Base64urlUInt(q)),
             first_prime_factor_crt_exponent: None,
             second_prime_factor_crt_exponent: None,
             first_crt_coefficient: None,
@@ -181,7 +181,7 @@ mod python_bindings {
         };
 
         let jwk = JWK {
-            params: ssi::jwk::Params::RSA(rsa_params),
+            params: ssi_jwk::Params::RSA(rsa_params),
             public_key_use: None,
             key_operations: None,
             algorithm: Some(alg),
