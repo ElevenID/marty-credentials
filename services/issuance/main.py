@@ -711,6 +711,32 @@ def create_app() -> FastAPI:
                     "proof_types_supported": _proof_types,
                     "credential_definition": {"type": ["VerifiableCredential"]},
                     "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
+                },
+                # The shared issuer supports the same SD-JWT route used by
+                # Credential Manager.  Keep its configuration identifier in
+                # sync with ``_format_from_configuration_id`` so a wallet can
+                # select it without relying on a per-organization offer.
+                "default#credential-manager": {
+                    "format": "dc+sd-jwt",
+                    "scope": "default",
+                    "vct": f"{ISSUER_BASE_URL}/credentials/default",
+                    "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
+                },
+                # ``#mdoc`` is the configuration suffix the issuance request
+                # validator resolves to mso_mdoc.  Advertising that exact ID
+                # prevents metadata from claiming a format which a subsequent
+                # credential request cannot select.
+                "default#mdoc": {
+                    "format": "mso_mdoc",
+                    "scope": "default",
+                    "doctype": "org.iso.18013.5.1.mDL",
+                    "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 }
             },
         }

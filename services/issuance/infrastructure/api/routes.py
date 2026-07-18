@@ -3232,6 +3232,8 @@ async def issue_credential(
             f"{cred_type_base}#spruce-sd-jwt",
             "default",
             "default#sd-jwt",
+            "default#credential-manager",
+            "default#mdoc",
             "default#vds-nc",
         }
         # Also include org's published credential types so validation is

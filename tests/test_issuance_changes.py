@@ -55,6 +55,33 @@ from issuance.infrastructure.adapters.memory_repository import (
 from issuance.infrastructure.models import issued_credentials_table, issuance_transactions_table
 
 
+def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch):
+    """The fallback issuer must not advertise less than its request path accepts."""
+    monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
+
+    from fastapi.testclient import TestClient
+    from issuance.main import create_app
+
+    response = TestClient(create_app()).get("/.well-known/openid-credential-issuer")
+
+    assert response.status_code == 200
+    configurations = response.json()["credential_configurations_supported"]
+    assert configurations["default"]["format"] == "jwt_vc_json"
+    assert configurations["default#credential-manager"]["format"] == "dc+sd-jwt"
+    assert configurations["default#credential-manager"]["vct"].endswith("/credentials/default")
+    assert configurations["default#mdoc"] == {
+        "format": "mso_mdoc",
+        "scope": "default",
+        "doctype": "org.iso.18013.5.1.mDL",
+        "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+        "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+        "proof_types_supported": {
+            "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+        },
+        "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
+    }
+
+
 def test_issuance_transaction_schema_tracks_revocation_profile():
     column = issuance_transactions_table.c.revocation_profile_id
 
