@@ -15,7 +15,7 @@ marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "a60b081b
 marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "a60b081b6206724e0121da561372c4bb759aec97", default-features = false }
 
 # PEM encoding
-pem-rfc7468 = { version = "0.7", features = ["alloc"] }
+pem-rfc7468 = { version = "1.0", features = ["alloc"] }
 marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "a60b081b6206724e0121da561372c4bb759aec97" }
 
 # PyO3 for Python bindings
@@ -26,7 +26,7 @@ ssi-crypto = { version = "0.2.1", default-features = false, features = ["secp256
 ssi-jwk = { version = "0.4.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1"] }
 ssi-status = { version = "0.8.1", default-features = false }
 isomdl = { version = "0.2" }
-coset = { version = "0.3" }
+coset = { version = "0.4" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # SD-JWT
@@ -44,7 +44,7 @@ ciborium = { version = "0.2" }
 bs58 = { version = "0.5" }
 base64 = { version = "0.22" }
 rsa = { version = "0.9" }
-rand = { version = "0.8" }
+rand = { version = "0.10" }
 
 # Async
 tokio = { version = "1.42", features = ["rt", "rt-multi-thread", "sync", "macros"] }
