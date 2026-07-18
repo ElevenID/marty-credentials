@@ -2605,9 +2605,16 @@ async def initiate_issuance(
         - ICAO VDS-NC (``variant == "vds_nc"``): ``{base}#vds-nc``
           which maps to the ``vds_nc`` entry in issuer metadata.
         """
-        if base == "default":
-            return base
         normalized_variant = _normalize_payload_format(variant)
+        # The root issuer metadata intentionally exposes distinct default
+        # configurations: JWT VC JSON, Credential Manager SD-JWT, and mdoc.
+        # An offer must name the configuration whose representation it will
+        # issue; returning bare ``default`` here selected the JWT VC JSON
+        # metadata while later processing inferred an SD-JWT representation.
+        if base == "default":
+            if normalized_variant in _MDOC_PAYLOAD_FORMATS:
+                return "default#mdoc"
+            return "default#credential-manager"
         if normalized_variant == "spruce_vc+sd_jwt":
             return f"{base}#spruce-sd-jwt"
         if normalized_variant in _MDOC_PAYLOAD_FORMATS:
