@@ -44,6 +44,17 @@ def test_credential_request_rejects_legacy_singular_proof() -> None:
         })
 
 
+def test_credential_request_ignores_unknown_extension_parameters() -> None:
+    request = CredentialRequest.model_validate({
+        "credential_configuration_id": "OpenBadge#sd-jwt",
+        "proofs": {"jwt": ["header.payload.signature"]},
+        "official_conformance_extension": "ignored",
+    })
+
+    assert request.credential_configuration_id == "OpenBadge#sd-jwt"
+    assert request.proofs == {"jwt": ["header.payload.signature"]}
+
+
 def test_configuration_id_infers_expected_protocol_format() -> None:
     assert _format_from_configuration_id("OpenBadge#sd-jwt") == "vc+sd-jwt"
     assert _format_from_configuration_id("OpenBadge#credential-manager") == "dc+sd-jwt"

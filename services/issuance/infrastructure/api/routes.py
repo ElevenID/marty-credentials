@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from issuance.application.canvas_issuance_guard import (
     CanvasIssuanceGuardError,
@@ -561,7 +561,17 @@ class NonceResponse(BaseModel):
 
 
 class CredentialRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # OID4VCI §8 requires receivers to ignore extension parameters. The
+    # official conformance suite deliberately adds one to verify this.
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_singular_proof(cls, value: Any) -> Any:
+        """Reject the deprecated singular proof object without rejecting extensions."""
+        if isinstance(value, dict) and "proof" in value:
+            raise ValueError("use the OID4VCI 'proofs' object instead of legacy 'proof'")
+        return value
 
     format: str | None = None
     # OID4VCI v1 §8.2: proofs is an object mapping proof_type -> list[str]
