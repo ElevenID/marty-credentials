@@ -2361,6 +2361,9 @@ class TestRustIntegrationOrgIdValidation:
             algorithm="ES256",
             signing_key_reference="raw-openbao-key-name",
             verification_method_id=verification_method_id,
+            # The final OID4VCI response selects this media type before it
+            # reaches the signing adapter; exercise that public contract here.
+            credential_format="dc+sd-jwt",
         )
 
         jwt = credential.split("~", 1)[0]
