@@ -108,7 +108,7 @@ jobs:
           image: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: marty-credentials-${{ matrix.service }}.spdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: image-evidence-${{ matrix.service }}
           path: marty-credentials-${{ matrix.service }}.spdx.json
@@ -119,7 +119,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: printf '%s\n' "$DIGEST" > marty-credentials-${{ matrix.service }}.digest
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: image-digest-${{ matrix.service }}
           path: marty-credentials-${{ matrix.service }}.digest
