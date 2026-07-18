@@ -212,6 +212,13 @@ def _effective_request_format(
     )
 
 
+def _requests_legacy_credential_alias(request: "CredentialRequest") -> bool:
+    """Whether a caller explicitly selected the pre-final response shape."""
+    if request.credential_configuration_id or request.credential_identifier:
+        return False
+    return _normalize_payload_format(request.format) in {"vc+sd_jwt", "jwt_vc", "jwt_vc_json"}
+
+
 def _key_purpose_for_credential_format(credential_format: str) -> str:
     if credential_format in {"mso_mdoc", "zk_mdoc"}:
         return "mdoc_dsc"
@@ -585,10 +592,8 @@ class CredentialRequest(BaseModel):
 
 
 class CredentialResponse(BaseModel):
-    # OID4VCI v1 / Draft-12 hybrid: SpruceID mobile-sdk-rs expects each element
-    # of "credentials" to be an Oid4vciCredential struct {"format": ..., "credential": ...}.
-    # Walt.id / Draft-11 clients read the singular "credential" (bare string) instead.
-    # Emit BOTH so all clients are satisfied.
+    # Final OID4VCI uses ``credentials``. ``credential`` is retained only for
+    # an explicit legacy-format request and omitted from final responses.
     credentials: list[str | dict]
     credential: str | None = None     # Walt.id / Draft-11 compatibility alias
     notification_id: str | None = None
@@ -3152,7 +3157,11 @@ async def nonce_endpoint(
     return NonceResponse(c_nonce=new_nonce)
 
 
-@issuance_router.post("/credential", response_model=CredentialResponse)
+@issuance_router.post(
+    "/credential",
+    response_model=CredentialResponse,
+    response_model_exclude_none=True,
+)
 async def issue_credential(
     http_request: Request,
     request: CredentialRequest,
@@ -3219,7 +3228,11 @@ async def issue_credential(
             notification_id = str(_uuid.uuid4())
             return CredentialResponse(
                 credentials=[credential_obj],
-                credential=existing_cred.credential_jwt,
+                credential=(
+                    existing_cred.credential_jwt
+                    if _requests_legacy_credential_alias(request)
+                    else None
+                ),
                 notification_id=notification_id,
             )
         return JSONResponse(
@@ -3581,7 +3594,11 @@ async def issue_credential(
                     credentials=[
                         {"format": existing_format, "credential": existing_credential.credential_jwt}
                     ],
-                    credential=existing_credential.credential_jwt,
+                    credential=(
+                        existing_credential.credential_jwt
+                        if _requests_legacy_credential_alias(request)
+                        else None
+                    ),
                     notification_id=str(uuid.uuid4()),
                 )
             return JSONResponse(
@@ -3687,7 +3704,7 @@ async def issue_credential(
         notification_id = str(_uuid.uuid4())
         return CredentialResponse(
             credentials=[credential_obj],
-            credential=jwt_credential,
+            credential=(jwt_credential if _requests_legacy_credential_alias(request) else None),
             notification_id=notification_id,
         )
         

@@ -22,6 +22,7 @@ from issuance.infrastructure.api.routes import (  # noqa: E402
     _credential_format_for_remote_context,
     _effective_request_format,
     _format_from_configuration_id,
+    _requests_legacy_credential_alias,
 )
 
 
@@ -53,6 +54,13 @@ def test_credential_request_ignores_unknown_extension_parameters() -> None:
 
     assert request.credential_configuration_id == "OpenBadge#sd-jwt"
     assert request.proofs == {"jwt": ["header.payload.signature"]}
+
+
+def test_only_explicit_legacy_format_requests_get_legacy_credential_alias() -> None:
+    assert _requests_legacy_credential_alias(CredentialRequest.model_validate({"format": "vc+sd-jwt"}))
+    assert not _requests_legacy_credential_alias(
+        CredentialRequest.model_validate({"credential_configuration_id": "OpenBadge#sd-jwt"})
+    )
 
 
 def test_configuration_id_infers_expected_protocol_format() -> None:
