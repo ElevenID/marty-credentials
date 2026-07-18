@@ -361,8 +361,6 @@ def create_app() -> FastAPI:
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
@@ -412,9 +410,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -438,8 +434,6 @@ def create_app() -> FastAPI:
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
@@ -475,9 +469,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -501,8 +493,6 @@ def create_app() -> FastAPI:
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
@@ -547,9 +537,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -571,8 +559,6 @@ def create_app() -> FastAPI:
 
         issuer_url = org_issuer_url(org_id)
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
@@ -692,10 +678,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
-            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -715,10 +698,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": ISSUER_BASE_URL,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/credential",
-            "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
-            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "nonce_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/nonce",
             "deferred_credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential",
             "notification_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/notification",
