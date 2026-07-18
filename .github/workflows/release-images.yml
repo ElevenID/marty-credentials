@@ -97,7 +97,7 @@ jobs:
           subject-name: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign image by digest
         env:
           IMAGE: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}
