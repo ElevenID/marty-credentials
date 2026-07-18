@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import Response
@@ -739,6 +739,28 @@ def create_app() -> FastAPI:
                     "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 }
             },
+        }
+
+    @app.get("/credentials/{credential_type:path}")
+    async def get_sd_jwt_vc_type_metadata(credential_type: str) -> dict:
+        """Return SD-JWT VC type metadata for the published ``vct`` URI.
+
+        OID4VCI credential configuration metadata and issued SD-JWT VCs use a
+        stable HTTPS ``vct`` URI.  The OIDF suite follows that URI and expects
+        a Type Metadata document whose ``vct`` exactly matches it.  Keeping
+        this endpoint on the issuer also lets deployments use a custom
+        credential type without publishing an unrelated static site.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+
+        normalized_type = credential_type.strip("/")
+        if not normalized_type:
+            raise HTTPException(status_code=404, detail="credential type is required")
+        vct = f"{ISSUER_BASE_URL}/credentials/{normalized_type}"
+        return {
+            "vct": vct,
+            "name": normalized_type.replace("_", " ").replace("-", " ").title(),
+            "display": [{"name": normalized_type.replace("_", " ").title(), "locale": "en-US"}],
         }
 
     # ------------------------------------------------------------------

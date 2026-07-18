@@ -81,6 +81,10 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
     }
 
+    type_metadata = TestClient(create_app()).get("/credentials/default")
+    assert type_metadata.status_code == 200
+    assert type_metadata.json()["vct"].endswith("/credentials/default")
+
 
 def test_issuance_transaction_schema_tracks_revocation_profile():
     column = issuance_transactions_table.c.revocation_profile_id
