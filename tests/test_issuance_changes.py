@@ -85,6 +85,10 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
     assert type_metadata.status_code == 200
     assert type_metadata.json()["vct"].endswith("/credentials/default")
 
+    type_metadata = TestClient(create_app()).get("/credentials/access_badge")
+    assert type_metadata.status_code == 200
+    assert type_metadata.json()["vct"].endswith("/credentials/access_badge")
+
 
 def test_issuance_transaction_schema_tracks_revocation_profile():
     column = issuance_transactions_table.c.revocation_profile_id

@@ -56,7 +56,7 @@ def test_credential_request_ignores_unknown_extension_parameters() -> None:
 
 
 def test_configuration_id_infers_expected_protocol_format() -> None:
-    assert _format_from_configuration_id("OpenBadge#sd-jwt") == "vc+sd-jwt"
+    assert _format_from_configuration_id("OpenBadge#sd-jwt") == "dc+sd-jwt"
     assert _format_from_configuration_id("OpenBadge#credential-manager") == "dc+sd-jwt"
     assert _format_from_configuration_id("OpenBadge#spruce-sd-jwt") == "spruce-vc+sd-jwt"
     assert _format_from_configuration_id("org.iso.18013.5.1.mDL#mdoc") == "mso_mdoc"

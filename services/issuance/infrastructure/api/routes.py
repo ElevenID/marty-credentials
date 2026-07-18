@@ -177,7 +177,10 @@ def _format_from_configuration_id(configuration_id: str | None) -> str | None:
     if normalized.endswith("#credential-manager"):
         return "dc+sd-jwt"
     if normalized.endswith("#sd-jwt"):
-        return "vc+sd-jwt"
+        # OID4VCI 1.0 SD-JWT VC configurations use the final media type.  The
+        # older ``vc+sd-jwt`` spelling remains an internal payload alias only;
+        # it must not escape in a wallet-facing response or JWT ``typ``.
+        return "dc+sd-jwt"
     if normalized.endswith("#mdoc") or normalized.endswith("#apple-wallet"):
         return "mso_mdoc"
     if normalized.endswith("#vds-nc"):
