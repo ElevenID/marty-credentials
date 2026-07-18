@@ -63,8 +63,8 @@ pub fn create_issuer_signed_items(
         for (idx, (claim_name, claim_value)) in claims.iter().enumerate() {
             // Generate random salt for each claim
             let mut random = [0u8; 16];
-            use rand::RngCore;
-            rand::thread_rng().fill_bytes(&mut random);
+            use rand::RngExt;
+            rand::rng().fill(&mut random);
 
             let item = IssuerSignedItem {
                 digest_id: DigestId::new(idx as i32),

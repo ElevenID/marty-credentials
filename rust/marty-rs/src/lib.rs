@@ -126,8 +126,9 @@ mod python_bindings {
         key_size: Option<u32>,
         use_pss: Option<bool>,
     ) -> PyResult<(String, String)> {
-        use rand::rngs::OsRng;
-        use rsa::{traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey};
+        use rsa::{
+            rand_core::OsRng, traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey,
+        };
         use ssi_jwk::{Algorithm, RSAParams};
 
         let bits = key_size.unwrap_or(2048);
