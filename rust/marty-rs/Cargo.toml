@@ -49,8 +49,7 @@ python = [
     "jsonwebtoken",
     "p256",
     "ed25519-dalek",
-    "sha2",
-    "serde_cbor"
+    "sha2"
 ]
 wasm = [
     "dep:marty-crypto",
@@ -115,7 +114,6 @@ jsonwebtoken = { workspace = true, optional = true }
 p256 = { version = "0.14", features = ["ecdsa", "pkcs8"], optional = true }
 ed25519-dalek = { version = "3.0", features = ["rand_core"], optional = true }
 sha2 = { version = "0.11", optional = true }
-serde_cbor = { version = "0.11", optional = true }
 
 # From marty-core
 marty-crypto = { workspace = true, optional = true }
