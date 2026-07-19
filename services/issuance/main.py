@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import Response
@@ -361,12 +361,11 @@ def create_app() -> FastAPI:
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
+        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
@@ -385,7 +384,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -412,9 +411,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -438,8 +435,6 @@ def create_app() -> FastAPI:
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
@@ -475,9 +470,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -501,12 +494,11 @@ def create_app() -> FastAPI:
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
+        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
 
         repo = get_repo()
         known_types = await repo.get_credential_types_for_org(org_id)
@@ -524,7 +516,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -535,7 +527,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -547,9 +539,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -571,12 +561,11 @@ def create_app() -> FastAPI:
 
         issuer_url = org_issuer_url(org_id)
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-        token_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/token"
-        authorization_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/authorize"
 
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
+        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
 
         # Pull distinct credential types from the issuance DB — self-contained,
         # no external auth required, and grows automatically with new templates.
@@ -624,7 +613,7 @@ def create_app() -> FastAPI:
                     "doctype": ctype,
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _signing_algs,
+                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
@@ -668,7 +657,7 @@ def create_app() -> FastAPI:
                 "doctype": "org.iso.18013.5.1.mDL",
                 "scope": "mso_mdoc",
                 "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
+                "credential_signing_alg_values_supported": _mdoc_signing_algs,
                 "proof_types_supported": _proof_types,
                 "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
             }
@@ -692,10 +681,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": issuer_url,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": authorization_endpoint,
             "credential_endpoint": credential_endpoint,
-            "token_endpoint": token_endpoint,
-            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "nonce_endpoint": nonce_endpoint,
             "deferred_credential_endpoint": deferred_credential_endpoint,
             "notification_endpoint": notification_endpoint,
@@ -715,10 +701,7 @@ def create_app() -> FastAPI:
         return {
             "credential_issuer": ISSUER_BASE_URL,
             "display": _issuer_display_entries(),
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/credential",
-            "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
-            "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "nonce_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/nonce",
             "deferred_credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential",
             "notification_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/notification",
@@ -731,8 +714,56 @@ def create_app() -> FastAPI:
                     "proof_types_supported": _proof_types,
                     "credential_definition": {"type": ["VerifiableCredential"]},
                     "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
+                },
+                # The shared issuer supports the same SD-JWT route used by
+                # Credential Manager.  Keep its configuration identifier in
+                # sync with ``_format_from_configuration_id`` so a wallet can
+                # select it without relying on a per-organization offer.
+                "default#credential-manager": {
+                    "format": "dc+sd-jwt",
+                    "scope": "default",
+                    "vct": f"{ISSUER_BASE_URL}/credentials/default",
+                    "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+                    "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
+                },
+                # ``#mdoc`` is the configuration suffix the issuance request
+                # validator resolves to mso_mdoc.  Advertising that exact ID
+                # prevents metadata from claiming a format which a subsequent
+                # credential request cannot select.
+                "default#mdoc": {
+                    "format": "mso_mdoc",
+                    "scope": "default",
+                    "doctype": "org.iso.18013.5.1.mDL",
+                    "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+                    "credential_signing_alg_values_supported": [-7, -8],
+                    "proof_types_supported": _proof_types,
+                    "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 }
             },
+        }
+
+    @app.get("/credentials/{credential_type:path}")
+    async def get_sd_jwt_vc_type_metadata(credential_type: str) -> dict:
+        """Return SD-JWT VC type metadata for the published ``vct`` URI.
+
+        OID4VCI credential configuration metadata and issued SD-JWT VCs use a
+        stable HTTPS ``vct`` URI.  The OIDF suite follows that URI and expects
+        a Type Metadata document whose ``vct`` exactly matches it.  Keeping
+        this endpoint on the issuer also lets deployments use a custom
+        credential type without publishing an unrelated static site.
+        """
+        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
+
+        normalized_type = credential_type.strip("/")
+        if not normalized_type:
+            raise HTTPException(status_code=404, detail="credential type is required")
+        vct = f"{ISSUER_BASE_URL}/credentials/{normalized_type}"
+        return {
+            "vct": vct,
+            "name": normalized_type.replace("_", " ").replace("-", " ").title(),
+            "display": [{"name": normalized_type.replace("_", " ").title(), "locale": "en-US"}],
         }
 
     # ------------------------------------------------------------------

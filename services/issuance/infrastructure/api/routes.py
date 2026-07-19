@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from issuance.application.canvas_issuance_guard import (
     CanvasIssuanceGuardError,
@@ -177,7 +177,10 @@ def _format_from_configuration_id(configuration_id: str | None) -> str | None:
     if normalized.endswith("#credential-manager"):
         return "dc+sd-jwt"
     if normalized.endswith("#sd-jwt"):
-        return "vc+sd-jwt"
+        # OID4VCI 1.0 SD-JWT VC configurations use the final media type.  The
+        # older ``vc+sd-jwt`` spelling remains an internal payload alias only;
+        # it must not escape in a wallet-facing response or JWT ``typ``.
+        return "dc+sd-jwt"
     if normalized.endswith("#mdoc") or normalized.endswith("#apple-wallet"):
         return "mso_mdoc"
     if normalized.endswith("#vds-nc"):
@@ -207,6 +210,13 @@ def _effective_request_format(
         or _format_from_configuration_id(request.credential_identifier)
         or _default_request_format_for_payload(tx.credential_payload_format if tx else None)
     )
+
+
+def _requests_legacy_credential_alias(request: "CredentialRequest") -> bool:
+    """Whether a caller explicitly selected the pre-final response shape."""
+    if request.credential_configuration_id or request.credential_identifier:
+        return False
+    return _normalize_payload_format(request.format) in {"vc+sd_jwt", "jwt_vc", "jwt_vc_json"}
 
 
 def _key_purpose_for_credential_format(credential_format: str) -> str:
@@ -561,7 +571,17 @@ class NonceResponse(BaseModel):
 
 
 class CredentialRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # OID4VCI §8 requires receivers to ignore extension parameters. The
+    # official conformance suite deliberately adds one to verify this.
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_singular_proof(cls, value: Any) -> Any:
+        """Reject the deprecated singular proof object without rejecting extensions."""
+        if isinstance(value, dict) and "proof" in value:
+            raise ValueError("use the OID4VCI 'proofs' object instead of legacy 'proof'")
+        return value
 
     format: str | None = None
     # OID4VCI v1 §8.2: proofs is an object mapping proof_type -> list[str]
@@ -572,10 +592,8 @@ class CredentialRequest(BaseModel):
 
 
 class CredentialResponse(BaseModel):
-    # OID4VCI v1 / Draft-12 hybrid: SpruceID mobile-sdk-rs expects each element
-    # of "credentials" to be an Oid4vciCredential struct {"format": ..., "credential": ...}.
-    # Walt.id / Draft-11 clients read the singular "credential" (bare string) instead.
-    # Emit BOTH so all clients are satisfied.
+    # Final OID4VCI uses ``credentials``. ``credential`` is retained only for
+    # an explicit legacy-format request and omitted from final responses.
     credentials: list[str | dict]
     credential: str | None = None     # Walt.id / Draft-11 compatibility alias
     notification_id: str | None = None
@@ -2605,9 +2623,16 @@ async def initiate_issuance(
         - ICAO VDS-NC (``variant == "vds_nc"``): ``{base}#vds-nc``
           which maps to the ``vds_nc`` entry in issuer metadata.
         """
-        if base == "default":
-            return base
         normalized_variant = _normalize_payload_format(variant)
+        # The root issuer metadata intentionally exposes distinct default
+        # configurations: JWT VC JSON, Credential Manager SD-JWT, and mdoc.
+        # An offer must name the configuration whose representation it will
+        # issue; returning bare ``default`` here selected the JWT VC JSON
+        # metadata while later processing inferred an SD-JWT representation.
+        if base == "default":
+            if normalized_variant in _MDOC_PAYLOAD_FORMATS:
+                return "default#mdoc"
+            return "default#credential-manager"
         if normalized_variant == "spruce_vc+sd_jwt":
             return f"{base}#spruce-sd-jwt"
         if normalized_variant in _MDOC_PAYLOAD_FORMATS:
@@ -3132,7 +3157,11 @@ async def nonce_endpoint(
     return NonceResponse(c_nonce=new_nonce)
 
 
-@issuance_router.post("/credential", response_model=CredentialResponse)
+@issuance_router.post(
+    "/credential",
+    response_model=CredentialResponse,
+    response_model_exclude_none=True,
+)
 async def issue_credential(
     http_request: Request,
     request: CredentialRequest,
@@ -3199,7 +3228,11 @@ async def issue_credential(
             notification_id = str(_uuid.uuid4())
             return CredentialResponse(
                 credentials=[credential_obj],
-                credential=existing_cred.credential_jwt,
+                credential=(
+                    existing_cred.credential_jwt
+                    if _requests_legacy_credential_alias(request)
+                    else None
+                ),
                 notification_id=notification_id,
             )
         return JSONResponse(
@@ -3232,6 +3265,8 @@ async def issue_credential(
             f"{cred_type_base}#spruce-sd-jwt",
             "default",
             "default#sd-jwt",
+            "default#credential-manager",
+            "default#mdoc",
             "default#vds-nc",
         }
         # Also include org's published credential types so validation is
@@ -3559,7 +3594,11 @@ async def issue_credential(
                     credentials=[
                         {"format": existing_format, "credential": existing_credential.credential_jwt}
                     ],
-                    credential=existing_credential.credential_jwt,
+                    credential=(
+                        existing_credential.credential_jwt
+                        if _requests_legacy_credential_alias(request)
+                        else None
+                    ),
                     notification_id=str(uuid.uuid4()),
                 )
             return JSONResponse(
@@ -3665,7 +3704,7 @@ async def issue_credential(
         notification_id = str(_uuid.uuid4())
         return CredentialResponse(
             credentials=[credential_obj],
-            credential=jwt_credential,
+            credential=(jwt_credential if _requests_legacy_credential_alias(request) else None),
             notification_id=notification_id,
         )
         

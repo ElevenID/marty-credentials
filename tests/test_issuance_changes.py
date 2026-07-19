@@ -55,6 +55,41 @@ from issuance.infrastructure.adapters.memory_repository import (
 from issuance.infrastructure.models import issued_credentials_table, issuance_transactions_table
 
 
+def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch):
+    """The fallback issuer must not advertise less than its request path accepts."""
+    monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
+
+    from fastapi.testclient import TestClient
+    from issuance.main import create_app
+
+    response = TestClient(create_app()).get("/.well-known/openid-credential-issuer")
+
+    assert response.status_code == 200
+    configurations = response.json()["credential_configurations_supported"]
+    assert configurations["default"]["format"] == "jwt_vc_json"
+    assert configurations["default#credential-manager"]["format"] == "dc+sd-jwt"
+    assert configurations["default#credential-manager"]["vct"].endswith("/credentials/default")
+    assert configurations["default#mdoc"] == {
+        "format": "mso_mdoc",
+        "scope": "default",
+        "doctype": "org.iso.18013.5.1.mDL",
+        "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+        "credential_signing_alg_values_supported": [-7, -8],
+        "proof_types_supported": {
+            "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+        },
+        "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
+    }
+
+    type_metadata = TestClient(create_app()).get("/credentials/default")
+    assert type_metadata.status_code == 200
+    assert type_metadata.json()["vct"].endswith("/credentials/default")
+
+    type_metadata = TestClient(create_app()).get("/credentials/access_badge")
+    assert type_metadata.status_code == 200
+    assert type_metadata.json()["vct"].endswith("/credentials/access_badge")
+
+
 def test_issuance_transaction_schema_tracks_revocation_profile():
     column = issuance_transactions_table.c.revocation_profile_id
 
@@ -2326,6 +2361,9 @@ class TestRustIntegrationOrgIdValidation:
             algorithm="ES256",
             signing_key_reference="raw-openbao-key-name",
             verification_method_id=verification_method_id,
+            # The final OID4VCI response selects this media type before it
+            # reaches the signing adapter; exercise that public contract here.
+            credential_format="dc+sd-jwt",
         )
 
         jwt = credential.split("~", 1)[0]
@@ -2335,7 +2373,7 @@ class TestRustIntegrationOrgIdValidation:
         payload = json.loads(base64url_decode(encoded_payload))
 
         assert header["kid"] == verification_method_id
-        assert header["typ"] == "vc+sd-jwt"
+        assert header["typ"] == "dc+sd-jwt"
         assert payload["cnf"]["jwk"] == {
             "kty": "EC",
             "crv": "P-256",
