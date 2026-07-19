@@ -26,9 +26,6 @@ from issuance.application.rust_integration import (
 # Set VDSNC_RUST_ENABLED=false in an environment to suppress VDS-NC credential
 # configuration entries from the OID4VCI metadata and disable VDS-NC signing.
 # Defaults to enabled so production deployments require no extra configuration.
-_VDSNC_RUST_ENABLED: bool = os.environ.get("VDSNC_RUST_ENABLED", "true").lower() not in (
-    "false", "0", "no", "off"
-)
 
 
 def _friendly_ctype_name(ctype: str) -> str:
@@ -141,7 +138,13 @@ def _credential_definition(ctype: str, metadata: dict[str, Any] | None) -> dict[
 
 
 def _with_claims(config: dict[str, Any], metadata: dict[str, Any] | None) -> dict[str, Any]:
-    claims = _claim_display_map(metadata)
+    """Add OID4VCI Final claim descriptors to an SD-JWT configuration.
+
+    The Final credential issuer metadata schema requires ``claims`` to be an
+    array of descriptors with a ``path``.  The older object map remains useful
+    only inside JWT-VC's ``credential_definition`` and must not leak here.
+    """
+    claims = _claim_descriptions(metadata)
     if claims:
         config["claims"] = claims
     return config
@@ -576,9 +579,7 @@ def create_app() -> FastAPI:
         # Build sets of credential types that explicitly support mDoc / VDS-NC
         # based on the template's supported_formats column.
         _MDOC_FORMATS = {"mdoc", "mso_mdoc"}
-        _VDS_NC_FORMATS = {"vds_nc", "vdsnc"}
         mdoc_types: set[str] = set()
-        vds_nc_types: set[str] = set()
         for ctype, formats in type_formats:
             normalized_formats = {
                 str(f).strip().lower().replace("-", "_")
@@ -586,8 +587,6 @@ def create_app() -> FastAPI:
             }
             if normalized_formats & _MDOC_FORMATS:
                 mdoc_types.add(ctype)
-            if normalized_formats & _VDS_NC_FORMATS:
-                vds_nc_types.add(ctype)
 
         credential_configurations: dict = {}
         for ctype, _formats in type_formats:
@@ -617,20 +616,9 @@ def create_app() -> FastAPI:
                     "proof_types_supported": _proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
-            if ctype in vds_nc_types:
-                if _VDSNC_RUST_ENABLED:
-                    credential_configurations[f"{ctype}#vds-nc"] = {
-                        "format": "vds_nc",
-                        "scope": ctype,
-                        "cryptographic_binding_methods_supported": _binding,
-                        "credential_signing_alg_values_supported": _signing_algs,
-                        "proof_types_supported": _proof_types,
-                        "display": _credential_display_entries(ctype, ctype_metadata),
-                    }
-                else:
-                    logger.debug(
-                        "VDS-NC metadata suppressed for %s: VDSNC_RUST_ENABLED=false", ctype
-                    )
+            # VDS-NC remains available through Marty's document issuance APIs,
+            # but it is not an OID4VCI Appendix A credential format. Do not
+            # advertise it from this OID4VCI metadata endpoint.
             if not ctype.startswith("org.iso.18013"):
                 # SD-JWT: use "dc+sd-jwt" per OID4VCI-1FINAL Appendix A (Final spec format ID).
                 # "vc+sd-jwt" was the Draft identifier; "dc+sd-jwt" is the Final spec name.
@@ -788,7 +776,7 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
         return {
             "issuer": issuer_url,
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],
@@ -815,7 +803,7 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
         return {
             "issuer": issuer_url,
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],
@@ -844,7 +832,7 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
         return {
             "issuer": issuer_url,
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],
@@ -864,7 +852,7 @@ def create_app() -> FastAPI:
         issuer_url = org_issuer_url(org_id)
         return {
             "issuer": issuer_url,
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
+            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
             "token_endpoint_auth_methods_supported": ["none"],

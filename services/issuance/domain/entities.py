@@ -631,6 +631,8 @@ class AuthorizationSession:
     # Token binding
     access_token: str | None = None
     nonce: str | None = None
+    # RFC 9449 sender constraint for authorization-code access tokens.
+    dpop_jkt: str | None = None
 
     # Lifecycle
     status: str = "pending"  # pending → exchanged → expired

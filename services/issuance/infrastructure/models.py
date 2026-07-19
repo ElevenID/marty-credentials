@@ -1177,6 +1177,7 @@ authorization_sessions_table = Table(
     Column("code_challenge_method", String, nullable=True),
     Column("access_token", String, nullable=True),
     Column("c_nonce", String, nullable=True),
+    Column("dpop_jkt", String, nullable=True),
     Column("status", String, nullable=False, default="pending"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("expires_at", DateTime(timezone=True), nullable=False),
