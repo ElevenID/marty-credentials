@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlparse
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 import httpx
@@ -115,31 +115,46 @@ def _validated_dpop_jkt(
     access_token: str | None = None,
     expected_htu: str | None = None,
 ) -> str:
-    """Verify an ES256 DPoP proof and return its RFC 7638 key thumbprint."""
+    """Verify an allowed DPoP proof and return its RFC 7638 key thumbprint."""
     try:
         encoded_header, encoded_claims, encoded_signature = proof.split(".")
         header = json.loads(_b64url_decode(encoded_header))
         claims = json.loads(_b64url_decode(encoded_claims))
         signature = _b64url_decode(encoded_signature)
         jwk = header["jwk"]
-        if header.get("typ") != "dpop+jwt" or header.get("alg") != "ES256":
-            raise ValueError("DPoP proof must use typ=dpop+jwt and ES256")
+        if header.get("typ") != "dpop+jwt" or header.get("alg") not in {"ES256", "PS256"}:
+            raise ValueError("DPoP proof must use typ=dpop+jwt and an approved algorithm")
         if claims.get("htm", "").upper() != method.upper() or not isinstance(claims.get("htu"), str):
             raise ValueError("DPoP proof has invalid htm or htu")
         if expected_htu is not None and claims["htu"].rstrip("/") != expected_htu.rstrip("/"):
             raise ValueError("DPoP proof htu does not match the target endpoint")
-        if len(signature) != 64 or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
-            raise ValueError("unsupported DPoP proof key")
-        public_key = ec.EllipticCurvePublicNumbers(
-            int.from_bytes(_b64url_decode(jwk["x"]), "big"),
-            int.from_bytes(_b64url_decode(jwk["y"]), "big"),
-            ec.SECP256R1(),
-        ).public_key()
-        public_key.verify(
-            encode_dss_signature(int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")),
-            f"{encoded_header}.{encoded_claims}".encode("ascii"),
-            ec.ECDSA(hashes.SHA256()),
-        )
+        signed_content = f"{encoded_header}.{encoded_claims}".encode("ascii")
+        if header["alg"] == "ES256":
+            if len(signature) != 64 or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
+                raise ValueError("unsupported ES256 DPoP proof key")
+            public_key = ec.EllipticCurvePublicNumbers(
+                int.from_bytes(_b64url_decode(jwk["x"]), "big"),
+                int.from_bytes(_b64url_decode(jwk["y"]), "big"),
+                ec.SECP256R1(),
+            ).public_key()
+            public_key.verify(
+                encode_dss_signature(int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")),
+                signed_content,
+                ec.ECDSA(hashes.SHA256()),
+            )
+        else:
+            if jwk.get("kty") != "RSA":
+                raise ValueError("unsupported PS256 DPoP proof key")
+            public_key = rsa.RSAPublicNumbers(
+                int.from_bytes(_b64url_decode(jwk["e"]), "big"),
+                int.from_bytes(_b64url_decode(jwk["n"]), "big"),
+            ).public_key()
+            public_key.verify(
+                signature,
+                signed_content,
+                padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+                hashes.SHA256(),
+            )
         if access_token is not None:
             expected_ath = _b64url_encode(hashlib.sha256(access_token.encode("utf-8")).digest())
             if claims.get("ath") != expected_ath:

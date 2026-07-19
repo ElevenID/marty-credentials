@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 # ---------------------------------------------------------------------------
@@ -101,6 +101,20 @@ def _dpop_proof(*, access_token: str, htu: str = "https://issuer.example/v1/issu
     return f"{header}.{claims}.{signature}"
 
 
+def _rsa_dpop_proof(*, access_token: str, htu: str = "https://issuer.example/v1/issuance/token") -> str:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    numbers = private_key.public_key().public_numbers()
+    jwk = {"kty": "RSA", "n": _b64url(numbers.n.to_bytes(256, "big")), "e": _b64url(numbers.e.to_bytes(3, "big"))}
+    header = _b64url(json.dumps({"typ": "dpop+jwt", "alg": "PS256", "jwk": jwk}, separators=(",", ":")).encode())
+    claims = _b64url(json.dumps({"htm": "POST", "htu": htu, "iat": 1_700_000_000, "jti": "rsa-test-proof", "ath": _b64url(hashlib.sha256(access_token.encode()).digest())}, separators=(",", ":")).encode())
+    signature = private_key.sign(
+        f"{header}.{claims}".encode(),
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+        hashes.SHA256(),
+    )
+    return f"{header}.{claims}.{_b64url(signature)}"
+
+
 def test_dpop_proof_is_bound_to_its_key_token_and_endpoint():
     from issuance.infrastructure.api.routes import _validated_dpop_jkt
 
@@ -127,6 +141,18 @@ def test_dpop_proof_is_bound_to_its_key_token_and_endpoint():
             access_token="token-for-client-two",
             expected_htu="https://issuer.example/v1/issuance/token",
         )
+
+
+def test_dpop_accepts_ps256_rsa_proofs_used_by_oidf_conformance():
+    from issuance.infrastructure.api.routes import _validated_dpop_jkt
+
+    proof = _rsa_dpop_proof(access_token="rsa-token")
+    assert _validated_dpop_jkt(
+        proof,
+        method="POST",
+        access_token="rsa-token",
+        expected_htu="https://issuer.example/v1/issuance/token",
+    )
 
 
 def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch):
