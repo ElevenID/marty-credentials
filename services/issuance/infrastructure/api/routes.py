@@ -1,7 +1,9 @@
 """OID4VCI HTTP API endpoints."""
 
 import asyncio
+import base64
 import copy
+import hmac
 import hashlib
 import json
 import logging
@@ -12,6 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
 from urllib.parse import urlencode, urlparse
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
@@ -77,6 +84,80 @@ def _authorization_session_transaction_id(session_id: str) -> str:
     """Return the single canonical issuance transaction for an auth-code grant."""
 
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"marty:oid4vci:authorization-session:{session_id}"))
+
+
+def _b64url_decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def _b64url_encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _dpop_thumbprint(jwk: dict[str, Any]) -> str:
+    """Return the RFC 7638 thumbprint for a public DPoP JWK."""
+    required_fields = {
+        "EC": ("crv", "kty", "x", "y"),
+        "OKP": ("crv", "kty", "x"),
+        "RSA": ("e", "kty", "n"),
+    }
+    fields = required_fields.get(jwk.get("kty"))
+    if fields is None or any(not isinstance(jwk.get(field), str) for field in fields):
+        raise ValueError("unsupported or incomplete DPoP JWK")
+    canonical = json.dumps({field: jwk[field] for field in fields}, separators=(",", ":"), sort_keys=True)
+    return _b64url_encode(hashlib.sha256(canonical.encode("utf-8")).digest())
+
+
+def _validated_dpop_jkt(
+    proof: str,
+    *,
+    method: str,
+    access_token: str | None = None,
+    expected_htu: str | None = None,
+) -> str:
+    """Verify an ES256 DPoP proof and return its RFC 7638 key thumbprint."""
+    try:
+        encoded_header, encoded_claims, encoded_signature = proof.split(".")
+        header = json.loads(_b64url_decode(encoded_header))
+        claims = json.loads(_b64url_decode(encoded_claims))
+        signature = _b64url_decode(encoded_signature)
+        jwk = header["jwk"]
+        if header.get("typ") != "dpop+jwt" or header.get("alg") != "ES256":
+            raise ValueError("DPoP proof must use typ=dpop+jwt and ES256")
+        if claims.get("htm", "").upper() != method.upper() or not isinstance(claims.get("htu"), str):
+            raise ValueError("DPoP proof has invalid htm or htu")
+        if expected_htu is not None and claims["htu"].rstrip("/") != expected_htu.rstrip("/"):
+            raise ValueError("DPoP proof htu does not match the target endpoint")
+        if len(signature) != 64 or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
+            raise ValueError("unsupported DPoP proof key")
+        public_key = ec.EllipticCurvePublicNumbers(
+            int.from_bytes(_b64url_decode(jwk["x"]), "big"),
+            int.from_bytes(_b64url_decode(jwk["y"]), "big"),
+            ec.SECP256R1(),
+        ).public_key()
+        public_key.verify(
+            encode_dss_signature(int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")),
+            f"{encoded_header}.{encoded_claims}".encode("ascii"),
+            ec.ECDSA(hashes.SHA256()),
+        )
+        if access_token is not None:
+            expected_ath = _b64url_encode(hashlib.sha256(access_token.encode("utf-8")).digest())
+            if claims.get("ath") != expected_ath:
+                raise ValueError("DPoP proof access-token hash does not match")
+        return _dpop_thumbprint(jwk)
+    except (KeyError, TypeError, ValueError, InvalidSignature, json.JSONDecodeError) as exc:
+        raise ValueError("invalid DPoP proof") from exc
+
+
+def _external_endpoint_url(request: Request) -> str:
+    """Reconstruct the public endpoint URL used by a DPoP client.
+
+    Gateway and TLS-proxy deployments retain the original forwarding headers.
+    Direct local calls deliberately fall back to the request URL.
+    """
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",", 1)[0].strip()
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc)).split(",", 1)[0].strip()
+    return f"{proto}://{host}{request.url.path}"
 
 
 def _authorization_redirect_uri(redirect_uri: str, params: dict[str, str]) -> str:
@@ -3021,6 +3102,18 @@ async def exchange_token(
     )
 
     # ── Authorization code flow ────────────────────────────────────
+    dpop = http_request.headers.get("DPoP")
+    dpop_jkt: str | None = None
+    if dpop:
+        try:
+            dpop_jkt = _validated_dpop_jkt(
+                dpop,
+                method="POST",
+                expected_htu=_external_endpoint_url(http_request),
+            )
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "invalid_dpop_proof"})
+
     if grant_type == "authorization_code":
         if not code:
             return JSONResponse(
@@ -3081,6 +3174,7 @@ async def exchange_token(
 
         # Persist the Rust-generated tokens on the session
         auth_session.mark_exchanged(access_token=token_resp["access_token"])
+        auth_session.dpop_jkt = dpop_jkt
         await repo.save_authorization_session(auth_session)
 
         return TokenResponse(
@@ -3148,6 +3242,8 @@ async def exchange_token(
 
     # Persist the Rust-generated tokens on the transaction
     tx.access_token = token_resp["access_token"]
+    if dpop_jkt:
+        tx.claims = {**tx.claims, "_dpop_jkt": dpop_jkt}
     tx.nonce = None
     tx.status = IssuanceStatus.AUTHORIZED
     await repo.save_transaction(tx)
@@ -3226,6 +3322,7 @@ async def issue_credential(
                 organization_id=auth_session.organization_id or "",
                 status=IssuanceStatus.AUTHORIZED,
                 access_token=access_token,
+                claims={"_dpop_jkt": auth_session.dpop_jkt} if auth_session.dpop_jkt else {},
                 nonce=auth_session.nonce,
                 credential_type=bare_ctype,
             )
@@ -3239,6 +3336,23 @@ async def issue_credential(
                 if concurrent_tx is None:
                     raise
                 tx = concurrent_tx
+
+    expected_dpop_jkt = (tx.claims or {}).get("_dpop_jkt")
+    if expected_dpop_jkt:
+        dpop = http_request.headers.get("DPoP")
+        if not dpop:
+            raise HTTPException(status_code=401, detail="DPoP proof is required for this access token")
+        try:
+            actual_dpop_jkt = _validated_dpop_jkt(
+                dpop,
+                method="POST",
+                access_token=access_token,
+                expected_htu=_external_endpoint_url(http_request),
+            )
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid DPoP proof")
+        if not hmac.compare_digest(str(expected_dpop_jkt), actual_dpop_jkt):
+            raise HTTPException(status_code=401, detail="DPoP proof does not match access token")
     
     # OID4VCI Final §7.3: The access token is single-use for credential issuance.
     # §8 errors use 400 invalid_credential_request, not 401.

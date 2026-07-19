@@ -11,6 +11,7 @@ Tests for the issuance service changes:
  - rust_integration org_id validation
 """
 
+import base64
 import hashlib
 import json
 import logging
@@ -18,6 +19,9 @@ import types
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 # ---------------------------------------------------------------------------
 # We can't import the real issuance package directly (it lives under
@@ -67,6 +71,62 @@ def test_authorization_redirect_preserves_registered_query_parameters():
         "https://wallet.example/callback?dummy1=lorem&dummy2=ipsum"
         "&code=authorization-code&iss=https%3A%2F%2Fissuer.example&state=caller-state"
     )
+
+
+def _b64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _dpop_proof(*, access_token: str, htu: str = "https://issuer.example/v1/issuance/credential") -> str:
+    """Build an ES256 RFC 9449 proof for the DPoP verifier unit tests."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    numbers = private_key.public_key().public_numbers()
+    jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": _b64url(numbers.x.to_bytes(32, "big")),
+        "y": _b64url(numbers.y.to_bytes(32, "big")),
+    }
+    header = _b64url(json.dumps({"typ": "dpop+jwt", "alg": "ES256", "jwk": jwk}, separators=(",", ":")).encode())
+    claims = _b64url(json.dumps({
+        "htm": "POST",
+        "htu": htu,
+        "iat": 1_700_000_000,
+        "jti": "test-proof-id",
+        "ath": _b64url(hashlib.sha256(access_token.encode()).digest()),
+    }, separators=(",", ":")).encode())
+    der_signature = private_key.sign(f"{header}.{claims}".encode(), ec.ECDSA(hashes.SHA256()))
+    r, s = decode_dss_signature(der_signature)
+    signature = _b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+    return f"{header}.{claims}.{signature}"
+
+
+def test_dpop_proof_is_bound_to_its_key_token_and_endpoint():
+    from issuance.infrastructure.api.routes import _validated_dpop_jkt
+
+    proof = _dpop_proof(access_token="token-for-client-two")
+    thumbprint = _validated_dpop_jkt(
+        proof,
+        method="POST",
+        access_token="token-for-client-two",
+        expected_htu="https://issuer.example/v1/issuance/credential",
+    )
+
+    assert thumbprint
+    with pytest.raises(ValueError):
+        _validated_dpop_jkt(
+            proof,
+            method="POST",
+            access_token="token-for-client-one",
+            expected_htu="https://issuer.example/v1/issuance/credential",
+        )
+    with pytest.raises(ValueError):
+        _validated_dpop_jkt(
+            proof,
+            method="POST",
+            access_token="token-for-client-two",
+            expected_htu="https://issuer.example/v1/issuance/token",
+        )
 
 
 def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch):
