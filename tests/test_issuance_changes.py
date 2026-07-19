@@ -2573,9 +2573,14 @@ class TestRustIntegrationOrgIdValidation:
         assert decoded["vc"] == {
             "@context": ["https://www.w3.org/ns/credentials/v2"],
             "type": ["VerifiableCredential", "W3cVcdmTestCredential"],
+            "issuer": "did:web:issuer.example",
+            "validFrom": decoded["vc"]["validFrom"],
+            "validUntil": decoded["vc"]["validUntil"],
             "credentialSubject": {"givenName": "Alice", "id": "did:key:z6MkHolder"},
             "credentialStatus": {"type": "BitstringStatusListEntry"},
         }
+        assert decoded["vc"]["validFrom"].endswith("Z")
+        assert decoded["vc"]["validUntil"].endswith("Z")
 
     async def test_grpc_remote_signing_helper_uses_org_scoped_did_context(self, monkeypatch):
         from issuance.application.rust_integration import base64url_decode
