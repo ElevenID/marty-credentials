@@ -515,6 +515,13 @@ async def create_jwt_vc_with_remote_signing(
     vc: dict[str, Any] = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
         "type": ["VerifiableCredential", credential_type],
+        # ``iss`` is required by JWT, but VCDM consumers process this nested
+        # object and require its own issuer identifier and validity period.
+        "issuer": issuer_did,
+        "validFrom": datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "validUntil": datetime.fromtimestamp(
+            now + int(expiration_seconds or 31536000), timezone.utc
+        ).isoformat().replace("+00:00", "Z"),
         "credentialSubject": subject,
     }
     if isinstance(credential_status, dict):
