@@ -251,6 +251,31 @@ async def test_credential_endpoint_reports_unknown_configuration_with_standard_e
     }
 
 
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_unknown_identifier_with_standard_error() -> None:
+    """OID4VCI defines a specific error for an unknown credential identifier."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            format="vc+sd-jwt",
+            credential_identifier="unknown-identifier",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "unknown_credential_identifier",
+        "error_description": "Unknown credential_identifier: 'unknown-identifier'",
+    }
+
+
 def test_schema_enforces_one_credential_per_transaction() -> None:
     assert issuance_transactions_table.c.reserved_credential_id.nullable is True
     indexes = {index.name: index for index in issued_credentials_table.indexes}
