@@ -3120,13 +3120,16 @@ async def exchange_token(
     dpop = http_request.headers.get("DPoP")
     dpop_jkt: str | None = None
     if dpop:
+        expected_htu = _external_endpoint_url(http_request)
         try:
             dpop_jkt = _validated_dpop_jkt(
                 dpop,
                 method="POST",
-                expected_htu=_external_endpoint_url(http_request),
+                expected_htu=expected_htu,
             )
-        except ValueError:
+        except ValueError as exc:
+            # Keep proof material out of logs while retaining deployable diagnostics.
+            logger.warning("[token] invalid DPoP proof for public target %s: %s", expected_htu, exc.__cause__ or exc)
             return JSONResponse(status_code=400, content={"error": "invalid_dpop_proof"})
 
     if grant_type == "authorization_code":
