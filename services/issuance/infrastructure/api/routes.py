@@ -3857,6 +3857,12 @@ async def issue_credential(
                 namespace=_remote_mdoc_namespace(tx.credential_type),
                 claims_json=json.dumps(signing_claims),
                 expiration_seconds=tx.validity_days * 86400,
+                certificate_chain=(
+                    remote_context.get("mdoc_x5c")
+                    if isinstance(remote_context, dict)
+                    and isinstance(remote_context.get("mdoc_x5c"), list)
+                    else None
+                ),
                 remote_sign=_remote_mdoc_sign,
             )
         elif signing_format == "jwt_vc_json":
