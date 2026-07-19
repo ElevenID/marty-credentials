@@ -200,6 +200,57 @@ async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid
     }
 
 
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_missing_proof_as_invalid_proof(monkeypatch) -> None:
+    """OID4VCI uses the standard invalid_proof code for an absent proof."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(format="vc+sd-jwt"),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_proof",
+        "error_description": "Proof of possession is required per OID4VCI §7.2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_unknown_configuration_with_standard_error() -> None:
+    """OID4VCI defines a specific error for an unknown configuration id."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            format="vc+sd-jwt",
+            credential_configuration_id="unknown-configuration",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "unknown_credential_configuration",
+        "error_description": "Unknown credential_configuration_id: 'unknown-configuration'",
+    }
+
+
 def test_schema_enforces_one_credential_per_transaction() -> None:
     assert issuance_transactions_table.c.reserved_credential_id.nullable is True
     indexes = {index.name: index for index in issued_credentials_table.indexes}
