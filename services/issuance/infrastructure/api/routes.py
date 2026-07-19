@@ -18,7 +18,7 @@ from urllib.parse import urlencode, urlparse
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
@@ -32,7 +32,7 @@ from issuance.application.canvas_issuance_guard import (
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.rust_integration import (
     create_jwt_vc_with_remote_signing,
-    create_mdoc_credential_byok,
+    create_mdoc_credential_with_remote_signing,
     create_sd_jwt_vc_with_remote_signing,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
@@ -356,13 +356,13 @@ def _remote_mdoc_namespace(credential_type: str) -> str:
     raise ValueError(f"No mDoc namespace mapping is defined for doctype {credential_type!r}")
 
 
-def _remote_mdoc_signature_der(signature: dict[str, Any], algorithm: str) -> bytes:
-    """Return a DER ECDSA signature for the Rust mDoc assembler.
+def _remote_mdoc_signature_raw(signature: dict[str, Any], algorithm: str) -> bytes:
+    """Return a raw IEEE P1363 ECDSA signature for marty-core COSE assembly.
 
     The internal signing API preserves the provider encoding in
     ``signature_b64`` and may additionally expose the JOSE/P1363 form. mDoc
-    assembly consumes ASN.1 DER, so never pass a raw JWS signature through as
-    if it were DER.
+    ``marty-core`` consumes the raw COSE/JWS form. Never pass provider DER
+    through as if it were raw bytes.
     """
     encoded = signature.get("signature_b64")
     if not isinstance(encoded, str) or not encoded:
@@ -370,19 +370,24 @@ def _remote_mdoc_signature_der(signature: dict[str, Any], algorithm: str) -> byt
     padded = encoded + "=" * (-len(encoded) % 4)
     raw = base64.urlsafe_b64decode(padded)
     encoding = str(signature.get("signature_encoding") or "").lower()
-    if encoding == "der":
-        return raw
-    if encoding not in {"raw_ieee_p1363", "raw", "ieee_p1363"}:
-        raise RuntimeError(f"Unsupported remote mDoc signature encoding {encoding!r}")
     coordinate_length = {"ES256": 32, "ES384": 48}.get(algorithm.upper())
-    if coordinate_length is None or len(raw) != coordinate_length * 2:
+    if coordinate_length is None:
+        raise RuntimeError(f"Unsupported remote mDoc algorithm {algorithm!r}")
+    if encoding in {"raw_ieee_p1363", "raw", "ieee_p1363"}:
+        if len(raw) == coordinate_length * 2:
+            return raw
+        raise RuntimeError(f"Invalid {algorithm} P1363 signature length for remote mDoc signing")
+    if encoding != "der":
+        raise RuntimeError(f"Unsupported remote mDoc signature encoding {encoding!r}")
+    try:
+        r, s = decode_dss_signature(raw)
+    except ValueError as exc:
+        raise RuntimeError("Remote mDoc signature is not valid DER ECDSA") from exc
+    if r.bit_length() > coordinate_length * 8 or s.bit_length() > coordinate_length * 8:
         raise RuntimeError(
-            f"Invalid {algorithm} P1363 signature length for remote mDoc signing"
+            f"Invalid {algorithm} DER signature coordinate for remote mDoc signing"
         )
-    return encode_dss_signature(
-        int.from_bytes(raw[:coordinate_length], "big"),
-        int.from_bytes(raw[coordinate_length:], "big"),
-    )
+    return r.to_bytes(coordinate_length, "big") + s.to_bytes(coordinate_length, "big")
 
 
 async def apply_remote_issuer_context(
@@ -3834,31 +3839,26 @@ async def issue_credential(
             "credential_id": credential_id,
         }
         if signing_format == "mso_mdoc":
-            now = datetime.now(timezone.utc)
-
-            async def _remote_mdoc_sign(tbs_data: bytes) -> bytes:
+            async def _remote_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
                 result = await sign_payload_with_remote_service(
                     organization_id=tx.organization_id,
                     signing_service_id=tx.signing_service_id or "",
                     payload=tbs_data,
-                    algorithm=signing_algorithm,
+                    algorithm=algorithm,
                     key_reference=signing_key_reference,
                     key_purpose="mdoc_dsc",
                 )
-                return _remote_mdoc_signature_der(result, signing_algorithm)
+                return _remote_mdoc_signature_raw(result, algorithm)
 
-            mdoc = await create_mdoc_credential_byok(
+            jwt_credential, signed_credential_id = await create_mdoc_credential_with_remote_signing(
+                issuer_did=effective_issuer_did,
+                algorithm=signing_algorithm,
                 doc_type=tx.credential_type,
-                namespaces={_remote_mdoc_namespace(tx.credential_type): signing_claims},
-                validity={
-                    "signed": now.isoformat(),
-                    "valid_from": now.isoformat(),
-                    "valid_until": (now + timedelta(days=tx.validity_days)).isoformat(),
-                },
-                kms_sign_fn=_remote_mdoc_sign,
+                namespace=_remote_mdoc_namespace(tx.credential_type),
+                claims_json=json.dumps(signing_claims),
+                expiration_seconds=tx.validity_days * 86400,
+                remote_sign=_remote_mdoc_sign,
             )
-            jwt_credential = base64.urlsafe_b64encode(mdoc).decode("ascii").rstrip("=")
-            signed_credential_id = credential_id
         elif signing_format == "jwt_vc_json":
             jwt_credential, signed_credential_id = await create_jwt_vc_with_remote_signing(
                 credential_type=tx.credential_type or "VerifiableCredential",

@@ -83,12 +83,12 @@ def test_native_extension_capability_contract_requires_remote_mdoc_split_signing
         **{
             capability: (lambda: None)
             for capability in rust_integration.REQUIRED_MARTY_RS_CAPABILITIES
-            if capability != "prepare_mdoc_for_hsm"
+            if capability != "oid4vci_prepare_mdoc"
         }
     )
     monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: incomplete_module)
 
-    with pytest.raises(RuntimeError, match="prepare_mdoc_for_hsm"):
+    with pytest.raises(RuntimeError, match="oid4vci_prepare_mdoc"):
         rust_integration.validate_marty_rs_capabilities()
 
 

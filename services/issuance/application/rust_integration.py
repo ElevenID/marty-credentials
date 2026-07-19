@@ -209,10 +209,10 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "didcomm_unpack_message",
         "lti_verify_launch_jwt",
         # mDoc issuance never loads an issuer private key into this service.
-        # It requires the Rust prepare/sign/assemble split so the KMS can sign
-        # the exact COSE payload remotely.
-        "prepare_mdoc_for_hsm",
-        "complete_mdoc_with_signature",
+        # It requires the authoritative marty-core prepare/sign/assemble split
+        # so the KMS signs the exact COSE payload remotely.
+        "oid4vci_prepare_mdoc",
+        "oid4vci_assemble_mdoc",
         "oid4vci_create_authorization_response",
         "oid4vci_create_credential_offer",
         "oid4vci_create_token_response",
@@ -849,3 +849,35 @@ async def create_mdoc_credential_byok(
     )
 
     return bytes(cbor_bytes)
+
+
+async def create_mdoc_credential_with_remote_signing(
+    *,
+    issuer_did: str,
+    algorithm: str,
+    doc_type: str,
+    namespace: str,
+    claims_json: str,
+    expiration_seconds: int,
+    remote_sign: Callable[[bytes, str | None], Awaitable[bytes]],
+) -> Tuple[str, str]:
+    """Issue an mDoc through the authoritative marty-core KMS split API.
+
+    The PyO3 object preserves the protected COSE header, MSO and issuer-signed
+    items between preparation and assembly. Python receives only the exact
+    Sig_structure bytes and never synthesizes the final credential state.
+    """
+    marty_rs = get_marty_rs()
+    prepared = marty_rs.oid4vci_prepare_mdoc(
+        issuer_did,
+        algorithm,
+        doc_type,
+        namespace,
+        claims_json,
+        expiration_seconds,
+    )
+    signature = await remote_sign(bytes(prepared.tbs_data), algorithm)
+    credential, credential_id = marty_rs.oid4vci_assemble_mdoc(prepared, signature)
+    if not isinstance(credential, str) or not credential:
+        raise RuntimeError("marty-rs returned an empty remotely signed mDoc")
+    return credential, credential_id
