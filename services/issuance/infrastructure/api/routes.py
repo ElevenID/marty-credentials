@@ -3350,7 +3350,7 @@ async def issue_credential(
         logger.warning(f"[credential] rid={rid} tx_id={tx.id} rejecting — proof of possession missing")
         return JSONResponse(
             status_code=400,
-            content={"error": "proof_missing", "error_description": "Proof of possession is required per OID4VCI §7.2"},
+            content={"error": "invalid_proof", "error_description": "Proof of possession is required per OID4VCI §7.2"},
         )
 
     # OID4VCI-1FINAL Appendix F.4: aud in proof JWT MUST be the credential_issuer URL.
