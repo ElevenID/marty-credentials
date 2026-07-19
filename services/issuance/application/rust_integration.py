@@ -787,69 +787,8 @@ def didcomm_decrypt(jwe_json: str, recipient_x25519_private_key: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# mDoc BYOK (Bring Your Own Key) — prepare → external sign → assemble
+# mDoc remote signing is implemented by the authoritative marty-core binding.
 # ---------------------------------------------------------------------------
-
-async def create_mdoc_credential_byok(
-    doc_type: str,
-    namespaces: dict,
-    validity: dict,
-    kms_sign_fn,
-    device_key_der: bytes | None = None,
-    issuer_certificate_chain_pem: str | None = None,
-    digest_algorithm: str | None = None,
-) -> bytes:
-    """Create an mDoc credential using remote/HSM signing (BYOK pattern).
-
-    Follows the prepare → external sign → assemble pattern:
-    1. Rust prepares the mDoc and returns the to-be-signed (TBS) bytes
-    2. The caller-supplied ``kms_sign_fn`` signs the TBS bytes externally
-    3. Rust completes the mDoc with the external signature
-
-    Args:
-        doc_type: mDoc document type (e.g. ``org.iso.18013.5.1.mDL``)
-        namespaces: Dict of namespace → {claim_name: claim_value}
-        validity: Dict with ``signed``, ``valid_from``, ``valid_until`` ISO timestamps
-        kms_sign_fn: Async callable ``(bytes) -> bytes`` that returns a DER-encoded
-            ECDSA signature from the remote KMS/HSM.
-        device_key_der: Optional DER-encoded device public key
-        issuer_certificate_chain_pem: Reserved for future X.509 chain injection
-            (requires Rust-side support in the COSE_Sign1 unprotected header).
-        digest_algorithm: Hash algorithm for MSO digests (default: SHA-256)
-
-    Returns:
-        CBOR-encoded mDoc credential bytes (DeviceResponse format)
-    """
-    marty_rs = get_marty_rs()
-
-    # Step 1: Prepare — Rust builds the unsigned mDoc and returns TBS data
-    prepared = marty_rs.prepare_mdoc_for_hsm(
-        doc_type,
-        namespaces,
-        validity,
-        device_key_der,
-        digest_algorithm,
-    )
-
-    tbs_data = prepared.get_tbs_data()
-    logger.info(
-        "Prepared mDoc for HSM signing (doc_type=%s, tbs_size=%d)",
-        doc_type, len(tbs_data),
-    )
-
-    # Step 2: Sign — external KMS/HSM signs the TBS bytes
-    signature_der = await kms_sign_fn(tbs_data)
-
-    # Step 3: Assemble — Rust completes the mDoc with the external signature
-    cbor_bytes = marty_rs.complete_mdoc_with_signature(prepared, signature_der)
-
-    logger.info(
-        "Completed mDoc BYOK issuance (doc_type=%s, cbor_size=%d)",
-        doc_type, len(cbor_bytes),
-    )
-
-    return bytes(cbor_bytes)
-
 
 async def create_mdoc_credential_with_remote_signing(
     *,
