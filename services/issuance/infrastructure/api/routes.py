@@ -3397,9 +3397,13 @@ async def issue_credential(
         _proof_nonce = None
 
     if not _proof_nonce or not await _nonce_pool.consume(_proof_nonce):
+        # OID4VCI Final §8.2 distinguishes a nonce failure from a malformed
+        # or invalidly-signed proof.  Keeping this mapping precise lets
+        # wallets request a fresh nonce instead of treating the holder key as
+        # invalid.
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_proof", "error_description": "Proof nonce is missing, expired, or already used"},
+            content={"error": "invalid_nonce", "error_description": "Proof nonce is missing, expired, or already used"},
         )
 
     ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
