@@ -3308,7 +3308,7 @@ async def issue_credential(
             return JSONResponse(
                 status_code=400,
                 content={
-                    "error": "invalid_credential_request",
+                    "error": "unknown_credential_identifier",
                     "error_description": f"Unknown credential_identifier: {request.credential_identifier!r}",
                 },
             )
