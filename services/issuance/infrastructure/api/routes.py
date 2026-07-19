@@ -3098,7 +3098,10 @@ async def exchange_token(
             content={"error": "invalid_grant", "error_description": "Transaction expired"},
         )
     
-    # OID4VCI Final §6.1: The pre-authorized code MUST be single-use.
+    # OID4VCI Final §4.1.1: the pre-authorized code MUST be short lived and
+    # single-use.  Do not turn a second wallet redemption into an unbounded
+    # issuance capability; multi-wallet authorization belongs to the
+    # authorization-code flow or an explicitly modelled product policy.
     # Reject any attempt to reuse it after a token has already been issued.
     if tx.status in (IssuanceStatus.AUTHORIZED, IssuanceStatus.ISSUED):
         logger.warning(
