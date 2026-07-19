@@ -31,6 +31,7 @@ from issuance.application.canvas_issuance_guard import (
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.rust_integration import (
+    create_jwt_vc_with_remote_signing,
     create_sd_jwt_vc_with_remote_signing,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
@@ -3639,13 +3640,13 @@ async def issue_credential(
         sd_claims = [k for k in clean_claims if not k.startswith("_")]
 
     remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt, effective_request_format)
-    if signing_format != "vc+sd-jwt":
+    if signing_format not in {"vc+sd-jwt", "jwt_vc_json"}:
         detail = _unsupported_remote_signing_format_detail(signing_format, remote_credential_format)
         logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
         raise HTTPException(status_code=503, detail=detail)
 
     remote_context = issuer_context if isinstance(issuer_context, dict) else None
-    if signing_format == "vc+sd-jwt":
+    if signing_format in {"vc+sd-jwt", "jwt_vc_json"}:
         try:
             remote_context = await apply_remote_issuer_context(
                 tx,
@@ -3780,22 +3781,31 @@ async def issue_credential(
             signing_claims["credentialStatus"] = credential_status_claim
 
         logger.info(f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}")
-        jwt_credential, signed_credential_id = await create_sd_jwt_vc_with_remote_signing(
-            issuer_did=effective_issuer_did,
-            signing_service_id=tx.signing_service_id,
-            remote_sign=_remote_sign,
-            subject_id=holder_did or tx.subject_did,
-            holder_jwk=holder_jwk,
-            credential_type=signing_credential_type,
-            claims_json=json.dumps(signing_claims),
-            expiration_seconds=31536000,  # 1 year
-            selective_disclosure_claims=sd_claims,
-            algorithm=signing_algorithm,
-            signing_key_reference=signing_key_reference,
-            verification_method_id=verification_method_id,
-            credential_format=effective_request_format,
-            credential_id=credential_id,
-        )
+        signing_arguments = {
+            "issuer_did": effective_issuer_did,
+            "signing_service_id": tx.signing_service_id,
+            "remote_sign": _remote_sign,
+            "subject_id": holder_did or tx.subject_did,
+            "claims_json": json.dumps(signing_claims),
+            "expiration_seconds": 31536000,
+            "algorithm": signing_algorithm,
+            "signing_key_reference": signing_key_reference,
+            "verification_method_id": verification_method_id,
+            "credential_id": credential_id,
+        }
+        if signing_format == "jwt_vc_json":
+            jwt_credential, signed_credential_id = await create_jwt_vc_with_remote_signing(
+                credential_type=tx.credential_type or "VerifiableCredential",
+                **signing_arguments,
+            )
+        else:
+            jwt_credential, signed_credential_id = await create_sd_jwt_vc_with_remote_signing(
+                holder_jwk=holder_jwk,
+                credential_type=signing_credential_type,
+                selective_disclosure_claims=sd_claims,
+                credential_format=effective_request_format,
+                **signing_arguments,
+            )
         if signed_credential_id != credential_id:
             raise RuntimeError("Remote credential builder changed the reserved credential ID")
 
@@ -3875,7 +3885,7 @@ async def issue_credential(
         if current_tx is not None and current_tx.status == IssuanceStatus.SIGNING:
             current_tx.fail(str(e))
             await repo.save_transaction(current_tx)
-        if signing_format == "vc+sd-jwt" and (tx.issuer_did_override or tx.signing_service_id):
+        if signing_format in {"vc+sd-jwt", "jwt_vc_json"} and (tx.issuer_did_override or tx.signing_service_id):
             raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, e)) from e
         raise HTTPException(status_code=500, detail=f"Credential creation failed: {e}") from e
 

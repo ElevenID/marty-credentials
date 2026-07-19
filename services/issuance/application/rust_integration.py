@@ -480,6 +480,73 @@ async def create_sd_jwt_vc_with_remote_signing(
     return f"{'~'.join(jwt_parts)}~", credential_id
 
 
+async def create_jwt_vc_with_remote_signing(
+    *,
+    issuer_did: str,
+    signing_service_id: str,
+    remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
+    subject_id: str | None,
+    credential_type: str,
+    claims_json: str,
+    expiration_seconds: int = 31536000,
+    algorithm: str | None = None,
+    signing_key_reference: str | None = None,
+    verification_method_id: str | None = None,
+    credential_id: str | None = None,
+) -> Tuple[str, str]:
+    """Create a VCDM v2 JWT VC signed by the configured remote KMS.
+
+    This is intentionally parallel to ``create_sd_jwt_vc_with_remote_signing``:
+    the issuer private key never enters the service process.  ``vc+jwt`` is a
+    JWS representation, not a COSE/VDS format, so the existing remote JWS
+    signature contract is sufficient.
+    """
+    claims = json.loads(claims_json or "{}")
+    if not isinstance(claims, dict):
+        raise RuntimeError("claims_json must encode an object")
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
+    credential_status = claims.pop("credentialStatus", None)
+    subject = dict(claims)
+    if subject_id:
+        subject.setdefault("id", subject_id)
+
+    vc: dict[str, Any] = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential", credential_type],
+        "credentialSubject": subject,
+    }
+    if isinstance(credential_status, dict):
+        vc["credentialStatus"] = credential_status
+
+    payload: dict[str, Any] = {
+        "iss": issuer_did,
+        "iat": now,
+        "nbf": now,
+        "exp": now + int(expiration_seconds or 31536000),
+        "jti": credential_id,
+        "vc": vc,
+    }
+    if subject_id:
+        payload["sub"] = subject_id
+
+    header = {
+        "alg": algorithm or "ES256",
+        "typ": "vc+jwt",
+        "kid": verification_method_id or _remote_issuer_kid(
+            issuer_did, signing_service_id, signing_key_reference
+        ),
+    }
+    encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
+    encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
+    sign_result = await remote_sign(f"{encoded_header}.{encoded_payload}".encode("ascii"), algorithm)
+    signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
+    if not isinstance(signature_b64, str) or not signature_b64:
+        raise RuntimeError("Remote signing service returned no usable JWS signature")
+    return f"{encoded_header}.{encoded_payload}.{signature_b64}", credential_id
+
+
 # ---------------------------------------------------------------------------
 # OID4VCI Protocol Wrappers  (delegate to Rust — never reimplement in Python)
 # ---------------------------------------------------------------------------

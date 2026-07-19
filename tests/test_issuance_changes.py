@@ -2536,6 +2536,47 @@ class TestRustIntegrationOrgIdValidation:
         assert payload["jti"] == supplied_credential_id
         assert payload["credentialStatus"]["statusListIndex"] == "42"
 
+    async def test_remote_jwt_vc_uses_vcdm_v2_envelope_and_remote_signature(self):
+        from issuance.application.rust_integration import (
+            base64url_decode,
+            create_jwt_vc_with_remote_signing,
+        )
+
+        captured: dict[str, str | None] = {}
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            captured["input"] = payload.decode("ascii")
+            captured["algorithm"] = algorithm
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        credential, credential_id = await create_jwt_vc_with_remote_signing(
+            issuer_did="did:web:issuer.example",
+            signing_service_id="managed-openbao-transit",
+            remote_sign=fake_remote_sign,
+            subject_id="did:key:z6MkHolder",
+            credential_type="W3cVcdmTestCredential",
+            claims_json=json.dumps({"givenName": "Alice", "credentialStatus": {"type": "BitstringStatusListEntry"}}),
+            algorithm="ES256",
+            verification_method_id="did:web:issuer.example#key-1",
+        )
+
+        header, payload, signature = credential.split(".")
+        assert signature == "AQID"
+        assert captured["input"] == f"{header}.{payload}"
+        assert captured["algorithm"] == "ES256"
+        assert json.loads(base64url_decode(header)) == {
+            "alg": "ES256", "typ": "vc+jwt", "kid": "did:web:issuer.example#key-1"
+        }
+        decoded = json.loads(base64url_decode(payload))
+        assert decoded["iss"] == "did:web:issuer.example"
+        assert decoded["jti"] == credential_id
+        assert decoded["vc"] == {
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "W3cVcdmTestCredential"],
+            "credentialSubject": {"givenName": "Alice", "id": "did:key:z6MkHolder"},
+            "credentialStatus": {"type": "BitstringStatusListEntry"},
+        }
+
     async def test_grpc_remote_signing_helper_uses_org_scoped_did_context(self, monkeypatch):
         from issuance.application.rust_integration import base64url_decode
 
