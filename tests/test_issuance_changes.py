@@ -55,6 +55,20 @@ from issuance.infrastructure.adapters.memory_repository import (
 from issuance.infrastructure.models import issued_credentials_table, issuance_transactions_table
 
 
+def test_authorization_redirect_preserves_registered_query_parameters():
+    from issuance.infrastructure.api.routes import _authorization_redirect_uri
+
+    location = _authorization_redirect_uri(
+        "https://wallet.example/callback?dummy1=lorem&dummy2=ipsum",
+        {"code": "authorization-code", "iss": "https://issuer.example", "state": "caller-state"},
+    )
+
+    assert location == (
+        "https://wallet.example/callback?dummy1=lorem&dummy2=ipsum"
+        "&code=authorization-code&iss=https%3A%2F%2Fissuer.example&state=caller-state"
+    )
+
+
 def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch):
     """The fallback issuer must not advertise less than its request path accepts."""
     monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
@@ -268,6 +282,20 @@ def repo():
 # ============================================================================
 
 class TestSpruceClaimDescriptions:
+    def test_sd_jwt_claims_are_oid4vci_final_descriptor_array(self):
+        from issuance.main import _with_claims
+
+        config = _with_claims(
+            {"format": "dc+sd-jwt"},
+            {"claims": [{"name": "email", "display_name": "Email Address", "required": True}]},
+        )
+
+        assert config["claims"] == [{
+            "path": ["email"],
+            "display": [{"name": "Email Address", "locale": "en-US"}],
+            "mandatory": True,
+        }]
+
     def test_claim_descriptions_are_oid4vci_list_shape(self):
         from issuance.main import _claim_descriptions, _with_claim_descriptions
 

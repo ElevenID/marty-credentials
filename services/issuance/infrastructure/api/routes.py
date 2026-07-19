@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
@@ -77,6 +77,17 @@ def _authorization_session_transaction_id(session_id: str) -> str:
     """Return the single canonical issuance transaction for an auth-code grant."""
 
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"marty:oid4vci:authorization-session:{session_id}"))
+
+
+def _authorization_redirect_uri(redirect_uri: str, params: dict[str, str]) -> str:
+    """Append OAuth response parameters without corrupting registered queries.
+
+    RFC 6749 permits a registered redirect URI to contain query parameters.
+    The authorization response parameters therefore use ``&`` when a query is
+    already present, rather than introducing a second ``?``.
+    """
+    separator = "&" if urlparse(redirect_uri).query else "?"
+    return f"{redirect_uri}{separator}{urlencode(params)}"
 
 
 async def _canvas_pre_signing_guard_response(
@@ -2785,6 +2796,7 @@ async def authorize(
     authorization_details: str = Query(None),
     scope: str = Query(None),
     organization_id: str = Query(None),
+    issuer_org: str = Query(None),
     request_uri: str = Query(None),
     repo: IIssuanceRepository = Depends(),
 ):
@@ -2799,6 +2811,12 @@ async def authorize(
     import json as _json
 
     # ── RFC 9126: resolve PAR request_uri ────────────────────────────
+    # ``issuer_org`` is the public AS-metadata binding for this per-org
+    # endpoint. It deliberately avoids the gateway's authenticated
+    # ``organization_id`` management parameter while preserving issuer
+    # identity across the PAR-to-authorization redirect.
+    organization_id = issuer_org or organization_id
+
     if request_uri:
         par_params = await _par_store.pop(request_uri)
         if par_params is None:
@@ -2891,11 +2909,10 @@ async def authorize(
         )
     except (ValueError, RuntimeError) as exc:
         if redirect_uri:
-            from urllib.parse import urlencode
             params = {"error": "invalid_request", "error_description": str(exc)}
             if state:
                 params["state"] = state
-            return RedirectResponse(f"{redirect_uri}?{urlencode(params)}")
+            return RedirectResponse(_authorization_redirect_uri(redirect_uri, params))
         return JSONResponse(
             status_code=400,
             content={"error": "invalid_request", "error_description": str(exc)},
@@ -2919,11 +2936,14 @@ async def authorize(
 
     # If a redirect_uri was provided, redirect the user agent back
     if redirect_uri:
-        from urllib.parse import urlencode
-        params = {"code": auth_resp["code"]}
+        # OAuth 2.0 Authorization Server Issuer Identification (RFC 9207) is
+        # required by the OID4VCI/FAPI profile so a wallet can bind the code to
+        # the issuer that created it, including when the registered redirect
+        # URI already has query parameters.
+        params = {"code": auth_resp["code"], "iss": org_issuer_url(organization_id)}
         if state:
             params["state"] = state
-        return RedirectResponse(f"{redirect_uri}?{urlencode(params)}")
+        return RedirectResponse(_authorization_redirect_uri(redirect_uri, params))
 
     # Otherwise return JSON (useful for testing / programmatic clients)
     return auth_resp
