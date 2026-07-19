@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
 
 # ---------------------------------------------------------------------------
 # We can't import the real issuance package directly (it lives under
@@ -581,6 +581,28 @@ class TestRemoteIssuerFailureDetail:
         assert "SD-JWT VC issuance only" in detail
         assert "mso_mdoc" in detail
         assert "remote COSE/VDS signing support" in detail
+
+    def test_remote_mdoc_signature_preserves_der_and_converts_p1363(self):
+        from issuance.infrastructure.api.routes import _remote_mdoc_signature_der
+
+        der = encode_dss_signature(17, 23)
+        encoded_der = _b64url(der)
+        assert _remote_mdoc_signature_der(
+            {"signature_b64": encoded_der, "signature_encoding": "der"}, "ES256"
+        ) == der
+
+        raw = (17).to_bytes(32, "big") + (23).to_bytes(32, "big")
+        assert _remote_mdoc_signature_der(
+            {"signature_b64": _b64url(raw), "signature_encoding": "raw_ieee_p1363"}, "ES256"
+        ) == der
+
+    def test_remote_mdoc_namespace_is_doctype_specific(self):
+        from issuance.infrastructure.api.routes import _remote_mdoc_namespace
+
+        assert _remote_mdoc_namespace("org.iso.18013.5.1.mDL") == "org.iso.18013.5.1"
+        assert _remote_mdoc_namespace("com.icao.dtc") == "com.icao.dtc"
+        with pytest.raises(ValueError, match="namespace mapping"):
+            _remote_mdoc_namespace("unregistered.example.document")
 
 
 class TestGetCredentialByTransactionId:
