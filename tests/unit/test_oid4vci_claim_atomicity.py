@@ -168,6 +168,38 @@ def _request() -> Request:
     )
 
 
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid_proof(
+    monkeypatch,
+) -> None:
+    """A replayed or expired nonce is recoverable with a fresh nonce request."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    async def reject_nonce(_nonce: str) -> bool:
+        return False
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(routes._nonce_pool, "consume", reject_nonce)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(format="vc+sd-jwt", proofs={"jwt": [_proof_jwt()]}),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_nonce",
+        "error_description": "Proof nonce is missing, expired, or already used",
+    }
+
+
 def test_schema_enforces_one_credential_per_transaction() -> None:
     assert issuance_transactions_table.c.reserved_credential_id.nullable is True
     indexes = {index.name: index for index in issued_credentials_table.indexes}

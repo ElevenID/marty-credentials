@@ -3098,7 +3098,10 @@ async def exchange_token(
             content={"error": "invalid_grant", "error_description": "Transaction expired"},
         )
     
-    # OID4VCI Final §6.1: The pre-authorized code MUST be single-use.
+    # OID4VCI Final §4.1.1: the pre-authorized code MUST be short lived and
+    # single-use.  Do not turn a second wallet redemption into an unbounded
+    # issuance capability; multi-wallet authorization belongs to the
+    # authorization-code flow or an explicitly modelled product policy.
     # Reject any attempt to reuse it after a token has already been issued.
     if tx.status in (IssuanceStatus.AUTHORIZED, IssuanceStatus.ISSUED):
         logger.warning(
@@ -3397,9 +3400,13 @@ async def issue_credential(
         _proof_nonce = None
 
     if not _proof_nonce or not await _nonce_pool.consume(_proof_nonce):
+        # OID4VCI Final §8.2 distinguishes a nonce failure from a malformed
+        # or invalidly-signed proof.  Keeping this mapping precise lets
+        # wallets request a fresh nonce instead of treating the holder key as
+        # invalid.
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_proof", "error_description": "Proof nonce is missing, expired, or already used"},
+            content={"error": "invalid_nonce", "error_description": "Proof nonce is missing, expired, or already used"},
         )
 
     ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
