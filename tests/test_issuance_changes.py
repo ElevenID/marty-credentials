@@ -605,6 +605,51 @@ class TestRemoteIssuerFailureDetail:
             _remote_mdoc_namespace("unregistered.example.document")
 
 
+@pytest.mark.asyncio
+async def test_remote_mdoc_signing_uses_only_trusted_certificate_chain(monkeypatch):
+    """Wallet claims cannot select the issuer certificate in a COSE header."""
+    from issuance.application import rust_integration
+
+    captured: dict[str, object] = {}
+
+    class Prepared:
+        tbs_data = b"mdoc-tbs"
+
+    class Extension:
+        def oid4vci_prepare_mdoc(self, *args):
+            captured["claims"] = json.loads(args[4])
+            return Prepared()
+
+        def oid4vci_assemble_mdoc(self, prepared, signature):
+            assert prepared.tbs_data == b"mdoc-tbs"
+            assert signature == b"signature"
+            return "issuer-signed-b64", "urn:uuid:credential"
+
+    async def remote_sign(payload: bytes, algorithm: str | None) -> bytes:
+        assert payload == b"mdoc-tbs"
+        assert algorithm == "ES256"
+        return b"signature"
+
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
+    credential, credential_id = await rust_integration.create_mdoc_credential_with_remote_signing(
+        issuer_did="did:web:issuer.example",
+        algorithm="ES256",
+        doc_type="org.iso.18013.5.1.mDL",
+        namespace="org.iso.18013.5.1",
+        claims_json=json.dumps({"given_name": "Erika", "_mdoc_x5c": ["untrusted"]}),
+        expiration_seconds=3600,
+        certificate_chain=["trusted-leaf", "trusted-intermediate"],
+        remote_sign=remote_sign,
+    )
+
+    assert credential == "issuer-signed-b64"
+    assert credential_id == "urn:uuid:credential"
+    assert captured["claims"] == {
+        "given_name": "Erika",
+        "_mdoc_x5c": ["trusted-leaf", "trusted-intermediate"],
+    }
+
+
 class TestGetCredentialByTransactionId:
     async def test_returns_matching_credential(self, repo):
         cred = _make_credential(transaction_id="tx-42")

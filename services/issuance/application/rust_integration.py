@@ -859,6 +859,7 @@ async def create_mdoc_credential_with_remote_signing(
     namespace: str,
     claims_json: str,
     expiration_seconds: int,
+    certificate_chain: list[str] | None,
     remote_sign: Callable[[bytes, str | None], Awaitable[bytes]],
 ) -> Tuple[str, str]:
     """Issue an mDoc through the authoritative marty-core KMS split API.
@@ -867,13 +868,25 @@ async def create_mdoc_credential_with_remote_signing(
     items between preparation and assembly. Python receives only the exact
     Sig_structure bytes and never synthesizes the final credential state.
     """
+    try:
+        claims = json.loads(claims_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("mDoc claims must be a JSON object") from exc
+    if not isinstance(claims, dict):
+        raise ValueError("mDoc claims must be a JSON object")
+    # Certificate material is issuer-controlled. Never allow a request claim
+    # to select the COSE x5chain used to authenticate an mdoc issuer.
+    claims.pop("_mdoc_x5c", None)
+    if certificate_chain:
+        claims["_mdoc_x5c"] = certificate_chain
+
     marty_rs = get_marty_rs()
     prepared = marty_rs.oid4vci_prepare_mdoc(
         issuer_did,
         algorithm,
         doc_type,
         namespace,
-        claims_json,
+        json.dumps(claims),
         expiration_seconds,
     )
     signature = await remote_sign(bytes(prepared.tbs_data), algorithm)
