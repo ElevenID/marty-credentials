@@ -76,6 +76,22 @@ def test_native_extension_capability_contract_rejects_incomplete_module(monkeypa
         rust_integration.validate_marty_rs_capabilities()
 
 
+def test_native_extension_capability_contract_requires_remote_mdoc_split_signing(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    incomplete_module = SimpleNamespace(
+        **{
+            capability: (lambda: None)
+            for capability in rust_integration.REQUIRED_MARTY_RS_CAPABILITIES
+            if capability != "prepare_mdoc_for_hsm"
+        }
+    )
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: incomplete_module)
+
+    with pytest.raises(RuntimeError, match="prepare_mdoc_for_hsm"):
+        rust_integration.validate_marty_rs_capabilities()
+
+
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
     dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())

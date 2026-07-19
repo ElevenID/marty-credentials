@@ -208,6 +208,11 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "didcomm_resolve_did",
         "didcomm_unpack_message",
         "lti_verify_launch_jwt",
+        # mDoc issuance never loads an issuer private key into this service.
+        # It requires the Rust prepare/sign/assemble split so the KMS can sign
+        # the exact COSE payload remotely.
+        "prepare_mdoc_for_hsm",
+        "complete_mdoc_with_signature",
         "oid4vci_create_authorization_response",
         "oid4vci_create_credential_offer",
         "oid4vci_create_token_response",
