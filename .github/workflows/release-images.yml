@@ -1,25 +1,155 @@
-name: Release service images
+name: Finalize stable release and service images
 
 on:
   repository_dispatch:
-    types: [credentials-release-published]
+    types: [credentials-release-draft-ready]
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub release tag to publish as images
+        description: Stable release tag whose draft should be finalized
+        required: true
+        type: string
+      release_id:
+        description: Numeric ID of the existing draft release
+        required: true
+        type: string
+      commit_sha:
+        description: Full commit SHA targeted by the tag and draft
         required: true
         type: string
 
 concurrency:
-  group: images-${{ github.event.client_payload.tag || inputs.tag }}
+  group: credentials-images-${{ github.event.client_payload.tag || github.event.inputs.tag }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  publish:
+  validate-draft:
+    name: Validate exact draft handoff
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      tag: ${{ steps.contract.outputs.tag }}
+      release_id: ${{ steps.contract.outputs.release_id }}
+      commit: ${{ steps.contract.outputs.commit }}
+      terminal: ${{ steps.release_state.outputs.terminal }}
+      state: ${{ steps.release_state.outputs.state }}
+    steps:
+      - name: Normalize dispatch contract
+        id: contract
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
+          DISPATCH_RELEASE_ID: ${{ github.event.client_payload.release_id }}
+          DISPATCH_COMMIT: ${{ github.event.client_payload.commit_sha }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_RELEASE_ID: ${{ github.event.inputs.release_id }}
+          INPUT_COMMIT: ${{ github.event.inputs.commit_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/heads/main"
+          if [ "$WORKFLOW_REF" != "$expected_workflow_ref" ]; then
+            echo "::error::Release finalization must use the workflow from protected main"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            TAG="$INPUT_TAG"
+            RELEASE_ID="$INPUT_RELEASE_ID"
+            COMMIT="$INPUT_COMMIT"
+          else
+            TAG="$DISPATCH_TAG"
+            RELEASE_ID="$DISPATCH_RELEASE_ID"
+            COMMIT="$DISPATCH_COMMIT"
+          fi
+          if [[ ! "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Release ID must be a positive integer"
+            exit 1
+          fi
+          if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Commit must be a full lowercase SHA"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ steps.contract.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+
+      - name: Validate source and draft by numeric release ID
+        id: release_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ steps.contract.outputs.commit }}
+          RELEASE_ID: ${{ steps.contract.outputs.release_id }}
+          TAG: ${{ steps.contract.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          python scripts/release_contract.py validate-source \
+            --repository . --tag "$TAG" --commit "$COMMIT"
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
+          STATE="$(python scripts/release_contract.py validate-release \
+            --json release.json --release-id "$RELEASE_ID" --tag "$TAG" \
+            --commit "$COMMIT" --phase resumable)"
+          if [ "$STATE" = terminal ]; then
+            for service in issuance verification; do
+              name="marty-credentials-$service.digest"
+              asset_count="$(jq -r --arg name "$name" \
+                '[.assets[] | select(.name == $name)] | length' release.json)"
+              if [ "$asset_count" -ne 1 ]; then
+                echo "::error::Published release has an ambiguous $name asset"
+                exit 1
+              fi
+              asset_id="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .id' release.json)"
+              api_digest="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .digest' release.json)"
+              gh api -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$name"
+              local_digest="sha256:$(sha256sum "$name" | cut -d ' ' -f1)"
+              if [ "$api_digest" != "$local_digest" ]; then
+                echo "::error::Published $name API digest does not match its bytes"
+                exit 1
+              fi
+              image_digest="$(tr -d '\r\n' < "$name")"
+              package="marty-credentials-$service"
+              gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
+                > "package-terminal-$service.json"
+              python scripts/release_contract.py validate-package-tag \
+                --json "package-terminal-$service.json" --tag "$TAG" \
+                --digest "$image_digest"
+            done
+            echo "terminal=true" >> "$GITHUB_OUTPUT"
+          elif [ "$STATE" = complete ] || [ "$STATE" = build ]; then
+            echo "terminal=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unexpected release recovery state: $STATE"
+            exit 1
+          fi
+          echo "state=$STATE" >> "$GITHUB_OUTPUT"
+
+  publish-by-digest:
+    name: Build image evidence (${{ matrix.service }})
+    needs: validate-draft
+    if: needs.validate-draft.outputs.state == 'build'
     strategy:
+      fail-fast: false
       matrix:
         include:
           - service: issuance
@@ -36,29 +166,26 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{ github.event.client_payload.tag || inputs.tag }}
-      - name: Download and verify immutable release dependencies
+          ref: ${{ needs.validate-draft.outputs.tag }}
+
+      - name: Download and verify pinned release dependencies
         id: deps
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.client_payload.tag || inputs.tag }}
         run: |
           set -euo pipefail
           jq -e '.schema == "marty.release-dependencies/v1"' release/dependencies.json >/dev/null
           mkdir release-deps
-
           for dependency in marty-rs marty-msf marty-common; do
-            repository=$(jq -r ".[\"$dependency\"].repository" release/dependencies.json)
-            release_tag=$(jq -r ".[\"$dependency\"].tag" release/dependencies.json)
-            asset=$(jq -r ".[\"$dependency\"].asset" release/dependencies.json)
-            expected=$(jq -r ".[\"$dependency\"].sha256" release/dependencies.json)
+            repository=$(jq -r --arg dependency "$dependency" '.[$dependency].repository' release/dependencies.json)
+            release_tag=$(jq -r --arg dependency "$dependency" '.[$dependency].tag' release/dependencies.json)
+            asset=$(jq -r --arg dependency "$dependency" '.[$dependency].asset' release/dependencies.json)
+            expected=$(jq -r --arg dependency "$dependency" '.[$dependency].sha256' release/dependencies.json)
             gh release download "$release_tag" --repo "$repository" --pattern "$asset" --dir release-deps
             echo "$expected  release-deps/$asset" | sha256sum -c -
           done
-
           {
-            echo "tag=$TAG"
             echo "marty_rs_wheel=$(jq -r '.["marty-rs"].asset' release/dependencies.json)"
             echo "marty_msf_wheel=$(jq -r '.["marty-msf"].asset' release/dependencies.json)"
             echo "marty_common_wheel=$(jq -r '.["marty-common"].asset' release/dependencies.json)"
@@ -66,23 +193,24 @@ jobs:
             echo "marty_msf_sha256=$(jq -r '.["marty-msf"].sha256' release/dependencies.json)"
             echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)"
           } >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+
       - id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          push: true
-          tags: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}:${{ steps.deps.outputs.tag }}
+          outputs: type=image,name=ghcr.io/elevenid/marty-credentials-${{ matrix.service }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.deps.outputs.tag }}
+            org.opencontainers.image.revision=${{ needs.validate-draft.outputs.commit }}
+            org.opencontainers.image.version=${{ needs.validate-draft.outputs.tag }}
           build-args: |
             MARTY_RS_WHEEL=${{ steps.deps.outputs.marty_rs_wheel }}
             MARTY_MSF_WHEEL=${{ steps.deps.outputs.marty_msf_wheel }}
@@ -92,7 +220,8 @@ jobs:
             MARTY_COMMON_SHA256=${{ steps.deps.outputs.marty_common_sha256 }}
           provenance: mode=max
           sbom: true
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-name: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -108,43 +237,368 @@ jobs:
           image: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: marty-credentials-${{ matrix.service }}.spdx.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: image-evidence-${{ matrix.service }}
-          path: marty-credentials-${{ matrix.service }}.spdx.json
-          retention-days: 7
-
       - name: Record immutable image digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: printf '%s\n' "$DIGEST" > marty-credentials-${{ matrix.service }}.digest
-
+          SERVICE: ${{ matrix.service }}
+        run: printf '%s\n' "$DIGEST" > "marty-credentials-$SERVICE.digest"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: image-digest-${{ matrix.service }}
-          path: marty-credentials-${{ matrix.service }}.digest
+          name: image-evidence-${{ matrix.service }}
+          path: |
+            marty-credentials-${{ matrix.service }}.digest
+            marty-credentials-${{ matrix.service }}.spdx.json
           retention-days: 7
 
-  attach-evidence:
-    needs: publish
+  finalize-release:
+    name: Publish immutable release exactly once
+    needs: [validate-draft, publish-by-digest]
+    if: >-
+      always() &&
+      needs.validate-draft.result == 'success' &&
+      needs.validate-draft.outputs.state != 'terminal' &&
+      (
+        needs.publish-by-digest.result == 'success' ||
+        (
+          needs.validate-draft.outputs.state == 'complete' &&
+          needs.publish-by-digest.result == 'skipped'
+        )
+      )
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
+      packages: write
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          pattern: image-*
+          ref: ${{ needs.validate-draft.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: needs.validate-draft.outputs.state == 'build'
+        with:
+          pattern: image-evidence-*
           path: release-assets
           merge-multiple: true
-      - name: Create checksums
-        run: (cd release-assets && sha256sum ./* > SHA256SUMS)
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+
+      - name: Revalidate and download draft assets by release ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-before.json
+          python scripts/release_contract.py validate-release \
+            --json release-before.json --release-id "$RELEASE_ID" --tag "$TAG" \
+            --commit "$COMMIT" --phase resumable
+          jq -e '.draft == true' release-before.json >/dev/null
+          mkdir -p existing-assets release-assets
+          while IFS=$'\t' read -r asset_id asset_name; do
+            case "$asset_name" in
+              marty-credentials-issuance.digest|\
+              marty-credentials-issuance.spdx.json|\
+              marty-credentials-verification.digest|\
+              marty-credentials-verification.spdx.json|\
+              SHA256SUMS|SHA256SUMS.sigstore.json)
+                destination="existing-assets/$asset_name"
+                ;;
+              *)
+                destination="release-assets/$asset_name"
+                ;;
+            esac
+            gh api -H 'Accept: application/octet-stream' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+              > "$destination"
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' release-before.json)
+          for name in \
+            marty-credentials-issuance.digest \
+            marty-credentials-issuance.spdx.json \
+            marty-credentials-verification.digest \
+            marty-credentials-verification.spdx.json
+          do
+            if [ -f "existing-assets/$name" ]; then
+              if [ -f "release-assets/$name" ]; then
+                if ! cmp --silent "existing-assets/$name" "release-assets/$name"; then
+                  echo "::error::Existing $name differs from the rebuilt evidence"
+                  exit 1
+                fi
+              else
+                cp "existing-assets/$name" "release-assets/$name"
+              fi
+            fi
+          done
+
+      - name: Verify every stable artifact's GitHub provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r name; do
+            gh attestation verify "release-assets/$name" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow \
+              "$GITHUB_REPOSITORY/.github/workflows/release-stable.yml" \
+              --source-ref "refs/tags/$TAG" \
+              --source-digest "$COMMIT" \
+              --deny-self-hosted-runners
+          done < <(
+            python scripts/release_contract.py list-stable-assets --tag "$TAG"
+          )
+
+      - name: Create and verify one final checksum manifest
+        env:
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python scripts/release_contract.py write-checksums \
+            --directory release-assets --tag "$TAG"
+          if [ -f existing-assets/SHA256SUMS ] &&
+            ! cmp --silent existing-assets/SHA256SUMS release-assets/SHA256SUMS; then
+            echo "::error::Existing SHA256SUMS differs from the reconstructed manifest"
+            exit 1
+          fi
+          python scripts/release_contract.py verify-checksums \
+            --directory release-assets --tag "$TAG"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - name: Sign final checksum manifest
+        run: |
+          set -euo pipefail
+          if [ -f existing-assets/SHA256SUMS.sigstore.json ]; then
+            if [ ! -f existing-assets/SHA256SUMS ]; then
+              echo "::error::A checksum signature exists without its checksum manifest"
+              exit 1
+            fi
+            cp existing-assets/SHA256SUMS.sigstore.json \
+              release-assets/SHA256SUMS.sigstore.json
+            cosign verify-blob \
+              --bundle release-assets/SHA256SUMS.sigstore.json \
+              --certificate-identity \
+              "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/heads/main" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              release-assets/SHA256SUMS >/dev/null
+          else
+            cosign sign-blob --yes \
+              --bundle release-assets/SHA256SUMS.sigstore.json \
+              release-assets/SHA256SUMS
+          fi
+
+      - name: Attest complete release payload
+        if: needs.validate-draft.outputs.state != 'complete'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-path: release-assets/**
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+
+      - name: Verify the existing complete-payload attestation
+        if: needs.validate-draft.outputs.state == 'complete'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for artifact in release-assets/*; do
+            gh attestation verify "$artifact" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow \
+              "$GITHUB_REPOSITORY/.github/workflows/release-images.yml" \
+              --deny-self-hosted-runners
+          done
+
+      - name: Upload only missing evidence to the exact draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-current.json
+          python scripts/release_contract.py validate-release \
+            --json release-current.json --release-id "$RELEASE_ID" \
+            --tag "$TAG" --commit "$COMMIT" --phase resumable
+          jq -e '.draft == true' release-current.json >/dev/null
+          for name in \
+            marty-credentials-issuance.digest \
+            marty-credentials-issuance.spdx.json \
+            marty-credentials-verification.digest \
+            marty-credentials-verification.spdx.json \
+            SHA256SUMS \
+            SHA256SUMS.sigstore.json
+          do
+            local_digest="sha256:$(sha256sum "release-assets/$name" | cut -d ' ' -f1)"
+            count="$(jq -r --arg name "$name" \
+              '[.assets[] | select(.name == $name)] | length' release-current.json)"
+            if [ "$count" -gt 1 ]; then
+              echo "::error::Draft contains duplicate $name assets"
+              exit 1
+            fi
+            if [ "$count" -eq 1 ]; then
+              asset_id="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .id' release-current.json)"
+              api_digest="$(jq -er --arg name "$name" \
+                '.assets[] | select(.name == $name) | .digest' release-current.json)"
+              if [ "$api_digest" != "$local_digest" ]; then
+                echo "::error::Existing $name API digest differs from the local payload"
+                exit 1
+              fi
+              existing="$(mktemp)"
+              gh api -H 'Accept: application/octet-stream' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$existing"
+              if ! cmp --silent "$existing" "release-assets/$name"; then
+                echo "::error::Existing $name differs from this finalized payload"
+                exit 1
+              fi
+              echo "Existing $name is identical; retaining it"
+              continue
+            fi
+            encoded="$(jq -rn --arg value "$name" '$value | @uri')"
+            response="$(mktemp)"
+            status="$(curl --silent --show-error \
+              --output "$response" --write-out '%{http_code}' \
+              --request POST \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2026-03-10' \
+              --header 'Content-Type: application/octet-stream' \
+              --data-binary "@release-assets/$name" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$encoded")"
+            if [ "$status" != 201 ]; then
+              cat "$response"
+              echo "::error::Uploading $name failed with HTTP $status"
+              exit 1
+            fi
+            jq -e --arg name "$name" \
+              --arg digest "$local_digest" \
+              '.name == $name and .state == "uploaded" and .digest == $digest' \
+              "$response" >/dev/null
+          done
+
+      - name: Validate complete draft before image tag promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-complete.json
+          python scripts/release_contract.py validate-release \
+            --json release-complete.json --release-id "$RELEASE_ID" --tag "$TAG" \
+            --commit "$COMMIT" --phase complete-draft
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0
         with:
-          tag_name: ${{ github.event.client_payload.tag || inputs.tag }}
-          generate_release_notes: true
-          files: release-assets/**
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Promote both verified digests to the stable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for service in issuance verification; do
+            package="marty-credentials-$service"
+            IMAGE="ghcr.io/elevenid/marty-credentials-$service"
+            DIGEST="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
+            if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Invalid $service image digest"
+              exit 1
+            fi
+            gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
+              > "package-before-$service.json"
+            state="$(python scripts/release_contract.py validate-package-tag \
+              --json "package-before-$service.json" --tag "$TAG" \
+              --digest "$DIGEST" --allow-absent)"
+            if [ "$state" = absent ]; then
+              docker buildx imagetools create --tag "$IMAGE:$TAG" "$IMAGE@$DIGEST"
+            elif [ "$state" = matched ]; then
+              echo "$IMAGE:$TAG already targets $DIGEST; retaining it"
+            else
+              echo "::error::Unexpected image tag validation state: $state"
+              exit 1
+            fi
+            gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
+              > "package-after-$service.json"
+            python scripts/release_contract.py validate-package-tag \
+              --json "package-after-$service.json" --tag "$TAG" \
+              --digest "$DIGEST"
+          done
+
+      - name: Publish the exact complete draft once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-prepublish.json
+          python scripts/release_contract.py validate-release \
+            --json release-prepublish.json --release-id "$RELEASE_ID" \
+            --tag "$TAG" --commit "$COMMIT" --phase complete-draft
+          while IFS=$'\t' read -r name api_digest; do
+            if [ ! -f "release-assets/$name" ] || [ -L "release-assets/$name" ]; then
+              echo "::error::Local final payload is missing regular file $name"
+              exit 1
+            fi
+            local_digest="sha256:$(sha256sum "release-assets/$name" | cut -d ' ' -f1)"
+            if [ "$api_digest" != "$local_digest" ]; then
+              echo "::error::Remote release digest for $name changed before publication"
+              exit 1
+            fi
+          done < <(jq -r '.assets[] | [.name, .digest] | @tsv' release-prepublish.json)
+          tag_object="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          object_type="$(jq -r '.object.type' <<<"$tag_object")"
+          object_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+          depth=0
+          while [ "$object_type" = tag ]; do
+            depth=$((depth + 1))
+            if [ "$depth" -gt 5 ]; then
+              echo "::error::Release tag has an excessive indirection chain"
+              exit 1
+            fi
+            tag_object="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+            object_type="$(jq -r '.object.type' <<<"$tag_object")"
+            object_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+          done
+          if [ "$object_type" != commit ] || [ "$object_sha" != "$COMMIT" ]; then
+            echo "::error::Remote tag no longer resolves to the approved commit"
+            exit 1
+          fi
+          for service in issuance verification; do
+            DIGEST="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
+            package="marty-credentials-$service"
+            gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
+              > "package-prepublish-$service.json"
+            python scripts/release_contract.py validate-package-tag \
+              --json "package-prepublish-$service.json" --tag "$TAG" \
+              --digest "$DIGEST"
+          done
+          gh api --method PATCH -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            -F draft=false -F prerelease=false -f make_latest=true > release-published.json
+          python scripts/release_contract.py validate-release \
+            --json release-published.json --release-id "$RELEASE_ID" --tag "$TAG" \
+            --commit "$COMMIT" --phase published

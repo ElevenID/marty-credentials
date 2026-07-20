@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve W3C VC Data Model v2 credential subject objects and subject sets
   through the production JWT-VC issuance and remote-signing path.
 
+### Security
+
+- Publish stable source artifacts and digest-pinned service images through one
+  fail-closed immutable draft, with a complete signed checksum manifest.
+
 ## [unreleased] - 2026-07-17
 
 ## [unreleased] - 2026-07-17
