@@ -3,7 +3,9 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
 IMAGES = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(encoding="utf-8")
+PYPI = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
 PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 
 def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
@@ -74,6 +76,27 @@ def test_release_tool_installs_are_version_pinned() -> None:
     assert "hatchling==1.31.0" in PYPROJECT
     assert "hatch-vcs==0.5.0" in PYPROJECT
     assert "maturin==1.14.1" in PYPROJECT
+
+
+def test_pypi_waits_for_the_immutable_stable_release() -> None:
+    assert "workflow_call:" in PYPI
+    assert "workflow_dispatch:" in PYPI
+    assert "push:" not in PYPI
+    assert "python scripts/release_contract.py validate-source" in PYPI
+    assert "--phase published" in PYPI
+    assert "gh attestation verify" in PYPI
+    assert "marty_credentials-$VERSION.tar.gz" in PYPI
+    assert "python -m build" not in PYPI
+    assert "uses: ./.github/workflows/publish-pypi.yml" in IMAGES
+    assert "needs.finalize-release.result == 'success'" in IMAGES
+
+
+def test_deprecated_mutable_release_workflows_are_removed() -> None:
+    workflows = ROOT / ".github" / "workflows"
+    assert not (workflows / "release-rc.yml").exists()
+    assert not (workflows / "cleanup-artifacts.yml").exists()
+    assert "v0.2.0-rc.1" not in README
+    assert "rustwasm.github.io/wasm-pack/installer" not in README
 
 
 def test_docker_actions_use_verified_node24_commits() -> None:

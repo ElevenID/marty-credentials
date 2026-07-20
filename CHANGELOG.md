@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Publish stable source artifacts and digest-pinned service images through one
   fail-closed immutable draft, with a complete signed checksum manifest.
+- Publish the optional PyPI source distribution only from that attested,
+  immutable release and remove obsolete mutable RC and artifact-cleanup paths.
 
 ## [unreleased] - 2026-07-17
 

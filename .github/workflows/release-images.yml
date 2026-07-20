@@ -602,3 +602,20 @@ jobs:
           python scripts/release_contract.py validate-release \
             --json release-published.json --release-id "$RELEASE_ID" --tag "$TAG" \
             --commit "$COMMIT" --phase published
+
+  publish-pypi:
+    name: Publish the immutable source distribution to PyPI
+    needs: [validate-draft, finalize-release]
+    if: >-
+      needs.finalize-release.result == 'success' &&
+      needs.validate-draft.outputs.state != 'terminal' &&
+      vars.ENABLE_PUBLIC_REGISTRY_PUBLISHING == 'true'
+    permissions:
+      attestations: read
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/publish-pypi.yml
+    with:
+      tag: ${{ needs.validate-draft.outputs.tag }}
+      release_id: ${{ needs.validate-draft.outputs.release_id }}
+      commit_sha: ${{ needs.validate-draft.outputs.commit }}
