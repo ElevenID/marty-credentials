@@ -493,6 +493,7 @@ async def create_jwt_vc_with_remote_signing(
     subject_id: str | None,
     credential_type: str,
     claims_json: str,
+    credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
     expiration_seconds: int = 31536000,
     algorithm: str | None = None,
     signing_key_reference: str | None = None,
@@ -513,9 +514,29 @@ async def create_jwt_vc_with_remote_signing(
     now = int(datetime.now(timezone.utc).timestamp())
     credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
     credential_status = claims.pop("credentialStatus", None)
-    subject = dict(claims)
-    if subject_id:
-        subject.setdefault("id", subject_id)
+    if credential_subject is None:
+        subject: dict[str, Any] | list[dict[str, Any]] = dict(claims)
+        if subject_id:
+            subject.setdefault("id", subject_id)
+    else:
+        if claims:
+            raise RuntimeError(
+                "explicit credential_subject cannot be combined with subject claims"
+            )
+        if isinstance(credential_subject, dict):
+            if not credential_subject:
+                raise RuntimeError("credential_subject must contain at least one claim")
+            subject = dict(credential_subject)
+        elif (
+            isinstance(credential_subject, list)
+            and credential_subject
+            and all(isinstance(item, dict) and item for item in credential_subject)
+        ):
+            subject = [dict(item) for item in credential_subject]
+        else:
+            raise RuntimeError(
+                "credential_subject must be a non-empty object or list of non-empty objects"
+            )
 
     vc: dict[str, Any] = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
