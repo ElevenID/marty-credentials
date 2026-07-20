@@ -40,11 +40,14 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
+          # Avoid the action's latest-release GitHub API lookup.
+          maturin-version: v1.14.1
           working-directory: rust/marty-rs
           target: ${{ matrix.target }}
-          args: --release --out ../../dist --features python
+          args: --locked --release --out ../../dist --features python
           sccache: 'true'
           manylinux: auto
+          before-script-linux: yum install -y perl-IPC-Cmd perl-Time-Piece
 
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

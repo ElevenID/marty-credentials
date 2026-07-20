@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   build-python:
+    if: vars.ENABLE_PUBLIC_REGISTRY_PUBLISHING == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
@@ -25,29 +26,6 @@ jobs:
           path: dist/*
           retention-days: 7
 
-  build-ffi:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-      - uses: PyO3/maturin-action@423a6347767a8b16e65c2a7a7042e4a921528da8 # v1
-        with:
-          working-directory: rust/marty-rs
-          args: --release --out ../../ffi-dist --features python
-          manylinux: auto
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6
-        with:
-          name: marty-rs-${{ matrix.os }}
-          path: ffi-dist/*
-          retention-days: 7
-
   publish-python:
     if: vars.ENABLE_PUBLIC_REGISTRY_PUBLISHING == 'true'
     needs: build-python
@@ -61,48 +39,3 @@ jobs:
           name: marty-credentials-python
           path: dist
       - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
-
-  publish-ffi:
-    if: vars.ENABLE_PUBLIC_REGISTRY_PUBLISHING == 'true'
-    needs: build-ffi
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6
-        with:
-          pattern: marty-rs-*
-          path: dist
-          merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
-
-  github-release:
-    needs: [build-python, build-ffi]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6
-        with:
-          pattern: marty-*
-          path: release
-          merge-multiple: true
-      - uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
-        with:
-          path: .
-          format: cyclonedx-json
-          output-file: release/marty-credentials-sbom.cdx.json
-      - name: Generate checksums
-        working-directory: release
-        run: find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
-        with:
-          subject-path: release/**/*
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          files: release/**/*
-          generate_release_notes: true
