@@ -65,7 +65,7 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.tag }}
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
 
@@ -133,7 +133,7 @@ jobs:
         with:
           ref: ${{ needs.validate-release-source.outputs.tag }}
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
       - name: Build wheels
@@ -203,7 +203,7 @@ jobs:
         with:
           ref: ${{ needs.validate-release-source.outputs.tag }}
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
       - name: Install build tools
@@ -228,7 +228,7 @@ jobs:
       - name: Run Rust tests
         working-directory: rust/marty-rs
         run: cargo test --locked --no-default-features --features native
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
       - name: Install and test Python package
@@ -260,7 +260,7 @@ jobs:
         with:
           ref: ${{ needs.validate-release-source.outputs.tag }}
           fetch-depth: 0
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
       - name: Download all stable artifacts
