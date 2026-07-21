@@ -311,7 +311,7 @@ jobs:
           # moment to return a newly-created draft from the releases listing.
           # Retry only the read; never create another draft or alter the tag.
           RELEASE_ID=""
-          for attempt in $(seq 1 15); do
+          for _ in $(seq 1 15); do
             gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
               "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
             matches="$(jq -r --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)] | length' releases.json)"
