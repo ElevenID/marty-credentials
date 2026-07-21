@@ -307,11 +307,29 @@ jobs:
           TAG: ${{ needs.validate-release-source.outputs.tag }}
         run: |
           set -euo pipefail
-          gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
-          RELEASE_ID="$(jq -er --arg tag "$TAG" \
-            '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0].id else error("release lookup is ambiguous") end' \
-            releases.json)"
+          # Draft releases are not addressable by tag and GitHub can take a
+          # moment to return a newly-created draft from the releases listing.
+          # Retry only the read; never create another draft or alter the tag.
+          RELEASE_ID=""
+          for attempt in $(seq 1 15); do
+            gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+            matches="$(jq -r --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)] | length' releases.json)"
+            if [ "$matches" -eq 1 ]; then
+              RELEASE_ID="$(jq -er --arg tag "$TAG" \
+                '[.[][] | select(.tag_name == $tag)][0].id' releases.json)"
+              break
+            fi
+            if [ "$matches" -gt 1 ]; then
+              echo "::error::More than one draft release is associated with $TAG"
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ -z "$RELEASE_ID" ]; then
+            echo "::error::Draft release for $TAG was not visible after 30 seconds"
+            exit 1
+          fi
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
           python scripts/release_contract.py validate-release \
