@@ -30,7 +30,10 @@ jobs:
     name: Validate exact draft handoff
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # GitHub treats an unpublished draft as write-scoped release content;
+      # this job only reads its exact numeric ID before handing off to the
+      # image jobs, but needs this scope to perform that read.
+      contents: write
       packages: read
     outputs:
       tag: ${{ steps.contract.outputs.tag }}
