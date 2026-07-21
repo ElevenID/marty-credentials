@@ -8,8 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Stable tag to release (e.g., v0.2.0)'
+        description: 'Existing stable tag to release (for example, v0.2.0)'
         required: true
+        type: string
+
+concurrency:
+  group: credentials-stable-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -18,8 +23,100 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  validate-release-source:
+    name: Validate immutable release source
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      tag: ${{ steps.target.outputs.tag }}
+      version: ${{ steps.target.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+    steps:
+      - name: Select requested tag
+        id: target
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCHED_TAG: ${{ github.event.inputs.tag }}
+          PUSHED_TAG: ${{ github.ref_name }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            TAG="$DISPATCHED_TAG"
+          else
+            TAG="$PUSHED_TAG"
+          fi
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Stable release tag is invalid: $TAG"
+            exit 1
+          fi
+          expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/release-stable.yml@refs/tags/$TAG"
+          if [ "$WORKFLOW_REF" != "$expected_workflow_ref" ]; then
+            echo "::error::Run the stable workflow from the exact release tag ref"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$(printf '%s' "$TAG" | cut -c2-)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ steps.target.outputs.tag }}
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+
+      - name: Bind tag, checkout, and package versions
+        id: identity
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_COMMIT: ${{ github.sha }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          COMMIT="$(git rev-parse "$TAG^{commit}")"
+          if [ "$EVENT_NAME" = push ] && [ "$COMMIT" != "$PUSH_COMMIT" ]; then
+            echo "::error::Tag target $COMMIT does not match push commit $PUSH_COMMIT"
+            exit 1
+          fi
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          python scripts/release_contract.py validate-source --repository . --tag "$TAG" --commit "$COMMIT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an existing draft or published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+          jq -e --arg tag "$TAG" '([.[][] | select(.tag_name == $tag)] | length) == 0' \
+            releases.json >/dev/null
+
+      - name: Reject existing versioned image tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for service in issuance verification; do
+            package="marty-credentials-$service"
+            gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
+              > "package-$service.json"
+            python scripts/release_contract.py validate-package-tag-absent \
+              --json "package-$service.json" --tag "$TAG"
+          done
+
   build-python-wheels:
     name: Build Python Wheels
+    needs: validate-release-source
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,24 +126,19 @@ jobs:
         exclude:
           - os: windows-latest
             target: aarch64
-          # manylinux2014's cross compiler cannot build the current ring and
-          # aws-lc ARM assembly. Keep native macOS ARM coverage and publish
-          # Linux x86_64 until this can move to a native ARM runner.
           - os: ubuntu-latest
             target: aarch64
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          ref: ${{ needs.validate-release-source.outputs.tag }}
           fetch-depth: 0
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.11'
-
       - name: Build wheels
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
         with:
-          # Avoid the action's latest-release GitHub API lookup.
           maturin-version: v1.14.1
           working-directory: rust/marty-rs
           target: ${{ matrix.target }}
@@ -54,7 +146,6 @@ jobs:
           sccache: 'true'
           manylinux: auto
           before-script-linux: yum install -y perl-IPC-Cmd perl-Time-Piece
-
       - name: Upload wheels
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -63,40 +154,37 @@ jobs:
 
   build-wasm:
     name: Build WASM Packages
+    needs: validate-release-source
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: rust/marty-rs
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-release-source.outputs.tag }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-
       - name: Install wasm-pack
-        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-
+        run: cargo install wasm-pack --version 0.15.0 --locked
       - name: Build WASM packages
         run: |
           mkdir -p ../../dist/wasm
-          
           wasm-pack build --locked --target web --no-default-features --features wasm
           mv pkg ../../dist/wasm/web
           wasm-pack build --locked --target nodejs --no-default-features --features wasm
           mv pkg ../../dist/wasm/nodejs
           wasm-pack build --locked --target bundler --no-default-features --features wasm
           mv pkg ../../dist/wasm/bundler
-
       - name: Create WASM archive
         run: |
           cd ../../dist
           tar -czf marty-rs-wasm.tar.gz wasm/
           sha256sum marty-rs-wasm.tar.gz > checksums-wasm.txt
-
       - name: Generate SBOM
         run: |
-          cargo install cargo-cyclonedx --locked
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
           cargo cyclonedx --format json --override-filename marty-rs-sbom
           mv marty-rs-sbom.json ../../dist/marty-rs-sbom.json
-
       - name: Upload WASM artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -108,22 +196,20 @@ jobs:
 
   build-source-dist:
     name: Build Python Source Distribution
+    needs: validate-release-source
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          ref: ${{ needs.validate-release-source.outputs.tag }}
           fetch-depth: 0
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.11'
-
       - name: Install build tools
-        run: pip install build hatch
-
+        run: python -m pip install build==1.5.0
       - name: Build source distribution
         run: python -m build --sdist --outdir dist
-
       - name: Upload source dist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -132,22 +218,22 @@ jobs:
 
   test:
     name: Run Tests Before Release
+    needs: validate-release-source
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ needs.validate-release-source.outputs.tag }}
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-
       - name: Run Rust tests
         working-directory: rust/marty-rs
         run: cargo test --locked --no-default-features --features native
-
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.11'
-
       - name: Install and test Python package
         run: |
-          pip install maturin pytest
+          python -m pip install maturin==1.14.1 pytest==9.1.1
           cd rust/marty-rs
           maturin build --locked --features python --interpreter python --out dist
           python -c "import pathlib, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(next(pathlib.Path('dist').glob('*.whl')))])"
@@ -155,69 +241,93 @@ jobs:
           pip install -e .[dev]
           pytest tests/
 
-  create-release:
+  create-release-draft:
+    name: Create complete source-artifact draft
+    needs:
+      - validate-release-source
+      - build-python-wheels
+      - build-wasm
+      - build-source-dist
+      - test
+    runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
-      id-token: write # Required for attestations.
+      id-token: write
       attestations: write
-    name: Create Stable Release
-    needs: [build-python-wheels, build-wasm, build-source-dist, test]
-    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
+          ref: ${{ needs.validate-release-source.outputs.tag }}
           fetch-depth: 0
-
-      - name: Get version from tag
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${GITHUB_EVENT_INPUTS_TAG}"
-          else
-            TAG="${GITHUB_REF#refs/tags/}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-        env:
-          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
-
-      - name: Download all artifacts
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - name: Download all stable artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: release-artifacts
-
-      - name: Consolidate artifacts
+      - name: Collect the exact stable artifact set
+        env:
+          TAG: ${{ needs.validate-release-source.outputs.tag }}
         run: |
-          mkdir -p final-release
-          find release-artifacts -type f -exec cp {} final-release/ \;
-          cd final-release
-          sha256sum ./* > SHA256SUMS
-
+          set -euo pipefail
+          python scripts/release_contract.py collect-stable \
+            --source release-artifacts --destination final-release --tag "$TAG"
       - name: Generate release notes
+        env:
+          TAG: ${{ needs.validate-release-source.outputs.tag }}
         run: |
-          cargo install git-cliff
-          git cliff --tag ${{ steps.version.outputs.tag }} --unreleased --strip all > RELEASE_NOTES.md
-
-      - name: Generate attestations
+          set -euo pipefail
+          cargo install git-cliff --version 2.13.1 --locked
+          git cliff --tag "$TAG" --unreleased --strip all > RELEASE_NOTES.md
+      - name: Attest stable artifacts
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a
         with:
           subject-path: 'final-release/*'
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: Release ${{ steps.version.outputs.version }}
-          body_path: RELEASE_NOTES.md
-          files: final-release/*
-          prerelease: false
-          generate_release_notes: true
-
-      - name: Start image publication from released artifacts
+      - name: Create draft without overwriting assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          COMMIT: ${{ needs.validate-release-source.outputs.commit }}
+          TAG: ${{ needs.validate-release-source.outputs.tag }}
+          VERSION: ${{ needs.validate-release-source.outputs.version }}
         run: |
-          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" \
-            -f event_type=credentials-release-published \
-            -f "client_payload[tag]=$TAG"
+          set -euo pipefail
+          gh release create "$TAG" final-release/* \
+            --draft \
+            --verify-tag \
+            --target "$COMMIT" \
+            --title "Release $VERSION" \
+            --notes-file RELEASE_NOTES.md
+      - name: Resolve and validate exact draft
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-release-source.outputs.commit }}
+          TAG: ${{ needs.validate-release-source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" > releases.json
+          RELEASE_ID="$(jq -er --arg tag "$TAG" \
+            '[.[][] | select(.tag_name == $tag)] | if length == 1 then .[0].id else error("release lookup is ambiguous") end' \
+            releases.json)"
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
+          python scripts/release_contract.py validate-release \
+            --json release.json --release-id "$RELEASE_ID" --tag "$TAG" \
+            --commit "$COMMIT" --phase stable-draft
+          echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
+      - name: Start digest-first image publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-release-source.outputs.commit }}
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+          TAG: ${{ needs.validate-release-source.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
+            -f event_type=credentials-release-draft-ready \
+            -f "client_payload[tag]=$TAG" \
+            -f "client_payload[release_id]=$RELEASE_ID" \
+            -f "client_payload[commit_sha]=$COMMIT"

@@ -2486,6 +2486,34 @@ class TestListCredentialsByOrg:
 # ============================================================================
 
 class TestRustIntegrationOrgIdValidation:
+    def test_initiate_request_accepts_an_explicit_subject_set_only(self):
+        from pydantic import ValidationError
+
+        from issuance.infrastructure.api.routes import InitiateIssuanceRequest
+
+        subjects = [
+            {"id": "did:example:subject"},
+            {"id": "did:example:other:subject"},
+        ]
+        request = InitiateIssuanceRequest(
+            organization_id="org-1",
+            credential_template_id="template-1",
+            credential_subject=subjects,
+        )
+        assert request.credential_subject == subjects
+
+        with pytest.raises(ValidationError, match="cannot be combined with claims"):
+            InitiateIssuanceRequest(
+                organization_id="org-1",
+                claims={"givenName": "Alice"},
+                credential_subject=subjects,
+            )
+        with pytest.raises(ValidationError, match="reserved for internal use"):
+            InitiateIssuanceRequest(
+                organization_id="org-1",
+                claims={"_credential_subject": subjects},
+            )
+
     def test_raises_when_org_id_missing(self):
         """create_verifiable_credential_wrapper must raise if org_id is None
         and the issuer DID is not found in the key cache."""
@@ -2648,6 +2676,63 @@ class TestRustIntegrationOrgIdValidation:
         }
         assert decoded["vc"]["validFrom"].endswith("Z")
         assert decoded["vc"]["validUntil"].endswith("Z")
+
+    async def test_remote_jwt_vc_preserves_multiple_credential_subjects(self):
+        from issuance.application.rust_integration import (
+            base64url_decode,
+            create_jwt_vc_with_remote_signing,
+        )
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        credential_subject = [
+            {"id": "did:example:subject"},
+            {"id": "did:example:other:subject", "role": "reviewer"},
+        ]
+        credential, _ = await create_jwt_vc_with_remote_signing(
+            issuer_did="did:web:issuer.example",
+            signing_service_id="managed-openbao-transit",
+            remote_sign=fake_remote_sign,
+            subject_id="did:key:z6MkHolder",
+            credential_type="W3cVcdmTestCredential",
+            claims_json=json.dumps(
+                {
+                    "credentialStatus": {
+                        "type": "BitstringStatusListEntry",
+                        "statusListIndex": "42",
+                    }
+                }
+            ),
+            credential_subject=credential_subject,
+            algorithm="ES256",
+        )
+
+        payload = json.loads(base64url_decode(credential.split(".")[1]))
+        assert payload["sub"] == "did:key:z6MkHolder"
+        assert payload["vc"]["credentialSubject"] == credential_subject
+        assert payload["vc"]["credentialStatus"]["statusListIndex"] == "42"
+
+    async def test_remote_jwt_vc_rejects_ambiguous_subject_inputs(self):
+        from issuance.application.rust_integration import create_jwt_vc_with_remote_signing
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        with pytest.raises(
+            RuntimeError,
+            match="explicit credential_subject cannot be combined with subject claims",
+        ):
+            await create_jwt_vc_with_remote_signing(
+                issuer_did="did:web:issuer.example",
+                signing_service_id="managed-openbao-transit",
+                remote_sign=fake_remote_sign,
+                subject_id="did:key:z6MkHolder",
+                credential_type="W3cVcdmTestCredential",
+                claims_json=json.dumps({"givenName": "Alice"}),
+                credential_subject=[{"id": "did:example:subject"}],
+                algorithm="ES256",
+            )
 
     async def test_grpc_remote_signing_helper_uses_org_scoped_did_context(self, monkeypatch):
         from issuance.application.rust_integration import base64url_decode

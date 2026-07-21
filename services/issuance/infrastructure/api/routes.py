@@ -249,6 +249,13 @@ _SD_JWT_PAYLOAD_FORMATS = {
     "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
     "sd_jwt_vc", "vc+sd_jwt", "dc+sd_jwt",
 }
+_JWT_VC_PAYLOAD_FORMATS = {
+    "jwt_vc",
+    "jwt_vc_json",
+    "w3c_vcdm_v2_jwt",
+    "w3c_vcdm_v2_jwt_vc",
+}
+_CREDENTIAL_SUBJECT_FIELD = "_credential_subject"
 
 _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
 
@@ -690,6 +697,26 @@ class InitiateIssuanceRequest(BaseModel):
     issuer_mode: str = "org_managed"
     delivery_mode: str = "wallet_only"
     claims: dict[str, Any] = {}
+    credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None
+
+    @model_validator(mode="after")
+    def validate_explicit_credential_subject(self) -> "InitiateIssuanceRequest":
+        if _CREDENTIAL_SUBJECT_FIELD in self.claims:
+            raise ValueError(f"{_CREDENTIAL_SUBJECT_FIELD} is reserved for internal use")
+        if self.credential_subject is None:
+            return self
+        if self.claims:
+            raise ValueError("credential_subject cannot be combined with claims")
+        subjects = (
+            self.credential_subject
+            if isinstance(self.credential_subject, list)
+            else [self.credential_subject]
+        )
+        if not subjects or not all(isinstance(subject, dict) and subject for subject in subjects):
+            raise ValueError(
+                "credential_subject must be a non-empty object or list of non-empty objects"
+            )
+        return self
 
 
 class IssuanceResponse(BaseModel):
@@ -2670,6 +2697,15 @@ async def initiate_issuance(
     if not credential_vct:
         credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
 
+    if (
+        request.credential_subject is not None
+        and _normalize_payload_format(credential_payload_format) not in _JWT_VC_PAYLOAD_FORMATS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="credential_subject is supported only for VCDM JWT-VC templates",
+        )
+
     await _require_active_revocation_profile_binding(
         organization_id=request.organization_id,
         revocation_profile_id=revocation_profile_id,
@@ -2677,6 +2713,8 @@ async def initiate_issuance(
     # Store vct in claims under a reserved key so the credential endpoint can
     # use it at signing time without a second template lookup.
     merged_claims = {**request.claims, "_vct": credential_vct}
+    if request.credential_subject is not None:
+        merged_claims[_CREDENTIAL_SUBJECT_FIELD] = request.credential_subject
     # MIP §8.3 – if the caller deferred claims resolution (only sent
     # _application_id), resolve actual claim values from the application's
     # form_data.
@@ -3637,6 +3675,8 @@ async def issue_credential(
         "applicant_id",
         # Reserved internal key for the vct URI used at signing time
         "_vct",
+        # Exact VCDM subject object/set carried separately from flat claims.
+        _CREDENTIAL_SUBJECT_FIELD,
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
     logger.info(f"[credential] rid={rid} claims={list(clean_claims.keys())} subject={holder_did or tx.subject_did or 'none'}")
@@ -3868,6 +3908,7 @@ async def issue_credential(
         elif signing_format == "jwt_vc_json":
             jwt_credential, signed_credential_id = await create_jwt_vc_with_remote_signing(
                 credential_type=tx.credential_type or "VerifiableCredential",
+                credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
                 **signing_arguments,
             )
         else:
@@ -3982,7 +4023,7 @@ async def _didcomm_sign_and_deliver(
         "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
         "issuance_transaction_id", "issuance_fallback", "credential_type",
         "credential_display_name", "rejection_reason", "review_notes",
-        "info_requests", "applicant_id", "_vct",
+        "info_requests", "applicant_id", "_vct", _CREDENTIAL_SUBJECT_FIELD,
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
 
