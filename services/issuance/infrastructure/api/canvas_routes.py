@@ -138,7 +138,7 @@ from issuance.infrastructure.api.routes import (
     _verify_management_api_key,
     apply_required_remote_issuer_context,
 )
-from issuance.infrastructure.api.signing_context import sign_payload_with_remote_service
+from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_profile
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import RedirectResponse
 
@@ -2001,28 +2001,44 @@ class LocalJwkToolJwtSigner:
         }
 
 
-class RemoteKmsToolJwtSigner:
-    """Production RS256 signer backed by the registered signing-keys/KMS service."""
+class IssuerProfileToolJwtSigner:
+    """Production RS256 signer selected by issuer profile and DID.
 
-    key_purpose = "lti_tool_signing"
+    The signing-keys service owns the profile's KMS binding.  This adapter never
+    accepts or forwards a KMS service identifier or provider key reference.
+    """
 
     def __init__(self) -> None:
         self.organization_id = os.environ.get("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "").strip()
-        self.service_id = os.environ.get("CANVAS_LTI_TOOL_SIGNING_SERVICE_ID", "").strip()
-        self.key_reference = os.environ.get("CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE", "").strip() or None
+        self.issuer_profile_id = os.environ.get("CANVAS_LTI_TOOL_ISSUER_PROFILE_ID", "").strip()
+        self.issuer_did = os.environ.get("CANVAS_LTI_TOOL_ISSUER_DID", "").strip()
         self.kid = os.environ.get("CANVAS_LTI_TOOL_ACTIVE_KID", "").strip()
         signing_url = os.environ.get("SIGNING_KEYS_INTERNAL_URL", "").strip()
         signing_api_key = (
             os.environ.get("SIGNING_KEYS_INTERNAL_API_KEY", "").strip()
             or os.environ.get("ISSUANCE_API_KEY", "").strip()
         )
-        if not all((self.organization_id, self.service_id, self.kid, signing_url, signing_api_key)):
+        if not all(
+            (
+                self.organization_id,
+                self.issuer_profile_id,
+                self.issuer_did,
+                self.kid,
+                signing_url,
+                signing_api_key,
+            )
+        ):
             raise HTTPException(
                 status_code=503,
                 detail=(
                     "Production Canvas LTI signing requires SIGNING_KEYS_INTERNAL_URL/API key and "
-                    "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID/SERVICE_ID/ACTIVE_KID"
+                    "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID/ISSUER_PROFILE_ID/ISSUER_DID/ACTIVE_KID"
                 ),
+            )
+        if not self.issuer_did.startswith("did:") or not self.kid.startswith(f"{self.issuer_did}#"):
+            raise HTTPException(
+                status_code=503,
+                detail="Canvas LTI active kid must be a verification method of the configured issuer DID",
             )
 
     def _configured_public_jwks(self) -> dict[str, Any]:
@@ -2068,19 +2084,25 @@ class RemoteKmsToolJwtSigner:
         header = {"alg": "RS256", "typ": "JWT", "kid": self.kid}
         signing_input = f"{_json_b64url(header)}.{_json_b64url(payload)}"
         try:
-            result = await sign_payload_with_remote_service(
+            result = await sign_payload_with_issuer_profile(
                 organization_id=self.organization_id,
-                signing_service_id=self.service_id,
+                issuer_profile_id=self.issuer_profile_id,
                 payload=signing_input.encode("ascii"),
                 algorithm="RS256",
-                key_reference=self.key_reference,
-                key_purpose=self.key_purpose,
+                expected_issuer_did=self.issuer_did,
+                expected_verification_method_id=self.kid,
             )
         except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Canvas LTI remote signing failed: {exc}") from exc
+            raise HTTPException(
+                status_code=503,
+                detail=f"Canvas LTI issuer-profile signing failed: {exc}",
+            ) from exc
         signature = str(result.get("signature_raw_b64") or result.get("signature_b64") or "").strip()
         if not signature:
-            raise HTTPException(status_code=503, detail="Canvas LTI remote signer returned no signature")
+            raise HTTPException(
+                status_code=503,
+                detail="Canvas LTI issuer-profile signer returned no signature",
+            )
         return f"{signing_input}.{signature.rstrip('=')}"
 
     async def public_jwks(self) -> dict[str, Any]:
@@ -2097,7 +2119,7 @@ def _tool_jwt_signer() -> ToolJwtSigner:
     environment = os.environ.get("ENVIRONMENT", os.environ.get("APP_ENV", "development")).strip().lower()
     if allow_local and environment not in {"production", "prod"}:
         return LocalJwkToolJwtSigner()
-    return RemoteKmsToolJwtSigner()
+    return IssuerProfileToolJwtSigner()
 
 
 async def _sign_deep_linking_jwt(payload: dict[str, Any]) -> str:

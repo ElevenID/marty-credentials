@@ -318,7 +318,7 @@ async def test_production_canvas_tool_signer_rejects_local_private_jwk(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_production_canvas_tool_signer_requires_lti_key_purpose(
+async def test_production_canvas_tool_signer_uses_issuer_profile_and_did(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -328,22 +328,41 @@ async def test_production_canvas_tool_signer_requires_lti_key_purpose(
         return {"signature_raw_b64": "c2ln"}
 
     monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_SERVICE_ID", "canvas-lti-rs256")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE", "canvas-lti-key")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "canvas-lti-kid")
+    issuer_did = "did:web:issuer.example:canvas"
+    kid = f"{issuer_did}#lti-tool-rs256"
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_PROFILE_ID", "canvas-lti-profile")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", issuer_did)
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", kid)
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
-    monkeypatch.setattr(canvas_routes, "sign_payload_with_remote_service", sign)
+    monkeypatch.setattr(canvas_routes, "sign_payload_with_issuer_profile", sign)
 
-    token = await canvas_routes.RemoteKmsToolJwtSigner().sign_jwt(
+    token = await canvas_routes.IssuerProfileToolJwtSigner().sign_jwt(
         {"iss": "client-123", "aud": "https://canvas.example.edu/login/oauth2/token"}
     )
 
     assert token.endswith(".c2ln")
-    assert captured["signing_service_id"] == "canvas-lti-rs256"
-    assert captured["key_reference"] == "canvas-lti-key"
+    assert captured["issuer_profile_id"] == "canvas-lti-profile"
+    assert captured["expected_issuer_did"] == issuer_did
+    assert captured["expected_verification_method_id"] == kid
     assert captured["algorithm"] == "RS256"
-    assert captured["key_purpose"] == "lti_tool_signing"
+    assert "signing_service_id" not in captured
+    assert "key_reference" not in captured
+
+
+@pytest.mark.asyncio
+async def test_production_canvas_tool_signer_rejects_kid_outside_issuer_did(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_PROFILE_ID", "canvas-lti-profile")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", "did:web:issuer.example:canvas")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "did:web:other.example#key-1")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
+
+    with pytest.raises(HTTPException, match="verification method"):
+        canvas_routes.IssuerProfileToolJwtSigner()
 
 
 @pytest.mark.asyncio
@@ -352,8 +371,12 @@ async def test_production_canvas_tool_jwks_rejects_private_material(
 ) -> None:
     private_jwk, _public_key = _private_rsa_jwk("canvas-lti-kid")
     monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_SERVICE_ID", "canvas-lti-rs256")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "canvas-lti-kid")
+    issuer_did = "did:web:issuer.example:canvas"
+    kid = f"{issuer_did}#lti-tool-rs256"
+    private_jwk["kid"] = kid
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_PROFILE_ID", "canvas-lti-profile")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", issuer_did)
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", kid)
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
     monkeypatch.setenv(
@@ -362,7 +385,7 @@ async def test_production_canvas_tool_jwks_rejects_private_material(
     )
 
     with pytest.raises(HTTPException, match="must not contain private key material"):
-        await canvas_routes.RemoteKmsToolJwtSigner().public_jwks()
+        await canvas_routes.IssuerProfileToolJwtSigner().public_jwks()
 
 
 @pytest.mark.asyncio
