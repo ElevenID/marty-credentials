@@ -57,7 +57,7 @@ async def resolve_remote_issuer_context(
     key_purpose: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, Any] | None:
-    """Resolve the active issuer DID and remote signing service for an org."""
+    """Resolve the active issuer profile and its DID for an organization."""
     if not organization_id:
         return None
 

@@ -18,10 +18,23 @@ from urllib.parse import urlencode, urlparse
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature, encode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.utils import (
+    decode_dss_signature,
+    encode_dss_signature,
+)
 
 import httpx
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -106,7 +119,9 @@ def _dpop_thumbprint(jwk: dict[str, Any]) -> str:
     fields = required_fields.get(jwk.get("kty"))
     if fields is None or any(not isinstance(jwk.get(field), str) for field in fields):
         raise ValueError("unsupported or incomplete DPoP JWK")
-    canonical = json.dumps({field: jwk[field] for field in fields}, separators=(",", ":"), sort_keys=True)
+    canonical = json.dumps(
+        {field: jwk[field] for field in fields}, separators=(",", ":"), sort_keys=True
+    )
     return _b64url_encode(hashlib.sha256(canonical.encode("utf-8")).digest())
 
 
@@ -126,7 +141,9 @@ def _validated_dpop_jkt(
         jwk = header["jwk"]
         if header.get("typ") != "dpop+jwt" or header.get("alg") not in {"ES256", "PS256"}:
             raise ValueError("DPoP proof must use typ=dpop+jwt and an approved algorithm")
-        if claims.get("htm", "").upper() != method.upper() or not isinstance(claims.get("htu"), str):
+        if claims.get("htm", "").upper() != method.upper() or not isinstance(
+            claims.get("htu"), str
+        ):
             raise ValueError("DPoP proof has invalid htm or htu")
         if expected_htu is not None and claims["htu"].rstrip("/") != expected_htu.rstrip("/"):
             raise ValueError("DPoP proof htu does not match the target endpoint")
@@ -140,7 +157,9 @@ def _validated_dpop_jkt(
                 ec.SECP256R1(),
             ).public_key()
             public_key.verify(
-                encode_dss_signature(int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")),
+                encode_dss_signature(
+                    int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
+                ),
                 signed_content,
                 ec.ECDSA(hashes.SHA256()),
             )
@@ -154,7 +173,9 @@ def _validated_dpop_jkt(
             public_key.verify(
                 signature,
                 signed_content,
-                padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size),
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size
+                ),
                 hashes.SHA256(),
             )
         if access_token is not None:
@@ -173,7 +194,11 @@ def _external_endpoint_url(request: Request) -> str:
     Direct local calls deliberately fall back to the request URL.
     """
     proto = request.headers.get("x-forwarded-proto", request.url.scheme).split(",", 1)[0].strip()
-    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc)).split(",", 1)[0].strip()
+    host = (
+        request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+        .split(",", 1)[0]
+        .strip()
+    )
     return f"{proto}://{host}{request.url.path}"
 
 
@@ -223,6 +248,7 @@ class CanvasMirrorTarget:
     platform: CanvasPlatform
     binding: CanvasProgramBinding
 
+
 try:
     from marty_common import MARTY_DEFAULT_REVOCATION_PROFILE_ID
 except Exception:  # pragma: no cover - local fallback for isolated issuance tests
@@ -243,11 +269,17 @@ _VDS_NC_PAYLOAD_FORMATS = {"vds_nc", "vdsnc"}
 # Staged-rollout flag — mirrors the one in main.py.  Set VDSNC_RUST_ENABLED=false
 # to disable VDS-NC signing and return an error for VDS-NC credential requests.
 _VDSNC_RUST_ENABLED: bool = os.environ.get("VDSNC_RUST_ENABLED", "true").lower() not in (
-    "false", "0", "no", "off"
+    "false",
+    "0",
+    "no",
+    "off",
 )
 _SD_JWT_PAYLOAD_FORMATS = {
-    "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
-    "sd_jwt_vc", "vc+sd_jwt", "dc+sd_jwt",
+    "w3c_vcdm_v2_sd_jwt",
+    "ietf_sd_jwt",
+    "sd_jwt_vc",
+    "vc+sd_jwt",
+    "dc+sd_jwt",
 }
 _JWT_VC_PAYLOAD_FORMATS = {
     "jwt_vc",
@@ -263,7 +295,10 @@ _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
 def _normalize_issuer_mode(value: str | None) -> str:
     mode = (value or "org_managed").strip() or "org_managed"
     if mode not in _ISSUER_MODES:
-        raise HTTPException(status_code=422, detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}",
+        )
     return mode
 
 
@@ -324,7 +359,9 @@ def _reject_direct_signing_headers(headers: Any) -> None:
         )
 
 
-def _credential_format_for_remote_context(payload_format: str | None, request_format: str | None = None) -> str:
+def _credential_format_for_remote_context(
+    payload_format: str | None, request_format: str | None = None
+) -> str:
     normalized_payload = _normalize_payload_format(payload_format)
     normalized_request = _normalize_payload_format(request_format)
     if normalized_payload in _MDOC_PAYLOAD_FORMATS:
@@ -396,7 +433,9 @@ def _key_purpose_for_credential_format(credential_format: str) -> str:
     return "vc_jwt_issuer"
 
 
-def _unsupported_remote_signing_format_detail(signing_format: str, credential_format: str | None = None) -> str:
+def _unsupported_remote_signing_format_detail(
+    signing_format: str, credential_format: str | None = None
+) -> str:
     """Return a fail-closed detail for formats without remote-signing support."""
     fmt = credential_format or signing_format
     return (
@@ -444,9 +483,7 @@ def _remote_mdoc_signature_raw(signature: dict[str, Any], algorithm: str) -> byt
     except ValueError as exc:
         raise RuntimeError("Remote mDoc signature is not valid DER ECDSA") from exc
     if r.bit_length() > coordinate_length * 8 or s.bit_length() > coordinate_length * 8:
-        raise RuntimeError(
-            f"Invalid {algorithm} DER signature coordinate for remote mDoc signing"
-        )
+        raise RuntimeError(f"Invalid {algorithm} DER signature coordinate for remote mDoc signing")
     return r.to_bytes(coordinate_length, "big") + s.to_bytes(coordinate_length, "big")
 
 
@@ -461,7 +498,9 @@ async def apply_remote_issuer_context(
     if not tx.organization_id:
         return None
 
-    resolved_format = credential_format or _credential_format_for_remote_context(tx.credential_payload_format)
+    resolved_format = credential_format or _credential_format_for_remote_context(
+        tx.credential_payload_format
+    )
     try:
         context = await resolve_remote_issuer_context(
             tx.organization_id,
@@ -471,7 +510,9 @@ async def apply_remote_issuer_context(
             key_purpose=_key_purpose_for_credential_format(resolved_format),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Unable to resolve remote issuer context for org=%s: %s", tx.organization_id, exc)
+        logger.warning(
+            "Unable to resolve remote issuer context for org=%s: %s", tx.organization_id, exc
+        )
         if raise_on_error:
             raise
         return None
@@ -481,8 +522,12 @@ async def apply_remote_issuer_context(
 
     resolved_issuer_did = context.get("issuer_did")
     resolved_service_id = context.get("signing_service_id")
-    resolved_profile_id = context.get("issuer_profile_id") or (context.get("issuer_profile") or {}).get("id")
-    resolved_issuer_mode = context.get("issuer_mode") or (context.get("issuer_profile") or {}).get("issuer_mode")
+    resolved_profile_id = context.get("issuer_profile_id") or (
+        context.get("issuer_profile") or {}
+    ).get("id")
+    resolved_issuer_mode = context.get("issuer_mode") or (context.get("issuer_profile") or {}).get(
+        "issuer_mode"
+    )
     if resolved_profile_id and resolved_profile_id != tx.issuer_profile_id:
         tx.issuer_profile_id = str(resolved_profile_id)
     if resolved_issuer_mode:
@@ -531,19 +576,22 @@ async def apply_required_remote_issuer_context(
     if not isinstance(context, dict):
         raise RuntimeError("An active KMS-backed issuer profile is required")
 
-    profile = context.get("issuer_profile") if isinstance(context.get("issuer_profile"), dict) else {}
+    profile = (
+        context.get("issuer_profile") if isinstance(context.get("issuer_profile"), dict) else {}
+    )
     required = {
         "issuer_profile_id": context.get("issuer_profile_id") or profile.get("id"),
         "issuer_did": context.get("issuer_did") or profile.get("issuer_did"),
-        "signing_service_id": context.get("signing_service_id") or profile.get("signing_service_id"),
-        "signing_key_reference": context.get("signing_key_reference") or profile.get("signing_key_reference"),
-        "verification_method_id": context.get("verification_method_id") or profile.get("verification_method_id"),
+        "signing_service_id": context.get("signing_service_id")
+        or profile.get("signing_service_id"),
+        "signing_key_reference": context.get("signing_key_reference")
+        or profile.get("signing_key_reference"),
+        "verification_method_id": context.get("verification_method_id")
+        or profile.get("verification_method_id"),
     }
     missing = sorted(name for name, value in required.items() if not str(value or "").strip())
     if missing:
-        raise RuntimeError(
-            "KMS issuer context is incomplete: missing " + ", ".join(missing)
-        )
+        raise RuntimeError("KMS issuer context is incomplete: missing " + ", ".join(missing))
     if profile and str(profile.get("status") or "").lower() != "active":
         raise RuntimeError("KMS issuer profile is not active")
     if tx.issuer_profile_id != str(required["issuer_profile_id"]):
@@ -565,8 +613,12 @@ def _did_resolution_failure_detail(tx: IssuanceTransaction, exc: Exception) -> s
 
 # Routers
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
-application_template_router = APIRouter(prefix="/v1/application-templates", tags=["application-templates"])
-internal_application_router = APIRouter(prefix="/internal/applications", tags=["internal-applications"])
+application_template_router = APIRouter(
+    prefix="/v1/application-templates", tags=["application-templates"]
+)
+internal_application_router = APIRouter(
+    prefix="/internal/applications", tags=["internal-applications"]
+)
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["issued-credentials"])
 
 # ---------------------------------------------------------------------------
@@ -688,7 +740,7 @@ class _NoncePool:
     """Thread-safe single-use nonce pool with TTL expiry."""
 
     def __init__(self) -> None:
-        self._nonces: dict[str, float] = {}   # nonce → expires_at
+        self._nonces: dict[str, float] = {}  # nonce → expires_at
         self._lock = asyncio.Lock()
 
     async def add(self, nonce: str) -> None:
@@ -740,6 +792,7 @@ async def _verify_management_api_key(
 # Request/Response Models
 # ============================================================================
 
+
 class InitiateIssuanceRequest(BaseModel):
     organization_id: str
     credential_template_id: str | None = None  # Optional — falls back to default type
@@ -778,7 +831,7 @@ class IssuanceResponse(BaseModel):
     credential_template_id: str
     status: str
     credential_offer_uri: str
-    credential_offer_uris: dict[str, str] = {}   # wallet_id → URI for each configured wallet
+    credential_offer_uris: dict[str, str] = {}  # wallet_id → URI for each configured wallet
     credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
     pre_auth_code: str
     expires_at: str
@@ -828,7 +881,7 @@ class CredentialResponse(BaseModel):
     # Final OID4VCI uses ``credentials``. ``credential`` is retained only for
     # an explicit legacy-format request and omitted from final responses.
     credentials: list[str | dict]
-    credential: str | None = None     # Walt.id / Draft-11 compatibility alias
+    credential: str | None = None  # Walt.id / Draft-11 compatibility alias
     notification_id: str | None = None
 
 
@@ -838,8 +891,16 @@ class ApplicationFormField(BaseModel):
     field_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1, max_length=256)
     field_type: Literal[
-        "TEXT", "DATE", "DATETIME", "SELECT", "FILE_UPLOAD",
-        "INTEGER", "NUMBER", "BOOLEAN", "EMAIL", "URL",
+        "TEXT",
+        "DATE",
+        "DATETIME",
+        "SELECT",
+        "FILE_UPLOAD",
+        "INTEGER",
+        "NUMBER",
+        "BOOLEAN",
+        "EMAIL",
+        "URL",
     ]
     required: bool
     claim_mapping: str | None = None
@@ -866,8 +927,12 @@ class ApplicationEvidenceRequirement(BaseModel):
 
     evidence_id: str = Field(min_length=1)
     evidence_type: Literal[
-        "DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION",
-        "EXTERNAL_FACT", "EXTERNAL_API",
+        "DOCUMENT_SCAN",
+        "BIOMETRIC",
+        "SELFIE",
+        "THIRD_PARTY_VERIFICATION",
+        "EXTERNAL_FACT",
+        "EXTERNAL_API",
     ]
     description: str
     required: bool
@@ -930,6 +995,7 @@ class ApplicationTemplatePatch(BaseModel):
 
 
 # ── DIDComm v2 models ─────────────────────────────────────────────────────
+
 
 class DidcommDeliverRequest(BaseModel):
     transaction_id: str
@@ -1167,6 +1233,7 @@ class IssuedCredentialRecordResponse(BaseModel):
 # Helpers
 # ============================================================================
 
+
 def org_issuer_url(org_id: str) -> str:
     """Return the per-org OID4VCI credential_issuer URL.
 
@@ -1269,7 +1336,9 @@ def _default_revocation_profile_id() -> str:
     )
 
 
-def _credential_format_for_revocation_profile(tx: IssuanceTransaction | None, request_format: str | None = None) -> str:
+def _credential_format_for_revocation_profile(
+    tx: IssuanceTransaction | None, request_format: str | None = None
+) -> str:
     payload_format = _normalize_payload_format(tx.credential_payload_format if tx else None)
     normalized_request = _normalize_payload_format(request_format)
     if payload_format in _MDOC_PAYLOAD_FORMATS or normalized_request in _MDOC_PAYLOAD_FORMATS:
@@ -1295,7 +1364,8 @@ def _status_list_entries_to_protocol(
                 status_list_uri=entry.get("status_list_uri") or entry.get("statusListCredential"),
                 type=entry.get("type"),
                 status_purpose=entry.get("status_purpose") or entry.get("statusPurpose"),
-                status_list_credential=entry.get("status_list_credential") or entry.get("statusListCredential"),
+                status_list_credential=entry.get("status_list_credential")
+                or entry.get("statusListCredential"),
             )
         )
     return result
@@ -1306,7 +1376,9 @@ def _status_list_entry_to_credential_status_claim(entry: dict[str, Any]) -> dict
     status_purpose = str(entry.get("status_purpose") or "revocation")
     index = int(entry.get("index") or 0)
     status_entry = {
-        "id": f"{status_list_uri}#{index}" if status_list_uri else f"urn:marty:status-list-entry:{index}",
+        "id": f"{status_list_uri}#{index}"
+        if status_list_uri
+        else f"urn:marty:status-list-entry:{index}",
         "type": entry.get("type") or "BitstringStatusListEntry",
         "statusPurpose": status_purpose,
         "statusListIndex": str(index),
@@ -1315,8 +1387,14 @@ def _status_list_entry_to_credential_status_claim(entry: dict[str, Any]) -> dict
     return status_entry
 
 
-def _status_list_entries_to_credential_status_claim(entries: list[dict[str, Any]]) -> list[dict[str, Any]] | dict[str, Any] | None:
-    claims = [_status_list_entry_to_credential_status_claim(entry) for entry in entries if isinstance(entry, dict)]
+def _status_list_entries_to_credential_status_claim(
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]] | dict[str, Any] | None:
+    claims = [
+        _status_list_entry_to_credential_status_claim(entry)
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
     if not claims:
         return None
     if len(claims) == 1:
@@ -1351,8 +1429,10 @@ async def _allocate_credential_status_list_entries(
             detail="The Credential Template has no Revocation Profile.",
         )
     service_url = (
-        os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or ""
-    ).strip().rstrip("/")
+        (os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or "")
+        .strip()
+        .rstrip("/")
+    )
     if not service_url:
         raise HTTPException(
             status_code=503,
@@ -1413,7 +1493,9 @@ async def _allocate_credential_status_list_entries(
             "index": int(index),
             "status_list_uri": str(status_list_url),
             "status_list_credential": str(status_list_url),
-            "type": "BitstringStatusListEntry" if credential_format != "mdoc" else "TokenStatusListEntry",
+            "type": "BitstringStatusListEntry"
+            if credential_format != "mdoc"
+            else "TokenStatusListEntry",
             "status_purpose": "revocation",
         }
     ]
@@ -1445,7 +1527,9 @@ async def _require_active_revocation_profile_binding(
     except grpc.aio.AioRpcError as exc:
         if exc.code() == grpc.StatusCode.NOT_FOUND:
             raise HTTPException(status_code=422, detail="Revocation Profile not found.") from exc
-        raise HTTPException(status_code=503, detail="Revocation Profile validation is unavailable.") from exc
+        raise HTTPException(
+            status_code=503, detail="Revocation Profile validation is unavailable."
+        ) from exc
 
     if response.organization_id != organization_id:
         raise HTTPException(
@@ -1465,7 +1549,8 @@ def _subject_claims_hash(tx: IssuanceTransaction | None) -> str | None:
     clean_claims = {
         key: value
         for key, value in tx.claims.items()
-        if key not in {
+        if key
+        not in {
             "credential_offer_uri",
             "credential_offer_uris",
             "offer_expires_at",
@@ -1490,11 +1575,17 @@ async def _issued_credential_to_protocol(
 ) -> IssuedCredentialRecordResponse:
     tx = await repo.get_transaction(cred.transaction_id)
     delivery_records = await repo.list_delivery_records_for_credential(cred.id)
-    subject_id = cred.subject_did or cred.applicant_id or (tx.subject_did if tx else None) or (tx.applicant_id if tx else None) or cred.id
+    subject_id = (
+        cred.subject_did
+        or cred.applicant_id
+        or (tx.subject_did if tx else None)
+        or (tx.applicant_id if tx else None)
+        or cred.id
+    )
     issued_at = cred.issued_at
     valid_until = cred.expires_at
     protocol_status = _credential_status_to_protocol(cred.status, valid_until)
-    credential_type = (tx.credential_type if tx and tx.credential_type else "unknown")
+    credential_type = tx.credential_type if tx and tx.credential_type else "unknown"
     updated_at = cred.status_updated_at if cred.status_updated_at else cred.issued_at
     renewal_eligible_at = (
         valid_until - timedelta(days=tx.renewal_window_days)
@@ -1541,7 +1632,9 @@ async def _issued_credential_to_protocol(
     )
 
 
-def _delivery_record_to_protocol(record: CredentialDeliveryRecord) -> CredentialDeliveryRecordResponse:
+def _delivery_record_to_protocol(
+    record: CredentialDeliveryRecord,
+) -> CredentialDeliveryRecordResponse:
     return CredentialDeliveryRecordResponse(
         id=record.id,
         delivery_target=record.delivery_target.value,
@@ -1653,7 +1746,9 @@ async def _canvas_mirror_provenance_to_protocol(
 ) -> CanvasMirrorProvenanceResponse:
     credential = await repo.get_credential(record.credential_id)
     if credential is None:
-        raise HTTPException(status_code=409, detail="Canonical issued credential not found for Canvas mirror record")
+        raise HTTPException(
+            status_code=409, detail="Canonical issued credential not found for Canvas mirror record"
+        )
     transaction = await repo.get_transaction(record.transaction_id)
     subject_id = (
         credential.subject_did
@@ -1664,9 +1759,8 @@ async def _canvas_mirror_provenance_to_protocol(
     credential_status = _credential_status_to_protocol(credential.status, credential.expires_at)
     issuer_did = credential.issuer_did or (transaction.issuer_did_override if transaction else None)
     credential_format = _credential_format_to_protocol(transaction, credential)
-    organization_consistent = (
-        credential.organization_id == record.organization_id
-        and (transaction is None or transaction.organization_id == record.organization_id)
+    organization_consistent = credential.organization_id == record.organization_id and (
+        transaction is None or transaction.organization_id == record.organization_id
     )
 
     return CanvasMirrorProvenanceResponse(
@@ -1839,7 +1933,9 @@ def _parse_iso_datetime(value: Any) -> datetime | None:
 
 
 def _max_iso_datetime(values: list[Any]) -> str | None:
-    parsed_values = [parsed for value in values if (parsed := _parse_iso_datetime(value)) is not None]
+    parsed_values = [
+        parsed for value in values if (parsed := _parse_iso_datetime(value)) is not None
+    ]
     if not parsed_values:
         return None
     return max(parsed_values).isoformat()
@@ -2036,14 +2132,17 @@ async def _emit_canvas_mirror_alerts_for_records(
     alerts = [
         alert
         for record in records
-        if (alert := _canvas_mirror_alert_for_record(
-            record,
-            alert_type=alert_type,
-            attempt_key=attempt_key,
-            error_at_key=error_at_key,
-            warning_threshold=warning_threshold,
-            critical_threshold=critical_threshold,
-        )) is not None
+        if (
+            alert := _canvas_mirror_alert_for_record(
+                record,
+                alert_type=alert_type,
+                attempt_key=attempt_key,
+                error_at_key=error_at_key,
+                warning_threshold=warning_threshold,
+                critical_threshold=critical_threshold,
+            )
+        )
+        is not None
     ]
     await _emit_canvas_mirror_alert_observability(
         repo=repo,
@@ -2327,12 +2426,16 @@ class CanvasMirrorAutomationConfig:
 
     @classmethod
     def from_env(cls) -> "CanvasMirrorAutomationConfig":
-        organization_id = (os.environ.get("CANVAS_MIRROR_WORKER_ORGANIZATION_ID") or "").strip() or None
+        organization_id = (
+            os.environ.get("CANVAS_MIRROR_WORKER_ORGANIZATION_ID") or ""
+        ).strip() or None
         return cls(
             enabled=_env_bool("CANVAS_MIRROR_WORKER_ENABLED", False),
             organization_id=organization_id,
             publish_interval_seconds=_env_int("CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS", 300),
-            status_sync_interval_seconds=_env_int("CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS", 900),
+            status_sync_interval_seconds=_env_int(
+                "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS", 900
+            ),
             batch_limit=_env_int("CANVAS_MIRROR_WORKER_BATCH_LIMIT", 25),
             retry_failed_publish=_env_bool("CANVAS_MIRROR_WORKER_RETRY_FAILED", True),
             run_on_startup=_env_bool("CANVAS_MIRROR_WORKER_RUN_ON_STARTUP", True),
@@ -2388,7 +2491,8 @@ async def run_canvas_mirror_publish_batch(
         repo=repo,
         organization_id=organization_id,
         records=[
-            record for record in processed_domain_records
+            record
+            for record in processed_domain_records
             if record.status == CredentialDeliveryStatus.FAILED
         ],
         alert_type="publish_failure",
@@ -2418,8 +2522,7 @@ async def run_canvas_mirror_status_sync_batch(
         organization_id=organization_id,
     )
     records_to_process = [
-        record for record in records
-        if _delivery_record_has_status_sync_failure(record)
+        record for record in records if _delivery_record_has_status_sync_failure(record)
     ][:limit]
 
     processed_records: list[CredentialDeliveryRecordResponse] = []
@@ -2487,7 +2590,8 @@ async def run_canvas_mirror_status_sync_batch(
         repo=repo,
         organization_id=organization_id,
         records=[
-            record for record in processed_domain_records
+            record
+            for record in processed_domain_records
             if _delivery_record_has_status_sync_failure(record)
         ],
         alert_type="lifecycle_sync_failure",
@@ -2525,8 +2629,14 @@ async def run_canvas_mirror_automation_cycle(
     )
     completed_at = datetime.now(timezone.utc)
     metrics = {
-        **{f"publish.{key.removeprefix('publish.')}": value for key, value in publish.metrics.items()},
-        **{f"status_sync.{key.removeprefix('status_sync.')}": value for key, value in status_sync.metrics.items()},
+        **{
+            f"publish.{key.removeprefix('publish.')}": value
+            for key, value in publish.metrics.items()
+        },
+        **{
+            f"status_sync.{key.removeprefix('status_sync.')}": value
+            for key, value in status_sync.metrics.items()
+        },
         "automation.processed": publish.processed_count + status_sync.processed_count,
         "automation.failed": publish.failed_count + status_sync.failed_count,
         "automation.blocked": publish.blocked_count + status_sync.blocked_count,
@@ -2565,7 +2675,9 @@ async def run_canvas_mirror_automation_loop(
     )
     now = time.monotonic()
     next_publish_at = now if config.run_on_startup else now + config.publish_interval_seconds
-    next_status_sync_at = now if config.run_on_startup else now + config.status_sync_interval_seconds
+    next_status_sync_at = (
+        now if config.run_on_startup else now + config.status_sync_interval_seconds
+    )
 
     while True:
         current = time.monotonic()
@@ -2623,7 +2735,10 @@ async def run_canvas_mirror_automation_loop(
 # OID4VCI Endpoints
 # ============================================================================
 
-@issuance_router.post("/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)])
+
+@issuance_router.post(
+    "/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)]
+)
 async def initiate_issuance(
     request: InitiateIssuanceRequest,
     http_request: Request = None,
@@ -2655,7 +2770,9 @@ async def initiate_issuance(
     except HTTPException:
         raise  # Hard fail — propagate to caller
     except Exception as e:
-        logger.warning(f"Could not validate organization {request.organization_id} (proceeding): {e}")
+        logger.warning(
+            f"Could not validate organization {request.organization_id} (proceeding): {e}"
+        )
 
     # Resolve credential type from template via gRPC (preferred) with HTTP fallback.
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
@@ -2683,25 +2800,39 @@ async def initiate_issuance(
                     ct_pb2.GetTemplateRequest(template_id=request.credential_template_id)
                 )
             if not tmpl_resp.id:
-                raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Credential template not found: {request.credential_template_id}",
+                )
             credential_type = tmpl_resp.credential_type or credential_type
             raw_vct = tmpl_resp.vct or ""
             credential_vct = (
-                raw_vct if raw_vct.startswith("http")
+                raw_vct
+                if raw_vct.startswith("http")
                 else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
             )
             zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
-            selective_disclosure_claims = list(tmpl_resp.selective_disclosure_fields) if tmpl_resp.selective_disclosure_fields else []
+            selective_disclosure_claims = (
+                list(tmpl_resp.selective_disclosure_fields)
+                if tmpl_resp.selective_disclosure_fields
+                else []
+            )
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             revocation_profile_id = tmpl_resp.revocation_profile_id or None
             template_issuer_profile_id = tmpl_resp.issuer_profile_id or None
-            wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
+            wallet_configs = (
+                json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
+            )
             validity_days = tmpl_resp.validity_rules.default_validity_days or 365
             renewable = bool(tmpl_resp.validity_rules.renewable)
             renewal_window_days = tmpl_resp.validity_rules.renewal_window_days or 30
-            logger.info(f"Fetched credential type from template (gRPC): {credential_type} vct={credential_vct}")
+            logger.info(
+                f"Fetched credential type from template (gRPC): {credential_type} vct={credential_vct}"
+            )
             logger.info(f"Template wallet_configs_json: {tmpl_resp.wallet_configs_json}")
-            logger.info(f"Parsed wallet_configs ({len(wallet_configs)} entries): {[wc.get('wallet_id') for wc in wallet_configs]}")
+            logger.info(
+                f"Parsed wallet_configs ({len(wallet_configs)} entries): {[wc.get('wallet_id') for wc in wallet_configs]}"
+            )
             _tmpl_resolved = True
         except HTTPException:
             raise
@@ -2715,26 +2846,36 @@ async def initiate_issuance(
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     resp = await client.get(url)
                 if resp.status_code == 404:
-                    raise HTTPException(status_code=404, detail=f"Credential template not found: {request.credential_template_id}")
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Credential template not found: {request.credential_template_id}",
+                    )
                 if resp.status_code >= 400:
                     raise HTTPException(status_code=resp.status_code, detail=resp.text)
                 tmpl = resp.json()
             except HTTPException:
                 raise
             except httpx.ConnectError:
-                raise HTTPException(status_code=503, detail="Credential template service unavailable")
+                raise HTTPException(
+                    status_code=503, detail="Credential template service unavailable"
+                )
             except httpx.TimeoutException:
                 raise HTTPException(status_code=504, detail="Credential template service timeout")
             credential_type = tmpl.get("credential_type") or credential_type
             raw_vct = tmpl.get("vct") or ""
             credential_vct = (
-                raw_vct if raw_vct.startswith("http")
+                raw_vct
+                if raw_vct.startswith("http")
                 else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
             )
-            logger.info(f"Fetched credential type from template (HTTP): {credential_type} vct={credential_vct}")
+            logger.info(
+                f"Fetched credential type from template (HTTP): {credential_type} vct={credential_vct}"
+            )
             zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
             selective_disclosure_claims = tmpl.get("selective_disclosure_fields") or []
-            credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
+            credential_payload_format = (
+                tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
+            )
             revocation_profile_id = tmpl.get("revocation_profile_id") or None
             template_issuer_profile_id = tmpl.get("issuer_profile_id") or None
             wallet_configs = tmpl.get("wallet_configs") or []
@@ -2775,16 +2916,15 @@ async def initiate_issuance(
     # _application_id), resolve actual claim values from the application's
     # form_data.
     _resolved_application = merged_claims.pop("_application_id", None)
-    if _resolved_application and (
-        not merged_claims or list(merged_claims.keys()) == ["_vct"]
-    ):
+    if _resolved_application and (not merged_claims or list(merged_claims.keys()) == ["_vct"]):
         try:
             app = await repo.get_application(str(_resolved_application))
             if app and app.form_data:
                 merged_claims = {**app.form_data, "_vct": credential_vct}
                 logger.info(
                     "[initiate] resolved claims from application %s: keys=%s",
-                    _resolved_application, list(app.form_data.keys()),
+                    _resolved_application,
+                    list(app.form_data.keys()),
                 )
             else:
                 logger.warning(
@@ -2793,7 +2933,9 @@ async def initiate_issuance(
                 )
         except Exception as _app_err:
             logger.warning(
-                "[initiate] could not resolve application %s: %s", _resolved_application, _app_err,
+                "[initiate] could not resolve application %s: %s",
+                _resolved_application,
+                _app_err,
             )
     logger.info(
         "[initiate] org=%s template=%s cred_type=%s received_claims=%s merged_claims=%s",
@@ -2812,9 +2954,7 @@ async def initiate_issuance(
     issuer_did_override: str | None = None
     request_issuer_profile_id = request.issuer_profile_id
     header_issuer_profile_id = (
-        http_request.headers.get("x-issuer-profile-id")
-        if http_request is not None
-        else None
+        http_request.headers.get("x-issuer-profile-id") if http_request is not None else None
     )
     issuer_profile_id = _select_transaction_issuer_profile_id(
         template_bound=bool(request.credential_template_id),
@@ -2830,7 +2970,9 @@ async def initiate_issuance(
     if http_request is not None:
         _reject_direct_signing_headers(http_request.headers)
         issuer_did_override = http_request.headers.get("x-issuer-did")
-        issuer_mode = _normalize_issuer_mode(http_request.headers.get("x-issuer-mode") or issuer_mode)
+        issuer_mode = _normalize_issuer_mode(
+            http_request.headers.get("x-issuer-mode") or issuer_mode
+        )
 
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
@@ -2853,13 +2995,13 @@ async def initiate_issuance(
         renewable=renewable,
         renewal_window_days=renewal_window_days,
     )
-    if not (tx.issuer_did_override and tx.signing_service_id):
+    if not (tx.issuer_did_override and tx.issuer_profile_id):
         await apply_remote_issuer_context(
             tx,
             credential_format=_credential_format_for_remote_context(credential_payload_format),
         )
     await repo.save_transaction(tx)
-    
+
     # OID4VCI: Pass credential offer inline for better wallet compatibility.
     # Delegate offer construction entirely to the Rust engine.
     from urllib.parse import quote
@@ -2928,7 +3070,9 @@ async def initiate_issuance(
     credential_offer_uris: dict[str, str] = {}
     credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
     didcomm_delivery_results: list[dict] = []
-    logger.info(f"Building credential_offer_uris from {len(tx.wallet_configs)} wallet configs: {tx.wallet_configs}")
+    logger.info(
+        f"Building credential_offer_uris from {len(tx.wallet_configs)} wallet configs: {tx.wallet_configs}"
+    )
     for wc in tx.wallet_configs:
         wid = wc.get("wallet_id", "")
         scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
@@ -2942,12 +3086,16 @@ async def initiate_issuance(
             if holder_did_for_delivery:
                 try:
                     delivery = await _didcomm_sign_and_deliver(
-                        tx=tx, holder_did=holder_did_for_delivery, repo=repo,
+                        tx=tx,
+                        holder_did=holder_did_for_delivery,
+                        repo=repo,
                     )
                     didcomm_delivery_results.append(delivery.model_dump())
                     credential_offer_uris[wid] = f"didcomm://{delivery.service_endpoint}"
                 except Exception as dc_err:
-                    logger.warning(f"DIDComm auto-delivery to {holder_did_for_delivery} failed: {dc_err}")
+                    logger.warning(
+                        f"DIDComm auto-delivery to {holder_did_for_delivery} failed: {dc_err}"
+                    )
                     credential_offer_uris[wid] = f"didcomm://pending?transaction_id={tx.id}"
             else:
                 # No holder_did — caller must use /didcomm/deliver later
@@ -2982,7 +3130,7 @@ async def initiate_issuance(
             credential_offer_uris[wid] = f"{scheme}{sep}credential_offer={encoded}"
             if wc.get("display_name"):
                 credential_offer_labels[wid] = wc["display_name"]
-    
+
     return IssuanceResponse(
         id=tx.id,
         organization_id=tx.organization_id,
@@ -3011,7 +3159,9 @@ async def _finalize_credential_renewal(
     if source.organization_id != renewed_credential.organization_id:
         raise HTTPException(status_code=409, detail="Renewal source organization mismatch.")
     if source.status != CredentialStatus.ACTIVE:
-        raise HTTPException(status_code=409, detail="Only an active credential can complete renewal.")
+        raise HTTPException(
+            status_code=409, detail="Only an active credential can complete renewal."
+        )
 
     await revoke_credential(
         source.id,
@@ -3028,6 +3178,7 @@ async def _finalize_credential_renewal(
 
 
 # ── Authorization Endpoint (OID4VCI §5) ──────────────────────────────────
+
 
 @issuance_router.get("/authorize", dependencies=[Depends(_enforce_token_rate_limit)])
 async def authorize(
@@ -3101,7 +3252,8 @@ async def authorize(
             if redirect_uri not in allowed_uris:
                 logger.warning(
                     "Rejected unregistered redirect_uri=%s (client_id=%s)",
-                    redirect_uri, client_id,
+                    redirect_uri,
+                    client_id,
                 )
                 return JSONResponse(
                     status_code=400,
@@ -3118,7 +3270,8 @@ async def authorize(
             if parsed.scheme != "https" and not is_localhost:
                 logger.warning(
                     "Rejected non-HTTPS redirect_uri=%s (client_id=%s)",
-                    redirect_uri, client_id,
+                    redirect_uri,
+                    client_id,
                 )
                 return JSONResponse(
                     status_code=400,
@@ -3136,21 +3289,24 @@ async def authorize(
         except _json.JSONDecodeError:
             pass
 
-    request_json = _json.dumps({
-        "response_type": response_type,
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": code_challenge_method,
-        "issuer_state": issuer_state,
-        "authorization_details": auth_details,
-        "scope": scope,
-    })
+    request_json = _json.dumps(
+        {
+            "response_type": response_type,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "issuer_state": issuer_state,
+            "authorization_details": auth_details,
+            "scope": scope,
+        }
+    )
 
     try:
         auth_resp, rust_session = oid4vci_create_authorization_response(
-            request_json, session_lifetime_secs=600,
+            request_json,
+            session_lifetime_secs=600,
         )
     except (ValueError, RuntimeError) as exc:
         if redirect_uri:
@@ -3196,6 +3352,7 @@ async def authorize(
 
 # ── Pushed Authorization Request Endpoint (RFC 9126) ─────────────────────
 
+
 @issuance_router.post("/par", dependencies=[Depends(_enforce_token_rate_limit)])
 async def pushed_authorization_request(
     http_request: Request,
@@ -3223,22 +3380,26 @@ async def pushed_authorization_request(
 
     request_uri = f"urn:ietf:params:oauth:request_uri:{_uuid.uuid4()}"
 
-    await _par_store.save(request_uri, {
-        "response_type": response_type,
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "scope": scope,
-        "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": code_challenge_method,
-        "issuer_state": issuer_state,
-        "authorization_details": authorization_details,
-        "organization_id": organization_id,
-    })
+    await _par_store.save(
+        request_uri,
+        {
+            "response_type": response_type,
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": scope,
+            "state": state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": code_challenge_method,
+            "issuer_state": issuer_state,
+            "authorization_details": authorization_details,
+            "organization_id": organization_id,
+        },
+    )
 
     logger.info(
         "[par] client_id=%s request_uri=%s",
-        client_id, request_uri[:60],
+        client_id,
+        request_uri[:60],
     )
 
     return JSONResponse(
@@ -3247,7 +3408,9 @@ async def pushed_authorization_request(
     )
 
 
-@issuance_router.post("/token", response_model=TokenResponse, dependencies=[Depends(_enforce_token_rate_limit)])
+@issuance_router.post(
+    "/token", response_model=TokenResponse, dependencies=[Depends(_enforce_token_rate_limit)]
+)
 async def exchange_token(
     http_request: Request,
     grant_type: str = Form(...),
@@ -3278,7 +3441,11 @@ async def exchange_token(
             )
         except ValueError as exc:
             # Keep proof material out of logs while retaining deployable diagnostics.
-            logger.warning("[token] invalid DPoP proof for public target %s: %s", expected_htu, exc.__cause__ or exc)
+            logger.warning(
+                "[token] invalid DPoP proof for public target %s: %s",
+                expected_htu,
+                exc.__cause__ or exc,
+            )
             return JSONResponse(status_code=400, content={"error": "invalid_dpop_proof"})
 
     if grant_type == "authorization_code":
@@ -3292,46 +3459,62 @@ async def exchange_token(
         if not auth_session:
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_grant", "error_description": "Invalid authorization code"},
+                content={
+                    "error": "invalid_grant",
+                    "error_description": "Invalid authorization code",
+                },
             )
 
         if auth_session.is_expired:
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_grant", "error_description": "Authorization code expired"},
+                content={
+                    "error": "invalid_grant",
+                    "error_description": "Authorization code expired",
+                },
             )
 
         if auth_session.status != "pending":
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_grant", "error_description": "Authorization code already used"},
+                content={
+                    "error": "invalid_grant",
+                    "error_description": "Authorization code already used",
+                },
             )
 
         # Build JSON payloads for the Rust engine which handles all
         # protocol validation (redirect_uri match, PKCE, etc.).
         import json as _json
-        request_payload = _json.dumps({
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": client_id or auth_session.client_id,
-            "code_verifier": code_verifier,
-        })
-        session_payload = _json.dumps({
-            "code": auth_session.code,
-            "client_id": auth_session.client_id,
-            "redirect_uri": auth_session.redirect_uri,
-            "code_challenge": auth_session.code_challenge,
-            "code_challenge_method": auth_session.code_challenge_method,
-            "issuer_state": auth_session.issuer_state,
-            "credential_configuration_ids": auth_session.credential_configuration_ids,
-            "created_at": int(auth_session.created_at.timestamp()),
-            "expires_in": 600,
-        })
+
+        request_payload = _json.dumps(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id or auth_session.client_id,
+                "code_verifier": code_verifier,
+            }
+        )
+        session_payload = _json.dumps(
+            {
+                "code": auth_session.code,
+                "client_id": auth_session.client_id,
+                "redirect_uri": auth_session.redirect_uri,
+                "code_challenge": auth_session.code_challenge,
+                "code_challenge_method": auth_session.code_challenge_method,
+                "issuer_state": auth_session.issuer_state,
+                "credential_configuration_ids": auth_session.credential_configuration_ids,
+                "created_at": int(auth_session.created_at.timestamp()),
+                "expires_in": 600,
+            }
+        )
 
         try:
             token_resp = oid4vci_exchange_auth_code_for_token(
-                request_payload, session_payload, 1800,
+                request_payload,
+                session_payload,
+                1800,
             )
         except RuntimeError as exc:
             return JSONResponse(
@@ -3351,19 +3534,27 @@ async def exchange_token(
 
     # ── Pre-authorized code flow ───────────────────────────────────
     if not pre_authorized_code:
-        logger.warning(f"[token] rid={rid} 400 pre-authorized_code missing (grant_type={grant_type!r})")
+        logger.warning(
+            f"[token] rid={rid} 400 pre-authorized_code missing (grant_type={grant_type!r})"
+        )
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_request", "error_description": "pre-authorized_code is required"},
+            content={
+                "error": "invalid_request",
+                "error_description": "pre-authorized_code is required",
+            },
         )
-    
+
     if grant_type != "urn:ietf:params:oauth:grant-type:pre-authorized_code":
         logger.warning(f"[token] rid={rid} 400 unsupported_grant_type {grant_type!r}")
         return JSONResponse(
             status_code=400,
-            content={"error": "unsupported_grant_type", "error_description": "Unsupported grant type"},
+            content={
+                "error": "unsupported_grant_type",
+                "error_description": "Unsupported grant type",
+            },
         )
-    
+
     tx = await repo.get_by_pre_auth_code(pre_authorized_code)
     if not tx:
         logger.warning(f"[token] rid={rid} 400 invalid pre-authorized_code (not found)")
@@ -3371,14 +3562,14 @@ async def exchange_token(
             status_code=400,
             content={"error": "invalid_grant", "error_description": "Invalid pre-authorized code"},
         )
-    
+
     if tx.is_expired:
         logger.warning(f"[token] rid={rid} 400 tx {tx.id} expired")
         return JSONResponse(
             status_code=400,
             content={"error": "invalid_grant", "error_description": "Transaction expired"},
         )
-    
+
     # OID4VCI Final §4.1.1: the pre-authorized code MUST be short lived and
     # single-use.  Do not turn a second wallet redemption into an unbounded
     # issuance capability; multi-wallet authorization belongs to the
@@ -3416,8 +3607,7 @@ async def exchange_token(
     await repo.save_transaction(tx)
 
     logger.info(
-        f"[token] rid={rid} tx_id={tx.id} org={tx.organization_id} "
-        f"cred_type={tx.credential_type}"
+        f"[token] rid={rid} tx_id={tx.id} org={tx.organization_id} cred_type={tx.credential_type}"
     )
 
     return TokenResponse(
@@ -3432,6 +3622,7 @@ async def nonce_endpoint(
 ) -> NonceResponse:
     """Return an OID4VCI Final proof nonce without client authentication."""
     import secrets as _secrets
+
     new_nonce = _secrets.token_urlsafe(32)
 
     # The pool makes accepted proofs one-time while allowing issuer metadata to
@@ -3457,9 +3648,9 @@ async def issue_credential(
     """Issue a credential (OID4VCI credential endpoint)."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid authorization")
-    
+
     access_token = authorization.split(" ", 1)[1]
-    
+
     # Try pre-auth flow first (transaction-based), then auth code flow (session-based)
     tx = await repo.get_by_access_token(access_token)
     auth_session = None
@@ -3508,7 +3699,9 @@ async def issue_credential(
     if expected_dpop_jkt:
         dpop = http_request.headers.get("DPoP")
         if not dpop:
-            raise HTTPException(status_code=401, detail="DPoP proof is required for this access token")
+            raise HTTPException(
+                status_code=401, detail="DPoP proof is required for this access token"
+            )
         try:
             actual_dpop_jkt = _validated_dpop_jkt(
                 dpop,
@@ -3520,7 +3713,7 @@ async def issue_credential(
             raise HTTPException(status_code=401, detail="Invalid DPoP proof")
         if not hmac.compare_digest(str(expected_dpop_jkt), actual_dpop_jkt):
             raise HTTPException(status_code=401, detail="DPoP proof does not match access token")
-    
+
     # OID4VCI Final §7.3: The access token is single-use for credential issuance.
     # §8 errors use 400 invalid_credential_request, not 401.
     if tx.status == IssuanceStatus.ISSUED:
@@ -3529,6 +3722,7 @@ async def issue_credential(
             response_format = _effective_request_format(request, tx)
             credential_obj = {"format": response_format, "credential": existing_cred.credential_jwt}
             import uuid as _uuid
+
             notification_id = str(_uuid.uuid4())
             return CredentialResponse(
                 credentials=[credential_obj],
@@ -3549,7 +3743,10 @@ async def issue_credential(
     if tx.status != IssuanceStatus.AUTHORIZED:
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_credential_request", "error_description": "Invalid transaction state"},
+            content={
+                "error": "invalid_credential_request",
+                "error_description": "Invalid transaction state",
+            },
         )
 
     # Repository reads are detached in PostgreSQL but the development adapter
@@ -3578,13 +3775,15 @@ async def issue_credential(
         tx_own_ids = set(valid_config_ids)
         if tx.organization_id:
             for _ctype in await repo.get_credential_types_for_org(tx.organization_id):
-                valid_config_ids.update({
-                    _ctype,
-                    f"{_ctype}#sd-jwt",
-                    f"{_ctype}#mdoc",
-                    f"{_ctype}#vds-nc",
-                    f"{_ctype}#spruce-sd-jwt",
-                })
+                valid_config_ids.update(
+                    {
+                        _ctype,
+                        f"{_ctype}#sd-jwt",
+                        f"{_ctype}#mdoc",
+                        f"{_ctype}#vds-nc",
+                        f"{_ctype}#spruce-sd-jwt",
+                    }
+                )
         if request.credential_configuration_id not in valid_config_ids:
             return JSONResponse(
                 status_code=400,
@@ -3615,15 +3814,17 @@ async def issue_credential(
             )
 
     effective_request_format = _effective_request_format(request, tx)
-    
+
     # Resolve the issuer profile and its DID before proof validation. The
     # actual signing key is loaded only if we must fall back to legacy local
     # signing after determining the credential format below.
     issuer_context = await apply_remote_issuer_context(
         tx,
-        credential_format=_credential_format_for_remote_context(tx.credential_payload_format, effective_request_format),
+        credential_format=_credential_format_for_remote_context(
+            tx.credential_payload_format, effective_request_format
+        ),
     )
-    
+
     # Get credential type from transaction (stored during initiation)
     credential_type = tx.credential_type or "org.iso.18013.5.1.mDL"
     rid = http_request.headers.get("X-Request-ID", "-")
@@ -3648,10 +3849,15 @@ async def issue_credential(
 
     # OID4VCI §7.2: proof of possession is required for credential binding.
     if not proof_jwt:
-        logger.warning(f"[credential] rid={rid} tx_id={tx.id} rejecting — proof of possession missing")
+        logger.warning(
+            f"[credential] rid={rid} tx_id={tx.id} rejecting — proof of possession missing"
+        )
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_proof", "error_description": "Proof of possession is required per OID4VCI §7.2"},
+            content={
+                "error": "invalid_proof",
+                "error_description": "Proof of possession is required per OID4VCI §7.2",
+            },
         )
 
     # OID4VCI-1FINAL Appendix F.4: aud in proof JWT MUST be the credential_issuer URL.
@@ -3660,10 +3866,11 @@ async def issue_credential(
     if tx.organization_id:
         try:
             import base64 as _b64, json as _json
-            _proof_parts = proof_jwt.split('.')
-            _pad = '=' * ((-len(_proof_parts[1])) % 4)
+
+            _proof_parts = proof_jwt.split(".")
+            _pad = "=" * ((-len(_proof_parts[1])) % 4)
             _proof_payload = _json.loads(_b64.urlsafe_b64decode(_proof_parts[1] + _pad))
-            _proof_aud = _proof_payload.get('aud') or ''
+            _proof_aud = _proof_payload.get("aud") or ""
             _expected_aud_paths = _allowed_credential_issuer_audience_paths(tx.organization_id)
             if not _proof_audience_matches_org_issuer(_proof_aud, tx.organization_id):
                 logger.warning(
@@ -3684,7 +3891,10 @@ async def issue_credential(
             logger.warning(f"[credential] rid={rid} could not decode proof aud: {_aud_err}")
             return JSONResponse(
                 status_code=400,
-                content={"error": "invalid_proof", "error_description": "Could not decode proof JWT audience"},
+                content={
+                    "error": "invalid_proof",
+                    "error_description": "Could not decode proof JWT audience",
+                },
             )
 
     # Verify proof JWT signature via Rust + extract holder DID
@@ -3692,10 +3902,11 @@ async def issue_credential(
     # full aud validation requires the public gateway URL which is available via ISSUER_BASE_URL.
     try:
         import base64 as _b64n, json as _json_n
-        _proof_parts_n = proof_jwt.split('.')
-        _pad_n = '=' * ((-len(_proof_parts_n[1])) % 4)
+
+        _proof_parts_n = proof_jwt.split(".")
+        _pad_n = "=" * ((-len(_proof_parts_n[1])) % 4)
         _payload_n = _json_n.loads(_b64n.urlsafe_b64decode(_proof_parts_n[1] + _pad_n))
-        _proof_nonce = _payload_n.get('nonce')
+        _proof_nonce = _payload_n.get("nonce")
     except Exception as _nonce_err:
         logger.warning(f"[credential] rid={rid} could not decode proof nonce: {_nonce_err}")
         _proof_nonce = None
@@ -3707,7 +3918,10 @@ async def issue_credential(
         # invalid.
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_nonce", "error_description": "Proof nonce is missing, expired, or already used"},
+            content={
+                "error": "invalid_nonce",
+                "error_description": "Proof nonce is missing, expired, or already used",
+            },
         )
 
     ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
@@ -3717,10 +3931,15 @@ async def issue_credential(
         holder_did = did_from_proof
         logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
     else:
-        logger.warning(f"[credential] rid={rid} tx_id={tx.id} proof verification failed: {verify_err}")
+        logger.warning(
+            f"[credential] rid={rid} tx_id={tx.id} proof verification failed: {verify_err}"
+        )
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_proof", "error_description": verify_err or "Proof of possession verification failed"},
+            content={
+                "error": "invalid_proof",
+                "error_description": verify_err or "Proof of possession verification failed",
+            },
         )
 
     # Filter internal workflow fields out of claims — these are metadata used by the
@@ -3744,13 +3963,16 @@ async def issue_credential(
         _CREDENTIAL_SUBJECT_FIELD,
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
-    logger.info(f"[credential] rid={rid} claims={list(clean_claims.keys())} subject={holder_did or tx.subject_did or 'none'}")
+    logger.info(
+        f"[credential] rid={rid} claims={list(clean_claims.keys())} subject={holder_did or tx.subject_did or 'none'}"
+    )
 
     # Use the stored vct URI for the SD-JWT `vct` claim (RFC 9596 §3.1).
     # This ensures the wallet sees a proper URI rather than the raw abbreviated credential_type.
-    vct_for_signing = (
-        tx.claims.get("_vct")
-        or (f"{ISSUER_BASE_URL}/credentials/{credential_type}" if credential_type and not credential_type.startswith("http") else credential_type)
+    vct_for_signing = tx.claims.get("_vct") or (
+        f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+        if credential_type and not credential_type.startswith("http")
+        else credential_type
     )
 
     # Get Rust bindings and create signed credential
@@ -3781,7 +4003,9 @@ async def issue_credential(
     else:
         signing_format = effective_request_format
     # For mdoc/vds_nc, pass the stored credential_type directly. SD-JWT uses vct URI.
-    signing_credential_type = tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
+    signing_credential_type = (
+        tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
+    )
 
     # For SD-JWT, if no explicit selective disclosure claims were configured
     # on the template, default to all top-level claim keys (EUDI compliance).
@@ -3789,7 +4013,9 @@ async def issue_credential(
     if signing_format == "vc+sd-jwt" and not sd_claims:
         sd_claims = [k for k in clean_claims if not k.startswith("_")]
 
-    remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt, effective_request_format)
+    remote_credential_format = _credential_format_for_remote_context(
+        credential_payload_fmt, effective_request_format
+    )
     if signing_format not in {"vc+sd-jwt", "jwt_vc_json", "mso_mdoc"}:
         detail = _unsupported_remote_signing_format_detail(signing_format, remote_credential_format)
         logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
@@ -3808,7 +4034,7 @@ async def issue_credential(
             detail = _did_resolution_failure_detail(tx, exc)
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail) from exc
-        if not (tx.issuer_did_override and tx.signing_service_id):
+        if not (tx.issuer_did_override and tx.issuer_profile_id):
             detail = (
                 "Issuer identity is not configured for this organization. "
                 "Create an active issuer profile with a DID signing method before issuing credentials."
@@ -3831,9 +4057,19 @@ async def issue_credential(
                 raise HTTPException(status_code=503, detail=detail) from exc
             if remote_context:
                 tx.issuer_did_override = remote_context.get("issuer_did") or tx.issuer_did_override
-                tx.signing_service_id = remote_context.get("signing_service_id") or tx.signing_service_id
-                tx.issuer_profile_id = remote_context.get("issuer_profile_id") or (remote_context.get("issuer_profile") or {}).get("id") or tx.issuer_profile_id
-                tx.issuer_mode = _normalize_issuer_mode(remote_context.get("issuer_mode") or (remote_context.get("issuer_profile") or {}).get("issuer_mode") or tx.issuer_mode)
+                tx.signing_service_id = (
+                    remote_context.get("signing_service_id") or tx.signing_service_id
+                )
+                tx.issuer_profile_id = (
+                    remote_context.get("issuer_profile_id")
+                    or (remote_context.get("issuer_profile") or {}).get("id")
+                    or tx.issuer_profile_id
+                )
+                tx.issuer_mode = _normalize_issuer_mode(
+                    remote_context.get("issuer_mode")
+                    or (remote_context.get("issuer_profile") or {}).get("issuer_mode")
+                    or tx.issuer_mode
+                )
         if not remote_context:
             detail = (
                 "Unable to resolve the remote DID issuer profile for this organization. "
@@ -3855,8 +4091,9 @@ async def issue_credential(
         return canvas_guard_denial
 
     try:
-        # All credentials require remote signing (all keys in KMS)
-        if not (tx.issuer_did_override and tx.signing_service_id):
+        # All credentials sign through the selected issuer profile and assert
+        # that profile's DID. The gateway owns its KMS custody binding.
+        if not (tx.issuer_did_override and tx.issuer_profile_id):
             detail = (
                 "Issuer profile configuration is required. "
                 "An active issuer profile and its DID must be configured for this organization."
@@ -3866,7 +4103,9 @@ async def issue_credential(
 
         service = remote_context.get("service") if isinstance(remote_context, dict) else {}
         service = service if isinstance(service, dict) else {}
-        signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
+        signing_algorithm = str(
+            service.get("algorithm") or remote_context.get("algorithm") or "ES256"
+        )
         verification_method_id = (
             remote_context.get("verification_method_id")
             if isinstance(remote_context, dict)
@@ -3898,7 +4137,10 @@ async def issue_credential(
                 existing_format = effective_request_format or signing_format or "vc+sd-jwt"
                 return CredentialResponse(
                     credentials=[
-                        {"format": existing_format, "credential": existing_credential.credential_jwt}
+                        {
+                            "format": existing_format,
+                            "credential": existing_credential.credential_jwt,
+                        }
                     ],
                     credential=(
                         existing_credential.credential_jwt
@@ -3918,15 +4160,21 @@ async def issue_credential(
         revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
             credential_id=credential_id,
             organization_id=tx.organization_id,
-            credential_format=_credential_format_for_revocation_profile(tx, effective_request_format),
+            credential_format=_credential_format_for_revocation_profile(
+                tx, effective_request_format
+            ),
             revocation_profile_id=tx.revocation_profile_id,
         )
         signing_claims = dict(clean_claims)
-        credential_status_claim = _status_list_entries_to_credential_status_claim(status_list_entries)
+        credential_status_claim = _status_list_entries_to_credential_status_claim(
+            status_list_entries
+        )
         if credential_status_claim:
             signing_claims["credentialStatus"] = credential_status_claim
 
-        logger.info(f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}")
+        logger.info(
+            f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}"
+        )
         signing_arguments = {
             "issuer_did": effective_issuer_did,
             "remote_sign": _remote_sign,
@@ -3938,6 +4186,7 @@ async def issue_credential(
             "credential_id": credential_id,
         }
         if signing_format == "mso_mdoc":
+
             async def _remote_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
                 result = await sign_payload_with_issuer_profile(
                     organization_id=tx.organization_id,
@@ -3957,9 +4206,8 @@ async def issue_credential(
                 claims_json=json.dumps(signing_claims),
                 expiration_seconds=tx.validity_days * 86400,
                 certificate_chain=(
-                    remote_context.get("mdoc_x5c")
+                    (remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c"))
                     if isinstance(remote_context, dict)
-                    and isinstance(remote_context.get("mdoc_x5c"), list)
                     else None
                 ),
                 remote_sign=_remote_mdoc_sign,
@@ -3976,6 +4224,11 @@ async def issue_credential(
                 credential_type=signing_credential_type,
                 selective_disclosure_claims=sd_claims,
                 credential_format=effective_request_format,
+                issuer_certificate_chain=(
+                    remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c")
+                    if isinstance(remote_context, dict)
+                    else None
+                ),
                 **signing_arguments,
             )
         if signed_credential_id != credential_id:
@@ -4017,12 +4270,14 @@ async def issue_credential(
                 credential_id=issued_credential.id,
             )
             await _finalize_credential_renewal(tx, issued_credential, repo)
-            await repo.save_event(IssuanceEvent(
-                transaction_id=tx.id,
-                application_id=tx.application_id,
-                event_type=EventType.CREDENTIAL_ISSUED,
-                metadata={"credential_id": credential_id, "credential_type": credential_type},
-            ))
+            await repo.save_event(
+                IssuanceEvent(
+                    transaction_id=tx.id,
+                    application_id=tx.application_id,
+                    event_type=EventType.CREDENTIAL_ISSUED,
+                    metadata={"credential_id": credential_id, "credential_type": credential_type},
+                )
+            )
             await record_post_issuance_deliveries(
                 repo,
                 tx,
@@ -4034,7 +4289,9 @@ async def issue_credential(
                 },
             )
 
-        logger.info(f"[credential] rid={rid} tx_id={tx.id} issued credential_id={credential_id} cred_type={credential_type}")
+        logger.info(
+            f"[credential] rid={rid} tx_id={tx.id} issued credential_id={credential_id} cred_type={credential_type}"
+        )
         # OID4VCI hybrid response:
         # - "credentials" as object array for SpruceID mobile-sdk-rs (expects Oid4vciCredential struct)
         # - "credential" as bare string for Walt.id / Draft-11 clients
@@ -4042,13 +4299,14 @@ async def issue_credential(
         # have been normalised from spruce-vc+sd-jwt → vc+sd-jwt for Rust).
         credential_obj = {"format": response_format, "credential": jwt_credential}
         import uuid as _uuid
+
         notification_id = str(_uuid.uuid4())
         return CredentialResponse(
             credentials=[credential_obj],
             credential=(jwt_credential if _requests_legacy_credential_alias(request) else None),
             notification_id=notification_id,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -4057,12 +4315,17 @@ async def issue_credential(
         if current_tx is not None and current_tx.status == IssuanceStatus.SIGNING:
             current_tx.fail(str(e))
             await repo.save_transaction(current_tx)
-        if signing_format in {"vc+sd-jwt", "jwt_vc_json"} and (tx.issuer_did_override or tx.signing_service_id):
-            raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, e)) from e
+        if signing_format in {"vc+sd-jwt", "jwt_vc_json"} and (
+            tx.issuer_did_override or tx.signing_service_id
+        ):
+            raise HTTPException(
+                status_code=503, detail=_did_resolution_failure_detail(tx, e)
+            ) from e
         raise HTTPException(status_code=500, detail=f"Credential creation failed: {e}") from e
 
 
 # ── DIDComm v2 Push Delivery ─────────────────────────────────────────────
+
 
 async def _didcomm_sign_and_deliver(
     tx: "IssuanceTransaction",
@@ -4079,10 +4342,19 @@ async def _didcomm_sign_and_deliver(
     """
     credential_type = tx.credential_type or "VerifiableCredential"
     _INTERNAL_CLAIM_FIELDS = {
-        "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
-        "issuance_transaction_id", "issuance_fallback", "credential_type",
-        "credential_display_name", "rejection_reason", "review_notes",
-        "info_requests", "applicant_id", "_vct", _CREDENTIAL_SUBJECT_FIELD,
+        "credential_offer_uri",
+        "credential_offer_uris",
+        "offer_expires_at",
+        "issuance_transaction_id",
+        "issuance_fallback",
+        "credential_type",
+        "credential_display_name",
+        "rejection_reason",
+        "review_notes",
+        "info_requests",
+        "applicant_id",
+        "_vct",
+        _CREDENTIAL_SUBJECT_FIELD,
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
 
@@ -4102,13 +4374,14 @@ async def _didcomm_sign_and_deliver(
     else:
         signing_format = "vc+sd-jwt"
 
-    vct_for_signing = (
-        tx.claims.get("_vct")
-        or (f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-            if credential_type and not credential_type.startswith("http")
-            else credential_type)
+    vct_for_signing = tx.claims.get("_vct") or (
+        f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+        if credential_type and not credential_type.startswith("http")
+        else credential_type
     )
-    signing_credential_type = tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
+    signing_credential_type = (
+        tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
+    )
 
     # SD-JWT default: all top-level claims if none configured
     sd_claims_dc = tx.selective_disclosure_claims or []
@@ -4121,7 +4394,9 @@ async def _didcomm_sign_and_deliver(
     if signing_format != "vc+sd-jwt":
         raise HTTPException(
             status_code=503,
-            detail=_unsupported_remote_signing_format_detail(signing_format, remote_credential_format),
+            detail=_unsupported_remote_signing_format_detail(
+                signing_format, remote_credential_format
+            ),
         )
 
     remote_context: dict[str, Any] | None = None
@@ -4135,11 +4410,13 @@ async def _didcomm_sign_and_deliver(
             raise_on_error=True,
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, exc)) from exc
+        raise HTTPException(
+            status_code=503, detail=_did_resolution_failure_detail(tx, exc)
+        ) from exc
     if remote_context:
         await repo.save_transaction(tx)
 
-    if not (tx.issuer_did_override and tx.signing_service_id):
+    if not (tx.issuer_did_override and tx.issuer_profile_id):
         raise HTTPException(
             status_code=503,
             detail=(
@@ -4158,20 +4435,37 @@ async def _didcomm_sign_and_deliver(
                 key_purpose=_key_purpose_for_credential_format(remote_credential_format),
             )
         except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=503, detail=_did_resolution_failure_detail(tx, exc)) from exc
+            raise HTTPException(
+                status_code=503, detail=_did_resolution_failure_detail(tx, exc)
+            ) from exc
         if remote_context:
             tx.issuer_did_override = remote_context.get("issuer_did") or tx.issuer_did_override
-            tx.signing_service_id = remote_context.get("signing_service_id") or tx.signing_service_id
-            tx.issuer_profile_id = remote_context.get("issuer_profile_id") or (remote_context.get("issuer_profile") or {}).get("id") or tx.issuer_profile_id
-            tx.issuer_mode = _normalize_issuer_mode(remote_context.get("issuer_mode") or (remote_context.get("issuer_profile") or {}).get("issuer_mode") or tx.issuer_mode)
+            tx.signing_service_id = (
+                remote_context.get("signing_service_id") or tx.signing_service_id
+            )
+            tx.issuer_profile_id = (
+                remote_context.get("issuer_profile_id")
+                or (remote_context.get("issuer_profile") or {}).get("id")
+                or tx.issuer_profile_id
+            )
+            tx.issuer_mode = _normalize_issuer_mode(
+                remote_context.get("issuer_mode")
+                or (remote_context.get("issuer_profile") or {}).get("issuer_mode")
+                or tx.issuer_mode
+            )
             await repo.save_transaction(tx)
     if not remote_context:
-        raise HTTPException(status_code=503, detail="Unable to resolve the remote DID issuer profile for this organization.")
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to resolve the remote DID issuer profile for this organization.",
+        )
 
     service = remote_context.get("service") if isinstance(remote_context, dict) else {}
     service = service if isinstance(service, dict) else {}
     signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
-    verification_method_id = remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
+    verification_method_id = (
+        remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
+    )
     effective_issuer_did_dc = tx.issuer_did_override
 
     async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
@@ -4214,6 +4508,11 @@ async def _didcomm_sign_and_deliver(
         verification_method_id=verification_method_id,
         credential_format=effective_request_format,
         credential_id=credential_id,
+        issuer_certificate_chain=(
+            remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c")
+            if isinstance(remote_context, dict)
+            else None
+        ),
     )
 
     # Step 2: Pack into DIDComm v2 envelope
@@ -4247,7 +4546,9 @@ async def _didcomm_sign_and_deliver(
         logger.info(f"DIDComm message encrypted for {holder_did}")
     except Exception as enc_err:
         # No key agreement key or encryption failure — fall back to plaintext
-        logger.info(f"DIDComm encryption not available for {holder_did}, sending plaintext: {enc_err}")
+        logger.info(
+            f"DIDComm encryption not available for {holder_did}, sending plaintext: {enc_err}"
+        )
 
     # Step 4: POST the DIDComm message to the holder's endpoint
     delivery_status = "delivered"
@@ -4296,17 +4597,19 @@ async def _didcomm_sign_and_deliver(
             credential_id=issued_credential.id,
         )
         await _finalize_credential_renewal(tx, issued_credential, repo)
-        await repo.save_event(IssuanceEvent(
-            transaction_id=tx.id,
-            application_id=tx.application_id,
-            event_type=EventType.CREDENTIAL_ISSUED,
-            metadata={
-                "credential_id": credential_id,
-                "credential_type": credential_type,
-                "delivery_protocol": "didcomm_v2",
-                "service_endpoint": service_endpoint,
-            },
-        ))
+        await repo.save_event(
+            IssuanceEvent(
+                transaction_id=tx.id,
+                application_id=tx.application_id,
+                event_type=EventType.CREDENTIAL_ISSUED,
+                metadata={
+                    "credential_id": credential_id,
+                    "credential_type": credential_type,
+                    "delivery_protocol": "didcomm_v2",
+                    "service_endpoint": service_endpoint,
+                },
+            )
+        )
         await record_post_issuance_deliveries(
             repo,
             tx,
@@ -4330,7 +4633,11 @@ async def _didcomm_sign_and_deliver(
     )
 
 
-@issuance_router.post("/didcomm/deliver", response_model=DidcommDeliveryResponse, dependencies=[Depends(_verify_management_api_key)])
+@issuance_router.post(
+    "/didcomm/deliver",
+    response_model=DidcommDeliveryResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def didcomm_deliver(
     request: DidcommDeliverRequest,
     repo: IIssuanceRepository = Depends(),
@@ -4374,7 +4681,9 @@ async def didcomm_receive(
 
     if "didcomm-encrypted" in content_type:
         # For now, we don't decrypt inbound JWE — log and accept
-        logger.info("Received encrypted DIDComm message (encrypted ack processing not yet supported)")
+        logger.info(
+            "Received encrypted DIDComm message (encrypted ack processing not yet supported)"
+        )
         return JSONResponse(status_code=202, content={"status": "accepted"})
 
     try:
@@ -4393,17 +4702,19 @@ async def didcomm_receive(
             # Try to find a credential with this message ID
             # The thid should match the didcomm_message_id from delivery
             try:
-                await repo.save_event(IssuanceEvent(
-                    transaction_id=thid,
-                    application_id=None,
-                    event_type=EventType.CREDENTIAL_ISSUED,
-                    metadata={
-                        "didcomm_ack": True,
-                        "ack_message_id": msg_id,
-                        "original_message_id": thid,
-                        "ack_from": msg.get("from", ""),
-                    },
-                ))
+                await repo.save_event(
+                    IssuanceEvent(
+                        transaction_id=thid,
+                        application_id=None,
+                        event_type=EventType.CREDENTIAL_ISSUED,
+                        metadata={
+                            "didcomm_ack": True,
+                            "ack_message_id": msg_id,
+                            "original_message_id": thid,
+                            "ack_from": msg.get("from", ""),
+                        },
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Could not record DIDComm ack event: {e}")
 
@@ -4441,6 +4752,7 @@ async def deferred_credential(
     """
     if not authorization or not authorization.startswith("Bearer "):
         from fastapi.responses import JSONResponse as _JSONResponse
+
         return _JSONResponse(
             status_code=401,
             content={"error": "invalid_token", "error_description": "Bearer token required"},
@@ -4449,6 +4761,7 @@ async def deferred_credential(
     transaction_id = body.get("transaction_id")
     if not transaction_id:
         from fastapi.responses import JSONResponse as _JSONResponse
+
         return _JSONResponse(
             status_code=400,
             content={"error": "invalid_request", "error_description": "transaction_id is required"},
@@ -4457,9 +4770,13 @@ async def deferred_credential(
     tx = await repo.get_transaction(transaction_id)
     if not tx:
         from fastapi.responses import JSONResponse as _JSONResponse
+
         return _JSONResponse(
             status_code=400,
-            content={"error": "invalid_transaction_id", "error_description": "No transaction found for the given ID"},
+            content={
+                "error": "invalid_transaction_id",
+                "error_description": "No transaction found for the given ID",
+            },
         )
     # If credential was already issued, return it
     if tx.status == IssuanceStatus.ISSUED:
@@ -4471,6 +4788,7 @@ async def deferred_credential(
     # If still pending/authorized, indicate the credential is not yet ready
     if tx.status in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
         from fastapi.responses import JSONResponse as _JSONResponse
+
         return _JSONResponse(
             status_code=202,
             content={"transaction_id": transaction_id},
@@ -4478,9 +4796,13 @@ async def deferred_credential(
         )
     # For any other status (failed, revoked, etc.), the transaction is invalid
     from fastapi.responses import JSONResponse as _JSONResponse
+
     return _JSONResponse(
         status_code=400,
-        content={"error": "invalid_transaction_id", "error_description": f"Transaction is in {tx.status.value} state"},
+        content={
+            "error": "invalid_transaction_id",
+            "error_description": f"Transaction is in {tx.status.value} state",
+        },
     )
 
 
@@ -4497,6 +4819,7 @@ async def notification_endpoint(
     """
     if not authorization or not authorization.startswith("Bearer "):
         from fastapi import HTTPException as _HTTPException
+
         raise _HTTPException(
             status_code=401,
             detail={"error": "invalid_token", "error_description": "Bearer token required"},
@@ -4513,12 +4836,13 @@ async def get_credential_offer(
     tx = await repo.get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Offer not found")
-    
+
     if tx.is_expired:
         raise HTTPException(status_code=410, detail="Offer expired")
-    
+
     # Delegate offer construction to Rust — no manual dict building in Python.
     import json as _json
+
     offer_json_str = oid4vci_create_credential_offer(
         issuer_url=org_issuer_url(tx.organization_id),
         credential_types=[tx.credential_type or "default"],
@@ -4608,7 +4932,9 @@ class IssuanceRetentionPurgeResponse(BaseModel):
     tracked_scope: list[str] = Field(default_factory=list)
 
 
-@issuance_router.post("/transactions/{tx_id}/revoke", dependencies=[Depends(_verify_management_api_key)])
+@issuance_router.post(
+    "/transactions/{tx_id}/revoke", dependencies=[Depends(_verify_management_api_key)]
+)
 async def revoke_transaction(
     tx_id: str,
     request: TransactionRevokeRequest,
@@ -4640,7 +4966,9 @@ async def revoke_transaction(
     }
 
 
-@issuance_router.get("/organizations/{organization_id}/retention", response_model=IssuanceRetentionSummaryResponse)
+@issuance_router.get(
+    "/organizations/{organization_id}/retention", response_model=IssuanceRetentionSummaryResponse
+)
 async def get_organization_retention_summary(
     organization_id: str,
     retention_days: int = Query(30, ge=1, le=3650),
@@ -4659,7 +4987,10 @@ async def get_organization_retention_summary(
     )
 
 
-@issuance_router.post("/organizations/{organization_id}/retention/purge", response_model=IssuanceRetentionPurgeResponse)
+@issuance_router.post(
+    "/organizations/{organization_id}/retention/purge",
+    response_model=IssuanceRetentionPurgeResponse,
+)
 async def purge_organization_retention_data(
     organization_id: str,
     retention_days: int = Query(30, ge=1, le=3650),
@@ -4703,6 +5034,7 @@ async def get_transaction_revocation_status(
 # Credential Lifecycle Management
 # ============================================================================
 
+
 async def _delegate_to_revocation_profile(
     credential_id: str,
     action: str,
@@ -4711,10 +5043,14 @@ async def _delegate_to_revocation_profile(
 ) -> dict:
     """Delegate revocation action to RevocationProfile service."""
     service_url = (
-        os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or ""
-    ).strip().rstrip("/")
+        (os.environ.get("REVOCATION_PROFILE_SERVICE_URL", REVOCATION_PROFILE_SERVICE_URL) or "")
+        .strip()
+        .rstrip("/")
+    )
     if not service_url:
-        raise HTTPException(status_code=503, detail="RevocationProfile service URL is not configured")
+        raise HTTPException(
+            status_code=503, detail="RevocationProfile service URL is not configured"
+        )
 
     profile_id = credential.revocation_profile_id if credential else None
     if not profile_id:
@@ -4750,13 +5086,14 @@ async def _delegate_to_revocation_profile(
             return response.json()
         except httpx.HTTPError as e:
             logger.error(f"RevocationProfile service error: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail="Revocation service unavailable"
-            )
+            raise HTTPException(status_code=503, detail="Revocation service unavailable")
 
 
-@issuance_router.post("/credentials/{credential_id}/revoke", response_model=CredentialStatusResponse, dependencies=[Depends(_verify_management_api_key)])
+@issuance_router.post(
+    "/credentials/{credential_id}/revoke",
+    response_model=CredentialStatusResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def revoke_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -4766,10 +5103,10 @@ async def revoke_credential(
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    
+
     if cred.status == CredentialStatus.REVOKED:
         raise HTTPException(status_code=400, detail="Credential already revoked")
-    
+
     # Status changes fail closed: local state must never diverge from the
     # credential's published status-list profile.
     await _delegate_to_revocation_profile(
@@ -4778,7 +5115,7 @@ async def revoke_credential(
         reason=request.reason,
         credential=cred,
     )
-    
+
     cred.status = CredentialStatus.REVOKED
     cred.status_updated_at = datetime.now(timezone.utc)
     cred.revoked = True
@@ -4791,9 +5128,9 @@ async def revoke_credential(
         lifecycle_action="revoke",
         reason=request.reason,
     )
-    
+
     logger.info(f"Revoked credential {credential_id}: {request.reason}")
-    
+
     return {
         "id": cred.id,
         "issuer_did": cred.issuer_did,
@@ -4803,7 +5140,11 @@ async def revoke_credential(
     }
 
 
-@issuance_router.post("/credentials/{credential_id}/suspend", response_model=CredentialStatusResponse, dependencies=[Depends(_verify_management_api_key)])
+@issuance_router.post(
+    "/credentials/{credential_id}/suspend",
+    response_model=CredentialStatusResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def suspend_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -4813,17 +5154,17 @@ async def suspend_credential(
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    
+
     if cred.status == CredentialStatus.REVOKED:
         raise HTTPException(status_code=400, detail="Cannot suspend revoked credential")
-    
+
     await _delegate_to_revocation_profile(
         credential_id=credential_id,
         action="suspend",
         reason=request.reason,
         credential=cred,
     )
-    
+
     cred.status = CredentialStatus.SUSPENDED
     cred.status_updated_at = datetime.now(timezone.utc)
     await repo.save_credential(cred)
@@ -4833,9 +5174,9 @@ async def suspend_credential(
         lifecycle_action="suspend",
         reason=request.reason,
     )
-    
+
     logger.info(f"Suspended credential {credential_id}: {request.reason}")
-    
+
     return {
         "id": cred.id,
         "status": cred.status.value,
@@ -4844,7 +5185,11 @@ async def suspend_credential(
     }
 
 
-@issuance_router.post("/credentials/{credential_id}/reinstate", response_model=CredentialStatusResponse, dependencies=[Depends(_verify_management_api_key)])
+@issuance_router.post(
+    "/credentials/{credential_id}/reinstate",
+    response_model=CredentialStatusResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def reinstate_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -4854,20 +5199,20 @@ async def reinstate_credential(
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    
+
     if cred.status == CredentialStatus.REVOKED:
         raise HTTPException(status_code=400, detail="Cannot reinstate revoked credential")
-    
+
     if cred.status != CredentialStatus.SUSPENDED:
         raise HTTPException(status_code=400, detail="Only suspended credentials can be reinstated")
-    
+
     await _delegate_to_revocation_profile(
         credential_id=credential_id,
         action="reinstate",
         reason=request.reason,
         credential=cred,
     )
-    
+
     cred.status = CredentialStatus.ACTIVE
     cred.status_updated_at = datetime.now(timezone.utc)
     await repo.save_credential(cred)
@@ -4877,9 +5222,9 @@ async def reinstate_credential(
         lifecycle_action="reinstate",
         reason=request.reason,
     )
-    
+
     logger.info(f"Reinstated credential {credential_id}: {request.reason}")
-    
+
     return {
         "id": cred.id,
         "status": cred.status.value,
@@ -4897,7 +5242,7 @@ async def get_credential_status(
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
-    
+
     return {
         "id": cred.id,
         "issuer_did": cred.issuer_did,
@@ -4915,10 +5260,10 @@ async def list_credentials(
 ) -> list[dict]:
     """List all credentials for an organization with optional status filter."""
     creds = await repo.list_credentials_by_org(organization_id)
-    
+
     if status:
         creds = [c for c in creds if c.status.value == status]
-    
+
     return [
         {
             "id": c.id,
@@ -4977,11 +5322,17 @@ async def publish_issued_credential_canvas_mirror(
 
     delivery_records = await repo.list_delivery_records_for_credential(cred.id)
     canvas_record = next(
-        (record for record in delivery_records if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS),
+        (
+            record
+            for record in delivery_records
+            if record.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS
+        ),
         None,
     )
     if canvas_record is None:
-        raise HTTPException(status_code=409, detail="No Canvas mirror delivery record exists for this credential")
+        raise HTTPException(
+            status_code=409, detail="No Canvas mirror delivery record exists for this credential"
+        )
     canvas_record = await _process_canvas_mirror_delivery_record(
         canvas_record,
         repo,
@@ -5065,20 +5416,25 @@ async def get_canvas_mirror_health(
         organization_id=organization_id,
     )
 
-    pending_publish_count = sum(1 for record in records if record.status == CredentialDeliveryStatus.PENDING)
-    failed_publish_records = [record for record in records if record.status == CredentialDeliveryStatus.FAILED]
+    pending_publish_count = sum(
+        1 for record in records if record.status == CredentialDeliveryStatus.PENDING
+    )
+    failed_publish_records = [
+        record for record in records if record.status == CredentialDeliveryStatus.FAILED
+    ]
     failed_publish_count = len(failed_publish_records)
-    delivered_records = [record for record in records if record.status == CredentialDeliveryStatus.DELIVERED]
+    delivered_records = [
+        record for record in records if record.status == CredentialDeliveryStatus.DELIVERED
+    ]
     blocked_records = [
-        record for record in records
-        if (record.metadata or {}).get("canvas_feature_gate_blocked")
+        record for record in records if (record.metadata or {}).get("canvas_feature_gate_blocked")
     ]
     lifecycle_sync_failed_records = [
-        record for record in delivered_records
-        if _delivery_record_has_status_sync_failure(record)
+        record for record in delivered_records if _delivery_record_has_status_sync_failure(record)
     ]
     lifecycle_sync_ok_records = [
-        record for record in delivered_records
+        record
+        for record in delivered_records
         if not _delivery_record_has_status_sync_failure(record)
     ]
     warning_threshold = _env_int("CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS", 3)
@@ -5089,26 +5445,32 @@ async def get_canvas_mirror_health(
     publish_failure_alerts = [
         alert
         for record in failed_publish_records
-        if (alert := _canvas_mirror_alert_for_record(
-            record,
-            alert_type="publish_failure",
-            attempt_key="publish_attempts",
-            error_at_key="last_error_at",
-            warning_threshold=warning_threshold,
-            critical_threshold=critical_threshold,
-        )) is not None
+        if (
+            alert := _canvas_mirror_alert_for_record(
+                record,
+                alert_type="publish_failure",
+                attempt_key="publish_attempts",
+                error_at_key="last_error_at",
+                warning_threshold=warning_threshold,
+                critical_threshold=critical_threshold,
+            )
+        )
+        is not None
     ]
     lifecycle_sync_alerts = [
         alert
         for record in lifecycle_sync_failed_records
-        if (alert := _canvas_mirror_alert_for_record(
-            record,
-            alert_type="lifecycle_sync_failure",
-            attempt_key="status_sync_attempts",
-            error_at_key="last_status_sync_error_at",
-            warning_threshold=warning_threshold,
-            critical_threshold=critical_threshold,
-        )) is not None
+        if (
+            alert := _canvas_mirror_alert_for_record(
+                record,
+                alert_type="lifecycle_sync_failure",
+                attempt_key="status_sync_attempts",
+                error_at_key="last_status_sync_error_at",
+                warning_threshold=warning_threshold,
+                critical_threshold=critical_threshold,
+            )
+        )
+        is not None
     ]
     alerts = sorted(
         [*publish_failure_alerts, *lifecycle_sync_alerts],
@@ -5121,8 +5483,7 @@ async def get_canvas_mirror_health(
     critical_alert_count = sum(1 for alert in alerts if alert.severity == "critical")
     warning_alert_count = sum(1 for alert in alerts if alert.severity == "warning")
     publish_attempts = [
-        _metadata_int(record.metadata, "publish_attempts")
-        for record in failed_publish_records
+        _metadata_int(record.metadata, "publish_attempts") for record in failed_publish_records
     ]
     status_sync_attempts = [
         _metadata_int(record.metadata, "status_sync_attempts")
@@ -5160,18 +5521,21 @@ async def get_canvas_mirror_health(
             "repeated_lifecycle_sync_failure_count": len(lifecycle_sync_alerts),
         },
         alerts=alerts,
-        last_successful_publish_at=_max_iso_datetime([
-            (record.metadata or {}).get("published_at")
-            for record in delivered_records
-        ]),
-        last_lifecycle_sync_failure_at=_max_iso_datetime([
-            (record.metadata or {}).get("last_status_sync_error_at")
-            for record in lifecycle_sync_failed_records
-        ]),
-        last_lifecycle_sync_success_at=_max_iso_datetime([
-            (record.metadata or {}).get("status_synced_at")
-            for record in lifecycle_sync_ok_records
-        ]),
+        last_successful_publish_at=_max_iso_datetime(
+            [(record.metadata or {}).get("published_at") for record in delivered_records]
+        ),
+        last_lifecycle_sync_failure_at=_max_iso_datetime(
+            [
+                (record.metadata or {}).get("last_status_sync_error_at")
+                for record in lifecycle_sync_failed_records
+            ]
+        ),
+        last_lifecycle_sync_success_at=_max_iso_datetime(
+            [
+                (record.metadata or {}).get("status_synced_at")
+                for record in lifecycle_sync_ok_records
+            ]
+        ),
     )
 
 
@@ -5198,7 +5562,11 @@ async def get_canvas_mirror_provenance(
     return await _canvas_mirror_provenance_to_protocol(record, repo)
 
 
-@issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])
+@issued_credential_router.post(
+    "/{credential_id}/revoke",
+    response_model=IssuedCredentialRecordResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def revoke_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -5211,7 +5579,11 @@ async def revoke_issued_credential(
     return await _issued_credential_to_protocol(cred, repo)
 
 
-@issued_credential_router.post("/{credential_id}/suspend", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])
+@issued_credential_router.post(
+    "/{credential_id}/suspend",
+    response_model=IssuedCredentialRecordResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def suspend_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
@@ -5224,7 +5596,11 @@ async def suspend_issued_credential(
     return await _issued_credential_to_protocol(cred, repo)
 
 
-@issued_credential_router.post("/{credential_id}/reinstate", response_model=IssuedCredentialRecordResponse, dependencies=[Depends(_verify_management_api_key)])
+@issued_credential_router.post(
+    "/{credential_id}/reinstate",
+    response_model=IssuedCredentialRecordResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def reinstate_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
