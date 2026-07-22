@@ -56,7 +56,7 @@ def _did_key_from_ed25519(public_key: bytes) -> str:
 
 def base64url_encode(data: bytes) -> str:
     """Encode bytes as base64url without padding."""
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
 def base64url_decode(data: str) -> bytes:
@@ -234,8 +234,7 @@ def validate_marty_rs_capabilities() -> None:
     )
     if missing:
         raise RuntimeError(
-            "marty-rs native extension is missing required capabilities: "
-            + ", ".join(missing)
+            "marty-rs native extension is missing required capabilities: " + ", ".join(missing)
         )
 
 
@@ -317,9 +316,7 @@ def create_verifiable_credential_wrapper(
     """
     signing_jwk_json = issuer_jwk_json.strip() if issuer_jwk_json else ""
     if signing_jwk_json in ("", "{}"):
-        issuer_key = next(
-            (k for k in _org_keys.values() if k["did"] == issuer_did), None
-        )
+        issuer_key = next((k for k in _org_keys.values() if k["did"] == issuer_did), None)
         if issuer_key is None:
             if not organization_id:
                 raise RuntimeError(
@@ -384,6 +381,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     verification_method_id: str,
     credential_format: str | None = None,
     credential_id: str | None = None,
+    issuer_certificate_chain: list[str] | None = None,
 ) -> Tuple[str, str]:
     """Create an SD-JWT VC using the selected issuer profile's DID signer.
 
@@ -431,7 +429,9 @@ async def create_sd_jwt_vc_with_remote_signing(
         if key in sd_claims:
             disclosure = [base64url_encode(secrets.token_bytes(16)), key, value]
             disclosure_b64 = base64url_encode(_json_dumps_compact(disclosure).encode("utf-8"))
-            sd_hashes.append(base64url_encode(hashlib.sha256(disclosure_b64.encode("ascii")).digest()))
+            sd_hashes.append(
+                base64url_encode(hashlib.sha256(disclosure_b64.encode("ascii")).digest())
+            )
             disclosures.append(disclosure_b64)
         else:
             payload[key] = value
@@ -449,6 +449,10 @@ async def create_sd_jwt_vc_with_remote_signing(
         "typ": "dc+sd-jwt" if credential_format == "dc+sd-jwt" else "vc+sd-jwt",
         "kid": verification_method_id,
     }
+    if issuer_certificate_chain:
+        if not all(isinstance(item, str) and item.strip() for item in issuer_certificate_chain):
+            raise RuntimeError("issuer profile certificate chain contains an invalid x5c entry")
+        header["x5c"] = list(issuer_certificate_chain)
     encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
     encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
     signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
@@ -460,7 +464,11 @@ async def create_sd_jwt_vc_with_remote_signing(
         raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
 
     if response_algorithm and response_algorithm != header["alg"]:
-        logger.debug("Remote signer returned algorithm %s for requested %s", response_algorithm, header["alg"])
+        logger.debug(
+            "Remote signer returned algorithm %s for requested %s",
+            response_algorithm,
+            header["alg"],
+        )
 
     jwt = f"{encoded_header}.{encoded_payload}.{signature_b64}"
     # SD-JWT compact serialization: jwt~disc1~disc2~  (trailing ~ with no KB JWT)
@@ -509,9 +517,7 @@ async def create_jwt_vc_with_remote_signing(
             subject.setdefault("id", subject_id)
     else:
         if claims:
-            raise RuntimeError(
-                "explicit credential_subject cannot be combined with subject claims"
-            )
+            raise RuntimeError("explicit credential_subject cannot be combined with subject claims")
         if isinstance(credential_subject, dict):
             if not credential_subject:
                 raise RuntimeError("credential_subject must contain at least one claim")
@@ -536,7 +542,9 @@ async def create_jwt_vc_with_remote_signing(
         "validFrom": datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z"),
         "validUntil": datetime.fromtimestamp(
             now + int(expiration_seconds or 31536000), timezone.utc
-        ).isoformat().replace("+00:00", "Z"),
+        )
+        .isoformat()
+        .replace("+00:00", "Z"),
         "credentialSubject": subject,
     }
     if isinstance(credential_status, dict):
@@ -560,8 +568,7 @@ async def create_jwt_vc_with_remote_signing(
     # signing remains internal to that profile's custody backend.
     subject_values = subject if isinstance(subject, list) else [subject]
     subject_identifies_holder = any(
-        isinstance(item, dict) and item.get("id") == subject_id
-        for item in subject_values
+        isinstance(item, dict) and item.get("id") == subject_id for item in subject_values
     )
     if subject_id and subject_identifies_holder:
         payload["sub"] = subject_id
@@ -573,7 +580,9 @@ async def create_jwt_vc_with_remote_signing(
     }
     encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
     encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
-    sign_result = await remote_sign(f"{encoded_header}.{encoded_payload}".encode("ascii"), algorithm)
+    sign_result = await remote_sign(
+        f"{encoded_header}.{encoded_payload}".encode("ascii"), algorithm
+    )
     signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
     if not isinstance(signature_b64, str) or not signature_b64:
         raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
@@ -584,6 +593,7 @@ async def create_jwt_vc_with_remote_signing(
 # OID4VCI Protocol Wrappers  (delegate to Rust — never reimplement in Python)
 # ---------------------------------------------------------------------------
 
+
 def oid4vci_create_credential_offer(
     issuer_url: str,
     credential_types: list[str],
@@ -593,7 +603,10 @@ def oid4vci_create_credential_offer(
     """Create a credential offer JSON string via Rust engine."""
     marty_rs = get_marty_rs()
     return marty_rs.oid4vci_create_credential_offer(
-        issuer_url, credential_types, pre_authorized_code, user_pin_required,
+        issuer_url,
+        credential_types,
+        pre_authorized_code,
+        user_pin_required,
     )
 
 
@@ -606,9 +619,11 @@ def oid4vci_create_token_response(
     Returns parsed dict with access_token, c_nonce, etc.
     """
     import json as _json
+
     marty_rs = get_marty_rs()
     resp_json = marty_rs.oid4vci_create_token_response(
-        pre_authorized_code, token_lifetime_secs,
+        pre_authorized_code,
+        token_lifetime_secs,
     )
     return _json.loads(resp_json)
 
@@ -622,9 +637,11 @@ def oid4vci_create_authorization_response(
     Returns (authorization_response_dict, authorization_session_dict).
     """
     import json as _json
+
     marty_rs = get_marty_rs()
     resp_json, sess_json = marty_rs.oid4vci_create_authorization_response(
-        request_json, session_lifetime_secs,
+        request_json,
+        session_lifetime_secs,
     )
     return _json.loads(resp_json), _json.loads(sess_json)
 
@@ -639,9 +656,12 @@ def oid4vci_exchange_auth_code_for_token(
     Returns parsed TokenResponse dict.
     """
     import json as _json
+
     marty_rs = get_marty_rs()
     resp_json = marty_rs.oid4vci_exchange_auth_code_for_token(
-        request_json, session_json, token_lifetime_secs,
+        request_json,
+        session_json,
+        token_lifetime_secs,
     )
     return _json.loads(resp_json)
 
@@ -719,7 +739,9 @@ def verify_proof_jwt(
     try:
         marty_rs = get_marty_rs()
         holder_did, _nonce, holder_jwk_json = marty_rs.oid4vci_verify_proof_jwt(
-            proof_jwt, expected_nonce, issuer_url,
+            proof_jwt,
+            expected_nonce,
+            issuer_url,
         )
         holder_jwk = json.loads(holder_jwk_json) if holder_jwk_json else None
         return True, holder_did, holder_jwk, None
@@ -739,6 +761,7 @@ def verify_proof_jwt(
 # ---------------------------------------------------------------------------
 # DIDComm v2 Protocol Wrappers (delegate to Rust marty-didcomm crate)
 # ---------------------------------------------------------------------------
+
 
 def didcomm_resolve_did(did: str, universal_resolver_url: str | None = None) -> dict:
     """Resolve a DID to its DID Document via Rust.
@@ -774,8 +797,12 @@ def didcomm_pack_credential(
     """
     marty_rs = get_marty_rs()
     return marty_rs.didcomm_pack_credential(
-        credential, credential_format, issuer_did, holder_did,
-        thread_id, credential_id,
+        credential,
+        credential_format,
+        issuer_did,
+        holder_did,
+        thread_id,
+        credential_id,
     )
 
 
@@ -810,6 +837,7 @@ def didcomm_decrypt(jwe_json: str, recipient_x25519_private_key: bytes) -> dict:
 # ---------------------------------------------------------------------------
 # mDoc remote signing is implemented by the authoritative marty-core binding.
 # ---------------------------------------------------------------------------
+
 
 async def create_mdoc_credential_with_remote_signing(
     *,
