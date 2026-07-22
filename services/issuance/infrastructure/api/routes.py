@@ -298,6 +298,32 @@ def _select_transaction_issuer_profile_id(
     return selected or header_issuer_profile_id
 
 
+def _reject_direct_signing_headers(headers: Any) -> None:
+    """Reject caller attempts to route issuance to a KMS service or key.
+
+    Issuance selects an issuer profile and its DID. The issuer-profile signer
+    owns the private profile-to-KMS binding; callers cannot override that
+    binding with legacy service or key headers.
+    """
+    forbidden = tuple(
+        name
+        for name in (
+            "x-signing-service-id",
+            "x-signing-key-reference",
+            "x-key-reference",
+        )
+        if str(headers.get(name) or "").strip()
+    )
+    if forbidden:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Direct signing service or key selection is not allowed; "
+                "select an issuer_profile_id and issuer DID instead."
+            ),
+        )
+
+
 def _credential_format_for_remote_context(payload_format: str | None, request_format: str | None = None) -> str:
     normalized_payload = _normalize_payload_format(payload_format)
     normalized_request = _normalize_payload_format(request_format)
@@ -2781,10 +2807,9 @@ async def initiate_issuance(
     # DB column is NOT NULL; when callers omit template id, persist a stable fallback.
     effective_credential_template_id = request.credential_template_id or "default"
 
-    # Extract issuer identity headers injected by the gateway when an
-    # IssuerProfile is configured for the organization.
+    # Extract only issuer-profile identity expectations. The profile signer
+    # resolves its private KMS binding internally.
     issuer_did_override: str | None = None
-    signing_service_id: str | None = None
     request_issuer_profile_id = request.issuer_profile_id
     header_issuer_profile_id = (
         http_request.headers.get("x-issuer-profile-id")
@@ -2803,8 +2828,8 @@ async def initiate_issuance(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if http_request is not None:
+        _reject_direct_signing_headers(http_request.headers)
         issuer_did_override = http_request.headers.get("x-issuer-did")
-        signing_service_id = http_request.headers.get("x-signing-service-id")
         issuer_mode = _normalize_issuer_mode(http_request.headers.get("x-issuer-mode") or issuer_mode)
 
     tx = IssuanceTransaction(
@@ -2816,7 +2841,7 @@ async def initiate_issuance(
         issuer_profile_id=issuer_profile_id or None,
         issuer_mode=issuer_mode,
         issuer_did_override=issuer_did_override or None,
-        signing_service_id=signing_service_id or None,
+        signing_service_id=None,
         delivery_mode=delivery_mode,
         claims=merged_claims,
         credential_type=credential_type,
@@ -3591,7 +3616,7 @@ async def issue_credential(
 
     effective_request_format = _effective_request_format(request, tx)
     
-    # Resolve issuer DID + remote signing service before proof validation. The
+    # Resolve the issuer profile and its DID before proof validation. The
     # actual signing key is loaded only if we must fall back to legacy local
     # signing after determining the credential format below.
     issuer_context = await apply_remote_issuer_context(
@@ -3786,7 +3811,7 @@ async def issue_credential(
         if not (tx.issuer_did_override and tx.signing_service_id):
             detail = (
                 "Issuer identity is not configured for this organization. "
-                "Create an active DID issuer profile backed by a remote signing service before issuing credentials."
+                "Create an active issuer profile with a DID signing method before issuing credentials."
             )
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
@@ -3812,7 +3837,7 @@ async def issue_credential(
         if not remote_context:
             detail = (
                 "Unable to resolve the remote DID issuer profile for this organization. "
-                "Verify the DID identity is active and its signing service is available."
+                "Verify the issuer profile and its DID signing method are active."
             )
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
@@ -3820,7 +3845,7 @@ async def issue_credential(
     # Approval and offer creation are not durable authorization for a Canvas
     # claim.  Re-bind the transaction to the active readiness snapshot and
     # current authoritative evidence immediately before status allocation and
-    # the remote KMS signing call.
+    # the issuer-profile signing call.
     canvas_guard_denial = await _canvas_pre_signing_guard_response(
         tx=tx,
         repo=repo,
@@ -3833,8 +3858,8 @@ async def issue_credential(
         # All credentials require remote signing (all keys in KMS)
         if not (tx.issuer_did_override and tx.signing_service_id):
             detail = (
-                "Remote signing configuration is required. "
-                "Issuer identity and signing service must be configured for this organization."
+                "Issuer profile configuration is required. "
+                "An active issuer profile and its DID must be configured for this organization."
             )
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
@@ -3842,11 +3867,6 @@ async def issue_credential(
         service = remote_context.get("service") if isinstance(remote_context, dict) else {}
         service = service if isinstance(service, dict) else {}
         signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
-        signing_key_reference = (
-            remote_context.get("signing_key_reference")
-            if isinstance(remote_context, dict)
-            else None
-        )
         verification_method_id = (
             remote_context.get("verification_method_id")
             if isinstance(remote_context, dict)
@@ -3909,13 +3929,11 @@ async def issue_credential(
         logger.info(f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}")
         signing_arguments = {
             "issuer_did": effective_issuer_did,
-            "signing_service_id": tx.signing_service_id,
             "remote_sign": _remote_sign,
             "subject_id": holder_did or tx.subject_did,
             "claims_json": json.dumps(signing_claims),
             "expiration_seconds": 31536000,
             "algorithm": signing_algorithm,
-            "signing_key_reference": signing_key_reference,
             "verification_method_id": verification_method_id,
             "credential_id": credential_id,
         }
@@ -4125,8 +4143,8 @@ async def _didcomm_sign_and_deliver(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Remote signing configuration is required. "
-                "Issuer identity and signing service must be configured for this organization."
+                "Issuer profile configuration is required. "
+                "An active issuer profile and its DID must be configured for this organization."
             ),
         )
 
@@ -4153,7 +4171,6 @@ async def _didcomm_sign_and_deliver(
     service = remote_context.get("service") if isinstance(remote_context, dict) else {}
     service = service if isinstance(service, dict) else {}
     signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
-    signing_key_reference = remote_context.get("signing_key_reference") if isinstance(remote_context, dict) else None
     verification_method_id = remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
     effective_issuer_did_dc = tx.issuer_did_override
 
@@ -4187,7 +4204,6 @@ async def _didcomm_sign_and_deliver(
     )
     jwt_credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
         issuer_did=effective_issuer_did_dc,
-        signing_service_id=tx.signing_service_id,
         remote_sign=_remote_sign,
         subject_id=holder_did,
         credential_type=signing_credential_type,
@@ -4195,7 +4211,6 @@ async def _didcomm_sign_and_deliver(
         expiration_seconds=31536000,
         selective_disclosure_claims=sd_claims_dc,
         algorithm=signing_algorithm,
-        signing_key_reference=signing_key_reference,
         verification_method_id=verification_method_id,
         credential_format=effective_request_format,
         credential_id=credential_id,
