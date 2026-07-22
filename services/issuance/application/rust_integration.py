@@ -370,29 +370,9 @@ def _env_truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _remote_issuer_kid(
-    issuer_did: str,
-    signing_service_id: str,
-    signing_key_reference: str | None = None,
-) -> str:
-    if issuer_did.startswith("did:web:"):
-        fragment = signing_key_reference or f"{signing_service_id}-vm"
-    elif signing_key_reference:
-        fragment = signing_key_reference
-    elif issuer_did.startswith("did:jwk:"):
-        fragment = "0"
-    elif issuer_did.startswith("did:key:"):
-        fragment = issuer_did.rsplit(":", 1)[-1]
-    else:
-        fragment = f"{signing_service_id}-vm"
-    safe_fragment = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in fragment)
-    return f"{issuer_did}#{safe_fragment or 'key-1'}"
-
-
 async def create_sd_jwt_vc_with_remote_signing(
     *,
     issuer_did: str,
-    signing_service_id: str,
     remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
     subject_id: str | None,
     holder_jwk: dict[str, Any] | None = None,
@@ -401,8 +381,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     expiration_seconds: int = 31536000,
     selective_disclosure_claims: list[str] | None = None,
     algorithm: str | None = None,
-    signing_key_reference: str | None = None,
-    verification_method_id: str | None = None,
+    verification_method_id: str,
     credential_format: str | None = None,
     credential_id: str | None = None,
 ) -> Tuple[str, str]:
@@ -415,6 +394,12 @@ async def create_sd_jwt_vc_with_remote_signing(
     claims = json.loads(claims_json or "{}")
     if not isinstance(claims, dict):
         raise RuntimeError("claims_json must encode an object")
+    if not isinstance(verification_method_id, str) or not verification_method_id.startswith(
+        f"{issuer_did}#"
+    ):
+        raise RuntimeError(
+            "verification_method_id must identify a key controlled by the issuer DID"
+        )
 
     now = int(datetime.now(timezone.utc).timestamp())
     credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
@@ -462,7 +447,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     header = {
         "alg": algorithm or "ES256",
         "typ": "dc+sd-jwt" if credential_format == "dc+sd-jwt" else "vc+sd-jwt",
-        "kid": verification_method_id or _remote_issuer_kid(issuer_did, signing_service_id, signing_key_reference),
+        "kid": verification_method_id,
     }
     encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
     encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
@@ -488,7 +473,6 @@ async def create_sd_jwt_vc_with_remote_signing(
 async def create_jwt_vc_with_remote_signing(
     *,
     issuer_did: str,
-    signing_service_id: str,
     remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
     subject_id: str | None,
     credential_type: str,
@@ -496,8 +480,7 @@ async def create_jwt_vc_with_remote_signing(
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
     expiration_seconds: int = 31536000,
     algorithm: str | None = None,
-    signing_key_reference: str | None = None,
-    verification_method_id: str | None = None,
+    verification_method_id: str,
     credential_id: str | None = None,
 ) -> Tuple[str, str]:
     """Create a VCDM v2 JWT VC signed by the configured remote KMS.
@@ -510,6 +493,12 @@ async def create_jwt_vc_with_remote_signing(
     claims = json.loads(claims_json or "{}")
     if not isinstance(claims, dict):
         raise RuntimeError("claims_json must encode an object")
+    if not isinstance(verification_method_id, str) or not verification_method_id.startswith(
+        f"{issuer_did}#"
+    ):
+        raise RuntimeError(
+            "verification_method_id must identify a key controlled by the issuer DID"
+        )
 
     now = int(datetime.now(timezone.utc).timestamp())
     credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
@@ -567,9 +556,7 @@ async def create_jwt_vc_with_remote_signing(
     header = {
         "alg": algorithm or "ES256",
         "typ": "vc+jwt",
-        "kid": verification_method_id or _remote_issuer_kid(
-            issuer_did, signing_service_id, signing_key_reference
-        ),
+        "kid": verification_method_id,
     }
     encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
     encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))

@@ -127,7 +127,6 @@ async def _create_remote_signed_sd_jwt_for_tx(
     remote_context = await _resolve_remote_signing_context_for_tx(tx, credential_format=credential_format)
     service = remote_context.get("service") if isinstance(remote_context.get("service"), dict) else {}
     algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
-    signing_key_reference = remote_context.get("signing_key_reference") if isinstance(remote_context, dict) else None
     verification_method_id = remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
 
     async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
@@ -142,7 +141,6 @@ async def _create_remote_signed_sd_jwt_for_tx(
 
     credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
         issuer_did=tx.issuer_did_override,
-        signing_service_id=tx.signing_service_id,
         remote_sign=_remote_sign,
         subject_id=subject_id,
         holder_jwk=holder_jwk,
@@ -151,7 +149,6 @@ async def _create_remote_signed_sd_jwt_for_tx(
         expiration_seconds=31536000,
         selective_disclosure_claims=selective_disclosure_claims or [],
         algorithm=algorithm,
-        signing_key_reference=signing_key_reference,
         verification_method_id=verification_method_id,
         credential_format=credential_format,
     )

@@ -73,6 +73,38 @@ def test_authorization_redirect_preserves_registered_query_parameters():
     )
 
 
+@pytest.mark.parametrize(
+    "header",
+    ["x-signing-service-id", "x-signing-key-reference", "x-key-reference"],
+)
+def test_issuance_rejects_direct_kms_routing_headers(header: str):
+    from fastapi import HTTPException
+    from issuance.infrastructure.api.routes import _reject_direct_signing_headers
+
+    with pytest.raises(HTTPException) as exc_info:
+        _reject_direct_signing_headers(
+            {
+                "x-issuer-profile-id": "issuer-profile-1",
+                "x-issuer-did": "did:web:issuer.example",
+                header: "caller-selected-kms-value",
+            }
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "issuer_profile_id and issuer DID" in str(exc_info.value.detail)
+
+
+def test_issuance_allows_profile_and_did_headers_without_kms_routing():
+    from issuance.infrastructure.api.routes import _reject_direct_signing_headers
+
+    _reject_direct_signing_headers(
+        {
+            "x-issuer-profile-id": "issuer-profile-1",
+            "x-issuer-did": "did:web:issuer.example",
+        }
+    )
+
+
 def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
@@ -2645,14 +2677,12 @@ class TestRustIntegrationOrgIdValidation:
 
         credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
             issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
-            signing_service_id="managed-openbao-transit",
             remote_sign=fake_remote_sign,
             subject_id="did:key:z6Mk_subject",
             holder_jwk=holder_jwk,
             credential_type="https://beta.elevenidllc.com/credentials/access_badge",
             claims_json=json.dumps({"name": "Alice"}),
             algorithm="ES256",
-            signing_key_reference="raw-openbao-key-name",
             verification_method_id=verification_method_id,
             # The final OID4VCI response selects this media type before it
             # reaches the signing adapter; exercise that public contract here.
@@ -2688,7 +2718,6 @@ class TestRustIntegrationOrgIdValidation:
         supplied_credential_id = "urn:uuid:00000000-0000-0000-0000-000000000123"
         credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
             issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
-            signing_service_id="managed-openbao-transit",
             remote_sign=fake_remote_sign,
             subject_id="did:key:z6Mk_subject",
             credential_type="https://beta.elevenidllc.com/credentials/access_badge",
@@ -2704,6 +2733,9 @@ class TestRustIntegrationOrgIdValidation:
                 }
             ),
             algorithm="ES256",
+            verification_method_id=(
+                "did:web:beta.elevenidllc.com:orgs:acme#issuer-profile-v1"
+            ),
             credential_id=supplied_credential_id,
         )
 
@@ -2714,6 +2746,25 @@ class TestRustIntegrationOrgIdValidation:
         assert credential_id == supplied_credential_id
         assert payload["jti"] == supplied_credential_id
         assert payload["credentialStatus"]["statusListIndex"] == "42"
+
+    async def test_remote_sd_jwt_rejects_verification_method_from_another_did(self):
+        from issuance.application.rust_integration import (
+            create_sd_jwt_vc_with_remote_signing,
+        )
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        with pytest.raises(RuntimeError, match="controlled by the issuer DID"):
+            await create_sd_jwt_vc_with_remote_signing(
+                issuer_did="did:web:issuer.example",
+                remote_sign=fake_remote_sign,
+                subject_id="did:key:z6Mk_subject",
+                credential_type="https://issuer.example/credentials/access_badge",
+                claims_json=json.dumps({"name": "Alice"}),
+                algorithm="ES256",
+                verification_method_id="did:web:attacker.example#key-1",
+            )
 
     async def test_remote_jwt_vc_uses_vcdm_v2_envelope_and_remote_signature(self):
         from issuance.application.rust_integration import (
@@ -2730,7 +2781,6 @@ class TestRustIntegrationOrgIdValidation:
 
         credential, credential_id = await create_jwt_vc_with_remote_signing(
             issuer_did="did:web:issuer.example",
-            signing_service_id="managed-openbao-transit",
             remote_sign=fake_remote_sign,
             subject_id="did:key:z6MkHolder",
             credential_type="W3cVcdmTestCredential",
@@ -2776,7 +2826,6 @@ class TestRustIntegrationOrgIdValidation:
         ]
         credential, _ = await create_jwt_vc_with_remote_signing(
             issuer_did="did:web:issuer.example",
-            signing_service_id="managed-openbao-transit",
             remote_sign=fake_remote_sign,
             subject_id="did:key:z6MkHolder",
             credential_type="W3cVcdmTestCredential",
@@ -2790,6 +2839,7 @@ class TestRustIntegrationOrgIdValidation:
             ),
             credential_subject=credential_subject,
             algorithm="ES256",
+            verification_method_id="did:web:issuer.example#key-1",
         )
 
         payload = json.loads(base64url_decode(credential.split(".")[1]))
@@ -2809,13 +2859,13 @@ class TestRustIntegrationOrgIdValidation:
         ):
             await create_jwt_vc_with_remote_signing(
                 issuer_did="did:web:issuer.example",
-                signing_service_id="managed-openbao-transit",
                 remote_sign=fake_remote_sign,
                 subject_id="did:key:z6MkHolder",
                 credential_type="W3cVcdmTestCredential",
                 claims_json=json.dumps({"givenName": "Alice"}),
                 credential_subject=[{"id": "did:example:subject"}],
                 algorithm="ES256",
+                verification_method_id="did:web:issuer.example#key-1",
             )
 
     async def test_grpc_remote_signing_helper_uses_org_scoped_did_context(self, monkeypatch):
