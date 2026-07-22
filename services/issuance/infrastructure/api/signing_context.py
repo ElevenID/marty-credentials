@@ -136,57 +136,6 @@ async def resolve_remote_issuer_did(
     return data if isinstance(data, dict) and data.get("ok") else None
 
 
-async def sign_payload_with_remote_service(
-    *,
-    organization_id: str,
-    signing_service_id: str,
-    payload: bytes,
-    algorithm: str | None = None,
-    key_reference: str | None = None,
-    key_purpose: str | None = None,
-) -> dict[str, Any]:
-    """Ask the registered remote KMS service to sign a payload."""
-    if not organization_id:
-        raise RuntimeError("organization_id is required for remote signing")
-    if not signing_service_id:
-        raise RuntimeError("signing_service_id is required for remote signing")
-    if not payload:
-        raise RuntimeError("payload is required for remote signing")
-
-    body: dict[str, Any] = {
-        "payload_b64": base64.urlsafe_b64encode(payload).decode().rstrip("="),
-    }
-    if algorithm:
-        body["algorithm"] = algorithm
-    if key_reference:
-        body["key_reference"] = key_reference
-    if key_purpose:
-        body["key_purpose"] = key_purpose
-
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        response = await client.post(
-            f"{_internal_signing_base_url()}/services/{signing_service_id}/sign",
-            params={"organization_id": organization_id},
-            json=body,
-            headers=_internal_headers(),
-        )
-
-    if response.status_code == 401:
-        raise RuntimeError("Internal signing API rejected the service API key")
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"DID-backed signing failed (HTTP {response.status_code}): {_response_error_detail(response)}"
-        )
-    data = response.json()
-    if not isinstance(data, dict) or not data.get("ok"):
-        raise RuntimeError("Remote signing service returned an invalid response")
-
-    signature = str(data.get("signature_raw_b64") or data.get("signature_b64") or "")
-    if not signature:
-        raise RuntimeError("Remote signing service did not return a signature")
-    return data
-
-
 async def sign_payload_with_issuer_profile(
     *,
     organization_id: str,
