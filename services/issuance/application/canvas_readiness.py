@@ -726,12 +726,13 @@ async def run_canvas_kms_did_challenge(
             + b"\x00"
             + secrets.token_bytes(32)
         )
-        signed = await signing_context.sign_payload_with_remote_service(
+        signed = await signing_context.sign_payload_with_issuer_profile(
             organization_id=organization_id,
-            signing_service_id=expected.signing_service_id,
+            issuer_profile_id=expected.profile_id,
             payload=challenge,
             algorithm=expected.algorithm,
-            key_reference=expected.signing_key_reference,
+            expected_issuer_did=expected.issuer_did,
+            expected_verification_method_id=expected.verification_method_id,
         )
         if not isinstance(signed, Mapping):
             return False

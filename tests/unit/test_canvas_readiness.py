@@ -314,8 +314,9 @@ def _install_kms_fakes(
 
     async def sign(**kwargs: Any) -> dict[str, Any]:
         assert kwargs["organization_id"] == "org-1"
-        assert kwargs["signing_service_id"] == "kms-service-1"
-        assert kwargs["key_reference"] == "badge-key-1"
+        assert kwargs["issuer_profile_id"] == "issuer-profile-1"
+        assert kwargs["expected_issuer_did"] == did
+        assert kwargs["expected_verification_method_id"] == vm
         assert kwargs["algorithm"] == algorithm
         return {
             "algorithm": algorithm,
@@ -331,7 +332,7 @@ def _install_kms_fakes(
         canvas_readiness.signing_context, "resolve_remote_issuer_did", resolve_did
     )
     monkeypatch.setattr(
-        canvas_readiness.signing_context, "sign_payload_with_remote_service", sign
+        canvas_readiness.signing_context, "sign_payload_with_issuer_profile", sign
     )
 
 

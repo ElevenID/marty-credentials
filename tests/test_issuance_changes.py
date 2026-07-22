@@ -520,7 +520,7 @@ class TestRemoteIssuerFailureDetail:
         assert tx.issuer_did_override == "did:web:issuer.example"
         assert tx.signing_service_id == "service-1"
 
-    async def test_remote_signing_preserves_gateway_error_detail(self, monkeypatch):
+    async def test_issuer_profile_signing_preserves_gateway_error_detail(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
 
         class FakeResponse:
@@ -548,16 +548,100 @@ class TestRemoteIssuerFailureDetail:
         monkeypatch.setenv("ISSUANCE_API_KEY", "test-key")
 
         with pytest.raises(RuntimeError) as excinfo:
-            await signing_context.sign_payload_with_remote_service(
+            await signing_context.sign_payload_with_issuer_profile(
                 organization_id="org-1",
-                signing_service_id="managed-openbao-transit",
+                issuer_profile_id="issuer-profile-1",
                 payload=b"payload",
                 algorithm="ES256",
-                key_reference="cred-issuer-marty-es256",
             )
 
-        assert "DID-backed signing failed (HTTP 503)" in str(excinfo.value)
+        assert "Issuer-profile DID signing failed (HTTP 503)" in str(excinfo.value)
         assert "cred-issuer-marty-es256" in str(excinfo.value)
+
+    def test_template_and_header_cannot_override_issuer_profile(self):
+        from issuance.infrastructure.api.routes import (
+            HTTPException,
+            _select_transaction_issuer_profile_id,
+        )
+
+        assert (
+            _select_transaction_issuer_profile_id(
+                template_bound=True,
+                template_issuer_profile_id="profile-1",
+                request_issuer_profile_id=None,
+                header_issuer_profile_id="profile-1",
+            )
+            == "profile-1"
+        )
+        with pytest.raises(HTTPException, match="cannot override"):
+            _select_transaction_issuer_profile_id(
+                template_bound=True,
+                template_issuer_profile_id="profile-1",
+                request_issuer_profile_id="profile-2",
+                header_issuer_profile_id=None,
+            )
+        with pytest.raises(HTTPException, match="does not match"):
+            _select_transaction_issuer_profile_id(
+                template_bound=True,
+                template_issuer_profile_id="profile-1",
+                request_issuer_profile_id=None,
+                header_issuer_profile_id="profile-2",
+            )
+
+    async def test_issuer_profile_signing_never_sends_kms_routing(self, monkeypatch):
+        from issuance.infrastructure.api import signing_context
+
+        issuer_did = "did:web:issuer.example"
+        verification_method = f"{issuer_did}#key-1"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 200
+            reason_phrase = "OK"
+            text = ""
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "issuer_profile_id": "issuer-profile-1",
+                    "issuer_did": issuer_did,
+                    "verification_method_id": verification_method,
+                    "signature_raw_b64": "AQID",
+                    "algorithm": "ES256",
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, **kwargs):
+                captured.update(url=url, **kwargs)
+                return FakeResponse()
+
+        monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
+        result = await signing_context.sign_payload_with_issuer_profile(
+            organization_id="org-1",
+            issuer_profile_id="issuer-profile-1",
+            payload=b"payload",
+            algorithm="ES256",
+            expected_issuer_did=issuer_did,
+            expected_verification_method_id=verification_method,
+        )
+
+        assert str(captured["url"]).endswith(
+            "/issuer-profiles/issuer-profile-1/sign"
+        )
+        assert captured["params"] == {"organization_id": "org-1"}
+        assert captured["json"] == {"payload_b64": "cGF5bG9hZA", "algorithm": "ES256"}
+        assert "service" not in json.dumps(captured["json"])
+        assert "key_reference" not in captured["json"]
+        assert result["issuer_did"] == issuer_did
 
     def test_did_resolution_failure_detail_mentions_issuer_and_key_error(self):
         from issuance.infrastructure.api.routes import _did_resolution_failure_detail
@@ -2783,12 +2867,12 @@ class TestRustIntegrationOrgIdValidation:
                 "service": {"id": "managed-openbao-transit", "algorithm": "ES256"},
             }
 
-        async def fake_sign_payload_with_remote_service(**kwargs):
+        async def fake_sign_payload_with_issuer_profile(**kwargs):
             captured["sign"] = kwargs
             return {"signature_raw_b64": "AQID", "algorithm": kwargs.get("algorithm")}
 
         monkeypatch.setattr(signing_context, "resolve_remote_issuer_context", fake_resolve_remote_issuer_context)
-        monkeypatch.setattr(signing_context, "sign_payload_with_remote_service", fake_sign_payload_with_remote_service)
+        monkeypatch.setattr(signing_context, "sign_payload_with_issuer_profile", fake_sign_payload_with_issuer_profile)
 
         tx = _make_transaction(
             issuer_did_override="did:web:beta.elevenidllc.com:orgs:old",
@@ -2822,8 +2906,12 @@ class TestRustIntegrationOrgIdValidation:
             "algorithm": None,
         }
         assert captured["sign"]["organization_id"] == "org-1"
-        assert captured["sign"]["signing_service_id"] == "managed-openbao-transit"
-        assert captured["sign"]["key_reference"] == "cred-issuer-acme-es256"
+        assert captured["sign"]["issuer_profile_id"] == "ip-grpc"
+        assert captured["sign"]["expected_issuer_did"] == issuer_did
+        assert (
+            captured["sign"]["expected_verification_method_id"]
+            == verification_method_id
+        )
         assert credential_id.startswith("urn:uuid:")
 
 
