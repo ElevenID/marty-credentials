@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.12] - 2026-07-22
+
+### Fixed
+
+- Advertise the Credential Issuer's authorization server explicitly for EUDI
+  reference-wallet discovery.
+- Omit an optional VC-JWT `sub` claim when an explicitly supplied VCDM
+  credential subject does not identify the OID4VCI proof holder, avoiding a
+  contradictory subject binding while preserving normal holder-bound output.
+
+Version 0.1.11 was not published because its immutable tag correctly failed
+the release-source version check. The tag was retained rather than rewritten.
+
 ## [0.1.10] - 2026-07-22
 
 ### Security
