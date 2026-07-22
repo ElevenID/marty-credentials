@@ -3616,7 +3616,7 @@ async def issue_credential(
 
     effective_request_format = _effective_request_format(request, tx)
     
-    # Resolve issuer DID + remote signing service before proof validation. The
+    # Resolve the issuer profile and its DID before proof validation. The
     # actual signing key is loaded only if we must fall back to legacy local
     # signing after determining the credential format below.
     issuer_context = await apply_remote_issuer_context(
@@ -3811,7 +3811,7 @@ async def issue_credential(
         if not (tx.issuer_did_override and tx.signing_service_id):
             detail = (
                 "Issuer identity is not configured for this organization. "
-                "Create an active DID issuer profile backed by a remote signing service before issuing credentials."
+                "Create an active issuer profile with a DID signing method before issuing credentials."
             )
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
@@ -3837,7 +3837,7 @@ async def issue_credential(
         if not remote_context:
             detail = (
                 "Unable to resolve the remote DID issuer profile for this organization. "
-                "Verify the DID identity is active and its signing service is available."
+                "Verify the issuer profile and its DID signing method are active."
             )
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
@@ -3845,7 +3845,7 @@ async def issue_credential(
     # Approval and offer creation are not durable authorization for a Canvas
     # claim.  Re-bind the transaction to the active readiness snapshot and
     # current authoritative evidence immediately before status allocation and
-    # the remote KMS signing call.
+    # the issuer-profile signing call.
     canvas_guard_denial = await _canvas_pre_signing_guard_response(
         tx=tx,
         repo=repo,
@@ -3858,8 +3858,8 @@ async def issue_credential(
         # All credentials require remote signing (all keys in KMS)
         if not (tx.issuer_did_override and tx.signing_service_id):
             detail = (
-                "Remote signing configuration is required. "
-                "Issuer identity and signing service must be configured for this organization."
+                "Issuer profile configuration is required. "
+                "An active issuer profile and its DID must be configured for this organization."
             )
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
@@ -4143,8 +4143,8 @@ async def _didcomm_sign_and_deliver(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Remote signing configuration is required. "
-                "Issuer identity and signing service must be configured for this organization."
+                "Issuer profile configuration is required. "
+                "An active issuer profile and its DID must be configured for this organization."
             ),
         )
 

@@ -385,7 +385,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     credential_format: str | None = None,
     credential_id: str | None = None,
 ) -> Tuple[str, str]:
-    """Create an SD-JWT VC whose signature is produced by a remote KMS.
+    """Create an SD-JWT VC using the selected issuer profile's DID signer.
 
     Args:
         credential_format: OID4VCI format string (e.g. ``"spruce-vc+sd-jwt"``)
@@ -457,7 +457,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     response_algorithm = sign_result.get("algorithm")
     signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
     if not isinstance(signature_b64, str) or not signature_b64:
-        raise RuntimeError("Remote signing service returned no usable JWS signature")
+        raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
 
     if response_algorithm and response_algorithm != header["alg"]:
         logger.debug("Remote signer returned algorithm %s for requested %s", response_algorithm, header["alg"])
@@ -483,7 +483,7 @@ async def create_jwt_vc_with_remote_signing(
     verification_method_id: str,
     credential_id: str | None = None,
 ) -> Tuple[str, str]:
-    """Create a VCDM v2 JWT VC signed by the configured remote KMS.
+    """Create a VCDM v2 JWT VC using the selected issuer profile's DID signer.
 
     This is intentionally parallel to ``create_sd_jwt_vc_with_remote_signing``:
     the issuer private key never enters the service process.  ``vc+jwt`` is a
@@ -563,7 +563,7 @@ async def create_jwt_vc_with_remote_signing(
     sign_result = await remote_sign(f"{encoded_header}.{encoded_payload}".encode("ascii"), algorithm)
     signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
     if not isinstance(signature_b64, str) or not signature_b64:
-        raise RuntimeError("Remote signing service returned no usable JWS signature")
+        raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
     return f"{encoded_header}.{encoded_payload}.{signature_b64}", credential_id
 
 

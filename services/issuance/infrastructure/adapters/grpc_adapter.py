@@ -120,7 +120,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
     credential_format: str,
     selective_disclosure_claims: list[str] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
-    """Create an SD-JWT credential signed by the org-scoped remote DID key."""
+    """Create an SD-JWT credential through the org-scoped issuer profile and DID."""
     from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
     from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_profile
 
