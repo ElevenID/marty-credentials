@@ -185,3 +185,67 @@ async def sign_payload_with_remote_service(
     if not signature:
         raise RuntimeError("Remote signing service did not return a signature")
     return data
+
+
+async def sign_payload_with_issuer_profile(
+    *,
+    organization_id: str,
+    issuer_profile_id: str,
+    payload: bytes,
+    algorithm: str | None = None,
+    expected_issuer_did: str | None = None,
+    expected_verification_method_id: str | None = None,
+) -> dict[str, Any]:
+    """Sign through an issuer profile and its published DID identity.
+
+    Application code selects only the issuer profile. The gateway owns the
+    profile-to-KMS binding and refuses service, provider-key, purpose, and key
+    reference overrides. Private key material remains in the configured KMS.
+    """
+    if not organization_id:
+        raise RuntimeError("organization_id is required for issuer-profile signing")
+    if not issuer_profile_id:
+        raise RuntimeError("issuer_profile_id is required for issuer-profile signing")
+    if not payload:
+        raise RuntimeError("payload is required for issuer-profile signing")
+
+    body: dict[str, Any] = {
+        "payload_b64": base64.urlsafe_b64encode(payload).decode().rstrip("="),
+    }
+    if algorithm:
+        body["algorithm"] = algorithm
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            f"{_internal_signing_base_url()}/issuer-profiles/{issuer_profile_id}/sign",
+            params={"organization_id": organization_id},
+            json=body,
+            headers=_internal_headers(),
+        )
+
+    if response.status_code == 401:
+        raise RuntimeError("Internal signing API rejected the service API key")
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Issuer-profile DID signing failed (HTTP {response.status_code}): "
+            f"{_response_error_detail(response)}"
+        )
+    data = response.json()
+    if not isinstance(data, dict) or not data.get("ok"):
+        raise RuntimeError("Issuer-profile signer returned an invalid response")
+    if data.get("issuer_profile_id") != issuer_profile_id:
+        raise RuntimeError("Issuer-profile signer returned a different profile identity")
+    if expected_issuer_did and data.get("issuer_did") != expected_issuer_did:
+        raise RuntimeError("Issuer-profile signer returned a different issuer DID")
+    if (
+        expected_verification_method_id
+        and data.get("verification_method_id") != expected_verification_method_id
+    ):
+        raise RuntimeError(
+            "Issuer-profile signer returned a different DID verification method"
+        )
+
+    signature = str(data.get("signature_raw_b64") or data.get("signature_b64") or "")
+    if not signature:
+        raise RuntimeError("Issuer-profile signer did not return a signature")
+    return data

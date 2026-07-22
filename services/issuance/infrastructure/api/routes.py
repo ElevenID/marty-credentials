@@ -46,7 +46,7 @@ from issuance.application.rust_integration import (
 )
 from issuance.infrastructure.api.signing_context import (
     resolve_remote_issuer_context,
-    sign_payload_with_remote_service,
+    sign_payload_with_issuer_profile,
 )
 from issuance.domain.entities import (
     AuthorizationSession,
@@ -269,6 +269,33 @@ def _normalize_issuer_mode(value: str | None) -> str:
 
 def _normalize_payload_format(value: str | None) -> str:
     return (value or "").strip().lower().replace("-", "_")
+
+
+def _select_transaction_issuer_profile_id(
+    *,
+    template_bound: bool,
+    template_issuer_profile_id: str | None,
+    request_issuer_profile_id: str | None,
+    header_issuer_profile_id: str | None,
+) -> str | None:
+    """Select one issuer profile without permitting caller/header overrides."""
+    if (
+        template_bound
+        and request_issuer_profile_id
+        and template_issuer_profile_id
+        and request_issuer_profile_id != template_issuer_profile_id
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id cannot override the credential template issuer profile.",
+        )
+    selected = template_issuer_profile_id or request_issuer_profile_id
+    if selected and header_issuer_profile_id and selected != header_issuer_profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail="X-Issuer-Profile-Id does not match the selected issuer profile.",
+        )
+    return selected or header_issuer_profile_id
 
 
 def _credential_format_for_remote_context(payload_format: str | None, request_format: str | None = None) -> str:
@@ -2611,6 +2638,7 @@ async def initiate_issuance(
     selective_disclosure_claims: list[str] = []
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     revocation_profile_id: str | None = None
+    template_issuer_profile_id: str | None = None
     wallet_configs: list[dict] = []
     validity_days = 365
     renewable = False
@@ -2640,6 +2668,7 @@ async def initiate_issuance(
             selective_disclosure_claims = list(tmpl_resp.selective_disclosure_fields) if tmpl_resp.selective_disclosure_fields else []
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             revocation_profile_id = tmpl_resp.revocation_profile_id or None
+            template_issuer_profile_id = tmpl_resp.issuer_profile_id or None
             wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
             validity_days = tmpl_resp.validity_rules.default_validity_days or 365
             renewable = bool(tmpl_resp.validity_rules.renewable)
@@ -2681,6 +2710,7 @@ async def initiate_issuance(
             selective_disclosure_claims = tmpl.get("selective_disclosure_fields") or []
             credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
             revocation_profile_id = tmpl.get("revocation_profile_id") or None
+            template_issuer_profile_id = tmpl.get("issuer_profile_id") or None
             wallet_configs = tmpl.get("wallet_configs") or []
             validity_rules = tmpl.get("validity_rules") or {}
             validity_days = int(validity_rules.get("default_validity_days") or 0)
@@ -2755,7 +2785,18 @@ async def initiate_issuance(
     # IssuerProfile is configured for the organization.
     issuer_did_override: str | None = None
     signing_service_id: str | None = None
-    issuer_profile_id = request.issuer_profile_id
+    request_issuer_profile_id = request.issuer_profile_id
+    header_issuer_profile_id = (
+        http_request.headers.get("x-issuer-profile-id")
+        if http_request is not None
+        else None
+    )
+    issuer_profile_id = _select_transaction_issuer_profile_id(
+        template_bound=bool(request.credential_template_id),
+        template_issuer_profile_id=template_issuer_profile_id,
+        request_issuer_profile_id=request_issuer_profile_id,
+        header_issuer_profile_id=header_issuer_profile_id,
+    )
     issuer_mode = _normalize_issuer_mode(request.issuer_mode)
     try:
         delivery_mode = normalize_delivery_mode(request.delivery_mode)
@@ -2764,7 +2805,6 @@ async def initiate_issuance(
     if http_request is not None:
         issuer_did_override = http_request.headers.get("x-issuer-did")
         signing_service_id = http_request.headers.get("x-signing-service-id")
-        issuer_profile_id = issuer_profile_id or http_request.headers.get("x-issuer-profile-id")
         issuer_mode = _normalize_issuer_mode(http_request.headers.get("x-issuer-mode") or issuer_mode)
 
     tx = IssuanceTransaction(
@@ -3815,12 +3855,13 @@ async def issue_credential(
         effective_issuer_did = tx.issuer_did_override
 
         async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
-            return await sign_payload_with_remote_service(
+            return await sign_payload_with_issuer_profile(
                 organization_id=tx.organization_id,
-                signing_service_id=tx.signing_service_id or "",
+                issuer_profile_id=tx.issuer_profile_id or "",
                 payload=payload,
                 algorithm=algorithm or signing_algorithm,
-                key_reference=signing_key_reference,
+                expected_issuer_did=effective_issuer_did,
+                expected_verification_method_id=verification_method_id,
             )
 
         # Claim the transaction before allocating status or calling the KMS.
@@ -3880,13 +3921,13 @@ async def issue_credential(
         }
         if signing_format == "mso_mdoc":
             async def _remote_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
-                result = await sign_payload_with_remote_service(
+                result = await sign_payload_with_issuer_profile(
                     organization_id=tx.organization_id,
-                    signing_service_id=tx.signing_service_id or "",
+                    issuer_profile_id=tx.issuer_profile_id or "",
                     payload=tbs_data,
                     algorithm=algorithm,
-                    key_reference=signing_key_reference,
-                    key_purpose="mdoc_dsc",
+                    expected_issuer_did=effective_issuer_did,
+                    expected_verification_method_id=verification_method_id,
                 )
                 return _remote_mdoc_signature_raw(result, algorithm)
 
@@ -4117,12 +4158,13 @@ async def _didcomm_sign_and_deliver(
     effective_issuer_did_dc = tx.issuer_did_override
 
     async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
-        return await sign_payload_with_remote_service(
+        return await sign_payload_with_issuer_profile(
             organization_id=tx.organization_id,
-            signing_service_id=tx.signing_service_id or "",
+            issuer_profile_id=tx.issuer_profile_id or "",
             payload=payload,
             algorithm=algorithm or signing_algorithm,
-            key_reference=signing_key_reference,
+            expected_issuer_did=effective_issuer_did_dc,
+            expected_verification_method_id=verification_method_id,
         )
 
     credential_id = f"urn:uuid:{uuid.uuid4()}"
