@@ -197,7 +197,9 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
     response = TestClient(create_app()).get("/.well-known/openid-credential-issuer")
 
     assert response.status_code == 200
-    configurations = response.json()["credential_configurations_supported"]
+    metadata = response.json()
+    assert metadata["authorization_servers"] == [metadata["credential_issuer"]]
+    configurations = metadata["credential_configurations_supported"]
     assert configurations["default"]["format"] == "jwt_vc_json"
     assert configurations["default#credential-manager"]["format"] == "dc+sd-jwt"
     assert configurations["default#credential-manager"]["vct"].endswith("/credentials/default")
@@ -2843,9 +2845,35 @@ class TestRustIntegrationOrgIdValidation:
         )
 
         payload = json.loads(base64url_decode(credential.split(".")[1]))
-        assert payload["sub"] == "did:key:z6MkHolder"
+        assert "sub" not in payload
         assert payload["vc"]["credentialSubject"] == credential_subject
         assert payload["vc"]["credentialStatus"]["statusListIndex"] == "42"
+
+    async def test_remote_jwt_vc_keeps_sub_when_explicit_subject_identifies_holder(self):
+        from issuance.application.rust_integration import (
+            base64url_decode,
+            create_jwt_vc_with_remote_signing,
+        )
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        credential, _ = await create_jwt_vc_with_remote_signing(
+            issuer_did="did:web:issuer.example",
+            remote_sign=fake_remote_sign,
+            subject_id="did:key:z6MkHolder",
+            credential_type="W3cVcdmTestCredential",
+            claims_json="{}",
+            credential_subject={
+                "id": "did:key:z6MkHolder",
+                "givenName": "Alice",
+            },
+            algorithm="ES256",
+            verification_method_id="did:web:issuer.example#key-1",
+        )
+
+        payload = json.loads(base64url_decode(credential.split(".")[1]))
+        assert payload["sub"] == "did:key:z6MkHolder"
 
     async def test_remote_jwt_vc_rejects_ambiguous_subject_inputs(self):
         from issuance.application.rust_integration import create_jwt_vc_with_remote_signing

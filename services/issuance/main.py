@@ -413,6 +413,11 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            # Be explicit even though OID4VCI permits omitting this value when
+            # the Credential Issuer is also the Authorization Server.  The
+            # EUDI reference wallet follows the advertised issuer into RFC
+            # 8414 discovery and does not reliably apply the omission rule.
+            "authorization_servers": [issuer_url],
             "display": _issuer_display_entries(),
             "credential_endpoint": credential_endpoint,
             "nonce_endpoint": nonce_endpoint,
@@ -472,6 +477,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "authorization_servers": [issuer_url],
             "display": _issuer_display_entries(),
             "credential_endpoint": credential_endpoint,
             "nonce_endpoint": nonce_endpoint,
@@ -541,6 +547,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "authorization_servers": [issuer_url],
             "display": _issuer_display_entries(),
             "credential_endpoint": credential_endpoint,
             "nonce_endpoint": nonce_endpoint,
@@ -668,6 +675,7 @@ def create_app() -> FastAPI:
 
         return {
             "credential_issuer": issuer_url,
+            "authorization_servers": [issuer_url],
             "display": _issuer_display_entries(),
             "credential_endpoint": credential_endpoint,
             "nonce_endpoint": nonce_endpoint,
@@ -688,6 +696,7 @@ def create_app() -> FastAPI:
         _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
         return {
             "credential_issuer": ISSUER_BASE_URL,
+            "authorization_servers": [ISSUER_BASE_URL],
             "display": _issuer_display_entries(),
             "credential_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/credential",
             "nonce_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/nonce",

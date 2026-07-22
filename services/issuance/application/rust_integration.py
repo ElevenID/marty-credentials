@@ -550,7 +550,20 @@ async def create_jwt_vc_with_remote_signing(
         "jti": credential_id,
         "vc": vc,
     }
-    if subject_id:
+    # The holder that proves possession at the OID4VCI endpoint is not always
+    # the semantic subject named by an explicitly supplied VCDM credential.
+    # JWT ``sub`` is optional, but when present the VCDM verifier requires it
+    # to identify one of the credentialSubject objects.  Preserve ``sub`` for
+    # the ordinary holder-bound path and for explicit subjects that actually
+    # name the holder; otherwise omit it instead of issuing a contradictory
+    # credential.  The issuer identity remains the selected profile's DID and
+    # signing remains internal to that profile's custody backend.
+    subject_values = subject if isinstance(subject, list) else [subject]
+    subject_identifies_holder = any(
+        isinstance(item, dict) and item.get("id") == subject_id
+        for item in subject_values
+    )
+    if subject_id and subject_identifies_holder:
         payload["sub"] = subject_id
 
     header = {
