@@ -246,8 +246,11 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "credential_metadata": {
             "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
         },
+        "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
     }
-    assert "display" not in configurations["default#mdoc"]
+    for configuration in configurations.values():
+        assert configuration["display"][0]["name"]
+        assert configuration["credential_metadata"]["display"] == configuration["display"]
     assert "credentialSubject" not in configurations["default"]["credential_definition"]
 
     from issuance.main import _credential_definition, _credential_metadata
