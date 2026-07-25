@@ -733,6 +733,11 @@ def create_app() -> FastAPI:
                     "credential_metadata": {
                         "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
                     },
+                    # EUDI's pinned draft-era web wallet tester still reads
+                    # the pre-Final top-level member. Keep this compatibility
+                    # alias in the root view while credential_metadata remains
+                    # the authoritative OID4VCI Final representation.
+                    "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
                 },
                 # The shared issuer supports the same SD-JWT route used by
                 # Credential Manager.  Keep its configuration identifier in
@@ -748,6 +753,7 @@ def create_app() -> FastAPI:
                     "credential_metadata": {
                         "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
                     },
+                    "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
                 },
                 # ``#mdoc`` is the configuration suffix the issuance request
                 # validator resolves to mso_mdoc.  Advertising that exact ID
@@ -763,6 +769,7 @@ def create_app() -> FastAPI:
                     "credential_metadata": {
                         "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                     },
+                    "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 },
             },
         }
