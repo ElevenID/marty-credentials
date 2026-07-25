@@ -45,7 +45,7 @@ from issuance.application.canvas_issuance_guard import (
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.rust_integration import (
     create_jwt_vc_with_remote_signing,
-    create_mdoc_credential_with_remote_signing,
+    create_mdoc_credential_with_issuer_profile_signing,
     create_sd_jwt_vc_with_remote_signing,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
@@ -4123,7 +4123,8 @@ async def issue_credential(
                 expected_verification_method_id=verification_method_id,
             )
 
-        # Claim the transaction before allocating status or calling the KMS.
+        # Claim the transaction before allocating status or asking the issuer
+        # profile to sign as its DID.
         # A deterministic reserved ID makes a crashed signing attempt explicit
         # and prevents a retry from minting a second credential identity.
         credential_id = tx.reserved_credential_id or (
@@ -4187,7 +4188,9 @@ async def issue_credential(
         }
         if signing_format == "mso_mdoc":
 
-            async def _remote_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
+            async def _issuer_profile_mdoc_sign(
+                tbs_data: bytes, algorithm: str
+            ) -> bytes:
                 result = await sign_payload_with_issuer_profile(
                     organization_id=tx.organization_id,
                     issuer_profile_id=tx.issuer_profile_id or "",
@@ -4198,19 +4201,25 @@ async def issue_credential(
                 )
                 return _remote_mdoc_signature_raw(result, algorithm)
 
-            jwt_credential, signed_credential_id = await create_mdoc_credential_with_remote_signing(
-                issuer_did=effective_issuer_did,
-                algorithm=signing_algorithm,
-                doc_type=tx.credential_type,
-                namespace=_remote_mdoc_namespace(tx.credential_type),
-                claims_json=json.dumps(signing_claims),
-                expiration_seconds=tx.validity_days * 86400,
-                certificate_chain=(
-                    (remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c"))
-                    if isinstance(remote_context, dict)
-                    else None
-                ),
-                remote_sign=_remote_mdoc_sign,
+            jwt_credential, signed_credential_id = (
+                await create_mdoc_credential_with_issuer_profile_signing(
+                    issuer_did=effective_issuer_did,
+                    algorithm=signing_algorithm,
+                    doc_type=tx.credential_type,
+                    namespace=_remote_mdoc_namespace(tx.credential_type),
+                    claims_json=json.dumps(signing_claims),
+                    expiration_seconds=tx.validity_days * 86400,
+                    credential_id=credential_id,
+                    certificate_chain=(
+                        (
+                            remote_context.get("issuer_x5c")
+                            or remote_context.get("mdoc_x5c")
+                        )
+                        if isinstance(remote_context, dict)
+                        else None
+                    ),
+                    profile_sign=_issuer_profile_mdoc_sign,
+                )
             )
         elif signing_format == "jwt_vc_json":
             jwt_credential, signed_credential_id = await create_jwt_vc_with_remote_signing(
@@ -4232,7 +4241,9 @@ async def issue_credential(
                 **signing_arguments,
             )
         if signed_credential_id != credential_id:
-            raise RuntimeError("Remote credential builder changed the reserved credential ID")
+            raise RuntimeError(
+                "Issuer-profile credential builder changed the reserved credential ID"
+            )
 
         # Only update state and emit event on first issuance; allow idempotent
         # wallet retries (wallets sometimes re-request after a network timeout).
