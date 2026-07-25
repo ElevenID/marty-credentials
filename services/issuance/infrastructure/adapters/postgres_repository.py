@@ -2133,7 +2133,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         prepared_transaction: IssuanceTransaction,
         credential_id: str,
     ) -> IssuanceTransaction | None:
-        """Atomically persist prepared context and reserve one KMS signing call."""
+        """Atomically persist context and reserve one issuer-profile signing attempt."""
 
         transaction_id = prepared_transaction.id
         async with self._session_factory() as session:

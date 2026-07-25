@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-07-24
+
+### Fixed
+
+- Preserve the transaction's deterministic mdoc credential identifier through
+  issuer-profile signing and native COSE assembly.
+- Keep application signing scoped to an issuer profile, its DID, and its
+  published verification method; KMS remains private key custody behind the
+  profile boundary.
+
 ## [0.1.12] - 2026-07-22
 
 ### Fixed

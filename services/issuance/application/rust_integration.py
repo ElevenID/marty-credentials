@@ -835,11 +835,11 @@ def didcomm_decrypt(jwe_json: str, recipient_x25519_private_key: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# mDoc remote signing is implemented by the authoritative marty-core binding.
+# mDoc issuer-profile signing is implemented by the authoritative marty-core binding.
 # ---------------------------------------------------------------------------
 
 
-async def create_mdoc_credential_with_remote_signing(
+async def create_mdoc_credential_with_issuer_profile_signing(
     *,
     issuer_did: str,
     algorithm: str,
@@ -847,14 +847,16 @@ async def create_mdoc_credential_with_remote_signing(
     namespace: str,
     claims_json: str,
     expiration_seconds: int,
+    credential_id: str,
     certificate_chain: list[str] | None,
-    remote_sign: Callable[[bytes, str | None], Awaitable[bytes]],
+    profile_sign: Callable[[bytes, str | None], Awaitable[bytes]],
 ) -> Tuple[str, str]:
-    """Issue an mDoc through the authoritative marty-core KMS split API.
+    """Issue an mDoc through the authoritative issuer-profile split API.
 
     The PyO3 object preserves the protected COSE header, MSO and issuer-signed
-    items between preparation and assembly. Python receives only the exact
-    Sig_structure bytes and never synthesizes the final credential state.
+    items between preparation and assembly. The issuer profile signs the exact
+    Sig_structure as its DID; KMS remains an implementation detail of profile
+    key custody. Python never synthesizes the final credential state.
     """
     try:
         claims = json.loads(claims_json)
@@ -876,9 +878,10 @@ async def create_mdoc_credential_with_remote_signing(
         namespace,
         json.dumps(claims),
         expiration_seconds,
+        credential_id,
     )
-    signature = await remote_sign(bytes(prepared.tbs_data), algorithm)
+    signature = await profile_sign(bytes(prepared.tbs_data), algorithm)
     credential, credential_id = marty_rs.oid4vci_assemble_mdoc(prepared, signature)
     if not isinstance(credential, str) or not credential:
-        raise RuntimeError("marty-rs returned an empty remotely signed mDoc")
+        raise RuntimeError("marty-rs returned an empty issuer-profile-signed mDoc")
     return credential, credential_id
