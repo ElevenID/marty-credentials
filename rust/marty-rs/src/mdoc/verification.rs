@@ -185,6 +185,96 @@ impl MdocVerificationResult {
     }
 }
 
+/// Verify issuer and holder authentication for an OpenID4VP mdoc presentation.
+///
+/// `session_transcript_cbor` must be constructed from verifier-owned request
+/// state. It is not accepted from the wallet. Issuer signing is a separate
+/// operation selected by issuer profile and DID; this verifier never receives
+/// a KMS key coordinate.
+#[pyfunction]
+pub fn verify_mdoc_presentation(
+    mdoc_bytes: Vec<u8>,
+    session_transcript_cbor: Vec<u8>,
+    trusted_issuer_certs_pem: Vec<String>,
+) -> PyResult<MdocPresentationVerificationResult> {
+    let issuer = verify_mdoc_signature(mdoc_bytes.clone(), trusted_issuer_certs_pem)?;
+    let mut errors = issuer.error.into_iter().collect::<Vec<_>>();
+    let (device_authentication_valid, device_document_types) =
+        match marty_verification::verify_device_authentication(
+            &mdoc_bytes,
+            &session_transcript_cbor,
+        ) {
+            Ok(result) => (result.verified, result.document_types),
+            Err(error) => {
+                errors.push(format!("Holder device authentication failed: {error}"));
+                (false, Vec::new())
+            }
+        };
+    let document_types = if issuer.document_types.is_empty() {
+        device_document_types
+    } else {
+        issuer.document_types
+    };
+
+    Ok(MdocPresentationVerificationResult {
+        issuer_signature_valid: issuer.signature_valid,
+        issuer_trusted: issuer.issuer_verified,
+        device_authentication_valid,
+        document_types,
+        error: (!errors.is_empty()).then(|| errors.join("; ")),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_presentation_fails_without_panicking() {
+        let result =
+            verify_mdoc_presentation(vec![0xff], vec![0x83, 0xf6, 0xf6, 0x82, 0x71], Vec::new())
+                .unwrap();
+
+        assert!(!result.issuer_signature_valid);
+        assert!(!result.issuer_trusted);
+        assert!(!result.device_authentication_valid);
+        assert!(result.error.is_some());
+    }
+}
+
+/// Result of complete mdoc presentation authentication.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone)]
+pub struct MdocPresentationVerificationResult {
+    /// The issuer COSE signature is valid for every returned document.
+    #[pyo3(get)]
+    pub issuer_signature_valid: bool,
+    /// Every issuer certificate chain terminates at a configured trust anchor.
+    #[pyo3(get)]
+    pub issuer_trusted: bool,
+    /// Every holder DeviceAuthentication signature matches verifier request state.
+    #[pyo3(get)]
+    pub device_authentication_valid: bool,
+    #[pyo3(get)]
+    pub document_types: Vec<String>,
+    #[pyo3(get)]
+    pub error: Option<String>,
+}
+
+#[pymethods]
+impl MdocPresentationVerificationResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "MdocPresentationVerificationResult(issuer_signature_valid={}, \
+             issuer_trusted={}, device_authentication_valid={}, document_types={:?})",
+            self.issuer_signature_valid,
+            self.issuer_trusted,
+            self.device_authentication_valid,
+            self.document_types
+        )
+    }
+}
+
 /// Verify an mDoc's signature using isomdl
 ///
 /// This function verifies the COSE_Sign1 signature on the MobileSecurityObject (MSO)
@@ -201,7 +291,7 @@ impl MdocVerificationResult {
 #[pyfunction]
 pub fn verify_mdoc_signature(
     mdoc_bytes: Vec<u8>,
-    _trusted_issuer_certs_pem: Vec<String>,
+    trusted_issuer_certs_pem: Vec<String>,
 ) -> PyResult<MdocVerificationResult> {
     // Parse DeviceResponse
     let response = match marty_verification::mdoc::parse_device_response(&mdoc_bytes) {
@@ -223,21 +313,32 @@ pub fn verify_mdoc_signature(
         .map(|d| d.doc_type.clone())
         .collect();
 
-    // Convert trusted certs from PEM to DER
-    // For now, skip trusted cert parsing since marty_crypto is not a dependency
-    // TODO: Add proper certificate chain validation
-    let trusted_certs_der: Vec<Vec<u8>> = Vec::new();
+    let mut chain_validator = marty_verification::verification::ChainValidator::new();
+    let mut trust_configuration_valid = !trusted_issuer_certs_pem.is_empty();
+    let mut errors = Vec::new();
+    if trusted_issuer_certs_pem.is_empty() {
+        errors.push("No trusted issuer certificates were configured".to_string());
+    }
+    for trusted_cert in &trusted_issuer_certs_pem {
+        if let Err(error) = chain_validator.add_trust_anchor_pem(trusted_cert) {
+            trust_configuration_valid = false;
+            errors.push(format!("Invalid trusted issuer certificate: {error}"));
+        }
+    }
 
     // Verify each document's MSO signature
     let mut all_signatures_valid = true;
-    let mut issuer_verified = false;
-    let mut last_error: Option<String> = None;
+    let mut issuer_verified = trust_configuration_valid;
 
     for doc in &response.documents {
         // Get issuer certificate from the document's cert chain
         if doc.issuer_cert_chain.is_empty() {
             all_signatures_valid = false;
-            last_error = Some("No issuer certificate in cert chain".to_string());
+            issuer_verified = false;
+            errors.push(format!(
+                "No issuer certificate in cert chain for {}",
+                doc.doc_type
+            ));
             continue;
         }
 
@@ -248,7 +349,11 @@ pub fn verify_mdoc_signature(
             Some(m) => m,
             None => {
                 all_signatures_valid = false;
-                last_error = Some("No Mobile Security Object in document".to_string());
+                issuer_verified = false;
+                errors.push(format!(
+                    "No Mobile Security Object in document {}",
+                    doc.doc_type
+                ));
                 continue;
             }
         };
@@ -257,15 +362,24 @@ pub fn verify_mdoc_signature(
         match marty_verification::mdoc::verify_mso_signature(mso, issuer_cert_der) {
             Ok(_) => {
                 // Signature is valid, now check if issuer is trusted
-                if !trusted_certs_der.is_empty() {
-                    // Check if issuer cert matches any trusted cert
-                    issuer_verified = trusted_certs_der
-                        .iter()
-                        .any(|trusted| trusted == issuer_cert_der);
-                    if !issuer_verified {
-                        // Try to verify cert chain
-                        // TODO: Implement full chain verification using marty-verification
-                        // For now, just check direct match
+                if trust_configuration_valid {
+                    match chain_validator.validate_chain_der(&doc.issuer_cert_chain) {
+                        Ok(validation) if validation.valid => {}
+                        Ok(validation) => {
+                            issuer_verified = false;
+                            errors.push(format!(
+                                "Issuer certificate chain validation failed for {}: {}",
+                                doc.doc_type,
+                                validation.errors.join("; ")
+                            ));
+                        }
+                        Err(error) => {
+                            issuer_verified = false;
+                            errors.push(format!(
+                                "Issuer certificate chain validation failed for {}: {error}",
+                                doc.doc_type
+                            ));
+                        }
                     }
                 } else {
                     // No trusted certs configured — issuer trust CANNOT be established.
@@ -280,7 +394,11 @@ pub fn verify_mdoc_signature(
             }
             Err(e) => {
                 all_signatures_valid = false;
-                last_error = Some(format!("Signature verification failed: {}", e));
+                issuer_verified = false;
+                errors.push(format!(
+                    "Signature verification failed for {}: {}",
+                    doc.doc_type, e
+                ));
             }
         }
     }
@@ -289,6 +407,6 @@ pub fn verify_mdoc_signature(
         signature_valid: all_signatures_valid,
         issuer_verified,
         document_types,
-        error: last_error,
+        error: (!errors.is_empty()).then(|| errors.join("; ")),
     })
 }
