@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20] - 2026-07-26
+
+### Bug Fixes
+
+- Bind the cryptographically verified OID4VCI proof public key into the mdoc
+  MSO so wallets can produce verifiable holder `DeviceAuthentication`.
+- Reject mdoc issuance when the proof supplies no verified public key, and
+  discard private JWK parameters before crossing the Rust binding boundary.
+- Preserve issuer authentication signing through the selected issuer profile,
+  issuer DID, and DID verification method; runtime callers do not select or
+  invoke KMS keys.
+
 ## [0.1.19] - 2026-07-26
 
 ### Bug Fixes
