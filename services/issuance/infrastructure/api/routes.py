@@ -4016,6 +4016,17 @@ async def issue_credential(
     remote_credential_format = _credential_format_for_remote_context(
         credential_payload_fmt, effective_request_format
     )
+    if signing_format == "mso_mdoc" and not holder_jwk:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_proof",
+                "error_description": (
+                    "mso_mdoc issuance requires a cryptographically verified "
+                    "holder public JWK for device-key binding"
+                ),
+            },
+        )
     if signing_format not in {"vc+sd-jwt", "jwt_vc_json", "mso_mdoc"}:
         detail = _unsupported_remote_signing_format_detail(signing_format, remote_credential_format)
         logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
@@ -4187,6 +4198,7 @@ async def issue_credential(
             "credential_id": credential_id,
         }
         if signing_format == "mso_mdoc":
+            assert holder_jwk is not None
 
             async def _issuer_profile_mdoc_sign(
                 tbs_data: bytes, algorithm: str
@@ -4210,6 +4222,7 @@ async def issue_credential(
                     claims_json=json.dumps(signing_claims),
                     expiration_seconds=tx.validity_days * 86400,
                     credential_id=credential_id,
+                    holder_jwk=holder_jwk,
                     certificate_chain=(
                         (
                             remote_context.get("issuer_x5c")
