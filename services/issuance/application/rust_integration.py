@@ -848,6 +848,7 @@ async def create_mdoc_credential_with_issuer_profile_signing(
     claims_json: str,
     expiration_seconds: int,
     credential_id: str,
+    holder_jwk: dict[str, Any],
     certificate_chain: list[str] | None,
     profile_sign: Callable[[bytes, str | None], Awaitable[bytes]],
 ) -> Tuple[str, str]:
@@ -856,7 +857,9 @@ async def create_mdoc_credential_with_issuer_profile_signing(
     The PyO3 object preserves the protected COSE header, MSO and issuer-signed
     items between preparation and assembly. The issuer profile signs the exact
     Sig_structure as its DID; KMS remains an implementation detail of profile
-    key custody. Python never synthesizes the final credential state.
+    key custody. The holder's proof public key is bound into the MSO for later
+    DeviceAuthentication verification; no holder private material is retained.
+    Python never synthesizes the final credential state.
     """
     try:
         claims = json.loads(claims_json)
@@ -879,6 +882,13 @@ async def create_mdoc_credential_with_issuer_profile_signing(
         json.dumps(claims),
         expiration_seconds,
         credential_id,
+        json.dumps(
+            {
+                key: value
+                for key, value in holder_jwk.items()
+                if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+            }
+        ),
     )
     signature = await profile_sign(bytes(prepared.tbs_data), algorithm)
     credential, credential_id = marty_rs.oid4vci_assemble_mdoc(prepared, signature)

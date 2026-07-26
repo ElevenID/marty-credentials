@@ -812,6 +812,7 @@ async def test_issuer_profile_mdoc_signing_uses_only_trusted_certificate_chain(
         def oid4vci_prepare_mdoc(self, *args):
             captured["claims"] = json.loads(args[4])
             captured["credential_id"] = args[6]
+            captured["holder_jwk"] = json.loads(args[7])
             return Prepared()
 
         def oid4vci_assemble_mdoc(self, prepared, signature):
@@ -837,6 +838,13 @@ async def test_issuer_profile_mdoc_signing_uses_only_trusted_certificate_chain(
             claims_json=json.dumps({"given_name": "Erika", "_mdoc_x5c": ["untrusted"]}),
             expiration_seconds=3600,
             credential_id="urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c",
+            holder_jwk={
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "holder-x",
+                "y": "holder-y",
+                "d": "must-not-cross-the-issuer-boundary",
+            },
             certificate_chain=["trusted-leaf", "trusted-intermediate"],
             profile_sign=profile_sign,
         )
@@ -851,6 +859,12 @@ async def test_issuer_profile_mdoc_signing_uses_only_trusted_certificate_chain(
     assert captured["credential_id"] == (
         "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"
     )
+    assert captured["holder_jwk"] == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "holder-x",
+        "y": "holder-y",
+    }
 
 
 class TestGetCredentialByTransactionId:
