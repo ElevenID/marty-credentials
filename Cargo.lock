@@ -2942,8 +2942,8 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.17"
-source = "git+https://github.com/ElevenID/marty-core?rev=50ae553d27199b42c6d660f3746917731a59d0c0#50ae553d27199b42c6d660f3746917731a59d0c0"
+version = "0.1.18"
+source = "git+https://github.com/ElevenID/marty-core?rev=5b52615ba20ad023ea98dc6e820d951e5acb8105#5b52615ba20ad023ea98dc6e820d951e5acb8105"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2988,8 +2988,8 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.17"
-source = "git+https://github.com/ElevenID/marty-core?rev=50ae553d27199b42c6d660f3746917731a59d0c0#50ae553d27199b42c6d660f3746917731a59d0c0"
+version = "0.1.18"
+source = "git+https://github.com/ElevenID/marty-core?rev=5b52615ba20ad023ea98dc6e820d951e5acb8105#5b52615ba20ad023ea98dc6e820d951e5acb8105"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "marty-rs"
-version = "0.1.17"
+version = "0.1.18"
 dependencies = [
  "base64 0.22.1",
  "bs58 0.5.1",
@@ -3062,8 +3062,8 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.17"
-source = "git+https://github.com/ElevenID/marty-core?rev=50ae553d27199b42c6d660f3746917731a59d0c0#50ae553d27199b42c6d660f3746917731a59d0c0"
+version = "0.1.18"
+source = "git+https://github.com/ElevenID/marty-core?rev=5b52615ba20ad023ea98dc6e820d951e5acb8105#5b52615ba20ad023ea98dc6e820d951e5acb8105"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
