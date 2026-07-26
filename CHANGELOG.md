@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-07-26
+
+### Bug Fixes
+
+- Verify the complete ISO mdoc `issuerAuth` COSE signature and its public
+  certificate chain instead of relying on a lossy compatibility projection.
+- Preserve signing through the issuer profile and its DID verification method;
+  verification does not select or call the profile's KMS-backed key.
+- Keep holder `DeviceAuthentication` verification separate from issuer
+  authentication.
+
 ## [0.1.18] - 2026-07-26
 
 ### Bug Fixes
