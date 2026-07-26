@@ -3023,6 +3023,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "console_error_panic_hook",
+ "coset 0.3.8",
  "coset 0.4.2",
  "ed25519-dalek 3.0.0",
  "flate2",

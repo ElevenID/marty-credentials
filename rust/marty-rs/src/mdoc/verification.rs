@@ -4,6 +4,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
 
+use coset_isomdl::{cbor::value::Value as CoseValue, Label};
+use isomdl::definitions::device_response::{DeviceResponse as IsoDeviceResponse, Status};
+use isomdl::definitions::x509::x5chain::{X5Chain, X5CHAIN_COSE_HEADER_LABEL};
+
 /// Wrapper for marty_verification::mdoc::DeviceResponse
 #[pyclass(skip_from_py_object)]
 pub struct DeviceResponse {
@@ -293,24 +297,42 @@ pub fn verify_mdoc_signature(
     mdoc_bytes: Vec<u8>,
     trusted_issuer_certs_pem: Vec<String>,
 ) -> PyResult<MdocVerificationResult> {
-    // Parse DeviceResponse
-    let response = match marty_verification::mdoc::parse_device_response(&mdoc_bytes) {
+    // Parse the complete ISO DeviceResponse. The compatibility parser used
+    // here previously extracts disclosed claims but intentionally does not
+    // retain issuerAuth, the MSO, or the x5chain and therefore cannot
+    // authenticate an issuer.
+    let response: IsoDeviceResponse = match isomdl::cbor::from_slice(&mdoc_bytes) {
         Ok(r) => r,
         Err(e) => {
             return Ok(MdocVerificationResult {
                 signature_valid: false,
                 issuer_verified: false,
                 document_types: vec![],
-                error: Some(format!("Failed to parse mDoc: {}", e)),
+                error: Some(format!("Failed to parse mDoc DeviceResponse: {e}")),
             });
         }
     };
+    if response.version != IsoDeviceResponse::VERSION || !matches!(response.status, Status::OK) {
+        return Ok(MdocVerificationResult {
+            signature_valid: false,
+            issuer_verified: false,
+            document_types: vec![],
+            error: Some("mDoc DeviceResponse version or status is invalid".to_string()),
+        });
+    }
+    let Some(documents) = response.documents.as_ref() else {
+        return Ok(MdocVerificationResult {
+            signature_valid: false,
+            issuer_verified: false,
+            document_types: vec![],
+            error: Some("mDoc DeviceResponse contains no documents".to_string()),
+        });
+    };
 
     // Get document types
-    let document_types: Vec<String> = response
-        .documents
+    let document_types: Vec<String> = documents
         .iter()
-        .map(|d| d.doc_type.clone())
+        .map(|document| document.doc_type.clone())
         .collect();
 
     let mut chain_validator = marty_verification::verification::ChainValidator::new();
@@ -326,80 +348,101 @@ pub fn verify_mdoc_signature(
         }
     }
 
-    // Verify each document's MSO signature
+    // Verify issuerAuth directly from the ISO document. Issuance/signing remains
+    // behind the issuer profile and its DID verification method; verification
+    // consumes only the public COSE signature and certificate chain.
     let mut all_signatures_valid = true;
     let mut issuer_verified = trust_configuration_valid;
 
-    for doc in &response.documents {
-        // Get issuer certificate from the document's cert chain
-        if doc.issuer_cert_chain.is_empty() {
+    for document in documents.iter() {
+        let issuer_auth = &document.issuer_signed.issuer_auth;
+        let x5chain_value = issuer_auth
+            .protected
+            .header
+            .rest
+            .iter()
+            .chain(issuer_auth.unprotected.rest.iter())
+            .find_map(|(label, value)| {
+                (label == &Label::Int(X5CHAIN_COSE_HEADER_LABEL)).then_some(value)
+            });
+
+        let Some(x5chain_value) = x5chain_value else {
             all_signatures_valid = false;
             issuer_verified = false;
             errors.push(format!(
-                "No issuer certificate in cert chain for {}",
-                doc.doc_type
+                "No issuer certificate chain in issuerAuth for {}",
+                document.doc_type
             ));
             continue;
-        }
+        };
 
-        let issuer_cert_der = &doc.issuer_cert_chain[0];
-
-        // Get MSO from document
-        let mso = match &doc.mso {
-            Some(m) => m,
-            None => {
+        let certificate_chain = match certificate_chain_der(x5chain_value) {
+            Ok(chain) => chain,
+            Err(error) => {
                 all_signatures_valid = false;
                 issuer_verified = false;
                 errors.push(format!(
-                    "No Mobile Security Object in document {}",
-                    doc.doc_type
+                    "Invalid issuer certificate chain for {}: {error}",
+                    document.doc_type
                 ));
                 continue;
             }
         };
 
-        // Verify MSO signature
-        match marty_verification::mdoc::verify_mso_signature(mso, issuer_cert_der) {
-            Ok(_) => {
-                // Signature is valid, now check if issuer is trusted
-                if trust_configuration_valid {
-                    match chain_validator.validate_chain_der(&doc.issuer_cert_chain) {
-                        Ok(validation) if validation.valid => {}
-                        Ok(validation) => {
-                            issuer_verified = false;
-                            errors.push(format!(
-                                "Issuer certificate chain validation failed for {}: {}",
-                                doc.doc_type,
-                                validation.errors.join("; ")
-                            ));
-                        }
-                        Err(error) => {
-                            issuer_verified = false;
-                            errors.push(format!(
-                                "Issuer certificate chain validation failed for {}: {error}",
-                                doc.doc_type
-                            ));
-                        }
-                    }
-                } else {
-                    // No trusted certs configured — issuer trust CANNOT be established.
-                    // Signature may be valid but we cannot confirm the issuer is
-                    // in the trust list. Mark explicitly as unverified.
-                    issuer_verified = false;
-                    tracing::warn!(
-                        "mDOC issuer trust check skipped: no trusted certificates configured. \
-                         Issuer cert chain present but cannot be validated against a trust anchor."
-                    );
-                }
-            }
-            Err(e) => {
+        let x5chain = match X5Chain::from_cbor(x5chain_value.clone()) {
+            Ok(chain) => chain,
+            Err(error) => {
                 all_signatures_valid = false;
                 issuer_verified = false;
                 errors.push(format!(
-                    "Signature verification failed for {}: {}",
-                    doc.doc_type, e
+                    "Invalid issuer x5chain for {}: {error}",
+                    document.doc_type
                 ));
+                continue;
             }
+        };
+
+        if let Err(error) = marty_verification::verification::mdl::verify_issuer_signature(
+            &x5chain,
+            &document.issuer_signed,
+        ) {
+            all_signatures_valid = false;
+            issuer_verified = false;
+            errors.push(format!(
+                "Signature verification failed for {}: {error}",
+                document.doc_type
+            ));
+            continue;
+        }
+
+        if trust_configuration_valid {
+            match chain_validator.validate_chain_der(&certificate_chain) {
+                Ok(validation) if validation.valid => {}
+                Ok(validation) => {
+                    issuer_verified = false;
+                    errors.push(format!(
+                        "Issuer certificate chain validation failed for {}: {}",
+                        document.doc_type,
+                        validation.errors.join("; ")
+                    ));
+                }
+                Err(error) => {
+                    issuer_verified = false;
+                    errors.push(format!(
+                        "Issuer certificate chain validation failed for {}: {error}",
+                        document.doc_type
+                    ));
+                }
+            }
+        } else {
+            // No trusted certs configured — issuer trust CANNOT be established.
+            // Signature may be valid but we cannot confirm the issuer is
+            // in the trust list. Mark explicitly as unverified.
+            issuer_verified = false;
+            tracing::warn!(
+                "mDOC issuer trust check skipped: no valid trusted certificates configured. \
+                 Issuer cert chain present but cannot be validated against a trust anchor."
+            );
         }
     }
 
@@ -409,4 +452,49 @@ pub fn verify_mdoc_signature(
         document_types,
         error: (!errors.is_empty()).then(|| errors.join("; ")),
     })
+}
+
+fn certificate_chain_der(value: &CoseValue) -> Result<Vec<Vec<u8>>, &'static str> {
+    match value {
+        CoseValue::Bytes(certificate) if !certificate.is_empty() => Ok(vec![certificate.clone()]),
+        CoseValue::Array(certificates) if !certificates.is_empty() => certificates
+            .iter()
+            .map(|certificate| match certificate {
+                CoseValue::Bytes(bytes) if !bytes.is_empty() => Ok(bytes.clone()),
+                _ => Err("x5chain entries must be non-empty byte strings"),
+            })
+            .collect(),
+        _ => Err("x5chain must be a byte string or non-empty array"),
+    }
+}
+
+#[cfg(test)]
+mod certificate_chain_tests {
+    use super::*;
+
+    #[test]
+    fn certificate_chain_accepts_single_der_certificate() {
+        assert_eq!(
+            certificate_chain_der(&CoseValue::Bytes(vec![1, 2, 3])),
+            Ok(vec![vec![1, 2, 3]])
+        );
+    }
+
+    #[test]
+    fn certificate_chain_accepts_der_certificate_array() {
+        assert_eq!(
+            certificate_chain_der(&CoseValue::Array(vec![
+                CoseValue::Bytes(vec![1]),
+                CoseValue::Bytes(vec![2]),
+            ])),
+            Ok(vec![vec![1], vec![2]])
+        );
+    }
+
+    #[test]
+    fn certificate_chain_rejects_empty_or_non_binary_values() {
+        assert!(certificate_chain_der(&CoseValue::Bytes(vec![])).is_err());
+        assert!(certificate_chain_der(&CoseValue::Array(vec![])).is_err());
+        assert!(certificate_chain_der(&CoseValue::Array(vec![CoseValue::Null])).is_err());
+    }
 }

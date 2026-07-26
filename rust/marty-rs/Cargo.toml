@@ -38,6 +38,7 @@ python = [
     "tokio",
     "isomdl",
     "coset",
+    "coset-isomdl",
     "time",
     "ssi-status",
     "flate2",
@@ -95,6 +96,7 @@ rand = { workspace = true }
 tokio = { workspace = true, optional = true }
 isomdl = { workspace = true, optional = true }
 coset = { workspace = true, optional = true }
+coset-isomdl = { package = "coset", version = "=0.3.8", optional = true }
 time = { workspace = true, optional = true }
 ssi-status = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
