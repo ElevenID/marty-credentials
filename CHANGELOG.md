@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.21] - 2026-07-27
+
+### Security
+
+- Add tenant-owned OID4VCI wallet-client registrations containing public
+  P-256 ES256 JWKs only and bind issued offers to the registered client.
+- Enforce the same RFC 7523 `private_key_jwt` identity, signature, audience,
+  timing, and one-time `jti` checks over REST and gRPC.
+- Atomically consume authorization and pre-authorization codes so concurrent
+  redemption has exactly one winner.
+- Bind organization-specific PAR endpoints to their tenant and advertise
+  tenant-only authentication methods only in tenant-scoped metadata.
+- Keep wallet private keys outside Marty and preserve issuer signing through
+  DID-resolved issuer profiles and their configured managed custody.
+
+### Fixed
+
+- Declare `googleapis-common-protos` as a Python runtime dependency for the
+  generated HTTP-annotated protobuf package.
+
 ## [0.1.20] - 2026-07-26
 
 ### Bug Fixes
