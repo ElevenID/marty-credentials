@@ -75,6 +75,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._applications: dict[str, Application] = {}
         self._application_templates: dict[str, ApplicationTemplate] = {}
         self._authorization_sessions: dict[str, AuthorizationSession] = {}
+        self._authorization_session_locks: dict[str, asyncio.Lock] = {}
         self._oid4vci_clients: dict[tuple[str, str], Oid4vciRegisteredClient] = {}
         self._oid4vci_client_assertions: dict[tuple[str, str, str], datetime] = {}
         self._oid4vci_client_assertion_lock = asyncio.Lock()
@@ -110,6 +111,26 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                     f"Stale issuance transaction transition {stored.status.value}->{tx.status.value}"
                 )
             self._transactions[tx.id] = copy.deepcopy(tx)
+
+    async def claim_transaction_for_token(
+        self,
+        prepared_transaction: IssuanceTransaction,
+    ) -> IssuanceTransaction | None:
+        transaction_id = prepared_transaction.id
+        lock = self._transaction_locks.setdefault(transaction_id, asyncio.Lock())
+        async with lock:
+            stored = self._transactions.get(transaction_id)
+            if (
+                stored is None
+                or stored.status != IssuanceStatus.PENDING
+                or stored.pre_auth_code != prepared_transaction.pre_auth_code
+            ):
+                return None
+            claimed = copy.deepcopy(prepared_transaction)
+            claimed.status = IssuanceStatus.AUTHORIZED
+            claimed.nonce = None
+            self._transactions[transaction_id] = copy.deepcopy(claimed)
+            return claimed
 
     async def claim_transaction_for_signing(
         self,
@@ -1957,12 +1978,34 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         }
 
     async def save_authorization_session(self, auth_session: AuthorizationSession) -> None:
-        self._authorization_sessions[auth_session.id] = auth_session
+        self._authorization_sessions[auth_session.id] = copy.deepcopy(auth_session)
+
+    async def claim_authorization_session_for_token(
+        self,
+        prepared_session: AuthorizationSession,
+    ) -> AuthorizationSession | None:
+        lock = self._authorization_session_locks.setdefault(
+            prepared_session.id,
+            asyncio.Lock(),
+        )
+        async with lock:
+            stored = self._authorization_sessions.get(prepared_session.id)
+            if (
+                stored is None
+                or stored.code != prepared_session.code
+                or stored.status != "pending"
+                or stored.is_expired
+            ):
+                return None
+            claimed = copy.deepcopy(prepared_session)
+            claimed.status = "exchanged"
+            self._authorization_sessions[claimed.id] = copy.deepcopy(claimed)
+            return claimed
 
     async def get_authorization_session_by_code(self, code: str) -> AuthorizationSession | None:
         for auth_session in self._authorization_sessions.values():
             if auth_session.code == code:
-                return auth_session
+                return copy.deepcopy(auth_session)
         return None
 
     async def get_authorization_session_by_access_token(
@@ -1972,7 +2015,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
 
         for auth_session in self._authorization_sessions.values():
             if auth_session.access_token and _hmac.compare_digest(auth_session.access_token, token):
-                return auth_session
+                return copy.deepcopy(auth_session)
         return None
 
     async def get_retention_summary(self, org_id: str, retention_days: int) -> dict[str, object]:

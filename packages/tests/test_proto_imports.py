@@ -45,3 +45,15 @@ class TestProtoPackageLazyImports:
         assert issuance_pb2.__name__ == "marty_proto.v1.issuance_service_pb2"
         assert auth_pb2.__name__ == "marty_proto.v1.auth_service_pb2"
         assert sys.modules["marty_proto.v1"] is pkg
+
+    def test_oid4vci_client_auth_fields_are_present_in_generated_contract(self):
+        _clear_proto_modules()
+
+        issuance_pb2 = importlib.import_module("marty_proto.v1.issuance_service_pb2")
+
+        initiate_fields = issuance_pb2.InitiateIssuanceRequest.DESCRIPTOR.fields_by_name
+        token_fields = issuance_pb2.ExchangeTokenRequest.DESCRIPTOR.fields_by_name
+
+        assert initiate_fields["authorized_client_id"].number == 7
+        assert token_fields["client_assertion_type"].number == 7
+        assert token_fields["client_assertion"].number == 8

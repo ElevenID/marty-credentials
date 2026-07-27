@@ -3,8 +3,8 @@
 import asyncio
 import base64
 import copy
-import hmac
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Literal
 from urllib.parse import urlencode, urlparse
 
+import httpx
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
@@ -22,8 +23,6 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
     decode_dss_signature,
     encode_dss_signature,
 )
-
-import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -36,8 +35,6 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from issuance.application.canvas_issuance_guard import (
     CanvasIssuanceGuardError,
     require_canvas_issuance_ready,
@@ -45,28 +42,23 @@ from issuance.application.canvas_issuance_guard import (
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.oid4vci_client_auth import (
-    JWT_BEARER_ASSERTION_TYPE,
     ClientAuthenticationError,
+    authenticate_oid4vci_client,
     normalize_public_client_jwks,
-    verify_private_key_jwt,
 )
 from issuance.application.rust_integration import (
     create_jwt_vc_with_remote_signing,
     create_mdoc_credential_with_issuer_profile_signing,
     create_sd_jwt_vc_with_remote_signing,
-    oid4vci_create_credential_offer,
-    oid4vci_create_token_response,
-    oid4vci_create_authorization_response,
-    oid4vci_exchange_auth_code_for_token,
-    verify_proof_jwt,
-    didcomm_resolve_did,
+    didcomm_encrypt,
     didcomm_extract_endpoint,
     didcomm_pack_credential,
-    didcomm_encrypt,
-)
-from issuance.infrastructure.api.signing_context import (
-    resolve_remote_issuer_context,
-    sign_payload_with_issuer_profile,
+    didcomm_resolve_did,
+    oid4vci_create_authorization_response,
+    oid4vci_create_credential_offer,
+    oid4vci_create_token_response,
+    oid4vci_exchange_auth_code_for_token,
+    verify_proof_jwt,
 )
 from issuance.domain.entities import (
     AuthorizationSession,
@@ -74,8 +66,8 @@ from issuance.domain.entities import (
     CanvasProgramBinding,
     CredentialDeliveryRecord,
     CredentialDeliveryStatus,
-    DeliveryTarget,
     CredentialStatus,
+    DeliveryTarget,
     EventType,
     IssuanceEvent,
     IssuanceStatus,
@@ -84,16 +76,21 @@ from issuance.domain.entities import (
     Oid4vciRegisteredClient,
 )
 from issuance.domain.ports import IIssuanceRepository
+from issuance.infrastructure.adapters.canvas_credentials_adapter import (
+    publish_canvas_credential_mirror,
+    sync_canvas_credential_status,
+)
 from issuance.infrastructure.adapters.delivery_records import (
     canvas_delivery_feature_enabled,
     canvas_deployment_profile_delivery_metadata,
     normalize_delivery_mode,
     record_post_issuance_deliveries,
 )
-from issuance.infrastructure.adapters.canvas_credentials_adapter import (
-    publish_canvas_credential_mirror,
-    sync_canvas_credential_status,
+from issuance.infrastructure.api.signing_context import (
+    resolve_remote_issuer_context,
+    sign_payload_with_issuer_profile,
 )
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -3564,62 +3561,24 @@ async def _authenticate_oid4vci_client(
     allowed_audiences: list[str],
     registration_required: bool,
 ) -> JSONResponse | None:
-    """Authenticate a tenant-owned client and atomically consume its JTI."""
-
-    supplied_authentication = bool(client_assertion_type or client_assertion)
-    if not organization_id or not expected_client_id:
-        return _invalid_oid4vci_client() if supplied_authentication else None
-
-    registered = await repo.get_oid4vci_client(organization_id, expected_client_id)
-    if registered is None:
-        if registration_required or supplied_authentication:
-            logger.warning(
-                "[token] registered client authentication failed for org=%s",
-                organization_id,
-            )
-            return _invalid_oid4vci_client()
-        return None
-    if (
-        not registered.active
-        or registered.token_endpoint_auth_method != "private_key_jwt"
-        or client_id != registered.client_id
-        or client_assertion_type != JWT_BEARER_ASSERTION_TYPE
-        or not client_assertion
-    ):
-        logger.warning(
-            "[token] registered client authentication failed for org=%s client=%s",
-            organization_id,
-            registered.client_id,
-        )
-        return _invalid_oid4vci_client()
-
+    """Map shared registered-client authentication failures to OAuth errors."""
     try:
-        verified = verify_private_key_jwt(
-            client_assertion,
-            client_id=registered.client_id,
-            public_jwks=registered.jwks,
+        await authenticate_oid4vci_client(
+            repo=repo,
+            organization_id=organization_id,
+            expected_client_id=expected_client_id,
+            client_id=client_id,
+            client_assertion_type=client_assertion_type,
+            client_assertion=client_assertion,
             allowed_audiences=allowed_audiences,
+            registration_required=registration_required,
         )
     except ClientAuthenticationError as exc:
         logger.warning(
-            "[token] registered client assertion rejected for org=%s client=%s: %s",
+            "[token] registered client authentication rejected for org=%s client=%s: %s",
             organization_id,
-            registered.client_id,
+            expected_client_id,
             exc,
-        )
-        return _invalid_oid4vci_client()
-
-    claimed = await repo.claim_oid4vci_client_assertion(
-        organization_id=organization_id,
-        client_id=registered.client_id,
-        jti=verified.jti,
-        expires_at=verified.expires_at,
-    )
-    if not claimed:
-        logger.warning(
-            "[token] registered client assertion replay rejected for org=%s client=%s",
-            organization_id,
-            registered.client_id,
         )
         return _invalid_oid4vci_client()
     return None
@@ -3762,7 +3721,15 @@ async def exchange_token(
         # Persist the Rust-generated tokens on the session
         auth_session.mark_exchanged(access_token=token_resp["access_token"])
         auth_session.dpop_jkt = dpop_jkt
-        await repo.save_authorization_session(auth_session)
+        claimed_session = await repo.claim_authorization_session_for_token(auth_session)
+        if claimed_session is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_grant",
+                    "error_description": "Authorization code already used",
+                },
+            )
 
         return TokenResponse(
             access_token=token_resp["access_token"],
@@ -3857,7 +3824,20 @@ async def exchange_token(
         tx.claims = {**tx.claims, "_dpop_jkt": dpop_jkt}
     tx.nonce = None
     tx.status = IssuanceStatus.AUTHORIZED
-    await repo.save_transaction(tx)
+    claimed_tx = await repo.claim_transaction_for_token(tx)
+    if claimed_tx is None:
+        logger.warning(
+            "[token] rid=%s tx_id=%s concurrent pre-auth code replay rejected",
+            rid,
+            tx.id,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_grant",
+                "error_description": "Pre-authorized code has already been used and is single-use only",
+            },
+        )
 
     logger.info(
         f"[token] rid={rid} tx_id={tx.id} org={tx.organization_id} cred_type={tx.credential_type}"
@@ -4118,7 +4098,8 @@ async def issue_credential(
     # hostnames while honoring wallet-specific issuer paths such as /spruce.
     if tx.organization_id:
         try:
-            import base64 as _b64, json as _json
+            import base64 as _b64
+            import json as _json
 
             _proof_parts = proof_jwt.split(".")
             _pad = "=" * ((-len(_proof_parts[1])) % 4)
@@ -4154,7 +4135,8 @@ async def issue_credential(
     # Pass issuer_url as None to let the Rust layer use the URL embedded in the proof's aud;
     # full aud validation requires the public gateway URL which is available via ISSUER_BASE_URL.
     try:
-        import base64 as _b64n, json as _json_n
+        import base64 as _b64n
+        import json as _json_n
 
         _proof_parts_n = proof_jwt.split(".")
         _pad_n = "=" * ((-len(_proof_parts_n[1])) % 4)

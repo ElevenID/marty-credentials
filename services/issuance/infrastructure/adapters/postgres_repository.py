@@ -682,6 +682,38 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 raise ValueError(f"Stale issuance transaction transition to {tx.status.value}")
             await session.commit()
 
+    async def claim_transaction_for_token(
+        self,
+        prepared_transaction: IssuanceTransaction,
+    ) -> IssuanceTransaction | None:
+        async with self._session_factory() as session:
+            statement = (
+                update(issuance_transactions_table)
+                .where(
+                    issuance_transactions_table.c.id == prepared_transaction.id,
+                    issuance_transactions_table.c.pre_auth_code
+                    == prepared_transaction.pre_auth_code,
+                    issuance_transactions_table.c.status == IssuanceStatus.PENDING.value,
+                )
+                .values(
+                    access_token=_hash_token(prepared_transaction.access_token),
+                    c_nonce=None,
+                    claims=prepared_transaction.claims,
+                    status=IssuanceStatus.AUTHORIZED.value,
+                )
+                .returning(*issuance_transactions_table.c)
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            claimed = self._row_to_transaction(row)
+            # Persisted access tokens are intentionally one-way hashed. The
+            # winner still needs the clear token for its immediate response.
+            claimed.access_token = prepared_transaction.access_token
+            return claimed
+
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
         async with self._session_factory() as session:
             stmt = select(issuance_transactions_table).where(
@@ -4469,6 +4501,36 @@ class PostgresIssuanceRepository(IIssuanceRepository):
 
             await session.execute(stmt)
             await session.commit()
+
+    async def claim_authorization_session_for_token(
+        self,
+        prepared_session: AuthorizationSession,
+    ) -> AuthorizationSession | None:
+        async with self._session_factory() as session:
+            statement = (
+                update(authorization_sessions_table)
+                .where(
+                    authorization_sessions_table.c.id == prepared_session.id,
+                    authorization_sessions_table.c.code == prepared_session.code,
+                    authorization_sessions_table.c.status == "pending",
+                    authorization_sessions_table.c.expires_at > datetime.now(UTC),
+                )
+                .values(
+                    access_token=_hash_token(prepared_session.access_token),
+                    c_nonce=prepared_session.nonce,
+                    dpop_jkt=prepared_session.dpop_jkt,
+                    status="exchanged",
+                )
+                .returning(*authorization_sessions_table.c)
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            claimed = self._row_to_auth_session(row)
+            claimed.access_token = prepared_session.access_token
+            return claimed
 
     def _row_to_auth_session(self, row) -> AuthorizationSession:
         """Map a DB row to an AuthorizationSession entity."""

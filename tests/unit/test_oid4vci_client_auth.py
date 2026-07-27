@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from datetime import UTC, datetime, timedelta
 
+import grpc
 import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -15,15 +17,18 @@ from issuance.application.oid4vci_client_auth import (
     verify_private_key_jwt,
 )
 from issuance.domain.entities import (
+    AuthorizationSession,
     IssuanceStatus,
     IssuanceTransaction,
     Oid4vciRegisteredClient,
 )
+from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
 from issuance.infrastructure.adapters.memory_repository import (
     InMemoryIssuanceRepository,
 )
 from issuance.infrastructure.api import routes
 from issuance.infrastructure.api.routes import _authenticate_oid4vci_client
+from marty_proto.v1 import issuance_service_pb2 as issuance_pb2
 from starlette.requests import Request
 
 CLIENT_ID = "marty-official-wallet-00000000-0000-0000-0000-000000000001"
@@ -360,5 +365,197 @@ async def test_token_endpoint_requires_bound_client_and_preserves_pending_state(
     assert still_pending is not None
     assert still_pending.status == IssuanceStatus.PENDING
     assert accepted.access_token == "access-token"
+    assert authorized is not None
+    assert authorized.status == IssuanceStatus.AUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_concurrent_pre_authorized_code_redemption_has_one_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key, public_jwk = _key_material()
+    repo = InMemoryIssuanceRepository()
+    await repo.save_oid4vci_client(
+        Oid4vciRegisteredClient(
+            organization_id="org-a",
+            client_id=CLIENT_ID,
+            jwks={"keys": [public_jwk]},
+        )
+    )
+    transaction = IssuanceTransaction(
+        organization_id="org-a",
+        credential_template_id="template-a",
+        oid4vci_client_id=CLIENT_ID,
+    )
+    await repo.save_transaction(transaction)
+    generated = 0
+
+    def create_token(_code: str, _lifetime: int) -> dict[str, object]:
+        nonlocal generated
+        generated += 1
+        return {"access_token": f"access-token-{generated}", "expires_in": 1800}
+
+    monkeypatch.setattr(routes, "oid4vci_create_token_response", create_token)
+    audience = routes.org_issuer_url("org-a")
+
+    async def redeem(jti: str):
+        return await routes.exchange_token(
+            http_request=_token_request(),
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code=transaction.pre_auth_code,
+            code=None,
+            redirect_uri=None,
+            client_id=CLIENT_ID,
+            code_verifier=None,
+            client_assertion_type=JWT_BEARER_ASSERTION_TYPE,
+            client_assertion=_assertion(
+                private_key,
+                claims={"aud": audience, "jti": jti},
+                now=datetime.now(UTC),
+            ),
+            repo=repo,
+        )
+
+    results = await asyncio.gather(redeem("concurrent-1"), redeem("concurrent-2"))
+    successes = [result for result in results if isinstance(result, routes.TokenResponse)]
+    failures = [result for result in results if getattr(result, "status_code", None) == 400]
+    stored = await repo.get_transaction(transaction.id)
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert stored is not None
+    assert stored.status == IssuanceStatus.AUTHORIZED
+    assert stored.access_token == successes[0].access_token
+
+
+@pytest.mark.asyncio
+async def test_concurrent_authorization_code_redemption_has_one_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    session = AuthorizationSession(
+        client_id="public-wallet",
+        organization_id="org-a",
+    )
+    await repo.save_authorization_session(session)
+    generated = 0
+
+    def exchange_code(_request: str, _session: str, _lifetime: int) -> dict[str, object]:
+        nonlocal generated
+        generated += 1
+        return {"access_token": f"auth-code-token-{generated}", "expires_in": 1800}
+
+    monkeypatch.setattr(routes, "oid4vci_exchange_auth_code_for_token", exchange_code)
+
+    async def redeem():
+        return await routes.exchange_token(
+            http_request=_token_request(),
+            grant_type="authorization_code",
+            pre_authorized_code=None,
+            code=session.code,
+            redirect_uri=None,
+            client_id="public-wallet",
+            code_verifier=None,
+            client_assertion_type=None,
+            client_assertion=None,
+            repo=repo,
+        )
+
+    results = await asyncio.gather(redeem(), redeem())
+    successes = [result for result in results if isinstance(result, routes.TokenResponse)]
+    failures = [result for result in results if getattr(result, "status_code", None) == 400]
+    stored = await repo.get_authorization_session_by_code(session.code)
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert stored is not None
+    assert stored.status == "exchanged"
+    assert stored.access_token == successes[0].access_token
+
+
+class _GrpcContext:
+    def __init__(self) -> None:
+        self.code = None
+        self.details = None
+
+    def set_code(self, code) -> None:
+        self.code = code
+
+    def set_details(self, details: str) -> None:
+        self.details = details
+
+
+@pytest.mark.asyncio
+async def test_grpc_token_exchange_cannot_bypass_registered_client_authentication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from issuance.application import rust_integration
+    from issuance.infrastructure.adapters import grpc_adapter
+
+    private_key, public_jwk = _key_material()
+    repo = InMemoryIssuanceRepository()
+    await repo.save_oid4vci_client(
+        Oid4vciRegisteredClient(
+            organization_id="org-a",
+            client_id=CLIENT_ID,
+            jwks={"keys": [public_jwk]},
+        )
+    )
+    transaction = IssuanceTransaction(
+        organization_id="org-a",
+        credential_template_id="template-a",
+        oid4vci_client_id=CLIENT_ID,
+    )
+    await repo.save_transaction(transaction)
+    monkeypatch.setattr(grpc_adapter, "ISSUER_BASE_URL", "https://issuer.example")
+    monkeypatch.setattr(
+        rust_integration,
+        "oid4vci_create_token_response",
+        lambda _code, _lifetime: {
+            "access_token": "grpc-access-token",
+            "expires_in": 1800,
+        },
+    )
+    service = IssuanceServiceGrpc(lambda: repo)
+
+    missing_context = _GrpcContext()
+    missing = await service.ExchangeToken(
+        issuance_pb2.ExchangeTokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code=transaction.pre_auth_code,
+            client_id=CLIENT_ID,
+        ),
+        missing_context,
+    )
+    pending = await repo.get_transaction(transaction.id)
+
+    assert missing.access_token == ""
+    assert missing_context.code == grpc.StatusCode.UNAUTHENTICATED
+    assert missing_context.details == "Client authentication failed"
+    assert pending is not None
+    assert pending.status == IssuanceStatus.PENDING
+
+    accepted_context = _GrpcContext()
+    accepted = await service.ExchangeToken(
+        issuance_pb2.ExchangeTokenRequest(
+            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            pre_authorized_code=transaction.pre_auth_code,
+            client_id=CLIENT_ID,
+            client_assertion_type=JWT_BEARER_ASSERTION_TYPE,
+            client_assertion=_assertion(
+                private_key,
+                claims={
+                    "aud": "https://issuer.example/org/org-a",
+                    "jti": "grpc-assertion",
+                },
+                now=datetime.now(UTC),
+            ),
+        ),
+        accepted_context,
+    )
+    authorized = await repo.get_transaction(transaction.id)
+
+    assert accepted_context.code is None
+    assert accepted.access_token == "grpc-access-token"
     assert authorized is not None
     assert authorized.status == IssuanceStatus.AUTHORIZED

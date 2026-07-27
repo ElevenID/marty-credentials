@@ -13,7 +13,7 @@ import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
@@ -38,6 +38,25 @@ class VerifiedClientAssertion:
     jti: str
     expires_at: datetime
     key_id: str
+
+
+class Oid4vciClientAuthRepository(Protocol):
+    """Narrow persistence surface required for registered-client authentication."""
+
+    async def get_oid4vci_client(
+        self,
+        organization_id: str,
+        client_id: str,
+    ) -> Any | None: ...
+
+    async def claim_oid4vci_client_assertion(
+        self,
+        *,
+        organization_id: str,
+        client_id: str,
+        jti: str,
+        expires_at: datetime,
+    ) -> bool: ...
 
 
 def _decode_base64url(value: str, *, field: str) -> bytes:
@@ -265,3 +284,57 @@ def verify_private_key_jwt(
         expires_at=datetime.fromtimestamp(expires_at, tz=UTC),
         key_id=key_id,
     )
+
+
+async def authenticate_oid4vci_client(
+    *,
+    repo: Oid4vciClientAuthRepository,
+    organization_id: str | None,
+    expected_client_id: str | None,
+    client_id: str | None,
+    client_assertion_type: str | None,
+    client_assertion: str | None,
+    allowed_audiences: Iterable[str],
+    registration_required: bool,
+) -> None:
+    """Authenticate one tenant-owned wallet client and consume its assertion JTI.
+
+    An unbound public offer may use the OAuth ``none`` method. Once an issuance
+    or authorization session is bound to a registered client, every transport
+    must present the same registered ``private_key_jwt`` proof.
+    """
+
+    supplied_authentication = bool(client_assertion_type or client_assertion)
+    if not organization_id or not expected_client_id:
+        if supplied_authentication:
+            raise ClientAuthenticationError("client authentication is not valid for this offer")
+        return
+
+    registered = await repo.get_oid4vci_client(organization_id, expected_client_id)
+    if registered is None:
+        if registration_required or supplied_authentication:
+            raise ClientAuthenticationError("registered client was not found")
+        return
+    if not registered.active:
+        raise ClientAuthenticationError("registered client is inactive")
+    if registered.token_endpoint_auth_method != "private_key_jwt":
+        raise ClientAuthenticationError("registered client authentication method is unsupported")
+    if client_id != registered.client_id:
+        raise ClientAuthenticationError("client_id does not match the registered client")
+    if client_assertion_type != JWT_BEARER_ASSERTION_TYPE or not client_assertion:
+        raise ClientAuthenticationError("registered client assertion is required")
+
+    verified = verify_private_key_jwt(
+        client_assertion,
+        client_id=registered.client_id,
+        public_jwks=registered.jwks,
+        allowed_audiences=allowed_audiences,
+    )
+    claimed = await repo.claim_oid4vci_client_assertion(
+        organization_id=organization_id,
+        client_id=registered.client_id,
+        jti=verified.jti,
+        expires_at=verified.expires_at,
+    )
+    if not claimed:
+        raise ClientAuthenticationError("registered client assertion was already used")

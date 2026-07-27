@@ -107,6 +107,19 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def claim_transaction_for_token(
+        self,
+        prepared_transaction: IssuanceTransaction,
+    ) -> IssuanceTransaction | None:
+        """Atomically transition a matching PENDING offer to AUTHORIZED.
+
+        The prepared transaction contains the newly generated access token and
+        optional DPoP binding. Implementations must persist those values only
+        when this caller wins the single-use pre-authorized-code claim.
+        """
+        pass
+
+    @abstractmethod
     async def claim_transaction_for_signing(
         self,
         prepared_transaction: IssuanceTransaction,
@@ -1088,6 +1101,14 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def save_authorization_session(self, session: AuthorizationSession) -> None:
         """Persist an authorization session (insert or update)."""
+        pass
+
+    @abstractmethod
+    async def claim_authorization_session_for_token(
+        self,
+        prepared_session: AuthorizationSession,
+    ) -> AuthorizationSession | None:
+        """Atomically consume a pending authorization code and persist its token."""
         pass
 
     @abstractmethod
