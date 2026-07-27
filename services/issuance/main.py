@@ -820,7 +820,8 @@ def create_app() -> FastAPI:
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
-            "token_endpoint_auth_methods_supported": ["none"],
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
                 "authorization_code",
@@ -848,7 +849,8 @@ def create_app() -> FastAPI:
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
-            "token_endpoint_auth_methods_supported": ["none"],
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
                 "authorization_code",
@@ -878,7 +880,8 @@ def create_app() -> FastAPI:
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
-            "token_endpoint_auth_methods_supported": ["none"],
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
                 "authorization_code",
@@ -899,7 +902,8 @@ def create_app() -> FastAPI:
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
-            "token_endpoint_auth_methods_supported": ["none"],
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
                 "authorization_code",
@@ -919,7 +923,8 @@ def create_app() -> FastAPI:
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize",
             "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
             "pushed_authorization_request_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/par",
-            "token_endpoint_auth_methods_supported": ["none"],
+            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
+            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
             "grant_types_supported": [
                 "urn:ietf:params:oauth:grant-type:pre-authorized_code",
                 "authorization_code",

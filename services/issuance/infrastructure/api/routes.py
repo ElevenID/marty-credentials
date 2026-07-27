@@ -44,6 +44,12 @@ from issuance.application.canvas_issuance_guard import (
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.oid4vci_client_auth import (
+    JWT_BEARER_ASSERTION_TYPE,
+    ClientAuthenticationError,
+    normalize_public_client_jwks,
+    verify_private_key_jwt,
+)
 from issuance.application.rust_integration import (
     create_jwt_vc_with_remote_signing,
     create_mdoc_credential_with_issuer_profile_signing,
@@ -75,6 +81,7 @@ from issuance.domain.entities import (
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
+    Oid4vciRegisteredClient,
 )
 from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.adapters.delivery_records import (
@@ -800,6 +807,7 @@ class InitiateIssuanceRequest(BaseModel):
     applicant_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
+    authorized_client_id: str | None = None
     issuer_profile_id: str | None = None
     issuer_mode: str = "org_managed"
     delivery_mode: str = "wallet_only"
@@ -824,6 +832,51 @@ class InitiateIssuanceRequest(BaseModel):
                 "credential_subject must be a non-empty object or list of non-empty objects"
             )
         return self
+
+
+class Oid4vciRegisteredClientRequest(BaseModel):
+    organization_id: str
+    client_id: str
+    jwks: dict[str, Any]
+    redirect_uris: list[str] = Field(default_factory=list)
+    active: bool = True
+
+    @model_validator(mode="after")
+    def validate_registered_client(self) -> "Oid4vciRegisteredClientRequest":
+        self.organization_id = self.organization_id.strip()
+        self.client_id = self.client_id.strip()
+        if not self.organization_id:
+            raise ValueError("organization_id is required")
+        if not self.client_id or len(self.client_id) > 512:
+            raise ValueError("client_id must contain between 1 and 512 characters")
+        self.jwks = normalize_public_client_jwks(self.jwks)
+        normalized_redirect_uris: list[str] = []
+        for redirect_uri in self.redirect_uris:
+            parsed = urlparse(redirect_uri)
+            is_localhost = parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+            if (
+                not parsed.scheme
+                or not parsed.netloc
+                or (parsed.scheme != "https" and not is_localhost)
+                or parsed.fragment
+            ):
+                raise ValueError("redirect_uris must be absolute HTTPS URIs without fragments")
+            normalized_redirect_uris.append(redirect_uri)
+        if len(set(normalized_redirect_uris)) != len(normalized_redirect_uris):
+            raise ValueError("redirect_uris must not contain duplicates")
+        self.redirect_uris = normalized_redirect_uris
+        return self
+
+
+class Oid4vciRegisteredClientResponse(BaseModel):
+    organization_id: str
+    client_id: str
+    jwks: dict[str, Any]
+    redirect_uris: list[str]
+    token_endpoint_auth_method: Literal["private_key_jwt"]
+    active: bool
+    created_at: str
+    updated_at: str
 
 
 class IssuanceResponse(BaseModel):
@@ -2737,6 +2790,40 @@ async def run_canvas_mirror_automation_loop(
 # ============================================================================
 
 
+@issuance_router.put(
+    "/oid4vci-clients",
+    response_model=Oid4vciRegisteredClientResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
+async def put_oid4vci_registered_client(
+    request: Oid4vciRegisteredClientRequest,
+    repo: IIssuanceRepository = Depends(),
+) -> Oid4vciRegisteredClientResponse:
+    """Create or rotate one tenant-owned wallet client's public keys."""
+
+    client = Oid4vciRegisteredClient(
+        organization_id=request.organization_id,
+        client_id=request.client_id,
+        jwks=request.jwks,
+        redirect_uris=request.redirect_uris,
+        active=request.active,
+    )
+    await repo.save_oid4vci_client(client)
+    saved = await repo.get_oid4vci_client(request.organization_id, request.client_id)
+    if saved is None:
+        raise HTTPException(status_code=500, detail="Registered client was not persisted")
+    return Oid4vciRegisteredClientResponse(
+        organization_id=saved.organization_id,
+        client_id=saved.client_id,
+        jwks=saved.jwks,
+        redirect_uris=saved.redirect_uris,
+        token_endpoint_auth_method="private_key_jwt",
+        active=saved.active,
+        created_at=saved.created_at.isoformat(),
+        updated_at=saved.updated_at.isoformat(),
+    )
+
+
 @issuance_router.post(
     "/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)]
 )
@@ -2774,6 +2861,28 @@ async def initiate_issuance(
         logger.warning(
             f"Could not validate organization {request.organization_id} (proceeding): {e}"
         )
+
+    authorized_client: Oid4vciRegisteredClient | None = None
+    if request.authorized_client_id:
+        authorized_client = await repo.get_oid4vci_client(
+            request.organization_id,
+            request.authorized_client_id,
+        )
+        if authorized_client is None:
+            raise HTTPException(
+                status_code=422,
+                detail="authorized_client_id is not registered for this organization",
+            )
+        if not authorized_client.active:
+            raise HTTPException(
+                status_code=422,
+                detail="authorized_client_id is inactive",
+            )
+        if authorized_client.token_endpoint_auth_method != "private_key_jwt":
+            raise HTTPException(
+                status_code=422,
+                detail="authorized_client_id has an unsupported authentication method",
+            )
 
     # Resolve credential type from template via gRPC (preferred) with HTTP fallback.
     credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
@@ -2983,6 +3092,7 @@ async def initiate_issuance(
         issuer_mode=issuer_mode,
         issuer_did_override=issuer_did_override or None,
         signing_service_id=None,
+        oid4vci_client_id=authorized_client.client_id if authorized_client else None,
         delivery_mode=delivery_mode,
         claims=merged_claims,
         credential_type=credential_type,
@@ -3243,6 +3353,32 @@ async def authorize(
             },
         )
 
+    registered_client = (
+        await repo.get_oid4vci_client(organization_id, client_id) if organization_id else None
+    )
+    if registered_client is not None:
+        if not registered_client.active:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "unauthorized_client",
+                    "error_description": "Client registration is inactive",
+                },
+            )
+        if not redirect_uri or redirect_uri not in registered_client.redirect_uris:
+            logger.warning(
+                "Rejected redirect_uri outside tenant registration (org=%s client=%s)",
+                organization_id,
+                client_id,
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_request",
+                    "error_description": "redirect_uri is not registered for this client",
+                },
+            )
+
     # ── Redirect URI allowlist (RFC 6749 §3.1.2.2) ──────────────────
     if redirect_uri:
         allowed_raw = os.environ.get("ALLOWED_REDIRECT_URIS", "")
@@ -3407,6 +3543,88 @@ async def pushed_authorization_request(
     )
 
 
+def _invalid_oid4vci_client() -> JSONResponse:
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": "invalid_client",
+            "error_description": "Client authentication failed",
+        },
+    )
+
+
+async def _authenticate_oid4vci_client(
+    *,
+    repo: IIssuanceRepository,
+    organization_id: str | None,
+    expected_client_id: str | None,
+    client_id: str | None,
+    client_assertion_type: str | None,
+    client_assertion: str | None,
+    allowed_audiences: list[str],
+    registration_required: bool,
+) -> JSONResponse | None:
+    """Authenticate a tenant-owned client and atomically consume its JTI."""
+
+    supplied_authentication = bool(client_assertion_type or client_assertion)
+    if not organization_id or not expected_client_id:
+        return _invalid_oid4vci_client() if supplied_authentication else None
+
+    registered = await repo.get_oid4vci_client(organization_id, expected_client_id)
+    if registered is None:
+        if registration_required or supplied_authentication:
+            logger.warning(
+                "[token] registered client authentication failed for org=%s",
+                organization_id,
+            )
+            return _invalid_oid4vci_client()
+        return None
+    if (
+        not registered.active
+        or registered.token_endpoint_auth_method != "private_key_jwt"
+        or client_id != registered.client_id
+        or client_assertion_type != JWT_BEARER_ASSERTION_TYPE
+        or not client_assertion
+    ):
+        logger.warning(
+            "[token] registered client authentication failed for org=%s client=%s",
+            organization_id,
+            registered.client_id,
+        )
+        return _invalid_oid4vci_client()
+
+    try:
+        verified = verify_private_key_jwt(
+            client_assertion,
+            client_id=registered.client_id,
+            public_jwks=registered.jwks,
+            allowed_audiences=allowed_audiences,
+        )
+    except ClientAuthenticationError as exc:
+        logger.warning(
+            "[token] registered client assertion rejected for org=%s client=%s: %s",
+            organization_id,
+            registered.client_id,
+            exc,
+        )
+        return _invalid_oid4vci_client()
+
+    claimed = await repo.claim_oid4vci_client_assertion(
+        organization_id=organization_id,
+        client_id=registered.client_id,
+        jti=verified.jti,
+        expires_at=verified.expires_at,
+    )
+    if not claimed:
+        logger.warning(
+            "[token] registered client assertion replay rejected for org=%s client=%s",
+            organization_id,
+            registered.client_id,
+        )
+        return _invalid_oid4vci_client()
+    return None
+
+
 @issuance_router.post(
     "/token", response_model=TokenResponse, dependencies=[Depends(_enforce_token_rate_limit)]
 )
@@ -3418,6 +3636,8 @@ async def exchange_token(
     redirect_uri: str = Form(None),
     client_id: str = Form(None),
     code_verifier: str = Form(None),
+    client_assertion_type: str = Form(None),
+    client_assertion: str = Form(None),
     repo: IIssuanceRepository = Depends(),
 ) -> TokenResponse:
     """Exchange pre-authorized code or authorization code for access token (OID4VCI)."""
@@ -3481,6 +3701,24 @@ async def exchange_token(
                     "error_description": "Authorization code already used",
                 },
             )
+
+        client_auth_error = await _authenticate_oid4vci_client(
+            repo=repo,
+            organization_id=auth_session.organization_id,
+            expected_client_id=auth_session.client_id,
+            client_id=client_id,
+            client_assertion_type=client_assertion_type,
+            client_assertion=client_assertion,
+            allowed_audiences=(
+                [org_issuer_url(auth_session.organization_id)]
+                if auth_session.organization_id
+                else []
+            )
+            + [_external_endpoint_url(http_request)],
+            registration_required=False,
+        )
+        if client_auth_error is not None:
+            return client_auth_error
 
         # Build JSON payloads for the Rust engine which handles all
         # protocol validation (redirect_uri match, PKCE, etc.).
@@ -3592,6 +3830,22 @@ async def exchange_token(
             status_code=400,
             content={"error": "invalid_grant", "error_description": "Invalid transaction state"},
         )
+
+    client_auth_error = await _authenticate_oid4vci_client(
+        repo=repo,
+        organization_id=tx.organization_id,
+        expected_client_id=tx.oid4vci_client_id,
+        client_id=client_id,
+        client_assertion_type=client_assertion_type,
+        client_assertion=client_assertion,
+        allowed_audiences=[
+            org_issuer_url(tx.organization_id),
+            _external_endpoint_url(http_request),
+        ],
+        registration_required=tx.oid4vci_client_id is not None,
+    )
+    if client_auth_error is not None:
+        return client_auth_error
 
     # Delegate access-token generation to Rust. OID4VCI Final obtains proof
     # freshness independently from the advertised Nonce Endpoint.
@@ -4199,9 +4453,7 @@ async def issue_credential(
         if signing_format == "mso_mdoc":
             assert holder_jwk is not None
 
-            async def _issuer_profile_mdoc_sign(
-                tbs_data: bytes, algorithm: str
-            ) -> bytes:
+            async def _issuer_profile_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
                 result = await sign_payload_with_issuer_profile(
                     organization_id=tx.organization_id,
                     issuer_profile_id=tx.issuer_profile_id or "",
@@ -4212,26 +4464,24 @@ async def issue_credential(
                 )
                 return _remote_mdoc_signature_raw(result, algorithm)
 
-            jwt_credential, signed_credential_id = (
-                await create_mdoc_credential_with_issuer_profile_signing(
-                    issuer_did=effective_issuer_did,
-                    algorithm=signing_algorithm,
-                    doc_type=tx.credential_type,
-                    namespace=_remote_mdoc_namespace(tx.credential_type),
-                    claims_json=json.dumps(signing_claims),
-                    expiration_seconds=tx.validity_days * 86400,
-                    credential_id=credential_id,
-                    holder_jwk=holder_jwk,
-                    certificate_chain=(
-                        (
-                            remote_context.get("issuer_x5c")
-                            or remote_context.get("mdoc_x5c")
-                        )
-                        if isinstance(remote_context, dict)
-                        else None
-                    ),
-                    profile_sign=_issuer_profile_mdoc_sign,
-                )
+            (
+                jwt_credential,
+                signed_credential_id,
+            ) = await create_mdoc_credential_with_issuer_profile_signing(
+                issuer_did=effective_issuer_did,
+                algorithm=signing_algorithm,
+                doc_type=tx.credential_type,
+                namespace=_remote_mdoc_namespace(tx.credential_type),
+                claims_json=json.dumps(signing_claims),
+                expiration_seconds=tx.validity_days * 86400,
+                credential_id=credential_id,
+                holder_jwk=holder_jwk,
+                certificate_chain=(
+                    (remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c"))
+                    if isinstance(remote_context, dict)
+                    else None
+                ),
+                profile_sign=_issuer_profile_mdoc_sign,
             )
         elif signing_format == "jwt_vc_json":
             jwt_credential, signed_credential_id = await create_jwt_vc_with_remote_signing(

@@ -39,6 +39,7 @@ from issuance.domain.entities import (
     IssuanceEvent,
     IssuanceTransaction,
     IssuedCredential,
+    Oid4vciRegisteredClient,
     OrganizationIntegrationSecret,
 )
 
@@ -98,7 +99,7 @@ def merge_application_integration_context(
 
 class IIssuanceRepository(ABC):
     """Port for issuance data persistence."""
-    
+
     # Transaction methods
     @abstractmethod
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
@@ -134,48 +135,76 @@ class IIssuanceRepository(ABC):
         transaction commits.
         """
         pass
-    
+
     @abstractmethod
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
         """Get transaction by ID."""
         pass
-    
+
     @abstractmethod
     async def get_by_pre_auth_code(self, code: str) -> IssuanceTransaction | None:
         """Get transaction by pre-authorization code."""
         pass
-    
+
     @abstractmethod
     async def get_by_access_token(self, token: str) -> IssuanceTransaction | None:
         """Get transaction by access token."""
         pass
-    
+
     @abstractmethod
     async def list_transactions(self, org_id: str) -> list[IssuanceTransaction]:
         """List all transactions for an organization."""
         pass
-    
+
+    @abstractmethod
+    async def save_oid4vci_client(self, client: Oid4vciRegisteredClient) -> None:
+        """Create or update one tenant-owned OID4VCI wallet client."""
+        pass
+
+    @abstractmethod
+    async def get_oid4vci_client(
+        self,
+        organization_id: str,
+        client_id: str,
+    ) -> Oid4vciRegisteredClient | None:
+        """Get a wallet client only within its owning organization."""
+        pass
+
+    @abstractmethod
+    async def claim_oid4vci_client_assertion(
+        self,
+        *,
+        organization_id: str,
+        client_id: str,
+        jti: str,
+        expires_at: datetime,
+    ) -> bool:
+        """Atomically reserve one assertion JTI; return false for a replay."""
+        pass
+
     # Credential methods
     @abstractmethod
     async def save_credential(self, cred: IssuedCredential) -> None:
         """Save or update a credential."""
         pass
-    
+
     @abstractmethod
     async def get_credential(self, cred_id: str) -> IssuedCredential | None:
         """Get credential by ID."""
         pass
 
     @abstractmethod
-    async def get_credential_by_transaction_id(self, transaction_id: str) -> IssuedCredential | None:
+    async def get_credential_by_transaction_id(
+        self, transaction_id: str
+    ) -> IssuedCredential | None:
         """Get credential by the issuance transaction that created it."""
         pass
-    
+
     @abstractmethod
     async def list_credentials(self, applicant_id: str) -> list[IssuedCredential]:
         """List credentials by applicant."""
         pass
-    
+
     @abstractmethod
     async def list_credentials_by_org(self, org_id: str) -> list[IssuedCredential]:
         """List all credentials for an organization."""
@@ -203,7 +232,9 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def list_delivery_records_for_credential(self, credential_id: str) -> list[CredentialDeliveryRecord]:
+    async def list_delivery_records_for_credential(
+        self, credential_id: str
+    ) -> list[CredentialDeliveryRecord]:
         """List delivery records for a credential."""
         pass
 
@@ -277,18 +308,18 @@ class IIssuanceRepository(ABC):
     ) -> ApprovalPolicySet | None:
         """Get an organization-owned approval PolicySet referenced by issuance."""
         pass
-    
+
     # Application Template methods
     @abstractmethod
     async def save_application_template(self, template: ApplicationTemplate) -> None:
         """Save or update an application template."""
         pass
-    
+
     @abstractmethod
     async def get_application_template(self, template_id: str) -> ApplicationTemplate | None:
         """Get application template by ID."""
         pass
-    
+
     @abstractmethod
     async def list_application_templates(self, org_id: str) -> list[ApplicationTemplate]:
         """List application templates for an organization."""
@@ -298,7 +329,7 @@ class IIssuanceRepository(ABC):
     async def delete_application_template(self, template_id: str) -> bool:
         """Delete an application template and return whether it existed."""
         pass
-    
+
     # Application methods
     @abstractmethod
     async def save_application(self, app: Application) -> None:
@@ -336,12 +367,12 @@ class IIssuanceRepository(ABC):
     ) -> Application | None:
         """Deep-merge only integration context, optionally using updated_at CAS."""
         pass
-    
+
     @abstractmethod
     async def get_application(self, app_id: str) -> Application | None:
         """Get application by ID."""
         pass
-    
+
     @abstractmethod
     async def list_applications(
         self,
@@ -748,7 +779,9 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def enqueue_due_canvas_sync_jobs(self, *, limit: int = 100) -> list[CanvasEvidenceSyncJob]:
+    async def enqueue_due_canvas_sync_jobs(
+        self, *, limit: int = 100
+    ) -> list[CanvasEvidenceSyncJob]:
         """Atomically enqueue due targets across competing schedulers."""
         pass
 
@@ -995,7 +1028,9 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_integration_secret_value(self, organization_id: str, secret_id: str) -> str | None:
+    async def get_integration_secret_value(
+        self, organization_id: str, secret_id: str
+    ) -> str | None:
         """Resolve a plaintext integration secret for runtime use."""
         pass
 
@@ -1043,7 +1078,9 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_credential_display_metadata_for_org(self, org_id: str) -> dict[str, dict[str, Any]]:
+    async def get_credential_display_metadata_for_org(
+        self, org_id: str
+    ) -> dict[str, dict[str, Any]]:
         """Return human display metadata keyed by credential_type."""
         pass
 
@@ -1059,7 +1096,9 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
+    async def get_authorization_session_by_access_token(
+        self, token: str
+    ) -> AuthorizationSession | None:
         """Look up a session by its access token (post-exchange)."""
         pass
 
