@@ -301,6 +301,58 @@ def _token_request() -> Request:
     )
 
 
+def test_authorization_metadata_advertises_client_auth_only_where_resolvable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi.testclient import TestClient
+    from issuance.main import create_app
+
+    monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
+    client = TestClient(create_app())
+
+    global_metadata = client.get("/.well-known/oauth-authorization-server").json()
+    tenant_metadata = client.get(
+        "/.well-known/oauth-authorization-server/org/org-a"
+    ).json()
+
+    assert global_metadata["token_endpoint_auth_methods_supported"] == ["none"]
+    assert "token_endpoint_auth_signing_alg_values_supported" not in global_metadata
+    assert tenant_metadata["token_endpoint_auth_methods_supported"] == [
+        "none",
+        "private_key_jwt",
+    ]
+    assert tenant_metadata["token_endpoint_auth_signing_alg_values_supported"] == [
+        "ES256"
+    ]
+    assert tenant_metadata["pushed_authorization_request_endpoint"].endswith(
+        "/v1/issuance/par?issuer_org=org-a"
+    )
+
+
+@pytest.mark.asyncio
+async def test_par_tenant_binding_cannot_be_overridden_by_form_body() -> None:
+    response = await routes.pushed_authorization_request(
+        http_request=_token_request(),
+        response_type="code",
+        client_id="public-wallet",
+        redirect_uri="https://wallet.example/callback",
+        scope=None,
+        state=None,
+        code_challenge="challenge",
+        code_challenge_method="S256",
+        issuer_state=None,
+        authorization_details=None,
+        organization_id="org-b",
+        issuer_org="org-a",
+    )
+    payload = json.loads(response.body)
+    stored = await routes._par_store.pop(payload["request_uri"])
+
+    assert response.status_code == 201
+    assert stored is not None
+    assert stored["organization_id"] == "org-a"
+
+
 @pytest.mark.asyncio
 async def test_token_endpoint_requires_bound_client_and_preserves_pending_state(
     monkeypatch: pytest.MonkeyPatch,

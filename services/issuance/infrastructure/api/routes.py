@@ -3498,6 +3498,7 @@ async def pushed_authorization_request(
     issuer_state: str = Form(None),
     authorization_details: str = Form(None),
     organization_id: str = Form(None),
+    issuer_org: str = Query(None),
 ) -> JSONResponse:
     """Pushed Authorization Request endpoint (RFC 9126 §2).
 
@@ -3510,6 +3511,10 @@ async def pushed_authorization_request(
     """
     import uuid as _uuid
 
+    # Per-organization AS metadata binds PAR to its tenant using this query
+    # parameter. A form organization remains available for existing internal
+    # integrations, but cannot override the issuer selected by discovery.
+    organization_id = issuer_org or organization_id
     request_uri = f"urn:ietf:params:oauth:request_uri:{_uuid.uuid4()}"
 
     await _par_store.save(
