@@ -5,8 +5,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-for package_root in (REPOSITORY_ROOT / "services", REPOSITORY_ROOT / "python"):
+for package_root in (
+    REPOSITORY_ROOT / "services",
+    REPOSITORY_ROOT / "python",
+    REPOSITORY_ROOT / "packages",
+):
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))

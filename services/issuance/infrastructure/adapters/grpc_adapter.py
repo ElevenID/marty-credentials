@@ -18,12 +18,17 @@ from typing import Any
 from urllib.parse import quote
 
 import grpc
-
+from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.oid4vci_client_auth import (
+    ClientAuthenticationError,
+    authenticate_oid4vci_client,
+)
 from marty_proto.v1 import (
     issuance_service_pb2 as pb2,
+)
+from marty_proto.v1 import (
     issuance_service_pb2_grpc,
 )
-from issuance.application.credential_vct import resolve_credential_vct
 
 logger = logging.getLogger(__name__)
 
@@ -210,8 +215,8 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def InitiateIssuance(self, request, context):
         """Initiate a credential offer (OID4VCI)."""
         try:
-            from issuance.domain.entities import IssuanceTransaction
             from issuance.application.rust_integration import oid4vci_create_credential_offer
+            from issuance.domain.entities import IssuanceTransaction
 
             repo = self._get_repo()
 
@@ -239,6 +244,23 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 logger.warning(f"Could not validate org {request.organization_id}: {e}")
             except Exception as e:
                 logger.warning(f"Could not validate org {request.organization_id}: {e}")
+
+            authorized_client_id = request.authorized_client_id or None
+            if authorized_client_id:
+                authorized_client = await repo.get_oid4vci_client(
+                    request.organization_id,
+                    authorized_client_id,
+                )
+                if (
+                    authorized_client is None
+                    or not authorized_client.active
+                    or authorized_client.token_endpoint_auth_method != "private_key_jwt"
+                ):
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details(
+                        "Authorized OID4VCI client is not active for this organization"
+                    )
+                    return pb2.IssuanceResponse()
 
             # Resolve credential type from template via HTTP
             credential_type = "org.iso.18013.5.1.mDL"
@@ -429,6 +451,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 applicant_id=request.applicant_id or None,
                 subject_did=request.subject_did or None,
                 claims=merged_claims,
+                oid4vci_client_id=authorized_client_id,
                 credential_type=credential_type,
                 zk_predicate_claims=zk_predicate_claims,
                 credential_payload_format=credential_payload_format,
@@ -526,11 +549,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def ExchangeToken(self, request, context):
         """Exchange pre-authorized code or authorization code for access token."""
         try:
-            from issuance.domain.entities import IssuanceStatus
             from issuance.application.rust_integration import (
                 oid4vci_create_token_response,
                 oid4vci_exchange_auth_code_for_token,
             )
+            from issuance.domain.entities import IssuanceStatus
 
             repo = self._get_repo()
 
@@ -555,6 +578,32 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 if auth_session.status != "pending":
                     context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                     context.set_details("Authorization code already used")
+                    return pb2.TokenResponse()
+
+                try:
+                    await authenticate_oid4vci_client(
+                        repo=repo,
+                        organization_id=auth_session.organization_id,
+                        expected_client_id=auth_session.client_id,
+                        client_id=request.client_id or None,
+                        client_assertion_type=request.client_assertion_type or None,
+                        client_assertion=request.client_assertion or None,
+                        allowed_audiences=(
+                            [_org_issuer_url(auth_session.organization_id)]
+                            if auth_session.organization_id
+                            else []
+                        )
+                        + [f"{ISSUER_BASE_URL.rstrip('/')}/v1/issuance/token"],
+                        registration_required=False,
+                    )
+                except ClientAuthenticationError:
+                    logger.warning(
+                        "gRPC token client authentication rejected for org=%s client=%s",
+                        auth_session.organization_id,
+                        auth_session.client_id,
+                    )
+                    context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                    context.set_details("Client authentication failed")
                     return pb2.TokenResponse()
 
                 request_payload = json.dumps(
@@ -592,7 +641,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     return pb2.TokenResponse()
 
                 auth_session.mark_exchanged(access_token=token_resp["access_token"])
-                await repo.save_authorization_session(auth_session)
+                claimed_session = await repo.claim_authorization_session_for_token(auth_session)
+                if claimed_session is None:
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details("Authorization code already used")
+                    return pb2.TokenResponse()
 
                 return pb2.TokenResponse(
                     access_token=token_resp["access_token"],
@@ -632,12 +685,40 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details(f"Invalid transaction state: {tx.status.value}")
                 return pb2.TokenResponse()
 
+            try:
+                await authenticate_oid4vci_client(
+                    repo=repo,
+                    organization_id=tx.organization_id,
+                    expected_client_id=tx.oid4vci_client_id,
+                    client_id=request.client_id or None,
+                    client_assertion_type=request.client_assertion_type or None,
+                    client_assertion=request.client_assertion or None,
+                    allowed_audiences=[
+                        _org_issuer_url(tx.organization_id),
+                        f"{ISSUER_BASE_URL.rstrip('/')}/v1/issuance/token",
+                    ],
+                    registration_required=tx.oid4vci_client_id is not None,
+                )
+            except ClientAuthenticationError:
+                logger.warning(
+                    "gRPC token client authentication rejected for org=%s client=%s",
+                    tx.organization_id,
+                    tx.oid4vci_client_id,
+                )
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Client authentication failed")
+                return pb2.TokenResponse()
+
             token_resp = oid4vci_create_token_response(request.pre_authorized_code, 1800)
 
             tx.access_token = token_resp["access_token"]
             tx.nonce = None
             tx.status = IssuanceStatus.AUTHORIZED
-            await repo.save_transaction(tx)
+            claimed_tx = await repo.claim_transaction_for_token(tx)
+            if claimed_tx is None:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details("Pre-authorized code already used (single-use)")
+                return pb2.TokenResponse()
 
             return pb2.TokenResponse(
                 access_token=token_resp["access_token"],
@@ -657,15 +738,17 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def IssueCredential(self, request, context):
         """Issue a credential (requires valid access token and proof JWT)."""
         try:
-            from issuance.domain.entities import (
-                IssuanceStatus,
-                IssuanceTransaction,
-                EventType,
-                IssuanceEvent,
-            )
-            from issuance.domain.entities import CredentialStatus, DeliveryTarget, IssuedCredential
             from issuance.application.rust_integration import (
                 verify_proof_jwt,
+            )
+            from issuance.domain.entities import (
+                CredentialStatus,
+                DeliveryTarget,
+                EventType,
+                IssuanceEvent,
+                IssuanceStatus,
+                IssuanceTransaction,
+                IssuedCredential,
             )
             from issuance.infrastructure.adapters.delivery_records import (
                 record_post_issuance_deliveries,
@@ -896,24 +979,25 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         """
         try:
             import hashlib
+            from datetime import timedelta
+
             import httpx
-            from issuance.domain.entities import (
-                IssuanceStatus,
-                IssuanceEvent,
-                EventType,
-                IssuedCredential,
-                CredentialStatus,
-                DeliveryTarget,
-            )
             from issuance.application.rust_integration import (
-                didcomm_resolve_did,
                 didcomm_extract_endpoint,
                 didcomm_pack_credential,
+                didcomm_resolve_did,
+            )
+            from issuance.domain.entities import (
+                CredentialStatus,
+                DeliveryTarget,
+                EventType,
+                IssuanceEvent,
+                IssuanceStatus,
+                IssuedCredential,
             )
             from issuance.infrastructure.adapters.delivery_records import (
                 record_post_issuance_deliveries,
             )
-            from datetime import timedelta
 
             repo = self._get_repo()
 

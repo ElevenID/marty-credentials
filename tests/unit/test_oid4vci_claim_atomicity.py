@@ -382,6 +382,44 @@ async def test_stale_authorized_save_cannot_reopen_a_signing_transaction() -> No
 
 
 @pytest.mark.asyncio
+async def test_postgres_token_claim_uses_pending_compare_and_set() -> None:
+    prepared = _transaction(
+        status=IssuanceStatus.AUTHORIZED,
+        access_token="new-wallet-token",
+        nonce=None,
+    )
+    returned = _transaction(
+        status=IssuanceStatus.AUTHORIZED,
+        access_token="hashed-at-rest",
+        nonce=None,
+    )
+    winner_session = _Session([_Result(_transaction_row(returned))])
+    winner_repo = PostgresIssuanceRepository(_SessionFactory(winner_session))
+
+    claimed = await winner_repo.claim_transaction_for_token(prepared)
+
+    assert claimed is not None
+    assert claimed.status == IssuanceStatus.AUTHORIZED
+    assert claimed.access_token == "new-wallet-token"
+    assert winner_session.committed is True
+    statement = winner_session.statements[0]
+    sql = str(statement).upper()
+    parameters = statement.compile().params
+    assert "PRE_AUTH_CODE" in sql
+    assert "STATUS =" in sql
+    assert "RETURNING" in sql
+    assert IssuanceStatus.PENDING.value in parameters.values()
+    assert IssuanceStatus.AUTHORIZED.value in parameters.values()
+
+    loser_session = _Session([_Result(None, rowcount=0)])
+    loser_repo = PostgresIssuanceRepository(_SessionFactory(loser_session))
+
+    assert await loser_repo.claim_transaction_for_token(prepared) is None
+    assert loser_session.rolled_back is True
+    assert loser_session.committed is False
+
+
+@pytest.mark.asyncio
 async def test_postgres_claim_and_finalize_use_cas_and_one_database_transaction() -> None:
     prepared = _transaction(
         issuer_profile_id="issuer-profile-1",

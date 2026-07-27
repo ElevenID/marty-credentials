@@ -47,6 +47,7 @@ from issuance.domain.entities import (
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
+    Oid4vciRegisteredClient,
     OrganizationIntegrationSecret,
     canvas_evidence_requirements_to_json,
     issuance_save_predecessors,
@@ -80,6 +81,8 @@ from issuance.infrastructure.models import (
     issuance_events_table,
     issuance_transactions_table,
     issued_credentials_table,
+    oid4vci_client_assertions_table,
+    oid4vci_registered_clients_table,
     organization_integration_secrets_table,
 )
 from sqlalchemy import and_, case, delete, func, or_, select, text, update
@@ -118,8 +121,12 @@ def _get_integration_secret_encryption():
         try:
             from status_list.infrastructure.security.encryption import SymmetricEncryption
         except ImportError as exc:  # pragma: no cover - deployment packaging guard
-            raise RuntimeError("status_list encryption package is required for integration secrets") from exc
-        env_name = os.environ.get("INTEGRATION_SECRET_MASTER_KEY_ENV", "INTEGRATION_SECRET_MASTER_KEY")
+            raise RuntimeError(
+                "status_list encryption package is required for integration secrets"
+            ) from exc
+        env_name = os.environ.get(
+            "INTEGRATION_SECRET_MASTER_KEY_ENV", "INTEGRATION_SECRET_MASTER_KEY"
+        )
         if not os.environ.get(env_name):
             key_file = os.environ.get(f"{env_name}_FILE")
             if key_file:
@@ -157,7 +164,7 @@ def _canvas_application_context(integration_context: Any) -> dict[str, Any] | No
 
 class PostgresIssuanceRepository(IIssuanceRepository):
     """PostgreSQL implementation of issuance repository."""
-    
+
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
         self._approval_policy_cache_ttl_seconds = int(
@@ -234,9 +241,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             canvas_base_url=row.canvas_base_url,
             lti_client_id=row.lti_client_id,
             lti_deployment_id=row.lti_deployment_id,
-            lti_trust_profile=(
-                getattr(row, "lti_trust_profile", None) or "hosted_global"
-            ),
+            lti_trust_profile=(getattr(row, "lti_trust_profile", None) or "hosted_global"),
             lti_issuer=row.lti_issuer,
             lti_jwks_url=row.lti_jwks_url,
             lti_jwks_json=row.lti_jwks_json,
@@ -574,9 +579,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             resolution_claim_token=getattr(row, "resolution_claim_token", None),
             resolution_claim_action=getattr(row, "resolution_claim_action", None),
             resolution_claimed_at=getattr(row, "resolution_claimed_at", None),
-            resolution_recovery_pending=bool(
-                getattr(row, "resolution_recovery_pending", False)
-            ),
+            resolution_recovery_pending=bool(getattr(row, "resolution_recovery_pending", False)),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
@@ -601,11 +604,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             issuer_did_override=getattr(row, "issuer_did_override", None),
             signing_service_id=getattr(row, "signing_service_id", None),
             reserved_credential_id=getattr(row, "reserved_credential_id", None),
+            oid4vci_client_id=getattr(row, "oid4vci_client_id", None),
             delivery_mode=getattr(row, "delivery_mode", None) or "wallet_only",
             claims=row.claims or {},
             credential_type=row.credential_type,
             zk_predicate_claims=list(row.zk_predicate_claims or []),
-            selective_disclosure_claims=list(getattr(row, 'selective_disclosure_claims', None) or []),
+            selective_disclosure_claims=list(
+                getattr(row, "selective_disclosure_claims", None) or []
+            ),
             credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
             wallet_configs=list(row.wallet_configs or []),
             validity_days=getattr(row, "validity_days", None) or 365,
@@ -614,10 +620,10 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             created_at=row.created_at,
             expires_at=row.expires_at,
             issued_at=row.issued_at,
-            revoked_at=getattr(row, 'revoked_at', None),
-            revocation_reason=getattr(row, 'revocation_reason', None),
+            revoked_at=getattr(row, "revoked_at", None),
+            revocation_reason=getattr(row, "revocation_reason", None),
         )
-    
+
     # Transaction methods
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
         async with self._session_factory() as session:
@@ -639,6 +645,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "issuer_did_override": tx.issuer_did_override,
                 "signing_service_id": tx.signing_service_id,
                 "reserved_credential_id": tx.reserved_credential_id,
+                "oid4vci_client_id": tx.oid4vci_client_id,
                 "delivery_mode": tx.delivery_mode or "wallet_only",
                 "claims": tx.claims,
                 "credential_type": tx.credential_type,
@@ -657,7 +664,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             }
 
             update_data = {k: v for k, v in tx_data.items() if k not in ("id", "created_at")}
-            allowed_predecessors = [status.value for status in issuance_save_predecessors(tx.status)]
+            allowed_predecessors = [
+                status.value for status in issuance_save_predecessors(tx.status)
+            ]
             stmt = (
                 pg_insert(issuance_transactions_table)
                 .values(**tx_data)
@@ -670,11 +679,41 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             result = await session.execute(stmt)
             if result.rowcount == 0:
                 await session.rollback()
-                raise ValueError(
-                    f"Stale issuance transaction transition to {tx.status.value}"
-                )
+                raise ValueError(f"Stale issuance transaction transition to {tx.status.value}")
             await session.commit()
-    
+
+    async def claim_transaction_for_token(
+        self,
+        prepared_transaction: IssuanceTransaction,
+    ) -> IssuanceTransaction | None:
+        async with self._session_factory() as session:
+            statement = (
+                update(issuance_transactions_table)
+                .where(
+                    issuance_transactions_table.c.id == prepared_transaction.id,
+                    issuance_transactions_table.c.pre_auth_code
+                    == prepared_transaction.pre_auth_code,
+                    issuance_transactions_table.c.status == IssuanceStatus.PENDING.value,
+                )
+                .values(
+                    access_token=_hash_token(prepared_transaction.access_token),
+                    c_nonce=None,
+                    claims=prepared_transaction.claims,
+                    status=IssuanceStatus.AUTHORIZED.value,
+                )
+                .returning(*issuance_transactions_table.c)
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            claimed = self._row_to_transaction(row)
+            # Persisted access tokens are intentionally one-way hashed. The
+            # winner still needs the clear token for its immediate response.
+            claimed.access_token = prepared_transaction.access_token
+            return claimed
+
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
         async with self._session_factory() as session:
             stmt = select(issuance_transactions_table).where(
@@ -682,12 +721,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             row = result.first()
-            
+
             if not row:
                 return None
-            
+
             return self._row_to_transaction(row)
-    
+
     async def get_by_pre_auth_code(self, code: str) -> IssuanceTransaction | None:
         async with self._session_factory() as session:
             stmt = select(issuance_transactions_table).where(
@@ -695,12 +734,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             row = result.first()
-            
+
             if not row:
                 return None
-            
+
             return self._row_to_transaction(row)
-    
+
     async def get_by_access_token(self, token: str) -> IssuanceTransaction | None:
         async with self._session_factory() as session:
             stmt = select(issuance_transactions_table).where(
@@ -708,12 +747,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             row = result.first()
-            
+
             if not row:
                 return None
-            
+
             return self._row_to_transaction(row)
-    
+
     async def list_transactions(self, org_id: str) -> list[IssuanceTransaction]:
         async with self._session_factory() as session:
             stmt = select(issuance_transactions_table).where(
@@ -721,14 +760,95 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             transactions = []
             for row in rows:
                 tx = await self.get_transaction(row.id)
                 if tx:
                     transactions.append(tx)
-            
+
             return transactions
+
+    async def save_oid4vci_client(self, client: Oid4vciRegisteredClient) -> None:
+        async with self._session_factory() as session:
+            now = datetime.now(UTC)
+            statement = (
+                pg_insert(oid4vci_registered_clients_table)
+                .values(
+                    organization_id=client.organization_id,
+                    client_id=client.client_id,
+                    jwks=client.jwks,
+                    redirect_uris=client.redirect_uris,
+                    token_endpoint_auth_method=client.token_endpoint_auth_method,
+                    active=client.active,
+                    created_at=client.created_at,
+                    updated_at=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=["organization_id", "client_id"],
+                    set_={
+                        "jwks": client.jwks,
+                        "redirect_uris": client.redirect_uris,
+                        "token_endpoint_auth_method": client.token_endpoint_auth_method,
+                        "active": client.active,
+                        "updated_at": now,
+                    },
+                )
+            )
+            await session.execute(statement)
+            await session.commit()
+
+    async def get_oid4vci_client(
+        self,
+        organization_id: str,
+        client_id: str,
+    ) -> Oid4vciRegisteredClient | None:
+        async with self._session_factory() as session:
+            statement = select(oid4vci_registered_clients_table).where(
+                oid4vci_registered_clients_table.c.organization_id == organization_id,
+                oid4vci_registered_clients_table.c.client_id == client_id,
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                return None
+            return Oid4vciRegisteredClient(
+                organization_id=row.organization_id,
+                client_id=row.client_id,
+                jwks=row.jwks,
+                redirect_uris=list(row.redirect_uris or []),
+                token_endpoint_auth_method=row.token_endpoint_auth_method,
+                active=bool(row.active),
+                created_at=row.created_at,
+                updated_at=row.updated_at,
+            )
+
+    async def claim_oid4vci_client_assertion(
+        self,
+        *,
+        organization_id: str,
+        client_id: str,
+        jti: str,
+        expires_at: datetime,
+    ) -> bool:
+        async with self._session_factory() as session:
+            await session.execute(
+                delete(oid4vci_client_assertions_table).where(
+                    oid4vci_client_assertions_table.c.expires_at <= datetime.now(UTC)
+                )
+            )
+            result = await session.execute(
+                pg_insert(oid4vci_client_assertions_table)
+                .values(
+                    organization_id=organization_id,
+                    client_id=client_id,
+                    jti=jti,
+                    expires_at=expires_at,
+                    created_at=datetime.now(UTC),
+                )
+                .on_conflict_do_nothing(index_elements=["organization_id", "client_id", "jti"])
+            )
+            await session.commit()
+            return result.rowcount == 1
 
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
         """Return distinct credential_type values for an org's issuable templates.
@@ -746,6 +866,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         Only 'deprecated' templates are excluded.
         """
         from sqlalchemy import text
+
         async with self._session_factory() as session:
             stmt = text(
                 """
@@ -769,6 +890,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         support mDoc (e.g. ``com.icao.dtc`` with ``supported_formats=["mdoc"]``).
         """
         from sqlalchemy import text
+
         async with self._session_factory() as session:
             stmt = text(
                 """
@@ -792,9 +914,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     type_formats[ctype].update(fmts)
             return [(ct, sorted(fmts)) for ct, fmts in sorted(type_formats.items())]
 
-    async def get_credential_display_metadata_for_org(self, org_id: str) -> dict[str, dict[str, Any]]:
+    async def get_credential_display_metadata_for_org(
+        self, org_id: str
+    ) -> dict[str, dict[str, Any]]:
         """Return display metadata for issuer metadata from credential templates."""
         from sqlalchemy import text
+
         async with self._session_factory() as session:
             stmt = text(
                 """
@@ -826,12 +951,10 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     # Credential methods
     async def save_credential(self, cred: IssuedCredential) -> None:
         async with self._session_factory() as session:
-            stmt = select(issued_credentials_table).where(
-                issued_credentials_table.c.id == cred.id
-            )
+            stmt = select(issued_credentials_table).where(issued_credentials_table.c.id == cred.id)
             result = await session.execute(stmt)
             existing = result.first()
-            
+
             cred_data = {
                 "id": cred.id,
                 "transaction_id": cred.transaction_id,
@@ -853,7 +976,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "revocation_reason": cred.revocation_reason,
                 "expires_at": cred.expires_at,
             }
-            
+
             if existing:
                 stmt = (
                     issued_credentials_table.update()
@@ -865,20 +988,18 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 cred_data["issued_at"] = cred.issued_at
                 stmt = issued_credentials_table.insert().values(**cred_data)
                 await session.execute(stmt)
-            
+
             await session.commit()
-    
+
     async def get_credential(self, cred_id: str) -> IssuedCredential | None:
         async with self._session_factory() as session:
-            stmt = select(issued_credentials_table).where(
-                issued_credentials_table.c.id == cred_id
-            )
+            stmt = select(issued_credentials_table).where(issued_credentials_table.c.id == cred_id)
             result = await session.execute(stmt)
             row = result.first()
-            
+
             if not row:
                 return None
-            
+
             return IssuedCredential(
                 id=row.id,
                 transaction_id=row.transaction_id,
@@ -902,7 +1023,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 expires_at=row.expires_at,
             )
 
-    async def get_credential_by_transaction_id(self, transaction_id: str) -> IssuedCredential | None:
+    async def get_credential_by_transaction_id(
+        self, transaction_id: str
+    ) -> IssuedCredential | None:
         async with self._session_factory() as session:
             stmt = select(issued_credentials_table).where(
                 issued_credentials_table.c.transaction_id == transaction_id
@@ -935,7 +1058,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 issued_at=row.issued_at,
                 expires_at=row.expires_at,
             )
-    
+
     async def list_credentials(self, applicant_id: str) -> list[IssuedCredential]:
         async with self._session_factory() as session:
             stmt = select(issued_credentials_table).where(
@@ -943,15 +1066,15 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             credentials = []
             for row in rows:
                 cred = await self.get_credential(row.id)
                 if cred:
                     credentials.append(cred)
-            
+
             return credentials
-    
+
     async def list_credentials_by_org(self, org_id: str) -> list[IssuedCredential]:
         async with self._session_factory() as session:
             stmt = select(issued_credentials_table).where(
@@ -959,13 +1082,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             credentials = []
             for row in rows:
                 cred = await self.get_credential(row.id)
                 if cred:
                     credentials.append(cred)
-            
+
             return credentials
 
     async def save_delivery_record(self, record: CredentialDeliveryRecord) -> None:
@@ -987,9 +1110,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "updated_at": record.updated_at,
             }
             update_data = {
-                key: value
-                for key, value in data.items()
-                if key not in {"id", "created_at"}
+                key: value for key, value in data.items() if key not in {"id", "created_at"}
             }
             stmt = (
                 pg_insert(credential_delivery_records_table)
@@ -1020,19 +1141,27 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     ) -> CredentialDeliveryRecord | None:
         async with self._session_factory() as session:
             stmt = select(credential_delivery_records_table).where(
-                credential_delivery_records_table.c.delivery_target == DeliveryTarget.CANVAS_CREDENTIALS.value,
-                credential_delivery_records_table.c.external_credential_id == external_credential_id,
+                credential_delivery_records_table.c.delivery_target
+                == DeliveryTarget.CANVAS_CREDENTIALS.value,
+                credential_delivery_records_table.c.external_credential_id
+                == external_credential_id,
             )
             if canvas_account_id is not None:
-                stmt = stmt.where(credential_delivery_records_table.c.canvas_account_id == canvas_account_id)
+                stmt = stmt.where(
+                    credential_delivery_records_table.c.canvas_account_id == canvas_account_id
+                )
             if organization_id is not None:
-                stmt = stmt.where(credential_delivery_records_table.c.organization_id == organization_id)
+                stmt = stmt.where(
+                    credential_delivery_records_table.c.organization_id == organization_id
+                )
             stmt = stmt.order_by(credential_delivery_records_table.c.created_at.desc()).limit(1)
             result = await session.execute(stmt)
             row = result.first()
             return self._row_to_delivery_record(row) if row else None
 
-    async def list_delivery_records_for_credential(self, credential_id: str) -> list[CredentialDeliveryRecord]:
+    async def list_delivery_records_for_credential(
+        self, credential_id: str
+    ) -> list[CredentialDeliveryRecord]:
         async with self._session_factory() as session:
             stmt = (
                 select(credential_delivery_records_table)
@@ -1042,7 +1171,11 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     case(
                         (credential_delivery_records_table.c.delivery_target == "wallet", 0),
                         (credential_delivery_records_table.c.delivery_target == "didcomm_v2", 1),
-                        (credential_delivery_records_table.c.delivery_target == "canvas_credentials", 2),
+                        (
+                            credential_delivery_records_table.c.delivery_target
+                            == "canvas_credentials",
+                            2,
+                        ),
                         else_=99,
                     ),
                     credential_delivery_records_table.c.delivery_target,
@@ -1068,7 +1201,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 )
             if statuses is not None:
                 stmt = stmt.where(
-                    credential_delivery_records_table.c.status.in_([status.value for status in statuses])
+                    credential_delivery_records_table.c.status.in_(
+                        [status.value for status in statuses]
+                    )
                 )
             if organization_id is not None:
                 stmt = stmt.where(
@@ -1079,7 +1214,10 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 case(
                     (credential_delivery_records_table.c.delivery_target == "wallet", 0),
                     (credential_delivery_records_table.c.delivery_target == "didcomm_v2", 1),
-                    (credential_delivery_records_table.c.delivery_target == "canvas_credentials", 2),
+                    (
+                        credential_delivery_records_table.c.delivery_target == "canvas_credentials",
+                        2,
+                    ),
                     else_=99,
                 ),
                 credential_delivery_records_table.c.delivery_target,
@@ -1159,11 +1297,15 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     review.organization_id != fact.organization_id
                     or review.application_id != fact.application_id
                 ):
-                    raise ValueError("Evidence policy review does not belong to the locked application")
+                    raise ValueError(
+                        "Evidence policy review does not belong to the locked application"
+                    )
                 await self._save_evidence_policy_review_in_session(session, review)
             for event in mutation.audit_events:
                 if event.application_id != fact.application_id:
-                    raise ValueError("Evidence audit event does not belong to the locked application")
+                    raise ValueError(
+                        "Evidence audit event does not belong to the locked application"
+                    )
                 await self._save_event_in_session(session, event)
             return CanvasEvidenceAtomicCommit(
                 evidence_fact=stored_fact,
@@ -1506,7 +1648,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         )
         self._approval_policy_cache[cache_key] = (now, policy_set)
         return policy_set
-    
+
     # Application Template methods
     async def save_application_template(self, template: ApplicationTemplate) -> None:
         async with self._session_factory() as session:
@@ -1515,7 +1657,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             existing = result.first()
-            
+
             template_data = {
                 "id": template.id,
                 "organization_id": template.organization_id,
@@ -1536,7 +1678,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "status": template.status,
                 "updated_at": datetime.now(UTC),
             }
-            
+
             if existing:
                 stmt = (
                     application_templates_table.update()
@@ -1548,9 +1690,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 template_data["created_at"] = template.created_at
                 stmt = application_templates_table.insert().values(**template_data)
                 await session.execute(stmt)
-            
+
             await session.commit()
-    
+
     async def get_application_template(self, template_id: str) -> ApplicationTemplate | None:
         async with self._session_factory() as session:
             stmt = select(application_templates_table).where(
@@ -1558,10 +1700,10 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             row = result.first()
-            
+
             if not row:
                 return None
-            
+
             return ApplicationTemplate(
                 id=row.id,
                 organization_id=row.organization_id,
@@ -1583,7 +1725,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
-    
+
     async def list_application_templates(self, org_id: str) -> list[ApplicationTemplate]:
         async with self._session_factory() as session:
             stmt = select(application_templates_table).where(
@@ -1591,13 +1733,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             templates = []
             for row in rows:
                 template = await self.get_application_template(row.id)
                 if template:
                     templates.append(template)
-            
+
             return templates
 
     async def delete_application_template(self, template_id: str) -> bool:
@@ -1609,16 +1751,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             await session.commit()
             return bool(result.rowcount)
-    
+
     # Application methods
     async def save_application(self, app: Application) -> None:
         async with self._session_factory() as session:
-            stmt = select(applications_table).where(
-                applications_table.c.id == app.id
-            )
+            stmt = select(applications_table).where(applications_table.c.id == app.id)
             result = await session.execute(stmt)
             existing = result.first()
-            
+
             app_data = {
                 "id": app.id,
                 "organization_id": app.organization_id,
@@ -1639,7 +1779,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "reviewed_at": app.reviewed_at,
                 "expires_at": app.expires_at,
             }
-            
+
             if existing:
                 stmt = (
                     applications_table.update()
@@ -1651,7 +1791,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 app_data["created_at"] = app.created_at
                 stmt = applications_table.insert().values(**app_data)
                 await session.execute(stmt)
-            
+
             await session.commit()
 
     async def _project_canvas_claim_in_session(
@@ -1776,7 +1916,11 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             if app_row.credential_id:
                 if current_row is None or current_row.status != IssuanceStatus.ISSUED.value:
                     raise ValueError("Canvas application already has a claimed credential")
-                return self._row_to_application(app_row), self._row_to_transaction(current_row), True
+                return (
+                    self._row_to_application(app_row),
+                    self._row_to_transaction(current_row),
+                    True,
+                )
 
             if current_row is not None and current_row.status == IssuanceStatus.ISSUED.value:
                 credential_result = await session.execute(
@@ -1834,11 +1978,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     "issuer_did_override": prepared_transaction.issuer_did_override,
                     "signing_service_id": prepared_transaction.signing_service_id,
                     "reserved_credential_id": prepared_transaction.reserved_credential_id,
+                    "oid4vci_client_id": prepared_transaction.oid4vci_client_id,
                     "delivery_mode": prepared_transaction.delivery_mode or "wallet_only",
                     "claims": prepared_transaction.claims,
                     "credential_type": prepared_transaction.credential_type,
                     "zk_predicate_claims": prepared_transaction.zk_predicate_claims or [],
-                    "selective_disclosure_claims": prepared_transaction.selective_disclosure_claims or [],
+                    "selective_disclosure_claims": prepared_transaction.selective_disclosure_claims
+                    or [],
                     "credential_payload_format": prepared_transaction.credential_payload_format,
                     "wallet_configs": prepared_transaction.wallet_configs or [],
                     "validity_days": prepared_transaction.validity_days,
@@ -1851,9 +1997,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     "revocation_reason": prepared_transaction.revocation_reason,
                 }
                 inserted = await session.execute(
-                    issuance_transactions_table.insert().values(**tx_data).returning(
-                        issuance_transactions_table
-                    )
+                    issuance_transactions_table.insert()
+                    .values(**tx_data)
+                    .returning(issuance_transactions_table)
                 )
                 reserved_row = inserted.first()
                 if reserved_row is None:
@@ -1931,9 +2077,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
 
     async def get_application(self, app_id: str) -> Application | None:
         async with self._session_factory() as session:
-            stmt = select(applications_table).where(
-                applications_table.c.id == app_id
-            )
+            stmt = select(applications_table).where(applications_table.c.id == app_id)
             result = await session.execute(stmt)
             row = result.first()
 
@@ -1956,21 +2100,21 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 conditions.append(applications_table.c.status == status.value)
             if template_id:
                 conditions.append(applications_table.c.application_template_id == template_id)
-            
+
             if conditions:
                 stmt = select(applications_table).where(and_(*conditions))
             else:
                 stmt = select(applications_table)
-            
+
             result = await session.execute(stmt)
             rows = result.all()
-            
+
             applications = []
             for row in rows:
                 app = await self.get_application(row.id)
                 if app:
                     applications.append(app)
-            
+
             return applications
 
     # Lifecycle event methods
@@ -1987,9 +2131,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             await session.execute(stmt)
             await session.commit()
 
-    async def list_events_for_application(
-        self, application_id: str
-    ) -> list[IssuanceEvent]:
+    async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         async with self._session_factory() as session:
             stmt = (
                 select(issuance_events_table)
@@ -2052,7 +2194,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 canvas_event_receipts_table.c.provider_event_id == provider_event_id
             )
             if canvas_account_id is not None:
-                stmt = stmt.where(canvas_event_receipts_table.c.canvas_account_id == canvas_account_id)
+                stmt = stmt.where(
+                    canvas_event_receipts_table.c.canvas_account_id == canvas_account_id
+                )
             result = await session.execute(stmt)
             row = result.first()
             return self._row_to_canvas_event_receipt(row) if row else None
@@ -2079,10 +2223,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             if limit is not None:
                 stmt = stmt.limit(limit)
             result = await session.execute(stmt)
-            return [
-                self._row_to_canvas_event_receipt(row)
-                for row in result.all()
-            ]
+            return [self._row_to_canvas_event_receipt(row) for row in result.all()]
 
     async def save_canvas_platform(self, platform: CanvasPlatform) -> None:
         async with self._session_factory() as session:
@@ -2113,9 +2254,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "updated_at": platform.updated_at,
             }
             update_data = {
-                key: value
-                for key, value in data.items()
-                if key not in {"id", "created_at"}
+                key: value for key, value in data.items() if key not in {"id", "created_at"}
             }
             stmt = (
                 pg_insert(canvas_platforms_table)
@@ -2409,9 +2548,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "updated_at": binding.updated_at,
             }
             update_data = {
-                key: value
-                for key, value in data.items()
-                if key not in {"id", "created_at"}
+                key: value for key, value in data.items() if key not in {"id", "created_at"}
             }
             stmt = (
                 pg_insert(canvas_program_bindings_table)
@@ -2460,7 +2597,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 conditions.append(canvas_program_bindings_table.c.platform_id == platform_id)
             if application_template_id is not None:
                 conditions.append(
-                    canvas_program_bindings_table.c.application_template_id == application_template_id
+                    canvas_program_bindings_table.c.application_template_id
+                    == application_template_id
                 )
             stmt = (
                 select(canvas_program_bindings_table)
@@ -2493,7 +2631,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["platform_id", "deployment_id", "lti_subject"],
-                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                    set_={
+                        key: value for key, value in data.items() if key not in {"id", "created_at"}
+                    },
                 )
             )
             await session.commit()
@@ -2548,7 +2688,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     canvas_learner_identities_table.c.platform_id == platform_id,
                     canvas_learner_identities_table.c.deployment_id == deployment_id,
                     canvas_learner_identities_table.c.canvas_user_id == canvas_user_id,
-                    canvas_learner_identities_table.c.status == CanvasLearnerIdentityStatus.LINKED.value,
+                    canvas_learner_identities_table.c.status
+                    == CanvasLearnerIdentityStatus.LINKED.value,
                 )
             )
             row = result.first()
@@ -2655,7 +2796,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["organization_id", "platform_id"],
-                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                    set_={
+                        key: value for key, value in data.items() if key not in {"id", "created_at"}
+                    },
                 )
             )
             await session.commit()
@@ -2704,10 +2847,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 select(canvas_platforms_table.c.id)
                 .where(
                     canvas_platforms_table.c.id == connection.platform_id,
-                    canvas_platforms_table.c.organization_id
-                    == connection.organization_id,
-                    canvas_platforms_table.c.config_version
-                    == connection.platform_config_version,
+                    canvas_platforms_table.c.organization_id == connection.organization_id,
+                    canvas_platforms_table.c.config_version == connection.platform_config_version,
                     canvas_platforms_table.c.archived_at.is_(None),
                 )
                 .with_for_update()
@@ -3108,7 +3249,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["organization_id", "logical_key"],
-                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                    set_={
+                        key: value for key, value in data.items() if key not in {"id", "created_at"}
+                    },
                 )
                 .returning(
                     canvas_evidence_sync_targets_table.c.id,
@@ -3168,8 +3311,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         conditions = (
             canvas_evidence_sync_targets_table.c.id == target_id,
             canvas_evidence_sync_targets_table.c.organization_id == organization_id,
-            canvas_evidence_sync_targets_table.c.config_version
-            == expected_config_version,
+            canvas_evidence_sync_targets_table.c.config_version == expected_config_version,
             canvas_evidence_sync_targets_table.c.enabled.is_(True),
         )
         async with self._session_factory() as session, session.begin():
@@ -3211,10 +3353,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 update(canvas_evidence_sync_targets_table)
                 .where(
                     canvas_evidence_sync_targets_table.c.id == target_id,
-                    canvas_evidence_sync_targets_table.c.organization_id
-                    == organization_id,
-                    canvas_evidence_sync_targets_table.c.config_version
-                    == expected_config_version,
+                    canvas_evidence_sync_targets_table.c.organization_id == organization_id,
+                    canvas_evidence_sync_targets_table.c.config_version == expected_config_version,
                     canvas_evidence_sync_targets_table.c.enabled.is_(True),
                 )
                 .values(last_succeeded_at=succeeded_at, updated_at=succeeded_at)
@@ -3278,7 +3418,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             return self._row_to_canvas_sync_job(row)
 
-    async def enqueue_due_canvas_sync_jobs(self, *, limit: int = 100) -> list[CanvasEvidenceSyncJob]:
+    async def enqueue_due_canvas_sync_jobs(
+        self, *, limit: int = 100
+    ) -> list[CanvasEvidenceSyncJob]:
         """Claim due targets across competing schedulers and enqueue one active job each."""
 
         now = datetime.now(UTC)
@@ -3346,9 +3488,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         async with self._session_factory() as session, session.begin():
             # A worker crash on the final allowed attempt must not resurrect a
             # ninth attempt when its lease expires.
-            expired_final_targets = select(
-                canvas_evidence_sync_jobs_table.c.target_id
-            ).where(
+            expired_final_targets = select(canvas_evidence_sync_jobs_table.c.target_id).where(
                 canvas_evidence_sync_jobs_table.c.status
                 == CanvasEvidenceSyncJobStatus.LEASED.value,
                 canvas_evidence_sync_jobs_table.c.lease_expires_at <= now,
@@ -3504,14 +3644,12 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 update(canvas_evidence_sync_jobs_table)
                 .where(
                     canvas_evidence_sync_jobs_table.c.id == job.id,
-                    canvas_evidence_sync_jobs_table.c.organization_id
-                    == job.organization_id,
+                    canvas_evidence_sync_jobs_table.c.organization_id == job.organization_id,
                     canvas_evidence_sync_jobs_table.c.status
                     == CanvasEvidenceSyncJobStatus.LEASED.value,
                     canvas_evidence_sync_jobs_table.c.lease_owner == worker_id,
                     canvas_evidence_sync_jobs_table.c.lease_expires_at > now,
-                    canvas_evidence_sync_jobs_table.c.attempt_count
-                    == job.attempt_count,
+                    canvas_evidence_sync_jobs_table.c.attempt_count == job.attempt_count,
                 )
                 .values(
                     status=job.status.value,
@@ -3537,8 +3675,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     update(canvas_evidence_sync_targets_table)
                     .where(
                         canvas_evidence_sync_targets_table.c.id == job.target_id,
-                        canvas_evidence_sync_targets_table.c.organization_id
-                        == job.organization_id,
+                        canvas_evidence_sync_targets_table.c.organization_id == job.organization_id,
                     )
                     .values(enabled=False, updated_at=now)
                 )
@@ -3556,8 +3693,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 update(canvas_evidence_sync_jobs_table)
                 .where(
                     canvas_evidence_sync_jobs_table.c.id == job_id,
-                    canvas_evidence_sync_jobs_table.c.organization_id
-                    == organization_id,
+                    canvas_evidence_sync_jobs_table.c.organization_id == organization_id,
                     canvas_evidence_sync_jobs_table.c.status
                     == CanvasEvidenceSyncJobStatus.DEAD_LETTER.value,
                 )
@@ -3583,8 +3719,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 update(canvas_evidence_sync_targets_table)
                 .where(
                     canvas_evidence_sync_targets_table.c.id == row.target_id,
-                    canvas_evidence_sync_targets_table.c.organization_id
-                    == organization_id,
+                    canvas_evidence_sync_targets_table.c.organization_id == organization_id,
                 )
                 .values(enabled=True, updated_at=now)
             )
@@ -3601,8 +3736,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 update(canvas_evidence_sync_jobs_table)
                 .where(
                     canvas_evidence_sync_jobs_table.c.id == job_id,
-                    canvas_evidence_sync_jobs_table.c.organization_id
-                    == organization_id,
+                    canvas_evidence_sync_jobs_table.c.organization_id == organization_id,
                     canvas_evidence_sync_jobs_table.c.status
                     == CanvasEvidenceSyncJobStatus.DEAD_LETTER.value,
                 )
@@ -3685,8 +3819,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             .select_from(joined_jobs)
             .where(
                 *target_scope,
-                canvas_evidence_sync_jobs_table.c.organization_id
-                == organization_id,
+                canvas_evidence_sync_jobs_table.c.organization_id == organization_id,
                 canvas_evidence_sync_jobs_table.c.status
                 == CanvasEvidenceSyncJobStatus.DEAD_LETTER.value,
             )
@@ -3701,8 +3834,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             .select_from(joined_jobs)
             .where(
                 *target_scope,
-                canvas_evidence_sync_jobs_table.c.organization_id
-                == organization_id,
+                canvas_evidence_sync_jobs_table.c.organization_id == organization_id,
                 canvas_evidence_sync_jobs_table.c.status.in_(
                     [
                         CanvasEvidenceSyncJobStatus.QUEUED.value,
@@ -3826,7 +3958,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["binding_id", "candidate_key"],
-                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                    set_={
+                        key: value for key, value in data.items() if key not in {"id", "created_at"}
+                    },
                 )
                 .returning(
                     canvas_award_candidates_table.c.id,
@@ -3974,7 +4108,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["id"],
-                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                    set_={
+                        key: value for key, value in data.items() if key not in {"id", "created_at"}
+                    },
                 )
             )
             await session.commit()
@@ -4031,8 +4167,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .where(
                     evidence_policy_reviews_table.c.id == review_id,
                     evidence_policy_reviews_table.c.organization_id == organization_id,
-                    evidence_policy_reviews_table.c.status
-                    == EvidencePolicyReviewStatus.OPEN.value,
+                    evidence_policy_reviews_table.c.status == EvidencePolicyReviewStatus.OPEN.value,
                     evidence_policy_reviews_table.c.resolution_claim_token.is_(None),
                 )
                 .values(
@@ -4059,8 +4194,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .where(
                     evidence_policy_reviews_table.c.id == review_id,
                     evidence_policy_reviews_table.c.organization_id == organization_id,
-                    evidence_policy_reviews_table.c.status
-                    == EvidencePolicyReviewStatus.OPEN.value,
+                    evidence_policy_reviews_table.c.status == EvidencePolicyReviewStatus.OPEN.value,
                     evidence_policy_reviews_table.c.resolution_claim_token == claim_token,
                 )
                 .values(
@@ -4094,11 +4228,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .where(
                     evidence_policy_reviews_table.c.id == review_id,
                     evidence_policy_reviews_table.c.organization_id == organization_id,
-                    evidence_policy_reviews_table.c.status
-                    == EvidencePolicyReviewStatus.OPEN.value,
+                    evidence_policy_reviews_table.c.status == EvidencePolicyReviewStatus.OPEN.value,
                     evidence_policy_reviews_table.c.resolution_claim_token == claim_token,
-                    evidence_policy_reviews_table.c.resolution_claim_action
-                    == resolution_action,
+                    evidence_policy_reviews_table.c.resolution_claim_action == resolution_action,
                 )
                 .values(
                     status=status.value,
@@ -4189,14 +4321,18 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "enabled": secret.enabled,
                 "created_at": existing.created_at if existing else secret.created_at,
                 "updated_at": now,
-                "last_used_at": secret.last_used_at if secret.last_used_at else (existing.last_used_at if existing else None),
+                "last_used_at": secret.last_used_at
+                if secret.last_used_at
+                else (existing.last_used_at if existing else None),
             }
             stmt = (
                 pg_insert(organization_integration_secrets_table)
                 .values(**data)
                 .on_conflict_do_update(
                     index_elements=["id"],
-                    set_={key: value for key, value in data.items() if key not in {"id", "created_at"}},
+                    set_={
+                        key: value for key, value in data.items() if key not in {"id", "created_at"}
+                    },
                 )
             )
             await session.execute(stmt)
@@ -4218,7 +4354,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         provider: str | None = None,
     ) -> list[OrganizationIntegrationSecret]:
         async with self._session_factory() as session:
-            conditions = [organization_integration_secrets_table.c.organization_id == organization_id]
+            conditions = [
+                organization_integration_secrets_table.c.organization_id == organization_id
+            ]
             if provider is not None:
                 conditions.append(organization_integration_secrets_table.c.provider == provider)
             stmt = (
@@ -4229,7 +4367,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             result = await session.execute(stmt)
             return [self._row_to_integration_secret(row) for row in result.all()]
 
-    async def get_integration_secret_value(self, organization_id: str, secret_id: str) -> str | None:
+    async def get_integration_secret_value(
+        self, organization_id: str, secret_id: str
+    ) -> str | None:
         encryption = _get_integration_secret_encryption()
         async with self._session_factory() as session:
             result = await session.execute(
@@ -4362,6 +4502,36 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             await session.execute(stmt)
             await session.commit()
 
+    async def claim_authorization_session_for_token(
+        self,
+        prepared_session: AuthorizationSession,
+    ) -> AuthorizationSession | None:
+        async with self._session_factory() as session:
+            statement = (
+                update(authorization_sessions_table)
+                .where(
+                    authorization_sessions_table.c.id == prepared_session.id,
+                    authorization_sessions_table.c.code == prepared_session.code,
+                    authorization_sessions_table.c.status == "pending",
+                    authorization_sessions_table.c.expires_at > datetime.now(UTC),
+                )
+                .values(
+                    access_token=_hash_token(prepared_session.access_token),
+                    c_nonce=prepared_session.nonce,
+                    dpop_jkt=prepared_session.dpop_jkt,
+                    status="exchanged",
+                )
+                .returning(*authorization_sessions_table.c)
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            claimed = self._row_to_auth_session(row)
+            claimed.access_token = prepared_session.access_token
+            return claimed
+
     def _row_to_auth_session(self, row) -> AuthorizationSession:
         """Map a DB row to an AuthorizationSession entity."""
         return AuthorizationSession(
@@ -4393,7 +4563,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             row = result.first()
             return self._row_to_auth_session(row) if row else None
 
-    async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
+    async def get_authorization_session_by_access_token(
+        self, token: str
+    ) -> AuthorizationSession | None:
         async with self._session_factory() as session:
             stmt = select(authorization_sessions_table).where(
                 authorization_sessions_table.c.access_token == _hash_token(token)
@@ -4488,19 +4660,24 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 auth_session_min.scalar_one_or_none(),
                 event_min.scalar_one_or_none(),
             ]
-            retained_candidates = [candidate for candidate in retained_candidates if candidate is not None]
+            retained_candidates = [
+                candidate for candidate in retained_candidates if candidate is not None
+            ]
 
         oldest_retained_record_at = min(retained_candidates) if retained_candidates else None
         next_expiry_at = (
             oldest_retained_record_at + timedelta(days=retention_days)
-            if oldest_retained_record_at else None
+            if oldest_retained_record_at
+            else None
         )
 
         return {
             "organization_id": org_id,
             "retention_days": retention_days,
             "cutoff_at": cutoff_at.isoformat(),
-            "oldest_retained_record_at": oldest_retained_record_at.isoformat() if oldest_retained_record_at else None,
+            "oldest_retained_record_at": oldest_retained_record_at.isoformat()
+            if oldest_retained_record_at
+            else None,
             "next_expiry_at": next_expiry_at.isoformat() if next_expiry_at else None,
             "eligible_for_purge": eligible_for_purge,
             "tracked_scope": [

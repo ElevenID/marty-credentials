@@ -48,12 +48,15 @@ issuance_transactions_table = Table(
     Column("issuer_did_override", String, nullable=True),
     Column("signing_service_id", String, nullable=True),
     Column("reserved_credential_id", String, nullable=True),
+    Column("oid4vci_client_id", String(512), nullable=True),
     Column("delivery_mode", String(40), nullable=False, server_default="wallet_only"),
     Column("claims", JSON, nullable=False, default=dict),
     Column("credential_type", String, nullable=True),
     Column("zk_predicate_claims", JSON, nullable=True, default=list),
     Column("selective_disclosure_claims", JSON, nullable=True, default=list),
-    Column("credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"),
+    Column(
+        "credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"
+    ),
     Column("wallet_configs", JSON, nullable=True, server_default="[]"),
     Column("validity_days", Integer, nullable=False, server_default="365"),
     Column("renewable", Boolean, nullable=False, server_default="false"),
@@ -69,7 +72,47 @@ issuance_transactions_table = Table(
     Index("ix_issuance_transactions_applicant_id", "applicant_id"),
     Index("ix_issuance_transactions_application_id", "application_id"),
     Index("ix_issuance_transactions_delivery_mode", "delivery_mode"),
-    schema="issuance_service"
+    schema="issuance_service",
+)
+
+# Tenant-owned OID4VCI wallet client registrations. These rows contain public
+# verification keys only; issuer and wallet private keys are never persisted.
+oid4vci_registered_clients_table = Table(
+    "oid4vci_registered_clients",
+    mapper_registry.metadata,
+    Column("organization_id", String, primary_key=True),
+    Column("client_id", String(512), primary_key=True),
+    Column("jwks", JSON, nullable=False),
+    Column("redirect_uris", JSON, nullable=False, default=list),
+    Column(
+        "token_endpoint_auth_method",
+        String(40),
+        nullable=False,
+        server_default="private_key_jwt",
+    ),
+    Column("active", Boolean, nullable=False, server_default="true"),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index(
+        "ix_oid4vci_registered_clients_org_active",
+        "organization_id",
+        "active",
+    ),
+    schema="issuance_service",
+)
+
+# One-time RFC 7523 assertion identifiers. The composite primary key makes
+# replay rejection atomic across workers and replicas.
+oid4vci_client_assertions_table = Table(
+    "oid4vci_client_assertions",
+    mapper_registry.metadata,
+    Column("organization_id", String, primary_key=True),
+    Column("client_id", String(512), primary_key=True),
+    Column("jti", String(256), primary_key=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Index("ix_oid4vci_client_assertions_expires_at", "expires_at"),
+    schema="issuance_service",
 )
 
 # Issued Credentials table
@@ -77,7 +120,12 @@ issued_credentials_table = Table(
     "issued_credentials",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "transaction_id",
+        String,
+        ForeignKey("issuance_service.issuance_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("organization_id", String, nullable=False),
     Column("credential_template_id", String, nullable=False),
     Column("applicant_id", String, nullable=True),
@@ -101,15 +149,25 @@ issued_credentials_table = Table(
     Index("ix_issued_credentials_applicant_id", "applicant_id"),
     Index("ux_issued_credentials_transaction_id", "transaction_id", unique=True),
     Index("ux_issued_credentials_tenant_id", "organization_id", "id", unique=True),
-    schema="issuance_service"
+    schema="issuance_service",
 )
 
 credential_delivery_records_table = Table(
     "credential_delivery_records",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("credential_id", String, ForeignKey("issuance_service.issued_credentials.id", ondelete="CASCADE"), nullable=False),
-    Column("transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "credential_id",
+        String,
+        ForeignKey("issuance_service.issued_credentials.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "transaction_id",
+        String,
+        ForeignKey("issuance_service.issuance_transactions.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("organization_id", String, nullable=False),
     Column("delivery_target", String(40), nullable=False),
     Column("delivery_mode", String(40), nullable=False, server_default="wallet_only"),
@@ -136,7 +194,12 @@ evidence_facts_table = Table(
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, nullable=False),
-    Column("application_id", String, ForeignKey("issuance_service.applications.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "application_id",
+        String,
+        ForeignKey("issuance_service.applications.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("subject_id", String, nullable=False),
     Column("provider", String(80), nullable=False),
     Column("fact_type", String(160), nullable=False),
@@ -276,7 +339,7 @@ application_templates_table = Table(
     Index("ix_application_templates_organization_id", "organization_id"),
     Index("ix_application_templates_status", "status"),
     Index("ux_application_templates_tenant_id", "organization_id", "id", unique=True),
-    schema="issuance_service"
+    schema="issuance_service",
 )
 
 # Applications table
@@ -285,7 +348,12 @@ applications_table = Table(
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, nullable=False),
-    Column("application_template_id", String, ForeignKey("issuance_service.application_templates.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "application_template_id",
+        String,
+        ForeignKey("issuance_service.application_templates.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("applicant_identifier", String, nullable=False),
     Column("form_data", JSON, nullable=False, default=dict),
     Column("submitted_evidence", JSON, nullable=False, default=list),
@@ -307,7 +375,7 @@ applications_table = Table(
     Index("ix_applications_template_id", "application_template_id"),
     Index("ix_applications_applicant_identifier", "applicant_identifier"),
     Index("ux_applications_tenant_id", "organization_id", "id", unique=True),
-    schema="issuance_service"
+    schema="issuance_service",
 )
 
 # Issuance Events table — append-only audit/lifecycle log
@@ -348,15 +416,25 @@ issuance_events_table = Table(
     "issuance_events",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="SET NULL"), nullable=True),
-    Column("application_id", String, ForeignKey("issuance_service.applications.id", ondelete="SET NULL"), nullable=True),
+    Column(
+        "transaction_id",
+        String,
+        ForeignKey("issuance_service.issuance_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column(
+        "application_id",
+        String,
+        ForeignKey("issuance_service.applications.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     Column("event_type", String, nullable=False),
     Column("metadata", JSON, nullable=False, default=dict),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Index("ix_issuance_events_application_id", "application_id"),
     Index("ix_issuance_events_transaction_id", "transaction_id"),
     Index("ix_issuance_events_event_type", "event_type"),
-    schema="issuance_service"
+    schema="issuance_service",
 )
 
 # Replay-safe inbound Canvas event receipts
@@ -369,7 +447,12 @@ canvas_event_receipts_table = Table(
     Column("credential_template_id", String, nullable=False),
     Column("canvas_account_id", String, nullable=True),
     Column("payload_hash", String, nullable=False),
-    Column("issuance_transaction_id", String, ForeignKey("issuance_service.issuance_transactions.id", ondelete="SET NULL"), nullable=True),
+    Column(
+        "issuance_transaction_id",
+        String,
+        ForeignKey("issuance_service.issuance_transactions.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
     Column("issuance_response", JSON, nullable=False, default=dict),
     Column("status", String, nullable=False, default="processed"),
     Column("error_summary", String, nullable=True),
@@ -377,8 +460,13 @@ canvas_event_receipts_table = Table(
     Column("last_seen_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Index("ix_canvas_event_receipts_provider_event_id", "provider_event_id"),
     Index("ix_canvas_event_receipts_organization_id", "organization_id"),
-    Index("ux_canvas_event_receipts_account_event", "canvas_account_id", "provider_event_id", unique=True),
-    schema="issuance_service"
+    Index(
+        "ux_canvas_event_receipts_account_event",
+        "canvas_account_id",
+        "provider_event_id",
+        unique=True,
+    ),
+    schema="issuance_service",
 )
 
 # Authorization Sessions table — OID4VCI authorization code flow (§5)
@@ -430,11 +518,18 @@ canvas_program_bindings_table = Table(
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
     Column("organization_id", String, nullable=False),
-    Column("platform_id", String, ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("application_template_id", String, nullable=False),
     Column("credential_template_id", String, nullable=False),
     Column("display_name", String, nullable=True),
-    Column("flow_mode", String(80), nullable=False, default="elevenid_orchestrated_canvas_evidence"),
+    Column(
+        "flow_mode", String(80), nullable=False, default="elevenid_orchestrated_canvas_evidence"
+    ),
     Column("direct_issue_enabled", Boolean, nullable=False, default=False),
     Column("auto_approve_on_evidence", Boolean, nullable=False, default=False),
     Column("evidence_requirements", JSON, nullable=False, default=list),
@@ -993,8 +1088,7 @@ canvas_candidate_observations_table = Table(
         unique=True,
     ),
     CheckConstraint(
-        "btrim(requirement_id) <> '' AND btrim(logical_key) <> '' "
-        "AND btrim(payload_hash) <> ''",
+        "btrim(requirement_id) <> '' AND btrim(logical_key) <> '' AND btrim(payload_hash) <> ''",
         name="ck_canvas_candidate_observations_revision",
     ),
     ForeignKeyConstraint(
@@ -1133,7 +1227,13 @@ organization_integration_secrets_table = Table(
     Column("last_used_at", DateTime(timezone=True), nullable=True),
     Index("ix_org_integration_secrets_organization_id", "organization_id"),
     Index("ix_org_integration_secrets_provider", "provider"),
-    Index("ux_org_integration_secrets_org_provider_name", "organization_id", "provider", "name", unique=True),
+    Index(
+        "ux_org_integration_secrets_org_provider_name",
+        "organization_id",
+        "provider",
+        "name",
+        unique=True,
+    ),
     schema="issuance_service",
 )
 
@@ -1141,7 +1241,12 @@ canvas_lti_launch_states_table = Table(
     "canvas_lti_launch_states",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
-    Column("platform_id", String, ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"), nullable=False),
+    Column(
+        "platform_id",
+        String,
+        ForeignKey("issuance_service.canvas_platforms.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("organization_id", String, nullable=False),
     Column("canvas_account_id", String, nullable=False),
     Column("state", String, nullable=False, unique=True),
@@ -1158,7 +1263,7 @@ canvas_lti_launch_states_table = Table(
     Index("ix_canvas_lti_launch_states_state", "state"),
     Index("ix_canvas_lti_launch_states_platform_id", "platform_id"),
     Index("ix_canvas_lti_launch_states_organization_status", "organization_id", "status"),
-    schema="issuance_service"
+    schema="issuance_service",
 )
 
 authorization_sessions_table = Table(
@@ -1184,7 +1289,7 @@ authorization_sessions_table = Table(
     Index("ix_authorization_sessions_code", "code"),
     Index("ix_authorization_sessions_status", "status"),
     Index("ix_authorization_sessions_issuer_state", "issuer_state"),
-    schema="issuance_service"
+    schema="issuance_service",
 )
 
 # Issuer Signing Keys table — encrypted Ed25519 JWKs per organization

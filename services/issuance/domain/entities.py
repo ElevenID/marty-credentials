@@ -19,6 +19,7 @@ _CANVAS_LTI_STATE_TTL_MINUTES = int(os.environ.get("CANVAS_LTI_STATE_TTL_MINUTES
 
 class IssuanceStatus(str, Enum):
     """Issuance transaction status."""
+
     PENDING = "pending"
     AUTHORIZED = "authorized"
     SIGNING = "signing"
@@ -30,9 +31,7 @@ class IssuanceStatus(str, Enum):
 
 _ISSUANCE_SAVE_PREDECESSORS: dict[IssuanceStatus, frozenset[IssuanceStatus]] = {
     IssuanceStatus.PENDING: frozenset({IssuanceStatus.PENDING}),
-    IssuanceStatus.AUTHORIZED: frozenset(
-        {IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED}
-    ),
+    IssuanceStatus.AUTHORIZED: frozenset({IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED}),
     # AUTHORIZED -> SIGNING is reserved for the repository compare-and-set.
     IssuanceStatus.SIGNING: frozenset({IssuanceStatus.SIGNING}),
     # Legacy DIDComm/gRPC delivery still completes through save_transaction.
@@ -85,9 +84,10 @@ def issuance_save_predecessors(target: IssuanceStatus) -> frozenset[IssuanceStat
 class IssuanceTransaction:
     """
     Issuance transaction aggregate.
-    
+
     Tracks the state of a credential issuance request through the OID4VCI protocol.
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     organization_id: str = ""
     credential_template_id: str = ""
@@ -96,50 +96,57 @@ class IssuanceTransaction:
     applicant_id: str | None = None
     application_id: str | None = None
     subject_did: str | None = None
-    
+
     # Transaction state
     status: IssuanceStatus = IssuanceStatus.PENDING
-    
+
     # OID4VCI tokens
     pre_auth_code: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     access_token: str | None = None
     nonce: str | None = None
-    
+
     # Issuer identity override (injected by gateway from IssuerProfile)
     issuer_profile_id: str | None = None
     issuer_mode: str = "org_managed"
     issuer_did_override: str | None = None
     signing_service_id: str | None = None
     reserved_credential_id: str | None = None
+    oid4vci_client_id: str | None = None
     delivery_mode: str = "wallet_only"
 
     # Credential data
     claims: dict[str, Any] = field(default_factory=dict)
     credential_type: str | None = None  # Store credential type from template
-    zk_predicate_claims: list[str] = field(default_factory=list)  # ZK-eligible claims (zk_mdoc only)
-    selective_disclosure_claims: list[str] = field(default_factory=list)  # SD-JWT selectively disclosable claims
+    zk_predicate_claims: list[str] = field(
+        default_factory=list
+    )  # ZK-eligible claims (zk_mdoc only)
+    selective_disclosure_claims: list[str] = field(
+        default_factory=list
+    )  # SD-JWT selectively disclosable claims
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"  # SD-JWT payload structure
     wallet_configs: list[dict] = field(default_factory=list)  # [{wallet_id, deep_link_scheme}, ...]
     validity_days: int = 365
     renewable: bool = False
     renewal_window_days: int = 30
-    
+
     # Timing
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=_OFFER_TTL_MINUTES))
+    expires_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=_OFFER_TTL_MINUTES)
+    )
     issued_at: datetime | None = None
     revoked_at: datetime | None = None
     revocation_reason: str | None = None
-    
+
     def complete(self) -> None:
         """Mark issuance as complete."""
         self.status = IssuanceStatus.ISSUED
         self.issued_at = datetime.now(timezone.utc)
-    
+
     def fail(self, reason: str) -> None:
         """Mark issuance as failed."""
         self.status = IssuanceStatus.FAILED
-    
+
     def revoke(self, reason: str | None = None) -> None:
         """Mark issuance as revoked."""
         self.status = IssuanceStatus.REVOKED
@@ -149,7 +156,7 @@ class IssuanceTransaction:
     @property
     def should_mirror_to_canvas(self) -> bool:
         return self.delivery_mode == "wallet_plus_canvas_mirror"
-    
+
     @property
     def is_expired(self) -> bool:
         return datetime.now(timezone.utc) > self.expires_at
@@ -157,6 +164,7 @@ class IssuanceTransaction:
 
 class EventType(str, Enum):
     """Issuance lifecycle event types."""
+
     OFFER_GENERATED = "offer_generated"
     OFFER_VIEWED = "offer_viewed"
     OFFER_EXPIRED = "offer_expired"
@@ -184,6 +192,7 @@ class IssuanceEvent:
       - offer_expired    : offer TTL passed when applicant views it
       - credential_issued: wallet completes OID4VCI exchange
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     transaction_id: str | None = None
     application_id: str | None = None
@@ -289,7 +298,9 @@ class CanvasEvidenceScope:
     resource_id: str | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "course_id", _required_identifier(self.course_id, "scope.course_id"))
+        object.__setattr__(
+            self, "course_id", _required_identifier(self.course_id, "scope.course_id")
+        )
         for name in ("activity_id", "module_id", "line_item_url", "resource_id"):
             value = getattr(self, name)
             if value is not None:
@@ -306,7 +317,9 @@ class CanvasEvidenceScope:
             raise ValueError("scope must be an object")
         return cls(
             course_id=value.get("course_id"),
-            activity_id=value.get("activity_id") or value.get("assignment_id") or value.get("quiz_id"),
+            activity_id=value.get("activity_id")
+            or value.get("assignment_id")
+            or value.get("quiz_id"),
             module_id=value.get("module_id"),
             line_item_url=value.get("line_item_url") or value.get("lineitem_url"),
             resource_id=value.get("resource_id") or value.get("resourceId"),
@@ -352,7 +365,9 @@ class CanvasEvidencePassRule:
             raise ValueError("pass_rule must be an object")
         unsupported = set(value) - {"min_score_percent", "completed"}
         if unsupported:
-            raise ValueError(f"Unsupported Canvas pass rule fields: {', '.join(sorted(unsupported))}")
+            raise ValueError(
+                f"Unsupported Canvas pass rule fields: {', '.join(sorted(unsupported))}"
+            )
         return cls(
             min_score_percent=value.get("min_score_percent"),
             completed=value.get("completed"),
@@ -391,7 +406,9 @@ class CanvasEvidenceRequirement:
         if not isinstance(self.scope, CanvasEvidenceScope):
             object.__setattr__(self, "scope", CanvasEvidenceScope.from_mapping(self.scope))
         if not isinstance(self.pass_rule, CanvasEvidencePassRule):
-            object.__setattr__(self, "pass_rule", CanvasEvidencePassRule.from_mapping(self.pass_rule))
+            object.__setattr__(
+                self, "pass_rule", CanvasEvidencePassRule.from_mapping(self.pass_rule)
+            )
         if not isinstance(self.required, bool):
             raise ValueError("required must be a boolean")
 
@@ -409,7 +426,10 @@ class CanvasEvidenceRequirement:
                 raise ValueError("completion requirements must use canvas_rest")
             if self.pass_rule.completed is not True or self.pass_rule.min_score_percent is not None:
                 raise ValueError("completion requirements need only pass_rule.completed=true")
-            if self.fact_type == CanvasEvidenceFactType.MODULE_COMPLETION and not self.scope.module_id:
+            if (
+                self.fact_type == CanvasEvidenceFactType.MODULE_COMPLETION
+                and not self.scope.module_id
+            ):
                 raise ValueError("module completion requirements need scope.module_id")
 
     @classmethod
@@ -427,7 +447,9 @@ class CanvasEvidenceRequirement:
             "required",
         }
         if unsupported:
-            raise ValueError(f"Unsupported Canvas requirement fields: {', '.join(sorted(unsupported))}")
+            raise ValueError(
+                f"Unsupported Canvas requirement fields: {', '.join(sorted(unsupported))}"
+            )
         try:
             source = CanvasEvidenceSource(str(value.get("source") or ""))
         except ValueError as exc:
@@ -475,7 +497,10 @@ def canvas_evidence_requirements_to_json(values: Any) -> list[Any]:
 
     if not isinstance(values, list):
         raise ValueError("Canvas evidence requirements must be a list")
-    return [value.to_dict() if isinstance(value, CanvasEvidenceRequirement) else value for value in values]
+    return [
+        value.to_dict() if isinstance(value, CanvasEvidenceRequirement) else value
+        for value in values
+    ]
 
 
 @dataclass
@@ -567,8 +592,9 @@ class CanvasLtiLaunchState:
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
-        + timedelta(minutes=_CANVAS_LTI_STATE_TTL_MINUTES)
+        default_factory=lambda: (
+            datetime.now(timezone.utc) + timedelta(minutes=_CANVAS_LTI_STATE_TTL_MINUTES)
+        )
     )
     consumed_at: datetime | None = None
 
@@ -583,6 +609,7 @@ class CanvasLtiLaunchState:
 
 class CredentialStatus(str, Enum):
     """Credential lifecycle status."""
+
     ACTIVE = "active"
     SUSPENDED = "suspended"
     REVOKED = "revoked"
@@ -612,6 +639,7 @@ class AuthorizationSession:
     request through to token exchange.  The authorization endpoint creates
     a session and the token endpoint consumes it.
     """
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     code: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     client_id: str = ""
@@ -637,7 +665,11 @@ class AuthorizationSession:
     # Lifecycle
     status: str = "pending"  # pending → exchanged → expired
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=_AUTH_SESSION_TTL_MINUTES))
+    expires_at: datetime = field(
+        default_factory=lambda: (
+            datetime.now(timezone.utc) + timedelta(minutes=_AUTH_SESSION_TTL_MINUTES)
+        )
+    )
 
     def mark_exchanged(self, access_token: str) -> None:
         """Record the access token and mark the authorization code exchanged."""
@@ -650,8 +682,27 @@ class AuthorizationSession:
 
 
 @dataclass
+class Oid4vciRegisteredClient:
+    """Tenant-owned wallet client allowed to authenticate at the token endpoint.
+
+    ``jwks`` contains public verification keys only. Wallet private keys are
+    external counterparty material and must never be stored by Marty.
+    """
+
+    organization_id: str
+    client_id: str
+    jwks: dict[str, Any]
+    redirect_uris: list[str] = field(default_factory=list)
+    token_endpoint_auth_method: str = "private_key_jwt"
+    active: bool = True
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
 class IssuedCredential:
     """Record of an issued credential."""
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     transaction_id: str = ""
     organization_id: str = ""
@@ -663,20 +714,20 @@ class IssuedCredential:
     renewed_from_credential_id: str | None = None
     renewed_to_credential_id: str | None = None
     status_list_entries: list[dict[str, Any]] = field(default_factory=list)
-    
+
     # Credential data
     credential_jwt: str = ""
     credential_hash: str = ""
-    
+
     # Lifecycle status
     status: CredentialStatus = CredentialStatus.ACTIVE
     status_updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    
+
     # Legacy revocation fields (deprecated, use status)
     revoked: bool = False
     revoked_at: datetime | None = None
     revocation_reason: str | None = None
-    
+
     # Timestamps
     issued_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime | None = None
@@ -753,7 +804,9 @@ class EvidenceFact:
                 "assertion": self.assertion or {},
                 "verification": self.verification or {},
             }
-            canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+            canonical_payload = json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), default=str
+            )
             self.payload_hash = hashlib.sha256(canonical_payload.encode("utf-8")).hexdigest()
         if not self.source_revision:
             self.source_revision = self.payload_hash
@@ -1052,6 +1105,7 @@ class ApprovalPolicySet:
 
 class ApplicationStatus(str, Enum):
     """Application status."""
+
     PENDING = "pending"
     UNDER_REVIEW = "under_review"
     APPROVED = "approved"
@@ -1062,12 +1116,13 @@ class ApplicationStatus(str, Enum):
 @dataclass
 class ApplicationTemplate:
     """Application Template defines the workflow for users to apply for credentials."""
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     organization_id: str = ""
     name: str = ""
     description: str | None = None
     credential_template_id: str | None = None
-    
+
     # Application configuration
     form_fields: list[dict[str, Any]] = field(default_factory=list)
     evidence_requirements: list[Any] = field(default_factory=list)
@@ -1075,16 +1130,16 @@ class ApplicationTemplate:
     # Pluggable vetting checks required for this application template.
     # Each entry: { check_type, custom_name, is_required, order, config, external_provider, webhook_url }
     required_checks: list[dict[str, Any]] = field(default_factory=list)
-    
+
     # Workflow configuration
     approval_strategy: str = "MANUAL"
     approval_policy_set_id: str | None = None
     application_validity_days: int = 30
-    
+
     # UI configuration
     ui_config: dict[str, Any] = field(default_factory=dict)
     notification_config: dict[str, Any] = field(default_factory=dict)
-    
+
     # Metadata
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -1094,34 +1149,37 @@ class ApplicationTemplate:
 @dataclass
 class Application:
     """Application instance - a user's submission to obtain a credential."""
+
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     organization_id: str = ""
     application_template_id: str = ""
-    
+
     # Applicant information
     applicant_identifier: str = ""
-    
+
     # Application data
     form_data: dict[str, Any] = field(default_factory=dict)
     evidence_submissions: list[dict[str, Any]] = field(default_factory=list)
     integration_context: dict[str, Any] = field(default_factory=dict)
-    
+
     # Status tracking
     status: ApplicationStatus = ApplicationStatus.PENDING
     review_notes: str | None = None
     reviewer_id: str | None = None
     rejection_reason: str | None = None
-    
+
     # Derived claims for credential issuance
     derived_claims: dict[str, Any] = field(default_factory=dict)
-    
+
     # Timestamps
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     submitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     reviewed_at: datetime | None = None
-    expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(days=30))
-    
+    expires_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc) + timedelta(days=30)
+    )
+
     # Link to issued credential (when approved)
     issuance_transaction_id: str | None = None
     credential_id: str | None = None
