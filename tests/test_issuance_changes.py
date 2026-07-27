@@ -94,18 +94,20 @@ def test_issuance_rejects_direct_kms_routing_headers(header: str):
         )
 
     assert exc_info.value.status_code == 422
-    assert "issuer_profile_id and issuer DID" in str(exc_info.value.detail)
+    assert "supply issuer_did in the request body" in str(exc_info.value.detail)
 
 
-def test_issuance_allows_profile_and_did_headers_without_kms_routing():
+def test_issuance_rejects_profile_and_did_selection_headers():
+    from fastapi import HTTPException
     from issuance.infrastructure.api.routes import _reject_direct_signing_headers
 
-    _reject_direct_signing_headers(
-        {
-            "x-issuer-profile-id": "issuer-profile-1",
-            "x-issuer-did": "did:web:issuer.example",
-        }
-    )
+    with pytest.raises(HTTPException, match="supply issuer_did in the request body"):
+        _reject_direct_signing_headers(
+            {
+                "x-issuer-profile-id": "issuer-profile-1",
+                "x-issuer-did": "did:web:issuer.example",
+            }
+        )
 
 
 def _b64url(value: bytes) -> str:
@@ -524,6 +526,7 @@ class TestRemoteIssuerFailureDetail:
             organization_id: str,
             *,
             issuer_profile_id: str | None = None,
+            issuer_did: str | None = None,
             issuer_mode: str | None = None,
             credential_format: str | None = None,
             key_purpose: str | None = None,
@@ -533,6 +536,7 @@ class TestRemoteIssuerFailureDetail:
                 {
                     "organization_id": organization_id,
                     "issuer_profile_id": issuer_profile_id,
+                    "issuer_did": issuer_did,
                     "issuer_mode": issuer_mode,
                     "credential_format": credential_format,
                     "key_purpose": key_purpose,
@@ -567,12 +571,63 @@ class TestRemoteIssuerFailureDetail:
         assert tx.signing_service_id == "svc-mdoc"
         assert captured == {
             "organization_id": "org-1",
-            "issuer_profile_id": "ip-selected",
+            "issuer_profile_id": None,
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:old",
             "issuer_mode": "elevenid_alias_for_org",
             "credential_format": "mso_mdoc",
             "key_purpose": "mdoc_dsc",
             "algorithm": None,
         }
+
+    async def test_did_context_uses_the_did_resolver(self, monkeypatch):
+        from issuance.infrastructure.api import signing_context
+
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 200
+            reason_phrase = "OK"
+            text = ""
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "organization_id": "org-1",
+                    "issuer_did": "did:web:issuer.example",
+                    "issuer_profile": {
+                        "id": "profile-1",
+                        "issuer_mode": "org_managed",
+                        "signing_service_id": "service-1",
+                        "signing_key_reference": "key-1",
+                    },
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, url, **kwargs):
+                captured.update(url=url, **kwargs)
+                return FakeResponse()
+
+        monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
+        result = await signing_context.resolve_remote_issuer_context(
+            "org-1",
+            issuer_did="did:web:issuer.example",
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+        )
+
+        assert str(captured["url"]).endswith("/resolve-issuer-did")
+        assert captured["params"]["issuer_did"] == "did:web:issuer.example"
+        assert result["issuer_profile_id"] == "profile-1"
+        assert result["signing_service_id"] == "service-1"
 
     async def test_required_remote_issuer_context_fails_on_incomplete_kms_profile(
         self, monkeypatch
@@ -661,34 +716,21 @@ class TestRemoteIssuerFailureDetail:
         assert "Issuer-profile DID signing failed (HTTP 503)" in str(excinfo.value)
         assert "cred-issuer-marty-es256" in str(excinfo.value)
 
-    def test_template_and_header_cannot_override_issuer_profile(self):
-        from issuance.infrastructure.api.routes import (
-            HTTPException,
-            _select_transaction_issuer_profile_id,
-        )
+    def test_initiate_issuance_request_accepts_only_public_did_identity(self):
+        from pydantic import ValidationError
 
-        assert (
-            _select_transaction_issuer_profile_id(
-                template_bound=True,
-                template_issuer_profile_id="profile-1",
-                request_issuer_profile_id=None,
-                header_issuer_profile_id="profile-1",
-            )
-            == "profile-1"
+        from issuance.infrastructure.api.routes import InitiateIssuanceRequest
+
+        request = InitiateIssuanceRequest(
+            organization_id="org-1",
+            issuer_did="did:web:issuer.example",
         )
-        with pytest.raises(HTTPException, match="cannot override"):
-            _select_transaction_issuer_profile_id(
-                template_bound=True,
-                template_issuer_profile_id="profile-1",
-                request_issuer_profile_id="profile-2",
-                header_issuer_profile_id=None,
-            )
-        with pytest.raises(HTTPException, match="does not match"):
-            _select_transaction_issuer_profile_id(
-                template_bound=True,
-                template_issuer_profile_id="profile-1",
-                request_issuer_profile_id=None,
-                header_issuer_profile_id="profile-2",
+        assert request.issuer_did == "did:web:issuer.example"
+        with pytest.raises(ValidationError, match="issuer_profile_id"):
+            InitiateIssuanceRequest(
+                organization_id="org-1",
+                issuer_did="did:web:issuer.example",
+                issuer_profile_id="profile-1",
             )
 
     async def test_issuer_profile_signing_never_sends_kms_routing(self, monkeypatch):
@@ -2844,6 +2886,7 @@ class TestRustIntegrationOrgIdValidation:
         ]
         request = InitiateIssuanceRequest(
             organization_id="org-1",
+            issuer_did="did:web:issuer.example",
             credential_template_id="template-1",
             credential_subject=subjects,
         )
@@ -2852,12 +2895,14 @@ class TestRustIntegrationOrgIdValidation:
         with pytest.raises(ValidationError, match="cannot be combined with claims"):
             InitiateIssuanceRequest(
                 organization_id="org-1",
+                issuer_did="did:web:issuer.example",
                 claims={"givenName": "Alice"},
                 credential_subject=subjects,
             )
         with pytest.raises(ValidationError, match="reserved for internal use"):
             InitiateIssuanceRequest(
                 organization_id="org-1",
+                issuer_did="did:web:issuer.example",
                 claims={"_credential_subject": subjects},
             )
 
@@ -3313,6 +3358,7 @@ async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypa
     repo = _TestableRepo()
     source_tx = _make_transaction(
         status=IssuanceStatus.ISSUED,
+        issuer_did_override="did:web:issuer.example",
         renewable=True,
         renewal_window_days=7,
         validity_days=1,

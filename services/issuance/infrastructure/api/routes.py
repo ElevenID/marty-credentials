@@ -311,39 +311,12 @@ def _normalize_payload_format(value: str | None) -> str:
     return (value or "").strip().lower().replace("-", "_")
 
 
-def _select_transaction_issuer_profile_id(
-    *,
-    template_bound: bool,
-    template_issuer_profile_id: str | None,
-    request_issuer_profile_id: str | None,
-    header_issuer_profile_id: str | None,
-) -> str | None:
-    """Select one issuer profile without permitting caller/header overrides."""
-    if (
-        template_bound
-        and request_issuer_profile_id
-        and template_issuer_profile_id
-        and request_issuer_profile_id != template_issuer_profile_id
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="issuer_profile_id cannot override the credential template issuer profile.",
-        )
-    selected = template_issuer_profile_id or request_issuer_profile_id
-    if selected and header_issuer_profile_id and selected != header_issuer_profile_id:
-        raise HTTPException(
-            status_code=422,
-            detail="X-Issuer-Profile-Id does not match the selected issuer profile.",
-        )
-    return selected or header_issuer_profile_id
-
-
 def _reject_direct_signing_headers(headers: Any) -> None:
     """Reject caller attempts to route issuance to a KMS service or key.
 
-    Issuance selects an issuer profile and its DID. The issuer-profile signer
-    owns the private profile-to-KMS binding; callers cannot override that
-    binding with legacy service or key headers.
+    Issuance resolves a public issuer DID to a profile. The issuer-profile
+    signer owns the private profile-to-KMS binding; callers cannot override
+    that resolution or its custody binding with headers.
     """
     forbidden = tuple(
         name
@@ -351,6 +324,9 @@ def _reject_direct_signing_headers(headers: Any) -> None:
             "x-signing-service-id",
             "x-signing-key-reference",
             "x-key-reference",
+            "x-issuer-profile-id",
+            "x-issuer-mode",
+            "x-issuer-did",
         )
         if str(headers.get(name) or "").strip()
     )
@@ -358,8 +334,8 @@ def _reject_direct_signing_headers(headers: Any) -> None:
         raise HTTPException(
             status_code=422,
             detail=(
-                "Direct signing service or key selection is not allowed; "
-                "select an issuer_profile_id and issuer DID instead."
+                "Direct signing or issuer-profile selection is not allowed; "
+                "supply issuer_did in the request body."
             ),
         )
 
@@ -509,7 +485,11 @@ async def apply_remote_issuer_context(
     try:
         context = await resolve_remote_issuer_context(
             tx.organization_id,
-            issuer_profile_id=tx.issuer_profile_id,
+            # New transactions carry only the caller's public DID. A profile
+            # ID is retained solely on pre-migration transactions so they can
+            # finish safely; it is never a public selector.
+            issuer_profile_id=tx.issuer_profile_id if not tx.issuer_did_override else None,
+            issuer_did=tx.issuer_did_override,
             issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
             credential_format=resolved_format,
             key_purpose=_key_purpose_for_credential_format(resolved_format),
@@ -799,14 +779,15 @@ async def _verify_management_api_key(
 
 
 class InitiateIssuanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str
+    issuer_did: str = Field(min_length=1)
     credential_template_id: str | None = None  # Optional — falls back to default type
     applicant_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     authorized_client_id: str | None = None
-    issuer_profile_id: str | None = None
-    issuer_mode: str = "org_managed"
     delivery_mode: str = "wallet_only"
     claims: dict[str, Any] = {}
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None
@@ -2888,7 +2869,7 @@ async def initiate_issuance(
     selective_disclosure_claims: list[str] = []
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     revocation_profile_id: str | None = None
-    template_issuer_profile_id: str | None = None
+    template_issuer_did: str | None = None
     wallet_configs: list[dict] = []
     validity_days = 365
     renewable = False
@@ -2925,7 +2906,7 @@ async def initiate_issuance(
             )
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             revocation_profile_id = tmpl_resp.revocation_profile_id or None
-            template_issuer_profile_id = tmpl_resp.issuer_profile_id or None
+            template_issuer_did = getattr(tmpl_resp, "issuer_did", None) or None
             wallet_configs = (
                 json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
             )
@@ -2982,7 +2963,7 @@ async def initiate_issuance(
                 tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
             )
             revocation_profile_id = tmpl.get("revocation_profile_id") or None
-            template_issuer_profile_id = tmpl.get("issuer_profile_id") or None
+            template_issuer_did = tmpl.get("issuer_did") or None
             wallet_configs = tmpl.get("wallet_configs") or []
             validity_rules = tmpl.get("validity_rules") or {}
             validity_days = int(validity_rules.get("default_validity_days") or 0)
@@ -2998,6 +2979,21 @@ async def initiate_issuance(
     # Derive vct fallback if not already resolved
     if not credential_vct:
         credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+
+    if request.credential_template_id:
+        if not template_issuer_did:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "credential_template_id must reference a template with an issuer_did; "
+                    "migrate the legacy template before issuance."
+                ),
+            )
+        if template_issuer_did != request.issuer_did:
+            raise HTTPException(
+                status_code=422,
+                detail="issuer_did cannot override the credential template issuer DID.",
+            )
 
     if (
         request.credential_subject is not None
@@ -3054,30 +3050,12 @@ async def initiate_issuance(
     # DB column is NOT NULL; when callers omit template id, persist a stable fallback.
     effective_credential_template_id = request.credential_template_id or "default"
 
-    # Extract only issuer-profile identity expectations. The profile signer
-    # resolves its private KMS binding internally.
-    issuer_did_override: str | None = None
-    request_issuer_profile_id = request.issuer_profile_id
-    header_issuer_profile_id = (
-        http_request.headers.get("x-issuer-profile-id") if http_request is not None else None
-    )
-    issuer_profile_id = _select_transaction_issuer_profile_id(
-        template_bound=bool(request.credential_template_id),
-        template_issuer_profile_id=template_issuer_profile_id,
-        request_issuer_profile_id=request_issuer_profile_id,
-        header_issuer_profile_id=header_issuer_profile_id,
-    )
-    issuer_mode = _normalize_issuer_mode(request.issuer_mode)
     try:
         delivery_mode = normalize_delivery_mode(request.delivery_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if http_request is not None:
         _reject_direct_signing_headers(http_request.headers)
-        issuer_did_override = http_request.headers.get("x-issuer-did")
-        issuer_mode = _normalize_issuer_mode(
-            http_request.headers.get("x-issuer-mode") or issuer_mode
-        )
 
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
@@ -3085,9 +3063,11 @@ async def initiate_issuance(
         revocation_profile_id=revocation_profile_id,
         applicant_id=request.applicant_id,
         subject_did=request.subject_did,
-        issuer_profile_id=issuer_profile_id or None,
-        issuer_mode=issuer_mode,
-        issuer_did_override=issuer_did_override or None,
+        # The request supplies a DID only. The internal resolver records the
+        # canonical issuer-profile ID after it proves the org/DID/format match.
+        issuer_profile_id=None,
+        issuer_mode="org_managed",
+        issuer_did_override=request.issuer_did,
         signing_service_id=None,
         oid4vci_client_id=authorized_client.client_id if authorized_client else None,
         delivery_mode=delivery_mode,
@@ -3101,11 +3081,10 @@ async def initiate_issuance(
         renewable=renewable,
         renewal_window_days=renewal_window_days,
     )
-    if not (tx.issuer_did_override and tx.issuer_profile_id):
-        await apply_remote_issuer_context(
-            tx,
-            credential_format=_credential_format_for_remote_context(credential_payload_format),
-        )
+    await apply_required_remote_issuer_context(
+        tx,
+        credential_format=_credential_format_for_remote_context(credential_payload_format),
+    )
     await repo.save_transaction(tx)
 
     # OID4VCI: Pass credential offer inline for better wallet compatibility.
@@ -5896,6 +5875,11 @@ async def renew_issued_credential(
         raise HTTPException(status_code=409, detail="Source issuance transaction is unavailable.")
     if not source_tx.renewable:
         raise HTTPException(status_code=409, detail="Credential Template does not allow renewal.")
+    if not source_tx.issuer_did_override:
+        raise HTTPException(
+            status_code=409,
+            detail="Source issuance lacks an issuer_did and cannot be renewed safely.",
+        )
     if not source.expires_at:
         raise HTTPException(status_code=409, detail="Credential has no renewal eligibility date.")
 
@@ -5913,11 +5897,10 @@ async def renew_issued_credential(
     offer = await initiate_issuance(
         InitiateIssuanceRequest(
             organization_id=source.organization_id,
+            issuer_did=source_tx.issuer_did_override,
             credential_template_id=source.credential_template_id,
             applicant_id=source.applicant_id,
             subject_did=source.subject_did,
-            issuer_profile_id=source_tx.issuer_profile_id,
-            issuer_mode=source_tx.issuer_mode,
             delivery_mode=source_tx.delivery_mode,
             claims=dict(source_tx.claims),
         ),
