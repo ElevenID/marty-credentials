@@ -16,6 +16,7 @@ from fastapi.responses import Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from issuance.application.credential_vct import resolve_credential_vct
 from issuance.domain.ports import IIssuanceRepository
 from issuance.application.rust_integration import (
     configure_issuer_key_store,
@@ -110,10 +111,7 @@ def _credential_display_entries(
 
 
 def _credential_vct(ctype: str, metadata: dict[str, Any] | None, issuer_base_url: str) -> str:
-    vct = (metadata or {}).get("vct")
-    if isinstance(vct, str) and vct.strip():
-        return vct.strip()
-    return f"{issuer_base_url}/credentials/{ctype}"
+    return resolve_credential_vct((metadata or {}).get("vct"), ctype, issuer_base_url)
 
 
 def _credential_definition(ctype: str) -> dict[str, Any]:

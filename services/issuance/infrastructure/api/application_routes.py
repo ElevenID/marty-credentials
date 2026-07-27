@@ -26,6 +26,7 @@ from issuance.application.canvas_issuance_guard import (
     CanvasIssuanceGuardError,
     canvas_approval_credential_context,
 )
+from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.evidence_reconciliation import (
     build_canvas_evidence_reconciliation_report,
     reconcile_canvas_evidence_transitions,
@@ -1026,10 +1027,10 @@ async def approve_application(
             if _resp.status_code < 400:
                 _tmpl = _resp.json()
                 credential_type = _tmpl.get("credential_type") or credential_type
-                raw_vct = _tmpl.get("vct") or ""
-                credential_vct = (
-                    raw_vct if raw_vct.startswith("http")
-                    else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                credential_vct = resolve_credential_vct(
+                    _tmpl.get("vct"),
+                    credential_type,
+                    ISSUER_BASE_URL,
                 )
         except Exception:
             pass

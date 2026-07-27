@@ -43,6 +43,7 @@ from issuance.application.canvas_issuance_guard import (
     require_canvas_issuance_ready,
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
+from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.rust_integration import (
     create_jwt_vc_with_remote_signing,
     create_mdoc_credential_with_issuer_profile_signing,
@@ -2805,11 +2806,10 @@ async def initiate_issuance(
                     detail=f"Credential template not found: {request.credential_template_id}",
                 )
             credential_type = tmpl_resp.credential_type or credential_type
-            raw_vct = tmpl_resp.vct or ""
-            credential_vct = (
-                raw_vct
-                if raw_vct.startswith("http")
-                else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            credential_vct = resolve_credential_vct(
+                tmpl_resp.vct,
+                credential_type,
+                ISSUER_BASE_URL,
             )
             zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
             selective_disclosure_claims = (
@@ -2862,11 +2862,10 @@ async def initiate_issuance(
             except httpx.TimeoutException:
                 raise HTTPException(status_code=504, detail="Credential template service timeout")
             credential_type = tmpl.get("credential_type") or credential_type
-            raw_vct = tmpl.get("vct") or ""
-            credential_vct = (
-                raw_vct
-                if raw_vct.startswith("http")
-                else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+            credential_vct = resolve_credential_vct(
+                tmpl.get("vct"),
+                credential_type,
+                ISSUER_BASE_URL,
             )
             logger.info(
                 f"Fetched credential type from template (HTTP): {credential_type} vct={credential_vct}"

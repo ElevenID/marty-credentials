@@ -23,6 +23,7 @@ from marty_proto.v1 import (
     issuance_service_pb2 as pb2,
     issuance_service_pb2_grpc,
 )
+from issuance.application.credential_vct import resolve_credential_vct
 
 logger = logging.getLogger(__name__)
 
@@ -271,11 +272,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         return pb2.IssuanceResponse()
 
                     credential_type = tmpl_resp.credential_type or credential_type
-                    raw_vct = tmpl_resp.vct or ""
-                    credential_vct = (
-                        raw_vct
-                        if raw_vct.startswith("http")
-                        else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                    credential_vct = resolve_credential_vct(
+                        tmpl_resp.vct,
+                        credential_type,
+                        ISSUER_BASE_URL,
                     )
                     zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
                     credential_payload_format = (
@@ -323,11 +323,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         context.set_details(f"Credential template service unavailable: {http_err}")
                         return pb2.IssuanceResponse()
                     credential_type = tmpl.get("credential_type") or credential_type
-                    raw_vct = tmpl.get("vct") or ""
-                    credential_vct = (
-                        raw_vct
-                        if raw_vct.startswith("http")
-                        else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                    credential_vct = resolve_credential_vct(
+                        tmpl.get("vct"),
+                        credential_type,
+                        ISSUER_BASE_URL,
                     )
                     zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
                     credential_payload_format = (
