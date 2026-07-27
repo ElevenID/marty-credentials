@@ -52,6 +52,7 @@ async def resolve_remote_issuer_context(
     organization_id: str,
     *,
     issuer_profile_id: str | None = None,
+    issuer_did: str | None = None,
     issuer_mode: str | None = None,
     credential_format: str | None = None,
     key_purpose: str | None = None,
@@ -64,6 +65,8 @@ async def resolve_remote_issuer_context(
     params: dict[str, str] = {"organization_id": organization_id}
     if issuer_profile_id:
         params["issuer_profile_id"] = issuer_profile_id
+    if issuer_did:
+        params["issuer_did"] = issuer_did
     if issuer_mode:
         params["issuer_mode"] = issuer_mode
     if credential_format:
@@ -73,9 +76,10 @@ async def resolve_remote_issuer_context(
     if algorithm:
         params["algorithm"] = algorithm
 
+    endpoint = "/resolve-issuer-did" if issuer_did else "/issuer-context"
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(
-            f"{_internal_signing_base_url()}/issuer-context",
+            f"{_internal_signing_base_url()}{endpoint}",
             params=params,
             headers=_internal_headers(),
         )
@@ -89,7 +93,24 @@ async def resolve_remote_issuer_context(
             f"DID issuer context resolution failed (HTTP {response.status_code}): {_response_error_detail(response)}"
         )
     data = response.json()
-    return data if isinstance(data, dict) and data.get("ok") else None
+    if not isinstance(data, dict) or not data.get("ok"):
+        return None
+    if not issuer_did:
+        return data
+
+    # The DID resolver is the source of truth for public identity, tenant
+    # ownership, format/purpose/algorithm compatibility, DID-document key
+    # binding, and ambiguity. Normalize its private profile result to the
+    # internal context shape used by signing code.
+    profile = data.get("issuer_profile")
+    if not isinstance(profile, dict) or not profile.get("id"):
+        raise RuntimeError("Issuer DID resolver returned no active issuer profile")
+    normalized = dict(data)
+    normalized["issuer_profile_id"] = str(profile["id"])
+    normalized["issuer_mode"] = profile.get("issuer_mode") or issuer_mode or "org_managed"
+    normalized["signing_service_id"] = profile.get("signing_service_id")
+    normalized["signing_key_reference"] = profile.get("signing_key_reference")
+    return normalized
 
 
 async def resolve_remote_issuer_did(
