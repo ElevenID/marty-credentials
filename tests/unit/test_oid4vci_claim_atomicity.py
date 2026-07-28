@@ -724,6 +724,143 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
 
 
 @pytest.mark.asyncio
+async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    transaction = _transaction(
+        credential_payload_format="w3c_vcdm_v2_di",
+        credential_type="EmployeeCredential",
+        issuer_did_override="did:web:issuer.example",
+    )
+    credential_document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "id": "urn:uuid:official-document",
+        "type": ["VerifiableCredential", "EmployeeCredential"],
+        "issuer": "did:web:issuer.example",
+        "credentialSubject": {"id": "did:key:learner", "role": "member"},
+    }
+    transaction.claims["_credential_document"] = credential_document
+    await repo.save_transaction(transaction)
+
+    verification_method_id = "did:web:issuer.example#data-integrity"
+    public_jwk = {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("="),
+        "kid": verification_method_id,
+    }
+    remote_context = {
+        "issuer_profile_id": "issuer-profile-data-integrity",
+        "issuer_did": "did:web:issuer.example",
+        "signing_service_id": "managed-custody",
+        "verification_method_id": verification_method_id,
+        "public_jwk": public_jwk,
+        "service": {"algorithm": "EdDSA"},
+    }
+    captured: dict[str, object] = {}
+
+    async def resolve_context(tx, **kwargs):
+        captured["resolution"] = kwargs
+        tx.issuer_profile_id = remote_context["issuer_profile_id"]
+        tx.issuer_did_override = remote_context["issuer_did"]
+        tx.signing_service_id = remote_context["signing_service_id"]
+        return remote_context
+
+    async def did_sign(**kwargs):
+        captured["sign"] = kwargs
+        assert kwargs["organization_id"] == "org-1"
+        assert kwargs["issuer_did"] == "did:web:issuer.example"
+        assert kwargs["credential_format"] == "ldp_vc"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert kwargs["algorithm"] == "EdDSA"
+        assert "issuer_profile_id" not in kwargs
+        assert "signing_service_id" not in kwargs
+        assert "key_reference" not in kwargs
+        return {
+            "ok": True,
+            "issuer_did": kwargs["issuer_did"],
+            "verification_method_id": verification_method_id,
+            "algorithm": "EdDSA",
+            "signature_raw_b64": base64.urlsafe_b64encode(bytes(64)).decode().rstrip("="),
+        }
+
+    async def build_data_integrity(*, remote_sign, credential_id, **kwargs):
+        captured["builder"] = kwargs
+        await remote_sign(b"canonical-data-integrity-input", "EdDSA")
+        return (
+            json.dumps(
+                {
+                    "@context": ["https://www.w3.org/ns/credentials/v2"],
+                    "id": credential_id,
+                    "type": ["VerifiableCredential"],
+                    "issuer": kwargs["issuer_did"],
+                    "credentialSubject": {"id": kwargs["subject_id"]},
+                    "proof": {
+                        "type": "DataIntegrityProof",
+                        "cryptosuite": "eddsa-rdfc-2022",
+                        "verificationMethod": kwargs["verification_method_id"],
+                        "proofPurpose": "assertionMethod",
+                        "proofValue": "zProof",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            credential_id,
+        )
+
+    async def allocate_status(**_kwargs):
+        return "status-profile", []
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
+    monkeypatch.setattr(routes, "require_canvas_issuance_ready", no_op)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (True, "did:key:learner", {}, None),
+    )
+    monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
+    monkeypatch.setattr(
+        routes,
+        "create_vcdm_data_integrity_with_remote_signing",
+        build_data_integrity,
+    )
+    monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
+    monkeypatch.setattr(routes, "record_canvas_credential_claim", no_op)
+    monkeypatch.setattr(routes, "_finalize_credential_renewal", no_op)
+    monkeypatch.setattr(routes, "record_post_issuance_deliveries", no_op)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            format="ldp_vc",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, routes.CredentialResponse)
+    assert response.credential is None
+    assert response.credentials[0]["format"] == "ldp_vc"
+    assert response.credentials[0]["credential"]["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
+    assert captured["resolution"]["credential_format"] == "ldp_vc"
+    assert captured["builder"]["public_jwk"] == public_jwk
+    assert captured["builder"]["verification_method_id"] == verification_method_id
+    assert captured["builder"]["credential_document"] == credential_document
+    assert captured["sign"]["payload"] == b"canonical-data-integrity-input"
+
+    credentials = await repo.list_credentials_by_org("org-1")
+    assert len(credentials) == 1
+    persisted = json.loads(credentials[0].credential_jwt)
+    assert persisted["issuer"] == "did:web:issuer.example"
+    assert persisted["id"] == credential_document["id"]
+    assert persisted["proof"]["verificationMethod"] == verification_method_id
+
+
+@pytest.mark.asyncio
 async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(monkeypatch) -> None:
     repo = InMemoryIssuanceRepository()
     authorization_session = AuthorizationSession(

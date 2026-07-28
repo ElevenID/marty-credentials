@@ -52,6 +52,9 @@ def test_native_extension_uses_marty_core_package_name(monkeypatch) -> None:
 
     extension = SimpleNamespace()
     package = SimpleNamespace(_marty_rs=extension)
+    # Mask an installed top-level wheel so this test deterministically
+    # exercises the nested-package compatibility path in every CI matrix job.
+    monkeypatch.setitem(sys.modules, "_marty_rs", None)
     monkeypatch.setitem(sys.modules, "marty_rs", package)
 
     assert rust_integration.get_marty_rs() is extension

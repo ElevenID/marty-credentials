@@ -394,6 +394,20 @@ mod python_bindings {
         Ok((true, payload_json, "".to_string()))
     }
 
+    /// Prepare a VCDM v2 EdDSA Data Integrity credential for issuer-DID signing.
+    #[pyfunction]
+    pub fn prepare_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+        marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json(request_json)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Complete and independently verify a remotely signed Data Integrity credential.
+    #[pyfunction]
+    pub fn complete_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+        marty_verification::vcdm::complete_vcdm_data_integrity_credential_json(request_json)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     #[pymodule]
     pub fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // Initialize tracing for structured logging
@@ -408,6 +422,11 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
         m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
         m.add_function(wrap_pyfunction!(verify_jwt, m)?)?;
+        m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
+        m.add_function(wrap_pyfunction!(
+            complete_vcdm_data_integrity_credential,
+            m
+        )?)?;
 
         // Status list classes and functions for credential revocation
         crate::status_list::register_status_list_module(m)?;
