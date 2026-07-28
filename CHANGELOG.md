@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.22] - 2026-07-28
+
+### Added
+
+- Issue native W3C VC Data Model v2 credentials with
+  `eddsa-rdfc-2022` Data Integrity proofs while preserving the complete
+  unsigned credential document.
+- Accept complete-document issuance through the public DID-first request
+  boundary without exposing issuer-profile, signing-service, key-reference,
+  or KMS selectors.
+
+### Security
+
+- Validate VCDM structure in the production issuance domain rather than a
+  conformance adapter, including contexts, types, subjects, validity,
+  typed resources, language values, and issuer-DID consistency.
+- Verify allowlisted HTTPS `relatedResource` digests with redirects disabled,
+  bounded responses, and timeouts before creating an issuance transaction.
+- Keep signing mediated by the single active compatible issuer profile
+  resolved from the organization and public issuer DID.
+
 ## [0.1.21] - 2026-07-27
 
 ### Security
