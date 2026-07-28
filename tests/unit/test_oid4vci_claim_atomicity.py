@@ -731,6 +731,14 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
         credential_type="EmployeeCredential",
         issuer_did_override="did:web:issuer.example",
     )
+    credential_document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "id": "urn:uuid:official-document",
+        "type": ["VerifiableCredential", "EmployeeCredential"],
+        "issuer": "did:web:issuer.example",
+        "credentialSubject": {"id": "did:key:learner", "role": "member"},
+    }
+    transaction.claims["_credential_document"] = credential_document
     await repo.save_transaction(transaction)
 
     verification_method_id = "did:web:issuer.example#data-integrity"
@@ -841,12 +849,14 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
     assert captured["resolution"]["credential_format"] == "ldp_vc"
     assert captured["builder"]["public_jwk"] == public_jwk
     assert captured["builder"]["verification_method_id"] == verification_method_id
+    assert captured["builder"]["credential_document"] == credential_document
     assert captured["sign"]["payload"] == b"canonical-data-integrity-input"
 
     credentials = await repo.list_credentials_by_org("org-1")
     assert len(credentials) == 1
     persisted = json.loads(credentials[0].credential_jwt)
     assert persisted["issuer"] == "did:web:issuer.example"
+    assert persisted["id"] == credential_document["id"]
     assert persisted["proof"]["verificationMethod"] == verification_method_id
 
 

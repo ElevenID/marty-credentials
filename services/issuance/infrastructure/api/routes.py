@@ -299,6 +299,7 @@ _DATA_INTEGRITY_PAYLOAD_FORMATS = {
     "w3c_vcdm_v2_di",
 }
 _CREDENTIAL_SUBJECT_FIELD = "_credential_subject"
+_CREDENTIAL_DOCUMENT_FIELD = "_credential_document"
 
 _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
 
@@ -811,31 +812,88 @@ class InitiateIssuanceRequest(BaseModel):
     organization_id: str
     issuer_did: str = Field(min_length=1)
     credential_template_id: str | None = None  # Optional — falls back to default type
+    application_id: str | None = None
     applicant_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     authorized_client_id: str | None = None
     delivery_mode: str = "wallet_only"
-    claims: dict[str, Any] = {}
+    claims: dict[str, Any] = Field(default_factory=dict)
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None
+    credential_document: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_explicit_credential_subject(self) -> "InitiateIssuanceRequest":
-        if _CREDENTIAL_SUBJECT_FIELD in self.claims:
-            raise ValueError(f"{_CREDENTIAL_SUBJECT_FIELD} is reserved for internal use")
-        if self.credential_subject is None:
-            return self
-        if self.claims:
-            raise ValueError("credential_subject cannot be combined with claims")
-        subjects = (
-            self.credential_subject
-            if isinstance(self.credential_subject, list)
-            else [self.credential_subject]
-        )
-        if not subjects or not all(isinstance(subject, dict) and subject for subject in subjects):
-            raise ValueError(
-                "credential_subject must be a non-empty object or list of non-empty objects"
+        for reserved in (
+            _CREDENTIAL_SUBJECT_FIELD,
+            _CREDENTIAL_DOCUMENT_FIELD,
+            "_application_id",
+        ):
+            if reserved in self.claims:
+                raise ValueError(f"{reserved} is reserved for internal use")
+        if self.credential_document is not None:
+            if "claims" in self.model_fields_set or self.credential_subject is not None:
+                raise ValueError(
+                    "credential_document cannot be combined with claims or credential_subject"
+                )
+            if not self.credential_document:
+                raise ValueError("credential_document must be a non-empty object")
+            if "proof" in self.credential_document:
+                raise ValueError("credential_document must be unsigned")
+            context = self.credential_document.get("@context")
+            if (
+                not isinstance(context, list)
+                or not context
+                or context[0] != "https://www.w3.org/ns/credentials/v2"
+            ):
+                raise ValueError(
+                    "credential_document must use the W3C VC Data Model v2 base context first"
+                )
+            credential_types = self.credential_document.get("type")
+            credential_types = (
+                credential_types if isinstance(credential_types, list) else [credential_types]
             )
+            if "VerifiableCredential" not in credential_types:
+                raise ValueError(
+                    "credential_document type must include VerifiableCredential"
+                )
+            subjects = self.credential_document.get("credentialSubject")
+            subjects = subjects if isinstance(subjects, list) else [subjects]
+            if not subjects or not all(
+                isinstance(subject, dict) and subject for subject in subjects
+            ):
+                raise ValueError(
+                    "credential_document must contain a non-empty credentialSubject"
+                )
+            for field in ("id",):
+                value = self.credential_document.get(field)
+                if value is not None:
+                    parsed = urlparse(value) if isinstance(value, str) else None
+                    if parsed is None or not parsed.scheme or not (
+                        parsed.netloc or parsed.path
+                    ):
+                        raise ValueError(f"credential_document {field} must be an absolute URI")
+            issuer = self.credential_document.get("issuer")
+            issuer_id = issuer.get("id") if isinstance(issuer, dict) else issuer
+            if issuer_id is not None and issuer_id != self.issuer_did:
+                raise ValueError(
+                    "credential_document issuer must match the resolved issuer_did"
+                )
+            return self
+        if self.credential_subject is not None:
+            if "claims" in self.model_fields_set:
+                raise ValueError("credential_subject cannot be combined with claims")
+            subjects = (
+                self.credential_subject
+                if isinstance(self.credential_subject, list)
+                else [self.credential_subject]
+            )
+            if not subjects or not all(
+                isinstance(subject, dict) and subject for subject in subjects
+            ):
+                raise ValueError(
+                    "credential_subject must be a non-empty object or list of non-empty objects"
+                )
         return self
 
 
@@ -3040,6 +3098,13 @@ async def initiate_issuance(
                 "credential_subject is supported only for VCDM JWT-VC or Data Integrity templates"
             ),
         )
+    if request.credential_document is not None and _normalize_payload_format(
+        credential_payload_format
+    ) not in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+        raise HTTPException(
+            status_code=422,
+            detail="credential_document is supported only for Data Integrity templates",
+        )
 
     await _require_active_revocation_profile_binding(
         organization_id=request.organization_id,
@@ -3050,29 +3115,32 @@ async def initiate_issuance(
     merged_claims = {**request.claims, "_vct": credential_vct}
     if request.credential_subject is not None:
         merged_claims[_CREDENTIAL_SUBJECT_FIELD] = request.credential_subject
-    # MIP §8.3 – if the caller deferred claims resolution (only sent
-    # _application_id), resolve actual claim values from the application's
-    # form_data.
-    _resolved_application = merged_claims.pop("_application_id", None)
-    if _resolved_application and (not merged_claims or list(merged_claims.keys()) == ["_vct"]):
+    if request.credential_document is not None:
+        merged_claims[_CREDENTIAL_DOCUMENT_FIELD] = request.credential_document
+    # MIP §8.3 – when the caller supplies only a canonical application,
+    # resolve its claim values from form_data. The application is a
+    # first-class request field, never a hidden claim.
+    if request.application_id and (
+        not merged_claims or list(merged_claims.keys()) == ["_vct"]
+    ):
         try:
-            app = await repo.get_application(str(_resolved_application))
+            app = await repo.get_application(request.application_id)
             if app and app.form_data:
                 merged_claims = {**app.form_data, "_vct": credential_vct}
                 logger.info(
                     "[initiate] resolved claims from application %s: keys=%s",
-                    _resolved_application,
+                    request.application_id,
                     list(app.form_data.keys()),
                 )
             else:
                 logger.warning(
                     "[initiate] application %s not found or has empty form_data",
-                    _resolved_application,
+                    request.application_id,
                 )
         except Exception as _app_err:
             logger.warning(
                 "[initiate] could not resolve application %s: %s",
-                _resolved_application,
+                request.application_id,
                 _app_err,
             )
     logger.info(
@@ -3099,6 +3167,7 @@ async def initiate_issuance(
         credential_template_id=effective_credential_template_id,
         revocation_profile_id=revocation_profile_id,
         applicant_id=request.applicant_id,
+        application_id=request.application_id,
         subject_did=request.subject_did,
         # The request supplies a DID only. The internal resolver records the
         # canonical issuer-profile ID after it proves the org/DID/format match.
@@ -4217,6 +4286,8 @@ async def issue_credential(
         "_vct",
         # Exact VCDM subject object/set carried separately from flat claims.
         _CREDENTIAL_SUBJECT_FIELD,
+        # Complete unsigned VCDM document carried separately from subject claims.
+        _CREDENTIAL_DOCUMENT_FIELD,
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
     logger.info(
@@ -4406,7 +4477,13 @@ async def issue_credential(
         # profile to sign as its DID.
         # A deterministic reserved ID makes a crashed signing attempt explicit
         # and prevents a retry from minting a second credential identity.
-        credential_id = tx.reserved_credential_id or (
+        credential_document = tx.claims.get(_CREDENTIAL_DOCUMENT_FIELD)
+        requested_credential_id = (
+            credential_document.get("id")
+            if isinstance(credential_document, dict)
+            else None
+        )
+        credential_id = tx.reserved_credential_id or requested_credential_id or (
             f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, f'marty:issuance:{tx.id}')}"
         )
         signing_tx = await repo.claim_transaction_for_signing(tx, credential_id)
@@ -4526,6 +4603,7 @@ async def issue_credential(
                 claims_json=json.dumps(signing_claims),
                 public_jwk=remote_context["public_jwk"],
                 credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
+                credential_document=credential_document,
                 expiration_seconds=tx.validity_days * 86400,
                 verification_method_id=verification_method_id,
                 credential_id=credential_id,
@@ -4676,6 +4754,7 @@ async def _didcomm_sign_and_deliver(
         "applicant_id",
         "_vct",
         _CREDENTIAL_SUBJECT_FIELD,
+        _CREDENTIAL_DOCUMENT_FIELD,
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
 

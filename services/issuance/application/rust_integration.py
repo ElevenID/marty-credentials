@@ -704,6 +704,7 @@ async def create_vcdm_data_integrity_with_remote_signing(
     claims_json: str,
     public_jwk: dict[str, Any],
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
+    credential_document: dict[str, Any] | None = None,
     expiration_seconds: int = 31536000,
     verification_method_id: str,
     credential_id: str | None = None,
@@ -727,8 +728,82 @@ async def create_vcdm_data_integrity_with_remote_signing(
     if not isinstance(claims, dict):
         raise RuntimeError("claims_json must encode an object")
 
+    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
     credential_status = claims.pop("credentialStatus", None)
-    if credential_subject is None:
+    if credential_document is not None:
+        if credential_subject is not None or claims:
+            raise RuntimeError(
+                "credential_document cannot be combined with subject claims"
+            )
+        # JSON round-tripping gives the signing engine a private, JSON-only
+        # document snapshot and prevents caller mutation during async signing.
+        credential = json.loads(_json_dumps_compact(credential_document))
+        if not isinstance(credential, dict) or not credential:
+            raise RuntimeError("credential_document must be a non-empty object")
+        if "proof" in credential:
+            raise RuntimeError("credential_document must be unsigned")
+        context = credential.get("@context")
+        if (
+            not isinstance(context, list)
+            or not context
+            or context[0] != _VCDM_CONTEXT
+        ):
+            raise RuntimeError(
+                "credential_document must use the VCDM v2 base context first"
+            )
+        credential_types = credential.get("type")
+        credential_types = (
+            credential_types
+            if isinstance(credential_types, list)
+            else [credential_types]
+        )
+        if "VerifiableCredential" not in credential_types:
+            raise RuntimeError(
+                "credential_document type must include VerifiableCredential"
+            )
+        subject = credential.get("credentialSubject")
+        subject_values = subject if isinstance(subject, list) else [subject]
+        if not subject_values or not all(
+            isinstance(item, dict) and item for item in subject_values
+        ):
+            raise RuntimeError(
+                "credential_document must contain a non-empty credentialSubject"
+            )
+        document_issuer = credential.get("issuer")
+        document_issuer_id = (
+            document_issuer.get("id")
+            if isinstance(document_issuer, dict)
+            else document_issuer
+        )
+        if document_issuer_id is None:
+            credential["issuer"] = issuer_did
+        elif document_issuer_id != issuer_did:
+            raise RuntimeError(
+                "credential_document issuer does not match the resolved issuer DID"
+            )
+        document_id = credential.get("id")
+        if document_id is None:
+            credential["id"] = credential_id
+        elif document_id != credential_id:
+            raise RuntimeError(
+                "credential_document id does not match the reserved credential ID"
+            )
+        now = datetime.now(UTC)
+        credential.setdefault("validFrom", now.isoformat().replace("+00:00", "Z"))
+        credential.setdefault(
+            "validUntil",
+            datetime.fromtimestamp(
+                now.timestamp() + int(expiration_seconds or 31536000),
+                UTC,
+            )
+            .isoformat()
+            .replace("+00:00", "Z"),
+        )
+        if credential_status is not None:
+            if not isinstance(credential_status, (dict, list)):
+                raise RuntimeError("credentialStatus must be an object or list")
+            credential["credentialStatus"] = credential_status
+    elif credential_subject is None:
         subject: dict[str, Any] | list[dict[str, Any]] = dict(claims)
         if subject_id:
             subject.setdefault("id", subject_id)
@@ -748,29 +823,29 @@ async def create_vcdm_data_integrity_with_remote_signing(
                 "credential_subject must be a non-empty object or list of non-empty objects"
             )
 
-    now = datetime.now(UTC)
-    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
-    types = ["VerifiableCredential"]
-    if credential_type and credential_type != "VerifiableCredential":
-        types.append(credential_type)
-    credential: dict[str, Any] = {
-        "@context": _data_integrity_context(subject, credential_type),
-        "id": credential_id,
-        "type": types,
-        "issuer": issuer_did,
-        "validFrom": now.isoformat().replace("+00:00", "Z"),
-        "validUntil": datetime.fromtimestamp(
-            now.timestamp() + int(expiration_seconds or 31536000),
-            UTC,
-        )
-        .isoformat()
-        .replace("+00:00", "Z"),
-        "credentialSubject": subject,
-    }
-    if credential_status is not None:
-        if not isinstance(credential_status, (dict, list)):
-            raise RuntimeError("credentialStatus must be an object or list")
-        credential["credentialStatus"] = credential_status
+    if credential_document is None:
+        now = datetime.now(UTC)
+        types = ["VerifiableCredential"]
+        if credential_type and credential_type != "VerifiableCredential":
+            types.append(credential_type)
+        credential = {
+            "@context": _data_integrity_context(subject, credential_type),
+            "id": credential_id,
+            "type": types,
+            "issuer": issuer_did,
+            "validFrom": now.isoformat().replace("+00:00", "Z"),
+            "validUntil": datetime.fromtimestamp(
+                now.timestamp() + int(expiration_seconds or 31536000),
+                UTC,
+            )
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "credentialSubject": subject,
+        }
+        if credential_status is not None:
+            if not isinstance(credential_status, (dict, list)):
+                raise RuntimeError("credentialStatus must be an object or list")
+            credential["credentialStatus"] = credential_status
 
     binding = get_marty_rs()
     prepared_json = binding.prepare_vcdm_data_integrity_credential(
@@ -807,10 +882,16 @@ async def create_vcdm_data_integrity_with_remote_signing(
         )
     )
     completed = json.loads(completed_json)
+    completed_issuer = completed.get("issuer") if isinstance(completed, dict) else None
+    completed_issuer_id = (
+        completed_issuer.get("id")
+        if isinstance(completed_issuer, dict)
+        else completed_issuer
+    )
     if (
         not isinstance(completed, dict)
         or completed.get("id") != credential_id
-        or completed.get("issuer") != issuer_did
+        or completed_issuer_id != issuer_did
         or not isinstance(completed.get("proof"), dict)
         or completed["proof"].get("cryptosuite") != "eddsa-rdfc-2022"
         or completed["proof"].get("verificationMethod") != verification_method_id

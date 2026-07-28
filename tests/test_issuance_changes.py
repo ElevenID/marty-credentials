@@ -2961,9 +2961,11 @@ class TestRustIntegrationOrgIdValidation:
             organization_id="org-1",
             issuer_did="did:web:issuer.example",
             credential_template_id="template-1",
+            application_id="application-1",
             credential_subject=subjects,
         )
         assert request.credential_subject == subjects
+        assert request.application_id == "application-1"
 
         with pytest.raises(ValidationError, match="cannot be combined with claims"):
             InitiateIssuanceRequest(
@@ -2977,6 +2979,54 @@ class TestRustIntegrationOrgIdValidation:
                 organization_id="org-1",
                 issuer_did="did:web:issuer.example",
                 claims={"_credential_subject": subjects},
+            )
+        with pytest.raises(ValidationError, match="reserved for internal use"):
+            InitiateIssuanceRequest(
+                organization_id="org-1",
+                issuer_did="did:web:issuer.example",
+                claims={"_application_id": "hidden-application-selector"},
+            )
+
+    def test_initiate_request_accepts_only_a_matching_unsigned_vcdm_document(self):
+        from pydantic import ValidationError
+
+        from issuance.infrastructure.api.routes import InitiateIssuanceRequest
+
+        document = {
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "id": "urn:uuid:credential-1",
+            "type": ["VerifiableCredential", "EmployeeCredential"],
+            "issuer": {"id": "did:web:issuer.example", "name": "Example issuer"},
+            "name": {"@value": "Employee credential", "@language": "en"},
+            "credentialSubject": [
+                {"id": "did:example:subject", "employeeNumber": "E-123"}
+            ],
+        }
+        request = InitiateIssuanceRequest(
+            organization_id="org-1",
+            issuer_did="did:web:issuer.example",
+            credential_template_id="template-1",
+            credential_document=document,
+        )
+        assert request.credential_document == document
+
+        for update, message in (
+            ({"proof": {"type": "DataIntegrityProof"}}, "must be unsigned"),
+            ({"issuer": "did:web:other.example"}, "must match"),
+        ):
+            invalid = {**document, **update}
+            with pytest.raises(ValidationError, match=message):
+                InitiateIssuanceRequest(
+                    organization_id="org-1",
+                    issuer_did="did:web:issuer.example",
+                    credential_document=invalid,
+                )
+        with pytest.raises(ValidationError, match="cannot be combined"):
+            InitiateIssuanceRequest(
+                organization_id="org-1",
+                issuer_did="did:web:issuer.example",
+                claims={"employeeNumber": "E-123"},
+                credential_document=document,
             )
 
     def test_raises_when_org_id_missing(self):
@@ -3355,6 +3405,113 @@ class TestRustIntegrationOrgIdValidation:
             "proofValue": "zFinalProof",
         }
 
+    async def test_remote_data_integrity_preserves_complete_unsigned_document(
+        self, monkeypatch
+    ):
+        from issuance.application import rust_integration
+
+        issuer_did = "did:web:issuer.example"
+        verification_method_id = f"{issuer_did}#key-1"
+        public_jwk = {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": _b64url(bytes(range(32))),
+            "kid": verification_method_id,
+        }
+        document = {
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                {
+                    "EmployeeCredential": (
+                        "https://credentials.example/EmployeeCredential"
+                    ),
+                    "employeeNumber": "https://credentials.example/employeeNumber",
+                },
+            ],
+            "id": "urn:uuid:credential-document-1",
+            "type": ["VerifiableCredential", "EmployeeCredential"],
+            "issuer": {"id": issuer_did, "name": "Example issuer"},
+            "name": {"@value": "Employee credential", "@language": "en"},
+            "validFrom": "2026-01-01T00:00:00Z",
+            "validUntil": "2027-01-01T00:00:00Z",
+            "credentialSchema": {
+                "id": "https://credentials.example/schema.json",
+                "type": "JsonSchema",
+            },
+            "credentialSubject": {
+                "id": "did:example:subject",
+                "employeeNumber": "E-123",
+            },
+        }
+        captured: dict[str, object] = {}
+
+        class FakeBinding:
+            @staticmethod
+            def prepare_vcdm_data_integrity_credential(request_json: str) -> str:
+                request = json.loads(request_json)
+                captured["credential"] = request["credential"]
+                prepared = {
+                    **request,
+                    "algorithm": "EdDSA",
+                    "signing_input_b64": _b64url(b"canonical-document"),
+                }
+                prepared["credential"] = {
+                    **prepared["credential"],
+                    "proof": {
+                        "type": "DataIntegrityProof",
+                        "cryptosuite": "eddsa-rdfc-2022",
+                        "verificationMethod": verification_method_id,
+                        "proofPurpose": "assertionMethod",
+                        "proofValue": "zPlaceholder",
+                    },
+                }
+                return json.dumps(prepared)
+
+            @staticmethod
+            def complete_vcdm_data_integrity_credential(request_json: str) -> str:
+                request = json.loads(request_json)
+                credential = request["prepared"]["credential"]
+                credential["proof"]["proofValue"] = "zFinalProof"
+                return json.dumps(credential)
+
+        async def fake_remote_sign(_payload: bytes, _algorithm: str | None):
+            return {
+                "signature_raw_b64": _b64url(bytes(range(64))),
+                "algorithm": "EdDSA",
+            }
+
+        monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: FakeBinding())
+        signed_json, credential_id = (
+            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+                issuer_did=issuer_did,
+                remote_sign=fake_remote_sign,
+                subject_id=None,
+                credential_type="ignored-for-complete-document",
+                claims_json="{}",
+                public_jwk=public_jwk,
+                credential_document=document,
+                verification_method_id=verification_method_id,
+                credential_id=document["id"],
+            )
+        )
+
+        assert captured["credential"] == document
+        assert credential_id == document["id"]
+        signed = json.loads(signed_json)
+        for field in (
+            "@context",
+            "id",
+            "type",
+            "issuer",
+            "name",
+            "validFrom",
+            "validUntil",
+            "credentialSchema",
+            "credentialSubject",
+        ):
+            assert signed[field] == document[field]
+        assert signed["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
+
     async def test_remote_data_integrity_rejects_private_jwk_before_preparation(self, monkeypatch):
         from issuance.application import rust_integration
 
@@ -3500,6 +3657,47 @@ class TestRustIntegrationOrgIdValidation:
         assert document["credentialStatus"]["statusListIndex"] == "42"
         assert document["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
         assert document["proof"]["verificationMethod"] == verification_method_id
+
+        complete_document = {
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                {
+                    "EmployeeCredential": (
+                        "https://credentials.example/EmployeeCredential"
+                    ),
+                    "employeeNumber": "https://credentials.example/employeeNumber",
+                },
+            ],
+            "id": "urn:uuid:native-complete-document",
+            "type": ["VerifiableCredential", "EmployeeCredential"],
+            "issuer": issuer_did,
+            "name": "Employee credential",
+            "validFrom": "2026-01-01T00:00:00Z",
+            "validUntil": "2027-01-01T00:00:00Z",
+            "credentialSubject": {
+                "id": "did:example:holder",
+                "employeeNumber": "E-123",
+            },
+        }
+        complete_credential, complete_id = (
+            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+                issuer_did=issuer_did,
+                remote_sign=valid_remote_sign,
+                subject_id=None,
+                credential_type="ignored-for-complete-document",
+                claims_json="{}",
+                public_jwk=public_jwk,
+                credential_document=complete_document,
+                verification_method_id=verification_method_id,
+                credential_id=complete_document["id"],
+            )
+        )
+        complete_signed = json.loads(complete_credential)
+        assert complete_id == complete_document["id"]
+        assert len(canonical_inputs) == 2 and canonical_inputs[1]
+        for field, value in complete_document.items():
+            assert complete_signed[field] == value
+        assert complete_signed["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
 
         async def invalid_remote_sign(payload: bytes, algorithm: str | None):
             assert payload and algorithm == "EdDSA"
