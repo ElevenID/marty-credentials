@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.27] - 2026-07-28
+
+### Fixed
+
+- Accept standards-conforming `private_key_jwt` token requests that identify
+  the registered client through the signed `iss` and `sub` claims without a
+  redundant `client_id` form field.
+
+### Security
+
+- Continue to resolve the client from the tenant-bound issuance transaction,
+  verify the assertion only against that registration's public keys, and
+  reject any supplied `client_id` that disagrees with the bound client.
+
 ## [0.1.26] - 2026-07-28
 
 ### Fixed

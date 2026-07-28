@@ -319,7 +319,13 @@ async def authenticate_oid4vci_client(
         raise ClientAuthenticationError("registered client is inactive")
     if registered.token_endpoint_auth_method != "private_key_jwt":
         raise ClientAuthenticationError("registered client authentication method is unsupported")
-    if client_id != registered.client_id:
+    # RFC 7523 client assertions identify the client through their signed
+    # ``iss`` and ``sub`` claims.  Some interoperable wallets therefore omit
+    # the redundant OAuth form ``client_id``.  The issuance transaction is
+    # already bound to exactly one tenant-owned registration, so verify the
+    # assertion against that registration and treat a supplied form value only
+    # as an additional consistency check.
+    if client_id is not None and client_id != registered.client_id:
         raise ClientAuthenticationError("client_id does not match the registered client")
     if client_assertion_type != JWT_BEARER_ASSERTION_TYPE or not client_assertion:
         raise ClientAuthenticationError("registered client assertion is required")
