@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.25] - 2026-07-28
+
+### Fixed
+
+- Consume the corrected Marty Core Data Integrity signing implementation so
+  standards-conforming credentials with past or future validity periods can
+  be issued through the DID-mediated issuer profile.
+- Preserve normal verifier rejection of expired and premature credentials
+  while continuing to reject malformed dates, reversed periods, tampering,
+  and invalid remote signatures.
+
 ## [0.1.24] - 2026-07-28
 
 ### Fixed
