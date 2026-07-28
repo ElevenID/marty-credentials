@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.23] - 2026-07-28
+
+### Fixed
+
+- Build the issuance and verification service images against the released
+  `marty-core` Python binding that provides the native W3C VC Data Model v2
+  Data Integrity prepare/complete operations required by the production
+  capability gate.
+- Keep the core binding as an immutable, checksum-verified release dependency
+  so service images cannot silently fall back to an older extension.
+
 ## [0.1.22] - 2026-07-28
 
 ### Added
