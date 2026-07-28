@@ -33,7 +33,10 @@ class TestProtoPackageLazyImports:
         )
 
         assert namespace["pb2"].__name__ == "marty_proto.v1.issuance_service_pb2"
-        assert namespace["issuance_service_pb2_grpc"].__name__ == "marty_proto.v1.issuance_service_pb2_grpc"
+        assert (
+            namespace["issuance_service_pb2_grpc"].__name__
+            == "marty_proto.v1.issuance_service_pb2_grpc"
+        )
 
     def test_multiple_stub_imports_share_same_package_instance(self):
         _clear_proto_modules()
@@ -57,3 +60,28 @@ class TestProtoPackageLazyImports:
         assert initiate_fields["authorized_client_id"].number == 7
         assert token_fields["client_assertion_type"].number == 7
         assert token_fields["client_assertion"].number == 8
+
+    def test_credential_template_contract_preserves_did_first_identity(self):
+        """The issuance client must decode the DID returned by template service.
+
+        A stale descriptor silently treats a newer protobuf field as unknown.
+        That makes a correctly persisted DID look absent and causes production
+        issuance to reject the template as legacy.
+        """
+        _clear_proto_modules()
+
+        template_pb2 = importlib.import_module("marty_proto.v1.credential_template_service_pb2")
+
+        create_fields = template_pb2.CreateTemplateRequest.DESCRIPTOR.fields_by_name
+        update_fields = template_pb2.UpdateTemplateRequest.DESCRIPTOR.fields_by_name
+        response_fields = template_pb2.TemplateResponse.DESCRIPTOR.fields_by_name
+
+        assert create_fields["issuer_did"].number == 21
+        assert update_fields["issuer_did"].number == 13
+        assert response_fields["issuer_did"].number == 28
+
+        for public_fields in (create_fields, update_fields):
+            assert "issuer_profile_id" not in public_fields
+            assert "issuer_key_id" not in public_fields
+            assert "key_access_mode" not in public_fields
+            assert "remote_signing_config_json" not in public_fields
