@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -98,6 +99,7 @@ def test_native_extension_capability_contract_requires_remote_mdoc_split_signing
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
     dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
+    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
 
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
@@ -105,3 +107,13 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert "COPY marty-core/" not in dockerfile
     assert dependencies["marty-rs"]["repository"] == "ElevenID/marty-core"
     assert dependencies["marty-rs"]["asset"].startswith("marty_rs-")
+    core_release = dependencies["marty-rs"]
+    assert core_release["tag"] == f"v{core_release['version']}"
+    assert core_release["asset"].startswith(f"marty_rs-{core_release['version']}-")
+    assert len(core_release["commit"]) == 40
+    assert len(core_release["sha256"]) == 64
+    core_revisions = {
+        cargo["workspace"]["dependencies"][package]["rev"]
+        for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
+    }
+    assert core_revisions == {core_release["commit"]}
