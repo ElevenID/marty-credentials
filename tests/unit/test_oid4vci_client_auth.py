@@ -257,6 +257,52 @@ async def test_registered_client_authentication_is_tenant_bound_and_one_time() -
 
 
 @pytest.mark.asyncio
+async def test_registered_client_identity_comes_from_bound_signed_assertion() -> None:
+    private_key, public_jwk = _key_material()
+    repo = InMemoryIssuanceRepository()
+    await repo.save_oid4vci_client(
+        Oid4vciRegisteredClient(
+            organization_id="org-a",
+            client_id=CLIENT_ID,
+            jwks={"keys": [public_jwk]},
+        )
+    )
+
+    omitted_form_client_id = await _authenticate_oid4vci_client(
+        repo=repo,
+        organization_id="org-a",
+        expected_client_id=CLIENT_ID,
+        client_id=None,
+        client_assertion_type=JWT_BEARER_ASSERTION_TYPE,
+        client_assertion=_assertion(
+            private_key,
+            claims={"jti": "assertion-without-form-client-id"},
+            now=datetime.now(UTC),
+        ),
+        allowed_audiences=[AUDIENCE],
+        registration_required=True,
+    )
+    mismatched_form_client_id = await _authenticate_oid4vci_client(
+        repo=repo,
+        organization_id="org-a",
+        expected_client_id=CLIENT_ID,
+        client_id="another-client",
+        client_assertion_type=JWT_BEARER_ASSERTION_TYPE,
+        client_assertion=_assertion(
+            private_key,
+            claims={"jti": "assertion-with-mismatched-form-client-id"},
+            now=datetime.now(UTC),
+        ),
+        allowed_audiences=[AUDIENCE],
+        registration_required=True,
+    )
+
+    assert omitted_form_client_id is None
+    assert mismatched_form_client_id is not None
+    assert mismatched_form_client_id.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_unbound_public_offer_accepts_none_but_rejects_unsolicited_assertion() -> None:
     private_key, _ = _key_material()
     repo = InMemoryIssuanceRepository()
@@ -311,9 +357,7 @@ def test_authorization_metadata_advertises_client_auth_only_where_resolvable(
     client = TestClient(create_app())
 
     global_metadata = client.get("/.well-known/oauth-authorization-server").json()
-    tenant_metadata = client.get(
-        "/.well-known/oauth-authorization-server/org/org-a"
-    ).json()
+    tenant_metadata = client.get("/.well-known/oauth-authorization-server/org/org-a").json()
 
     assert global_metadata["token_endpoint_auth_methods_supported"] == ["none"]
     assert "token_endpoint_auth_signing_alg_values_supported" not in global_metadata
@@ -321,9 +365,7 @@ def test_authorization_metadata_advertises_client_auth_only_where_resolvable(
         "none",
         "private_key_jwt",
     ]
-    assert tenant_metadata["token_endpoint_auth_signing_alg_values_supported"] == [
-        "ES256"
-    ]
+    assert tenant_metadata["token_endpoint_auth_signing_alg_values_supported"] == ["ES256"]
     assert tenant_metadata["pushed_authorization_request_endpoint"].endswith(
         "/v1/issuance/par?issuer_org=org-a"
     )
@@ -401,7 +443,7 @@ async def test_token_endpoint_requires_bound_client_and_preserves_pending_state(
         pre_authorized_code=transaction.pre_auth_code,
         code=None,
         redirect_uri=None,
-        client_id=CLIENT_ID,
+        client_id=None,
         code_verifier=None,
         client_assertion_type=JWT_BEARER_ASSERTION_TYPE,
         client_assertion=_assertion(
