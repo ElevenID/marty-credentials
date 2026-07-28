@@ -77,6 +77,11 @@ from issuance.domain.entities import (
     Oid4vciRegisteredClient,
 )
 from issuance.domain.ports import IIssuanceRepository
+from issuance.domain.vcdm_validation import (
+    VcdmValidationError,
+    validate_credential_document,
+    validate_related_resource_digests,
+)
 from issuance.infrastructure.adapters.canvas_credentials_adapter import (
     publish_canvas_credential_mirror,
     sync_canvas_credential_status,
@@ -99,6 +104,80 @@ _CANVAS_ISSUANCE_DENIAL = {
     "error": "invalid_credential_request",
     "error_description": "Credential eligibility requirements are not satisfied",
 }
+
+
+async def _validate_vcdm_related_resources(credential: dict[str, Any]) -> None:
+    """Validate remote VCDM resources through the production issuance policy.
+
+    User-controlled URLs are never fetched directly. Deployments must
+    explicitly allow each immutable resource URL, redirects are disabled, and
+    response size is bounded.
+    """
+
+    resources = credential.get("relatedResource")
+    if resources is None:
+        return
+    allowed_urls = {
+        value.strip()
+        for value in os.environ.get("VCDM_RELATED_RESOURCE_URLS", "").split(",")
+        if value.strip()
+    }
+    if not allowed_urls:
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "related_resource_validation_not_configured"},
+        )
+    values = resources if isinstance(resources, list) else [resources]
+    requested_urls = {resource["id"] for resource in values}
+    if not requested_urls.issubset(allowed_urls):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "related_resource_not_allowlisted"},
+        )
+    if any(urlparse(value).scheme != "https" for value in requested_urls):
+        raise HTTPException(
+            status_code=422,
+            detail={"error": "related_resource_not_allowlisted"},
+        )
+
+    try:
+        max_bytes = int(os.environ.get("VCDM_RELATED_RESOURCE_MAX_BYTES", "2000000"))
+        timeout_seconds = float(os.environ.get("VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS", "10"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="VCDM related-resource validation is misconfigured",
+        ) from exc
+    if max_bytes <= 0 or timeout_seconds <= 0:
+        raise HTTPException(
+            status_code=503,
+            detail="VCDM related-resource validation is misconfigured",
+        )
+
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        timeout=timeout_seconds,
+    ) as client:
+
+        async def fetch_resource(resource_id: str) -> bytes:
+            try:
+                response = await client.get(resource_id)
+            except httpx.HTTPError as exc:
+                raise VcdmValidationError("related_resource_unavailable") from exc
+            if response.status_code != 200 or len(response.content) > max_bytes:
+                raise VcdmValidationError("related_resource_unavailable")
+            return bytes(response.content)
+
+        try:
+            await validate_related_resource_digests(
+                credential,
+                fetch_resource=fetch_resource,
+            )
+        except VcdmValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": exc.code},
+            ) from exc
 
 
 def _authorization_session_transaction_id(session_id: str) -> str:
@@ -836,49 +915,21 @@ class InitiateIssuanceRequest(BaseModel):
                 raise ValueError(
                     "credential_document cannot be combined with claims or credential_subject"
                 )
-            if not self.credential_document:
-                raise ValueError("credential_document must be a non-empty object")
-            if "proof" in self.credential_document:
-                raise ValueError("credential_document must be unsigned")
-            context = self.credential_document.get("@context")
-            if (
-                not isinstance(context, list)
-                or not context
-                or context[0] != "https://www.w3.org/ns/credentials/v2"
-            ):
-                raise ValueError(
-                    "credential_document must use the W3C VC Data Model v2 base context first"
+            try:
+                validate_credential_document(
+                    self.credential_document,
+                    issuer_did=self.issuer_did,
                 )
-            credential_types = self.credential_document.get("type")
-            credential_types = (
-                credential_types if isinstance(credential_types, list) else [credential_types]
-            )
-            if "VerifiableCredential" not in credential_types:
-                raise ValueError(
-                    "credential_document type must include VerifiableCredential"
-                )
-            subjects = self.credential_document.get("credentialSubject")
-            subjects = subjects if isinstance(subjects, list) else [subjects]
-            if not subjects or not all(
-                isinstance(subject, dict) and subject for subject in subjects
-            ):
-                raise ValueError(
-                    "credential_document must contain a non-empty credentialSubject"
-                )
-            for field in ("id",):
-                value = self.credential_document.get(field)
-                if value is not None:
-                    parsed = urlparse(value) if isinstance(value, str) else None
-                    if parsed is None or not parsed.scheme or not (
-                        parsed.netloc or parsed.path
-                    ):
-                        raise ValueError(f"credential_document {field} must be an absolute URI")
-            issuer = self.credential_document.get("issuer")
-            issuer_id = issuer.get("id") if isinstance(issuer, dict) else issuer
-            if issuer_id is not None and issuer_id != self.issuer_did:
-                raise ValueError(
-                    "credential_document issuer must match the resolved issuer_did"
-                )
+            except VcdmValidationError as exc:
+                if exc.code == "credential_must_be_unsigned":
+                    message = "credential_document must be unsigned"
+                elif exc.code == "issuer_did_mismatch":
+                    message = (
+                        "credential_document issuer must match the resolved issuer_did"
+                    )
+                else:
+                    message = f"credential_document failed VCDM validation: {exc.code}"
+                raise ValueError(message) from exc
             return self
         if self.credential_subject is not None:
             if "claims" in self.model_fields_set:
@@ -3105,6 +3156,8 @@ async def initiate_issuance(
             status_code=422,
             detail="credential_document is supported only for Data Integrity templates",
         )
+    if request.credential_document is not None:
+        await _validate_vcdm_related_resources(request.credential_document)
 
     await _require_active_revocation_profile_binding(
         organization_id=request.organization_id,

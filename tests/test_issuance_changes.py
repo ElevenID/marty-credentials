@@ -2993,7 +2993,14 @@ class TestRustIntegrationOrgIdValidation:
         from issuance.infrastructure.api.routes import InitiateIssuanceRequest
 
         document = {
-            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "@context": [
+                "https://www.w3.org/ns/credentials/v2",
+                {
+                    "EmployeeCredential": (
+                        "https://issuer.example/credentials#EmployeeCredential"
+                    )
+                },
+            ],
             "id": "urn:uuid:credential-1",
             "type": ["VerifiableCredential", "EmployeeCredential"],
             "issuer": {"id": "did:web:issuer.example", "name": "Example issuer"},
