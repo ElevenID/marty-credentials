@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.24] - 2026-07-28
+
+### Fixed
+
+- Preserve the credential template's resolved `issuer_did` across the internal
+  gRPC boundary so DID-first issuance does not misclassify a current template
+  as legacy.
+- Add a generated-contract regression for the DID field numbers and prevent
+  public template messages from reintroducing issuer-profile, key, or KMS
+  routing selectors.
+
 ## [0.1.23] - 2026-07-28
 
 ### Fixed
