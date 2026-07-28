@@ -3713,7 +3713,10 @@ class TestRustIntegrationOrgIdValidation:
                 "algorithm": "EdDSA",
             }
 
-        with pytest.raises(ValueError, match="credential is invalid|verification failed"):
+        with pytest.raises(
+            ValueError,
+            match="credential(?: proof)? is invalid|(?:proof )?verification failed",
+        ):
             await rust_integration.create_vcdm_data_integrity_with_remote_signing(
                 issuer_did=issuer_did,
                 remote_sign=invalid_remote_sign,
