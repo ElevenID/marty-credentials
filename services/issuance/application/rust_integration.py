@@ -7,7 +7,7 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 from typing import Any, Awaitable, Callable, Tuple
 
 from sqlalchemy import select
@@ -181,12 +181,16 @@ def get_marty_rs():
         ImportError: If marty-rs bindings are not available.
     """
     try:
-        from marty_rs import _marty_rs
+        # Current maturin release wheels expose the extension at the top level.
+        # Prefer it so an older separately installed ``marty_rs`` compatibility
+        # package cannot shadow the extension built with this service release.
+        import _marty_rs
 
         return _marty_rs
     except ImportError as e:
         try:
-            import _marty_rs
+            # Legacy wheels packaged the same extension as a nested module.
+            from marty_rs import _marty_rs
 
             return _marty_rs
         except ImportError:
@@ -201,6 +205,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
     {
         "canvas_normalize_base_url",
         "canvas_probe_lti_platform",
+        "complete_vcdm_data_integrity_credential",
         "didcomm_decrypt",
         "didcomm_encrypt",
         "didcomm_extract_endpoint",
@@ -220,6 +225,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_sign_credential",
         "oid4vci_verify_pkce_s256",
         "oid4vci_verify_proof_jwt",
+        "prepare_vcdm_data_integrity_credential",
     }
 )
 
@@ -587,6 +593,230 @@ async def create_jwt_vc_with_remote_signing(
     if not isinstance(signature_b64, str) or not signature_b64:
         raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
     return f"{encoded_header}.{encoded_payload}.{signature_b64}", credential_id
+
+
+_PRIVATE_JWK_MEMBERS = frozenset(
+    {
+        "d",
+        "p",
+        "q",
+        "dp",
+        "dq",
+        "qi",
+        "oth",
+        "k",
+    }
+)
+_VCDM_CONTEXT = "https://www.w3.org/ns/credentials/v2"
+_VCDM_PROTECTED_TERMS = frozenset(
+    {
+        "@context",
+        "credentialSchema",
+        "credentialStatus",
+        "credentialSubject",
+        "description",
+        "digestMultibase",
+        "digestSRI",
+        "evidence",
+        "id",
+        "issuer",
+        "name",
+        "proof",
+        "refreshService",
+        "relatedResource",
+        "termsOfUse",
+        "type",
+        "validFrom",
+        "validUntil",
+    }
+)
+
+
+def _json_ld_term_name(value: str) -> str:
+    """Return a stable, collision-resistant IRI for a product claim term."""
+    return f"https://credentials.marty.dev/claims/{base64url_encode(value.encode('utf-8'))}"
+
+
+def _collect_json_ld_terms(value: Any, terms: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if (
+                isinstance(key, str)
+                and key
+                and not key.startswith("@")
+                and key not in _VCDM_PROTECTED_TERMS
+            ):
+                terms.add(key)
+            _collect_json_ld_terms(child, terms)
+    elif isinstance(value, list):
+        for child in value:
+            _collect_json_ld_terms(child, terms)
+
+
+def _data_integrity_context(
+    subject: dict[str, Any] | list[dict[str, Any]],
+    credential_type: str,
+) -> list[Any]:
+    """Build deterministic JSON-LD semantics for template-defined product claims."""
+    terms: set[str] = set()
+    _collect_json_ld_terms(subject, terms)
+    if ":" not in credential_type and credential_type != "VerifiableCredential":
+        terms.add(credential_type)
+    if not terms:
+        return [_VCDM_CONTEXT]
+    return [
+        _VCDM_CONTEXT,
+        {term: _json_ld_term_name(term) for term in sorted(terms)},
+    ]
+
+
+def _public_ed25519_jwk(
+    public_jwk: dict[str, Any],
+    verification_method_id: str,
+) -> dict[str, Any]:
+    if not isinstance(public_jwk, dict):
+        raise RuntimeError("issuer DID resolution returned no public JWK")
+    private_members = sorted(_PRIVATE_JWK_MEMBERS.intersection(public_jwk))
+    if private_members:
+        raise RuntimeError(
+            "issuer DID resolution exposed prohibited private JWK members: "
+            + ", ".join(private_members)
+        )
+    if (
+        public_jwk.get("kty") != "OKP"
+        or public_jwk.get("crv") != "Ed25519"
+        or not isinstance(public_jwk.get("x"), str)
+        or not public_jwk["x"]
+    ):
+        raise RuntimeError("eddsa-rdfc-2022 requires an Ed25519 public JWK from the issuer profile")
+    kid = public_jwk.get("kid")
+    if kid is not None and kid != verification_method_id:
+        raise RuntimeError("issuer public JWK kid does not match the DID verification method")
+    return dict(public_jwk)
+
+
+async def create_vcdm_data_integrity_with_remote_signing(
+    *,
+    issuer_did: str,
+    remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
+    subject_id: str | None,
+    credential_type: str,
+    claims_json: str,
+    public_jwk: dict[str, Any],
+    credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
+    expiration_seconds: int = 31536000,
+    verification_method_id: str,
+    credential_id: str | None = None,
+) -> tuple[str, str]:
+    """Create a native VCDM v2 Data Integrity credential via issuer-DID signing.
+
+    Marty-core owns JSON-LD canonicalization and final proof verification. This
+    service supplies only public DID material to that engine and sends the
+    resulting canonical bytes through the organization-scoped DID signer.
+    """
+    if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
+        raise RuntimeError("issuer_did must be a DID")
+    if not isinstance(verification_method_id, str) or not verification_method_id.startswith(
+        f"{issuer_did}#"
+    ):
+        raise RuntimeError(
+            "verification_method_id must identify a key controlled by the issuer DID"
+        )
+    resolved_public_jwk = _public_ed25519_jwk(public_jwk, verification_method_id)
+    claims = json.loads(claims_json or "{}")
+    if not isinstance(claims, dict):
+        raise RuntimeError("claims_json must encode an object")
+
+    credential_status = claims.pop("credentialStatus", None)
+    if credential_subject is None:
+        subject: dict[str, Any] | list[dict[str, Any]] = dict(claims)
+        if subject_id:
+            subject.setdefault("id", subject_id)
+    else:
+        if claims:
+            raise RuntimeError("explicit credential_subject cannot be combined with subject claims")
+        if isinstance(credential_subject, dict) and credential_subject:
+            subject = dict(credential_subject)
+        elif (
+            isinstance(credential_subject, list)
+            and credential_subject
+            and all(isinstance(item, dict) and item for item in credential_subject)
+        ):
+            subject = [dict(item) for item in credential_subject]
+        else:
+            raise RuntimeError(
+                "credential_subject must be a non-empty object or list of non-empty objects"
+            )
+
+    now = datetime.now(UTC)
+    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
+    types = ["VerifiableCredential"]
+    if credential_type and credential_type != "VerifiableCredential":
+        types.append(credential_type)
+    credential: dict[str, Any] = {
+        "@context": _data_integrity_context(subject, credential_type),
+        "id": credential_id,
+        "type": types,
+        "issuer": issuer_did,
+        "validFrom": now.isoformat().replace("+00:00", "Z"),
+        "validUntil": datetime.fromtimestamp(
+            now.timestamp() + int(expiration_seconds or 31536000),
+            UTC,
+        )
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "credentialSubject": subject,
+    }
+    if credential_status is not None:
+        if not isinstance(credential_status, (dict, list)):
+            raise RuntimeError("credentialStatus must be an object or list")
+        credential["credentialStatus"] = credential_status
+
+    binding = get_marty_rs()
+    prepared_json = binding.prepare_vcdm_data_integrity_credential(
+        _json_dumps_compact(
+            {
+                "credential": credential,
+                "issuer_did": issuer_did,
+                "verification_method_id": verification_method_id,
+                "public_jwk": resolved_public_jwk,
+            }
+        )
+    )
+    prepared = json.loads(prepared_json)
+    if not isinstance(prepared, dict) or prepared.get("algorithm") != "EdDSA":
+        raise RuntimeError("Marty Data Integrity engine returned an invalid signing request")
+    signing_input_b64 = prepared.get("signing_input_b64")
+    if not isinstance(signing_input_b64, str) or not signing_input_b64:
+        raise RuntimeError("Marty Data Integrity engine returned no canonical signing input")
+
+    sign_result = await remote_sign(base64url_decode(signing_input_b64), "EdDSA")
+    response_algorithm = sign_result.get("algorithm")
+    if response_algorithm and response_algorithm != "EdDSA":
+        raise RuntimeError("issuer-DID signer returned a different signing algorithm")
+    signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
+    if not isinstance(signature_b64, str) or not signature_b64:
+        raise RuntimeError("issuer-DID signer returned no usable EdDSA signature")
+
+    completed_json = binding.complete_vcdm_data_integrity_credential(
+        _json_dumps_compact(
+            {
+                "prepared": prepared,
+                "signature_b64": signature_b64,
+            }
+        )
+    )
+    completed = json.loads(completed_json)
+    if (
+        not isinstance(completed, dict)
+        or completed.get("id") != credential_id
+        or completed.get("issuer") != issuer_did
+        or not isinstance(completed.get("proof"), dict)
+        or completed["proof"].get("cryptosuite") != "eddsa-rdfc-2022"
+        or completed["proof"].get("verificationMethod") != verification_method_id
+    ):
+        raise RuntimeError("completed Data Integrity credential changed its signed identity")
+    return _json_dumps_compact(completed), credential_id
 
 
 # ---------------------------------------------------------------------------

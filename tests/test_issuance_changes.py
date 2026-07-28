@@ -865,7 +865,7 @@ class TestRemoteIssuerFailureDetail:
 
         detail = _unsupported_remote_signing_format_detail("mso_mdoc", "mso_mdoc")
 
-        assert "SD-JWT VC issuance only" in detail
+        assert "SD-JWT VC, JWT VC, mdoc, and VCDM v2 Data Integrity" in detail
         assert "mso_mdoc" in detail
         assert "remote COSE/VDS signing support" in detail
 
@@ -931,25 +931,26 @@ async def test_issuer_profile_mdoc_signing_uses_only_trusted_certificate_chain(
         return b"signature"
 
     monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
-    credential, credential_id = (
-        await rust_integration.create_mdoc_credential_with_issuer_profile_signing(
-            issuer_did="did:web:issuer.example",
-            algorithm="ES256",
-            doc_type="org.iso.18013.5.1.mDL",
-            namespace="org.iso.18013.5.1",
-            claims_json=json.dumps({"given_name": "Erika", "_mdoc_x5c": ["untrusted"]}),
-            expiration_seconds=3600,
-            credential_id="urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c",
-            holder_jwk={
-                "kty": "EC",
-                "crv": "P-256",
-                "x": "holder-x",
-                "y": "holder-y",
-                "d": "must-not-cross-the-issuer-boundary",
-            },
-            certificate_chain=["trusted-leaf", "trusted-intermediate"],
-            profile_sign=profile_sign,
-        )
+    (
+        credential,
+        credential_id,
+    ) = await rust_integration.create_mdoc_credential_with_issuer_profile_signing(
+        issuer_did="did:web:issuer.example",
+        algorithm="ES256",
+        doc_type="org.iso.18013.5.1.mDL",
+        namespace="org.iso.18013.5.1",
+        claims_json=json.dumps({"given_name": "Erika", "_mdoc_x5c": ["untrusted"]}),
+        expiration_seconds=3600,
+        credential_id="urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c",
+        holder_jwk={
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "holder-x",
+            "y": "holder-y",
+            "d": "must-not-cross-the-issuer-boundary",
+        },
+        certificate_chain=["trusted-leaf", "trusted-intermediate"],
+        profile_sign=profile_sign,
     )
 
     assert credential == "issuer-signed-b64"
@@ -958,9 +959,7 @@ async def test_issuer_profile_mdoc_signing_uses_only_trusted_certificate_chain(
         "given_name": "Erika",
         "_mdoc_x5c": ["trusted-leaf", "trusted-intermediate"],
     }
-    assert captured["credential_id"] == (
-        "urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c"
-    )
+    assert captured["credential_id"] == ("urn:uuid:961d492d-ffb7-59f9-b2cf-66a84c47d07c")
     assert captured["holder_jwk"] == {
         "kty": "EC",
         "crv": "P-256",
@@ -1059,6 +1058,20 @@ class TestCredentialFormatToProtocol:
         tx = _make_transaction(credential_payload_format="w3c_vcdm_v2_sd_jwt")
         cred = _make_credential()
         assert _credential_format_to_protocol(tx, cred) == "SD_JWT_VC"
+
+    def test_jwt_vc(self):
+        from issuance.infrastructure.api.routes import _credential_format_to_protocol
+
+        tx = _make_transaction(credential_payload_format="w3c_vcdm_v2_jwt_vc")
+        cred = _make_credential()
+        assert _credential_format_to_protocol(tx, cred) == "VC_JWT"
+
+    def test_json_ld_data_integrity(self):
+        from issuance.infrastructure.api.routes import _credential_format_to_protocol
+
+        tx = _make_transaction(credential_payload_format="w3c_vcdm_v2_di")
+        cred = _make_credential()
+        assert _credential_format_to_protocol(tx, cred) == "JSON_LD"
 
     def test_no_transaction(self):
         from issuance.infrastructure.api.routes import _credential_format_to_protocol
@@ -3232,6 +3245,278 @@ class TestRustIntegrationOrgIdValidation:
                 credential_subject=[{"id": "did:example:subject"}],
                 algorithm="ES256",
                 verification_method_id="did:web:issuer.example#key-1",
+            )
+
+    async def test_remote_data_integrity_uses_canonical_bytes_and_did_signer(self, monkeypatch):
+        from issuance.application import rust_integration
+
+        issuer_did = "did:web:issuer.example"
+        verification_method_id = f"{issuer_did}#key-1"
+        public_jwk = {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": _b64url(bytes(range(32))),
+            "kid": verification_method_id,
+        }
+        canonical = b"canonical data integrity signing input"
+        signature = bytes(range(64))
+        captured: dict[str, object] = {}
+
+        class FakeBinding:
+            @staticmethod
+            def prepare_vcdm_data_integrity_credential(request_json: str) -> str:
+                request = json.loads(request_json)
+                captured["prepare"] = request
+                credential = dict(request["credential"])
+                credential["proof"] = {
+                    "type": "DataIntegrityProof",
+                    "cryptosuite": "eddsa-rdfc-2022",
+                    "proofPurpose": "assertionMethod",
+                    "verificationMethod": request["verification_method_id"],
+                    "proofValue": "zPlaceholder",
+                }
+                return json.dumps(
+                    {
+                        "credential": credential,
+                        "issuer_did": request["issuer_did"],
+                        "verification_method_id": request["verification_method_id"],
+                        "public_jwk": request["public_jwk"],
+                        "algorithm": "EdDSA",
+                        "signing_input_b64": _b64url(canonical),
+                    }
+                )
+
+            @staticmethod
+            def complete_vcdm_data_integrity_credential(request_json: str) -> str:
+                request = json.loads(request_json)
+                captured["complete"] = request
+                credential = request["prepared"]["credential"]
+                credential["proof"]["proofValue"] = "zFinalProof"
+                return json.dumps(credential)
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            captured["sign"] = {"payload": payload, "algorithm": algorithm}
+            return {
+                "signature_raw_b64": _b64url(signature),
+                "algorithm": "EdDSA",
+                "issuer_did": issuer_did,
+                "verification_method_id": verification_method_id,
+            }
+
+        monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: FakeBinding())
+        (
+            credential_json,
+            credential_id,
+        ) = await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+            issuer_did=issuer_did,
+            remote_sign=fake_remote_sign,
+            subject_id="did:example:holder",
+            credential_type="https://credentials.example/EmployeeCredential",
+            claims_json=json.dumps(
+                {
+                    "employeeNumber": "E-123",
+                    "department": {"name": "Engineering"},
+                }
+            ),
+            public_jwk=public_jwk,
+            verification_method_id=verification_method_id,
+            credential_id="urn:uuid:credential-1",
+        )
+
+        assert credential_id == "urn:uuid:credential-1"
+        assert captured["sign"] == {"payload": canonical, "algorithm": "EdDSA"}
+        assert captured["complete"]["signature_b64"] == _b64url(signature)
+        prepared = captured["prepare"]
+        assert prepared["issuer_did"] == issuer_did
+        assert prepared["verification_method_id"] == verification_method_id
+        assert prepared["public_jwk"] == public_jwk
+        assert not {
+            "d",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+        }.intersection(prepared["public_jwk"])
+        context = prepared["credential"]["@context"]
+        assert context[0] == "https://www.w3.org/ns/credentials/v2"
+        assert set(context[1]) == {"department", "employeeNumber"}
+        assert all(
+            value.startswith("https://credentials.marty.dev/claims/")
+            for value in context[1].values()
+        )
+        assert json.loads(credential_json)["proof"] == {
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-rdfc-2022",
+            "proofPurpose": "assertionMethod",
+            "verificationMethod": verification_method_id,
+            "proofValue": "zFinalProof",
+        }
+
+    async def test_remote_data_integrity_rejects_private_jwk_before_preparation(self, monkeypatch):
+        from issuance.application import rust_integration
+
+        class UnexpectedBinding:
+            @staticmethod
+            def prepare_vcdm_data_integrity_credential(request_json: str) -> str:
+                raise AssertionError("private JWK must not reach the native binding")
+
+        monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: UnexpectedBinding())
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            raise AssertionError("private JWK must not reach the signer")
+
+        with pytest.raises(RuntimeError, match="private JWK members: d"):
+            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+                issuer_did="did:web:issuer.example",
+                remote_sign=fake_remote_sign,
+                subject_id="did:example:holder",
+                credential_type="VerifiableCredential",
+                claims_json=json.dumps({"name": "Alice"}),
+                public_jwk={
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": _b64url(bytes(range(32))),
+                    "d": _b64url(bytes(reversed(range(32)))),
+                },
+                verification_method_id="did:web:issuer.example#key-1",
+            )
+
+    async def test_remote_data_integrity_rejects_signer_algorithm_substitution(self, monkeypatch):
+        from issuance.application import rust_integration
+
+        issuer_did = "did:web:issuer.example"
+        verification_method_id = f"{issuer_did}#key-1"
+
+        class FakeBinding:
+            @staticmethod
+            def prepare_vcdm_data_integrity_credential(request_json: str) -> str:
+                request = json.loads(request_json)
+                return json.dumps(
+                    {
+                        **request,
+                        "credential": {
+                            **request["credential"],
+                            "proof": {
+                                "type": "DataIntegrityProof",
+                                "cryptosuite": "eddsa-rdfc-2022",
+                                "proofPurpose": "assertionMethod",
+                                "verificationMethod": verification_method_id,
+                                "proofValue": "zPlaceholder",
+                            },
+                        },
+                        "algorithm": "EdDSA",
+                        "signing_input_b64": _b64url(b"canonical"),
+                    }
+                )
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": _b64url(bytes(64)), "algorithm": "ES256"}
+
+        monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: FakeBinding())
+        with pytest.raises(RuntimeError, match="different signing algorithm"):
+            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+                issuer_did=issuer_did,
+                remote_sign=fake_remote_sign,
+                subject_id="did:example:holder",
+                credential_type="VerifiableCredential",
+                claims_json=json.dumps({"name": "Alice"}),
+                public_jwk={
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": _b64url(bytes(range(32))),
+                },
+                verification_method_id=verification_method_id,
+            )
+
+    async def test_native_data_integrity_binding_accepts_real_signature_and_rejects_invalid_one(
+        self,
+    ):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+        from issuance.application import rust_integration
+
+        binding = rust_integration.get_marty_rs()
+        if not all(
+            callable(getattr(binding, capability, None))
+            for capability in (
+                "prepare_vcdm_data_integrity_credential",
+                "complete_vcdm_data_integrity_credential",
+            )
+        ):
+            pytest.skip("current test environment does not contain the release native extension")
+
+        issuer_did = "did:web:issuer.example"
+        verification_method_id = f"{issuer_did}#data-integrity"
+        private_key = Ed25519PrivateKey.generate()
+        public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        public_jwk = {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": _b64url(public_key),
+            "kid": verification_method_id,
+        }
+        canonical_inputs: list[bytes] = []
+
+        async def valid_remote_sign(payload: bytes, algorithm: str | None):
+            assert algorithm == "EdDSA"
+            canonical_inputs.append(payload)
+            return {
+                "signature_raw_b64": _b64url(private_key.sign(payload)),
+                "algorithm": "EdDSA",
+            }
+
+        credential, credential_id = (
+            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+                issuer_did=issuer_did,
+                remote_sign=valid_remote_sign,
+                subject_id="did:example:holder",
+                credential_type="https://credentials.example/EmployeeCredential",
+                claims_json=json.dumps(
+                    {
+                        "employeeNumber": "E-123",
+                        "credentialStatus": {
+                            "id": "https://issuer.example/status/1#42",
+                            "type": "BitstringStatusListEntry",
+                            "statusPurpose": "revocation",
+                            "statusListIndex": "42",
+                            "statusListCredential": "https://issuer.example/status/1",
+                        },
+                    }
+                ),
+                public_jwk=public_jwk,
+                verification_method_id=verification_method_id,
+                credential_id="urn:uuid:native-data-integrity",
+            )
+        )
+
+        document = json.loads(credential)
+        assert credential_id == "urn:uuid:native-data-integrity"
+        assert len(canonical_inputs) == 1 and canonical_inputs[0]
+        assert document["issuer"] == issuer_did
+        assert document["credentialStatus"]["statusListIndex"] == "42"
+        assert document["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
+        assert document["proof"]["verificationMethod"] == verification_method_id
+
+        async def invalid_remote_sign(payload: bytes, algorithm: str | None):
+            assert payload and algorithm == "EdDSA"
+            return {
+                "signature_raw_b64": _b64url(bytes(64)),
+                "algorithm": "EdDSA",
+            }
+
+        with pytest.raises(ValueError, match="credential is invalid|verification failed"):
+            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+                issuer_did=issuer_did,
+                remote_sign=invalid_remote_sign,
+                subject_id="did:example:holder",
+                credential_type="https://credentials.example/EmployeeCredential",
+                claims_json=json.dumps({"employeeNumber": "E-123"}),
+                public_jwk=public_jwk,
+                verification_method_id=verification_method_id,
             )
 
     async def test_grpc_remote_signing_helper_uses_did_without_profile_or_kms_coordinates(

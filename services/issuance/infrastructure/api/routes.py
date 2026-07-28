@@ -50,6 +50,7 @@ from issuance.application.rust_integration import (
     create_jwt_vc_with_remote_signing,
     create_mdoc_credential_with_issuer_profile_signing,
     create_sd_jwt_vc_with_remote_signing,
+    create_vcdm_data_integrity_with_remote_signing,
     didcomm_encrypt,
     didcomm_extract_endpoint,
     didcomm_pack_credential,
@@ -292,6 +293,11 @@ _JWT_VC_PAYLOAD_FORMATS = {
     "w3c_vcdm_v2_jwt",
     "w3c_vcdm_v2_jwt_vc",
 }
+_DATA_INTEGRITY_PAYLOAD_FORMATS = {
+    "json_ld",
+    "ldp_vc",
+    "w3c_vcdm_v2_di",
+}
 _CREDENTIAL_SUBJECT_FIELD = "_credential_subject"
 
 _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
@@ -349,6 +355,11 @@ def _credential_format_for_remote_context(
         return "mso_mdoc"
     if normalized_payload in _VDS_NC_PAYLOAD_FORMATS:
         return "vds_nc"
+    if (
+        normalized_payload in _DATA_INTEGRITY_PAYLOAD_FORMATS
+        or normalized_request in _DATA_INTEGRITY_PAYLOAD_FORMATS
+    ):
+        return "ldp_vc"
     if normalized_request in {"jwt_vc_json", "jwt_vc"}:
         return "jwt_vc_json"
     return "dc+sd-jwt"
@@ -381,6 +392,8 @@ def _default_request_format_for_payload(payload_format: str | None) -> str:
         return "mso_mdoc"
     if normalized_payload in _VDS_NC_PAYLOAD_FORMATS:
         return "vds_nc"
+    if normalized_payload in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+        return "ldp_vc"
     if normalized_payload in _SD_JWT_PAYLOAD_FORMATS:
         return "vc+sd-jwt"
     return "jwt_vc_json"
@@ -420,10 +433,24 @@ def _unsupported_remote_signing_format_detail(
     """Return a fail-closed detail for formats without remote-signing support."""
     fmt = credential_format or signing_format
     return (
-        "DID-backed remote signing currently supports SD-JWT VC issuance only. "
+        "DID-backed remote signing supports SD-JWT VC, JWT VC, mdoc, and "
+        "VCDM v2 Data Integrity issuance. "
         f"Requested format {fmt!r} resolves to signing format {signing_format!r}, "
         "which requires remote COSE/VDS signing support before it can be issued safely."
     )
+
+
+def _credential_for_oid4vci_response(credential: str, signing_format: str) -> str | dict[str, Any]:
+    """Return the wire representation required by the selected OID4VCI format."""
+    if signing_format != "ldp_vc":
+        return credential
+    try:
+        document = json.loads(credential)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("stored ldp_vc credential is not a JSON document") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("proof"), dict):
+        raise RuntimeError("stored ldp_vc credential has no Data Integrity proof")
+    return document
 
 
 def _remote_mdoc_namespace(credential_type: str) -> str:
@@ -1357,6 +1384,10 @@ def _credential_format_to_protocol(tx: IssuanceTransaction | None, cred: IssuedC
         return "MDOC"
     if payload_format in _VDS_NC_PAYLOAD_FORMATS:
         return "VDS_NC"
+    if payload_format in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+        return "JSON_LD"
+    if payload_format in _JWT_VC_PAYLOAD_FORMATS:
+        return "VC_JWT"
     return "SD_JWT_VC"
 
 
@@ -1375,6 +1406,11 @@ def _credential_format_for_revocation_profile(
     normalized_request = _normalize_payload_format(request_format)
     if payload_format in _MDOC_PAYLOAD_FORMATS or normalized_request in _MDOC_PAYLOAD_FORMATS:
         return "mdoc"
+    if (
+        payload_format in _DATA_INTEGRITY_PAYLOAD_FORMATS
+        or normalized_request in _DATA_INTEGRITY_PAYLOAD_FORMATS
+    ):
+        return "json_ld"
     return "sd_jwt_vc"
 
 
@@ -2995,13 +3031,14 @@ async def initiate_issuance(
                 detail="issuer_did cannot override the credential template issuer DID.",
             )
 
-    if (
-        request.credential_subject is not None
-        and _normalize_payload_format(credential_payload_format) not in _JWT_VC_PAYLOAD_FORMATS
-    ):
+    if request.credential_subject is not None and _normalize_payload_format(
+        credential_payload_format
+    ) not in (_JWT_VC_PAYLOAD_FORMATS | _DATA_INTEGRITY_PAYLOAD_FORMATS):
         raise HTTPException(
             status_code=422,
-            detail="credential_subject is supported only for VCDM JWT-VC templates",
+            detail=(
+                "credential_subject is supported only for VCDM JWT-VC or Data Integrity templates"
+            ),
         )
 
     await _require_active_revocation_profile_binding(
@@ -4217,6 +4254,8 @@ async def issue_credential(
         signing_format = "vds_nc"
     elif normalized_payload_format in _SD_JWT_PAYLOAD_FORMATS:
         signing_format = "vc+sd-jwt"
+    elif normalized_payload_format in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+        signing_format = "ldp_vc"
     elif effective_request_format == "spruce-vc+sd-jwt":
         signing_format = "vc+sd-jwt"
     else:
@@ -4246,13 +4285,13 @@ async def issue_credential(
                 ),
             },
         )
-    if signing_format not in {"vc+sd-jwt", "jwt_vc_json", "mso_mdoc"}:
+    if signing_format not in {"vc+sd-jwt", "jwt_vc_json", "mso_mdoc", "ldp_vc"}:
         detail = _unsupported_remote_signing_format_detail(signing_format, remote_credential_format)
         logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
         raise HTTPException(status_code=503, detail=detail)
 
     remote_context = issuer_context if isinstance(issuer_context, dict) else None
-    if signing_format in {"vc+sd-jwt", "jwt_vc_json", "mso_mdoc"}:
+    if signing_format in {"vc+sd-jwt", "jwt_vc_json", "mso_mdoc", "ldp_vc"}:
         try:
             remote_context = await apply_remote_issuer_context(
                 tx,
@@ -4334,13 +4373,22 @@ async def issue_credential(
         service = remote_context.get("service") if isinstance(remote_context, dict) else {}
         service = service if isinstance(service, dict) else {}
         signing_algorithm = str(
-            service.get("algorithm") or remote_context.get("algorithm") or "ES256"
+            service.get("algorithm")
+            or remote_context.get("algorithm")
+            or ("EdDSA" if signing_format == "ldp_vc" else "ES256")
         )
         verification_method_id = (
             remote_context.get("verification_method_id")
             if isinstance(remote_context, dict)
             else None
         )
+        if signing_format == "ldp_vc":
+            if signing_algorithm != "EdDSA":
+                raise RuntimeError("ldp_vc with eddsa-rdfc-2022 requires an EdDSA issuer profile")
+            if not isinstance(verification_method_id, str) or not verification_method_id:
+                raise RuntimeError("ldp_vc issuer DID resolution returned no verification method")
+            if not isinstance(remote_context.get("public_jwk"), dict):
+                raise RuntimeError("ldp_vc issuer DID resolution returned no public JWK")
         effective_issuer_did = tx.issuer_did_override
 
         async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
@@ -4366,12 +4414,19 @@ async def issue_credential(
             current_tx = await repo.get_transaction(tx.id)
             existing_credential = await repo.get_credential_by_transaction_id(tx.id)
             if current_tx and current_tx.status == IssuanceStatus.ISSUED and existing_credential:
-                existing_format = effective_request_format or signing_format or "vc+sd-jwt"
+                existing_format = (
+                    "ldp_vc"
+                    if signing_format == "ldp_vc"
+                    else effective_request_format or signing_format or "vc+sd-jwt"
+                )
                 return CredentialResponse(
                     credentials=[
                         {
                             "format": existing_format,
-                            "credential": existing_credential.credential_jwt,
+                            "credential": _credential_for_oid4vci_response(
+                                existing_credential.credential_jwt,
+                                signing_format,
+                            ),
                         }
                     ],
                     credential=(
@@ -4405,7 +4460,9 @@ async def issue_credential(
             signing_claims["credentialStatus"] = credential_status_claim
 
         logger.info(
-            f"[credential] rid={rid} signing_path=remote format={effective_request_format} jwt_typ_will_be={effective_request_format}"
+            "[credential] rid=%s signing_path=issuer_did format=%s",
+            rid,
+            signing_format,
         )
         signing_arguments = {
             "issuer_did": effective_issuer_did,
@@ -4457,6 +4514,22 @@ async def issue_credential(
                 credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
                 **signing_arguments,
             )
+        elif signing_format == "ldp_vc":
+            (
+                jwt_credential,
+                signed_credential_id,
+            ) = await create_vcdm_data_integrity_with_remote_signing(
+                issuer_did=effective_issuer_did,
+                remote_sign=_remote_sign,
+                subject_id=holder_did or tx.subject_did,
+                credential_type=signing_credential_type,
+                claims_json=json.dumps(signing_claims),
+                public_jwk=remote_context["public_jwk"],
+                credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
+                expiration_seconds=tx.validity_days * 86400,
+                verification_method_id=verification_method_id,
+                credential_id=credential_id,
+            )
         else:
             jwt_credential, signed_credential_id = await create_sd_jwt_vc_with_remote_signing(
                 holder_jwk=holder_jwk,
@@ -4477,7 +4550,11 @@ async def issue_credential(
 
         # Only update state and emit event on first issuance; allow idempotent
         # wallet retries (wallets sometimes re-request after a network timeout).
-        response_format = effective_request_format or signing_format or "vc+sd-jwt"
+        response_format = (
+            "ldp_vc"
+            if signing_format == "ldp_vc"
+            else effective_request_format or signing_format or "vc+sd-jwt"
+        )
         if tx.status == IssuanceStatus.SIGNING:
             issued_at = datetime.now(timezone.utc)
             expires_at = issued_at + timedelta(days=tx.validity_days)
@@ -4538,7 +4615,10 @@ async def issue_credential(
         # - "credential" as bare string for Walt.id / Draft-11 clients
         # Use the request format in the response object (not signing_format which may
         # have been normalised from spruce-vc+sd-jwt → vc+sd-jwt for Rust).
-        credential_obj = {"format": response_format, "credential": jwt_credential}
+        credential_obj = {
+            "format": response_format,
+            "credential": _credential_for_oid4vci_response(jwt_credential, signing_format),
+        }
         import uuid as _uuid
 
         notification_id = str(_uuid.uuid4())
@@ -4556,7 +4636,7 @@ async def issue_credential(
         if current_tx is not None and current_tx.status == IssuanceStatus.SIGNING:
             current_tx.fail(str(e))
             await repo.save_transaction(current_tx)
-        if signing_format in {"vc+sd-jwt", "jwt_vc_json"} and (
+        if signing_format in {"vc+sd-jwt", "jwt_vc_json", "ldp_vc"} and (
             tx.issuer_did_override or tx.signing_service_id
         ):
             raise HTTPException(
