@@ -661,7 +661,11 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
 
     counts = {"builder": 0, "kms": 0}
 
-    async def kms_sign(**_kwargs):
+    async def did_sign(**kwargs):
+        assert kwargs["issuer_did"] == remote_context["issuer_did"]
+        assert kwargs["credential_format"] == "dc+sd-jwt"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert "issuer_profile_id" not in kwargs
         counts["kms"] += 1
         await asyncio.sleep(0)
         return {"signature": "remote-signature", "algorithm": "ES256"}
@@ -684,7 +688,7 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
     monkeypatch.setattr(routes, "require_canvas_issuance_ready", readiness_barrier)
     monkeypatch.setattr(routes, "verify_proof_jwt", lambda *_args, **_kwargs: (True, "did:key:learner", {}, None))
-    monkeypatch.setattr(routes, "sign_payload_with_issuer_profile", kms_sign)
+    monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
     monkeypatch.setattr(routes, "create_sd_jwt_vc_with_remote_signing", build_credential)
     monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
     monkeypatch.setattr(routes, "record_canvas_credential_claim", no_op)
@@ -759,7 +763,11 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
 
     counts = {"builder": 0, "kms": 0}
 
-    async def kms_sign(**_kwargs):
+    async def did_sign(**kwargs):
+        assert kwargs["issuer_did"] == remote_context["issuer_did"]
+        assert kwargs["credential_format"] == "dc+sd-jwt"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert "issuer_profile_id" not in kwargs
         counts["kms"] += 1
         await asyncio.sleep(0)
         return {"signature": "remote-signature", "algorithm": "ES256"}
@@ -786,7 +794,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         "verify_proof_jwt",
         lambda *_args, **_kwargs: (True, "did:key:learner", {}, None),
     )
-    monkeypatch.setattr(routes, "sign_payload_with_issuer_profile", kms_sign)
+    monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
     monkeypatch.setattr(routes, "create_sd_jwt_vc_with_remote_signing", build_credential)
     monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
     monkeypatch.setattr(routes, "record_canvas_credential_claim", no_op)
