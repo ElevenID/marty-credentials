@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.26] - 2026-07-28
+
+### Fixed
+
+- Build source crates and service images from one immutable Marty Core release
+  instead of allowing Cargo and container wheel inputs to drift.
+- Verify W3C Data Integrity credentials whose tenant-scoped `did:web`
+  verification method was resolved and authorized by the product DID
+  resolver, while retaining offline `did:key` support.
+
+### Security
+
+- Keep DID authorization and tenant isolation in the product service and pass
+  only exact public verification material to the cryptographic verifier.
+- Add a release-input coherence contract that fails when Cargo revisions,
+  wheel metadata, version, commit, or digest disagree.
+
 ## [0.1.25] - 2026-07-28
 
 ### Fixed
