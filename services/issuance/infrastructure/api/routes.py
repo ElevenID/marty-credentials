@@ -88,7 +88,7 @@ from issuance.infrastructure.adapters.delivery_records import (
 )
 from issuance.infrastructure.api.signing_context import (
     resolve_remote_issuer_context,
-    sign_payload_with_issuer_profile,
+    sign_payload_with_issuer_did,
 )
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -4276,7 +4276,7 @@ async def issue_credential(
             try:
                 remote_context = await resolve_remote_issuer_context(
                     tx.organization_id,
-                    issuer_profile_id=tx.issuer_profile_id,
+                    issuer_did=tx.issuer_did_override,
                     issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
                     credential_format=remote_credential_format,
                     key_purpose=_key_purpose_for_credential_format(remote_credential_format),
@@ -4344,12 +4344,13 @@ async def issue_credential(
         effective_issuer_did = tx.issuer_did_override
 
         async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
-            return await sign_payload_with_issuer_profile(
+            return await sign_payload_with_issuer_did(
                 organization_id=tx.organization_id,
-                issuer_profile_id=tx.issuer_profile_id or "",
+                issuer_did=effective_issuer_did,
+                credential_format=remote_credential_format,
+                key_purpose=_key_purpose_for_credential_format(remote_credential_format),
                 payload=payload,
                 algorithm=algorithm or signing_algorithm,
-                expected_issuer_did=effective_issuer_did,
                 expected_verification_method_id=verification_method_id,
             )
 
@@ -4420,12 +4421,13 @@ async def issue_credential(
             assert holder_jwk is not None
 
             async def _issuer_profile_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
-                result = await sign_payload_with_issuer_profile(
+                result = await sign_payload_with_issuer_did(
                     organization_id=tx.organization_id,
-                    issuer_profile_id=tx.issuer_profile_id or "",
+                    issuer_did=effective_issuer_did,
+                    credential_format=remote_credential_format,
+                    key_purpose=_key_purpose_for_credential_format(remote_credential_format),
                     payload=tbs_data,
                     algorithm=algorithm,
-                    expected_issuer_did=effective_issuer_did,
                     expected_verification_method_id=verification_method_id,
                 )
                 return _remote_mdoc_signature_raw(result, algorithm)
@@ -4668,7 +4670,7 @@ async def _didcomm_sign_and_deliver(
         try:
             remote_context = await resolve_remote_issuer_context(
                 tx.organization_id,
-                issuer_profile_id=tx.issuer_profile_id,
+                issuer_did=tx.issuer_did_override,
                 issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
                 credential_format=remote_credential_format,
                 key_purpose=_key_purpose_for_credential_format(remote_credential_format),
@@ -4708,12 +4710,13 @@ async def _didcomm_sign_and_deliver(
     effective_issuer_did_dc = tx.issuer_did_override
 
     async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
-        return await sign_payload_with_issuer_profile(
+        return await sign_payload_with_issuer_did(
             organization_id=tx.organization_id,
-            issuer_profile_id=tx.issuer_profile_id or "",
+            issuer_did=effective_issuer_did_dc,
+            credential_format=remote_credential_format,
+            key_purpose=_key_purpose_for_credential_format(remote_credential_format),
             payload=payload,
             algorithm=algorithm or signing_algorithm,
-            expected_issuer_did=effective_issuer_did_dc,
             expected_verification_method_id=verification_method_id,
         )
 

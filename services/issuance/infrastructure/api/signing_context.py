@@ -219,3 +219,76 @@ async def sign_payload_with_issuer_profile(
     if not signature:
         raise RuntimeError("Issuer-profile signer did not return a signature")
     return data
+
+
+async def sign_payload_with_issuer_did(
+    *,
+    organization_id: str,
+    issuer_did: str,
+    credential_format: str,
+    key_purpose: str,
+    payload: bytes,
+    algorithm: str | None = None,
+    expected_verification_method_id: str | None = None,
+) -> dict[str, Any]:
+    """Sign through the active profile resolved from an organization-scoped DID.
+
+    The issuance service deliberately does not send a profile, signing-service,
+    or provider-key selector.  The gateway resolves the DID and operation to a
+    single active issuer profile, then signs through that profile's custody
+    backend.  This keeps the protocol boundary DID-first even though the
+    gateway retains profile data as private configuration and audit state.
+    """
+    if not organization_id:
+        raise RuntimeError("organization_id is required for DID-mediated signing")
+    if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
+        raise RuntimeError("issuer_did must be a DID string for DID-mediated signing")
+    if not credential_format:
+        raise RuntimeError("credential_format is required for DID-mediated signing")
+    if not key_purpose:
+        raise RuntimeError("key_purpose is required for DID-mediated signing")
+    if not payload:
+        raise RuntimeError("payload is required for DID-mediated signing")
+
+    body: dict[str, Any] = {
+        "issuer_did": issuer_did,
+        "credential_format": credential_format,
+        "key_purpose": key_purpose,
+        "payload_b64": base64.urlsafe_b64encode(payload).decode().rstrip("="),
+    }
+    if algorithm:
+        body["algorithm"] = algorithm
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            f"{_internal_signing_base_url()}/issuer-dids/sign",
+            params={"organization_id": organization_id},
+            json=body,
+            headers=_internal_headers(),
+        )
+
+    if response.status_code == 401:
+        raise RuntimeError("Internal signing API rejected the service API key")
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"DID-mediated signing failed (HTTP {response.status_code}): "
+            f"{_response_error_detail(response)}"
+        )
+    data = response.json()
+    if not isinstance(data, dict) or not data.get("ok"):
+        raise RuntimeError("DID-mediated signer returned an invalid response")
+    if data.get("issuer_did") != issuer_did:
+        raise RuntimeError("DID-mediated signer returned a different issuer DID")
+    if (
+        expected_verification_method_id
+        and data.get("verification_method_id") != expected_verification_method_id
+    ):
+        raise RuntimeError(
+            "DID-mediated signer returned a different DID verification method"
+        )
+    if data.get("issuer_profile_id") or data.get("service_id"):
+        raise RuntimeError("DID-mediated signer exposed private signing routing")
+    signature = str(data.get("signature_raw_b64") or data.get("signature_b64") or "")
+    if not signature:
+        raise RuntimeError("DID-mediated signer did not return a signature")
+    return data

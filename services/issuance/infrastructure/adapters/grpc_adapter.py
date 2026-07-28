@@ -144,7 +144,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
 ) -> tuple[str, str, dict[str, Any]]:
     """Create an SD-JWT credential through the org-scoped issuer profile and DID."""
     from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
-    from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_profile
+    from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_did
 
     remote_context = await _resolve_remote_signing_context_for_tx(
         tx, credential_format=credential_format
@@ -158,12 +158,13 @@ async def _create_remote_signed_sd_jwt_for_tx(
     )
 
     async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
-        return await sign_payload_with_issuer_profile(
+        return await sign_payload_with_issuer_did(
             organization_id=tx.organization_id,
-            issuer_profile_id=tx.issuer_profile_id,
+            issuer_did=tx.issuer_did_override,
+            credential_format=credential_format,
+            key_purpose=_key_purpose_for_credential_format(credential_format),
             payload=payload,
             algorithm=algorithm_hint or algorithm,
-            expected_issuer_did=tx.issuer_did_override,
             expected_verification_method_id=verification_method_id,
         )
 
