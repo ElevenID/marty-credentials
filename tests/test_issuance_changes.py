@@ -786,6 +786,66 @@ class TestRemoteIssuerFailureDetail:
         assert "key_reference" not in captured["json"]
         assert result["issuer_did"] == issuer_did
 
+    async def test_issuer_did_signing_never_sends_profile_or_kms_routing(self, monkeypatch):
+        from issuance.infrastructure.api import signing_context
+
+        issuer_did = "did:web:issuer.example"
+        verification_method = f"{issuer_did}#key-1"
+        captured: dict[str, object] = {}
+
+        class FakeResponse:
+            status_code = 200
+            reason_phrase = "OK"
+            text = ""
+
+            def json(self):
+                return {
+                    "ok": True,
+                    "issuer_did": issuer_did,
+                    "verification_method_id": verification_method,
+                    "signature_raw_b64": "AQID",
+                    "algorithm": "ES256",
+                }
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def post(self, url, **kwargs):
+                captured.update(url=url, **kwargs)
+                return FakeResponse()
+
+        monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
+        result = await signing_context.sign_payload_with_issuer_did(
+            organization_id="org-1",
+            issuer_did=issuer_did,
+            credential_format="ldp_vc",
+            key_purpose="vc_jwt_issuer",
+            payload=b"payload",
+            algorithm="ES256",
+            expected_verification_method_id=verification_method,
+        )
+
+        assert str(captured["url"]).endswith("/issuer-dids/sign")
+        assert captured["params"] == {"organization_id": "org-1"}
+        assert captured["json"] == {
+            "issuer_did": issuer_did,
+            "credential_format": "ldp_vc",
+            "key_purpose": "vc_jwt_issuer",
+            "payload_b64": "cGF5bG9hZA",
+            "algorithm": "ES256",
+        }
+        assert "issuer_profile_id" not in captured["json"]
+        assert "service" not in json.dumps(captured["json"])
+        assert "key_reference" not in captured["json"]
+        assert result["issuer_did"] == issuer_did
+
     def test_did_resolution_failure_detail_mentions_issuer_and_key_error(self):
         from issuance.infrastructure.api.routes import _did_resolution_failure_detail
 
@@ -3174,7 +3234,7 @@ class TestRustIntegrationOrgIdValidation:
                 verification_method_id="did:web:issuer.example#key-1",
             )
 
-    async def test_grpc_remote_signing_helper_uses_profile_and_did_without_kms_coordinates(
+    async def test_grpc_remote_signing_helper_uses_did_without_profile_or_kms_coordinates(
         self, monkeypatch
     ):
         from issuance.application.rust_integration import base64url_decode
@@ -3224,7 +3284,7 @@ class TestRustIntegrationOrgIdValidation:
                 "issuer_x5c": ["leaf-certificate", "issuer-certificate"],
             }
 
-        async def fake_sign_payload_with_issuer_profile(**kwargs):
+        async def fake_sign_payload_with_issuer_did(**kwargs):
             captured["sign"] = kwargs
             return {"signature_raw_b64": "AQID", "algorithm": kwargs.get("algorithm")}
 
@@ -3233,8 +3293,8 @@ class TestRustIntegrationOrgIdValidation:
         )
         monkeypatch.setattr(
             signing_context,
-            "sign_payload_with_issuer_profile",
-            fake_sign_payload_with_issuer_profile,
+            "sign_payload_with_issuer_did",
+            fake_sign_payload_with_issuer_did,
         )
 
         tx = _make_transaction(
@@ -3274,9 +3334,11 @@ class TestRustIntegrationOrgIdValidation:
             "algorithm": None,
         }
         assert captured["sign"]["organization_id"] == "org-1"
-        assert captured["sign"]["issuer_profile_id"] == "ip-grpc"
-        assert captured["sign"]["expected_issuer_did"] == issuer_did
+        assert captured["sign"]["issuer_did"] == issuer_did
+        assert captured["sign"]["credential_format"] == "dc+sd-jwt"
+        assert captured["sign"]["key_purpose"] == "vc_jwt_issuer"
         assert captured["sign"]["expected_verification_method_id"] == verification_method_id
+        assert "issuer_profile_id" not in captured["sign"]
         assert "signing_service_id" not in captured["sign"]
         assert "signing_key_reference" not in captured["sign"]
         assert credential_id.startswith("urn:uuid:")
