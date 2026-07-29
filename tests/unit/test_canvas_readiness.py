@@ -271,6 +271,7 @@ def _install_kms_fakes(
         assert args == ("org-1",)
         assert kwargs == {
             "issuer_profile_id": "issuer-profile-1",
+            "issuer_did": did,
             "issuer_mode": "org_managed",
             "credential_format": "dc+sd-jwt",
             "key_purpose": "vc_jwt_issuer",

@@ -592,10 +592,10 @@ async def apply_remote_issuer_context(
     try:
         context = await resolve_remote_issuer_context(
             tx.organization_id,
-            # New transactions carry only the caller's public DID. A profile
-            # ID is retained solely on pre-migration transactions so they can
-            # finish safely; it is never a public selector.
-            issuer_profile_id=tx.issuer_profile_id if not tx.issuer_did_override else None,
+            # New transactions carry only the caller's public DID. A stored
+            # profile ID is an internal migration assertion and must exactly
+            # match the profile selected by that DID.
+            issuer_profile_id=tx.issuer_profile_id,
             issuer_did=tx.issuer_did_override,
             issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
             credential_format=resolved_format,
