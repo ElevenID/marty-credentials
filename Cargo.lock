@@ -1606,7 +1606,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2347,7 +2347,7 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 [[package]]
 name = "isomdl"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=069576a64580fc9923b65dcbdad0c2253c44296d#069576a64580fc9923b65dcbdad0c2253c44296d"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=a082c3f8f66345440ef6a9714cec11614a3ea399#a082c3f8f66345440ef6a9714cec11614a3ea399"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2392,7 +2392,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=069576a64580fc9923b65dcbdad0c2253c44296d#069576a64580fc9923b65dcbdad0c2253c44296d"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=a082c3f8f66345440ef6a9714cec11614a3ea399#a082c3f8f66345440ef6a9714cec11614a3ea399"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2942,8 +2942,8 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.25"
-source = "git+https://github.com/ElevenID/marty-core?rev=c159c9c8412f895f463a31db4bf6d848350eb6f1#c159c9c8412f895f463a31db4bf6d848350eb6f1"
+version = "0.1.26"
+source = "git+https://github.com/ElevenID/marty-core?rev=6255b9804df0d8591deb24df4c955e2bcdfb2887#6255b9804df0d8591deb24df4c955e2bcdfb2887"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2988,8 +2988,8 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.25"
-source = "git+https://github.com/ElevenID/marty-core?rev=c159c9c8412f895f463a31db4bf6d848350eb6f1#c159c9c8412f895f463a31db4bf6d848350eb6f1"
+version = "0.1.26"
+source = "git+https://github.com/ElevenID/marty-core?rev=6255b9804df0d8591deb24df4c955e2bcdfb2887#6255b9804df0d8591deb24df4c955e2bcdfb2887"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3016,7 +3016,7 @@ dependencies = [
 
 [[package]]
 name = "marty-rs"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "base64 0.22.1",
  "bs58 0.5.1",
@@ -3063,8 +3063,8 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.25"
-source = "git+https://github.com/ElevenID/marty-core?rev=c159c9c8412f895f463a31db4bf6d848350eb6f1#c159c9c8412f895f463a31db4bf6d848350eb6f1"
+version = "0.1.26"
+source = "git+https://github.com/ElevenID/marty-core?rev=6255b9804df0d8591deb24df4c955e2bcdfb2887#6255b9804df0d8591deb24df4c955e2bcdfb2887"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3949,7 +3949,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4259,7 +4259,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4318,7 +4318,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5622,7 +5622,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6242,7 +6242,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

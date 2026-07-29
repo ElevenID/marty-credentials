@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.29] - 2026-07-28
+
+### Security
+
+- Require every retained legacy issuer-profile assertion to accompany an
+  issuer DID and reject it unless DID-first resolution selects the exact same
+  active, organization-owned profile.
+
+### Fixed
+
+- Consume marty-core 0.1.26 for strict separation between PKIX root trust and
+  exact pinned document-signer trust in ISO 18013-5 verification.
+- Align the workspace-level isomdl patch with the reviewed maintained-fork
+  revision used by marty-core so release builds cannot silently select an
+  older mdoc implementation.
+
 ## [0.1.28] - 2026-07-28
 
 ### Fixed
