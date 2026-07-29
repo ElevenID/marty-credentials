@@ -4,12 +4,35 @@ from __future__ import annotations
 
 import importlib
 import sys
+from pathlib import Path
+
+import pytest
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+if str(PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_ROOT))
 
 
 def _clear_proto_modules() -> None:
     for name in list(sys.modules):
         if name == "marty_proto.v1" or name.startswith("marty_proto.v1."):
             sys.modules.pop(name, None)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_proto_module_cache():
+    """Keep lazy-import assertions from replacing a service's live stubs."""
+    previous = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "marty_proto.v1" or name.startswith("marty_proto.v1.")
+    }
+    _clear_proto_modules()
+    try:
+        yield
+    finally:
+        _clear_proto_modules()
+        sys.modules.update(previous)
 
 
 class TestProtoPackageLazyImports:

@@ -587,9 +587,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         repo=repo,
                         organization_id=auth_session.organization_id,
                         expected_client_id=auth_session.client_id,
-                        client_id=request.client_id or None,
-                        client_assertion_type=request.client_assertion_type or None,
-                        client_assertion=request.client_assertion or None,
+                        client_id=getattr(request, "client_id", "") or None,
+                        client_assertion_type=(
+                            getattr(request, "client_assertion_type", "") or None
+                        ),
+                        client_assertion=(
+                            getattr(request, "client_assertion", "") or None
+                        ),
                         allowed_audiences=(
                             [_org_issuer_url(auth_session.organization_id)]
                             if auth_session.organization_id
@@ -692,9 +696,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     repo=repo,
                     organization_id=tx.organization_id,
                     expected_client_id=tx.oid4vci_client_id,
-                    client_id=request.client_id or None,
-                    client_assertion_type=request.client_assertion_type or None,
-                    client_assertion=request.client_assertion or None,
+                    client_id=getattr(request, "client_id", "") or None,
+                    client_assertion_type=(
+                        getattr(request, "client_assertion_type", "") or None
+                    ),
+                    client_assertion=(
+                        getattr(request, "client_assertion", "") or None
+                    ),
                     allowed_audiences=[
                         _org_issuer_url(tx.organization_id),
                         f"{ISSUER_BASE_URL.rstrip('/')}/v1/issuance/token",

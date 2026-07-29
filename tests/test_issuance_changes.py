@@ -3804,17 +3804,6 @@ class TestRustIntegrationOrgIdValidation:
     ):
         from issuance.application.rust_integration import base64url_decode
 
-        if "marty_proto.v1" not in sys.modules:
-            proto_pkg = types.ModuleType("marty_proto")
-            proto_v1 = types.ModuleType("marty_proto.v1")
-            issuance_pb2 = types.ModuleType("marty_proto.v1.issuance_service_pb2")
-            issuance_pb2_grpc = types.ModuleType("marty_proto.v1.issuance_service_pb2_grpc")
-            issuance_pb2_grpc.IssuanceServiceServicer = object
-            sys.modules["marty_proto"] = proto_pkg
-            sys.modules["marty_proto.v1"] = proto_v1
-            sys.modules["marty_proto.v1.issuance_service_pb2"] = issuance_pb2
-            sys.modules["marty_proto.v1.issuance_service_pb2_grpc"] = issuance_pb2_grpc
-
         from issuance.infrastructure.adapters import grpc_adapter
         from issuance.infrastructure.api import signing_context
 

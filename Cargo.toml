@@ -3,7 +3,7 @@ resolver = "2"
 members = ["rust/marty-rs"]
 
 [workspace.package]
-version = "0.1.28"
+version = "0.1.29"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.87"
@@ -11,12 +11,12 @@ repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "c159c9c8412f895f463a31db4bf6d848350eb6f1", features = ["sod-builder"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "c159c9c8412f895f463a31db4bf6d848350eb6f1", default-features = false }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "6255b9804df0d8591deb24df4c955e2bcdfb2887", features = ["sod-builder"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "6255b9804df0d8591deb24df4c955e2bcdfb2887", default-features = false }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "c159c9c8412f895f463a31db4bf6d848350eb6f1" }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "6255b9804df0d8591deb24df4c955e2bcdfb2887" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
@@ -68,5 +68,6 @@ strip = true
 [patch.crates-io]
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
-# Temporary security fork pending https://github.com/spruceid/isomdl/pull/134.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "069576a64580fc9923b65dcbdad0c2253c44296d" }
+# Maintained ElevenID security/interoperability fork. The exact revision is
+# reviewed and synchronized from upstream through pull requests.
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "a082c3f8f66345440ef6a9714cec11614a3ea399" }
