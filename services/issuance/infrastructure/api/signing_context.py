@@ -58,9 +58,18 @@ async def resolve_remote_issuer_context(
     key_purpose: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, Any] | None:
-    """Resolve the active issuer profile and its DID for an organization."""
+    """Resolve the active issuer profile and its DID for an organization.
+
+    ``issuer_profile_id`` is an internal migration assertion, never an
+    alternate selector. When present it must accompany ``issuer_did`` and
+    exactly match the profile selected by DID resolution.
+    """
     if not organization_id:
         return None
+    if issuer_profile_id and not issuer_did:
+        raise RuntimeError(
+            "Legacy issuer_profile_id requires issuer_did for exact-match resolution"
+        )
 
     params: dict[str, str] = {"organization_id": organization_id}
     if issuer_profile_id:
@@ -105,8 +114,13 @@ async def resolve_remote_issuer_context(
     profile = data.get("issuer_profile")
     if not isinstance(profile, dict) or not profile.get("id"):
         raise RuntimeError("Issuer DID resolver returned no active issuer profile")
+    resolved_profile_id = str(profile["id"])
+    if issuer_profile_id and resolved_profile_id != issuer_profile_id:
+        raise RuntimeError(
+            "Resolved issuer DID does not match legacy issuer_profile_id"
+        )
     normalized = dict(data)
-    normalized["issuer_profile_id"] = str(profile["id"])
+    normalized["issuer_profile_id"] = resolved_profile_id
     normalized["issuer_mode"] = profile.get("issuer_mode") or issuer_mode or "org_managed"
     normalized["signing_service_id"] = profile.get("signing_service_id")
     normalized["signing_key_reference"] = profile.get("signing_key_reference")
