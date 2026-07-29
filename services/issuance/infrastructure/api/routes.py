@@ -1353,6 +1353,20 @@ class CanvasMirrorHealthResponse(BaseModel):
     last_lifecycle_sync_success_at: str | None = None
 
 
+class CanvasMirrorIssuerResponse(BaseModel):
+    """Public issuer identity for a Canvas mirror.
+
+    Internal profile, signing-service, key, and KMS selectors are deliberately
+    excluded. Consumers identify the issuer by DID and resolve its public
+    verification material through the normal DID resolution path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_did: str | None = None
+    credential_issuer_url: str
+
+
 class CanvasMirrorProvenanceResponse(BaseModel):
     delivery_record_id: str
     organization_id: str
@@ -1360,7 +1374,7 @@ class CanvasMirrorProvenanceResponse(BaseModel):
     mirror: dict[str, Any]
     canonical_credential: dict[str, Any]
     canonical_issuance: dict[str, Any]
-    issuer: dict[str, Any]
+    issuer: CanvasMirrorIssuerResponse
     trust_basis: dict[str, Any]
     delivery_record: CredentialDeliveryRecordResponse
 
@@ -1856,15 +1870,13 @@ def _canvas_mirror_record_matches(
     record: CredentialDeliveryRecord,
     *,
     canvas_account_id: str | None = None,
-    organization_id: str | None = None,
+    organization_id: str,
 ) -> bool:
     if record.delivery_target != DeliveryTarget.CANVAS_CREDENTIALS:
         return False
     if canvas_account_id is not None and record.canvas_account_id != canvas_account_id:
         return False
-    if organization_id is not None and record.organization_id != organization_id:
-        return False
-    return True
+    return record.organization_id == organization_id
 
 
 async def _resolve_canvas_mirror_delivery_record(
@@ -1874,7 +1886,7 @@ async def _resolve_canvas_mirror_delivery_record(
     external_credential_id: str | None = None,
     credential_id: str | None = None,
     canvas_account_id: str | None = None,
-    organization_id: str | None = None,
+    organization_id: str,
 ) -> CredentialDeliveryRecord:
     if not any([delivery_record_id, external_credential_id, credential_id]):
         raise HTTPException(
@@ -1977,12 +1989,10 @@ async def _canvas_mirror_provenance_to_protocol(
             "credential_type": transaction.credential_type if transaction else "unknown",
             "delivery_mode": transaction.delivery_mode if transaction else record.delivery_mode,
         },
-        issuer={
-            "issuer_did": issuer_did,
-            "issuer_profile_id": transaction.issuer_profile_id if transaction else None,
-            "issuer_mode": transaction.issuer_mode if transaction else None,
-            "credential_issuer_url": org_issuer_url(record.organization_id),
-        },
+        issuer=CanvasMirrorIssuerResponse(
+            issuer_did=issuer_did,
+            credential_issuer_url=org_issuer_url(record.organization_id),
+        ),
         trust_basis={
             "canonical_issuance_backed": True,
             "mirror_backed_by_delivery_record": True,
@@ -5996,15 +6006,31 @@ async def get_canvas_mirror_health(
 @issuance_router.get(
     "/delivery-records/canvas-credentials/provenance",
     response_model=CanvasMirrorProvenanceResponse,
+    dependencies=[Depends(_verify_management_api_key)],
 )
 async def get_canvas_mirror_provenance(
+    http_request: Request,
+    organization_id: str = Query(..., min_length=1),
     delivery_record_id: str | None = None,
     external_credential_id: str | None = None,
     credential_id: str | None = None,
     canvas_account_id: str | None = None,
-    organization_id: str | None = None,
     repo: IIssuanceRepository = Depends(),
 ) -> CanvasMirrorProvenanceResponse:
+    trusted_organization_id = (
+        http_request.headers.get("X-Organization-ID") or ""
+    ).strip()
+    if not trusted_organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Trusted organization context is required",
+        )
+    if not hmac.compare_digest(trusted_organization_id, organization_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Organization context does not match requested organization",
+        )
+
     record = await _resolve_canvas_mirror_delivery_record(
         repo=repo,
         delivery_record_id=delivery_record_id,
