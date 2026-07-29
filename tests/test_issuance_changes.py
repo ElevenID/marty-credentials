@@ -1950,6 +1950,10 @@ class TestCanvasMirrorPublishing:
         await repo.save_delivery_record(delivered)
 
         response = await routes.get_canvas_mirror_provenance(
+            http_request=types.SimpleNamespace(
+                headers={"X-Organization-ID": "org-1"}
+            ),
+            organization_id="org-1",
             external_credential_id="canvas-cred-provenance",
             canvas_account_id="canvas-account-1",
             repo=repo,
@@ -1969,10 +1973,99 @@ class TestCanvasMirrorPublishing:
         )
         assert "subject_id" not in response.canonical_credential
         assert response.canonical_issuance["application_id"] == "app-canvas-provenance"
-        assert response.issuer["issuer_did"] == "did:web:issuer.example"
+        assert response.issuer.model_dump() == {
+            "issuer_did": "did:web:issuer.example",
+            "credential_issuer_url": routes.org_issuer_url("org-1"),
+        }
+        serialized = response.model_dump()
+        assert "issuer_profile_id" not in serialized["issuer"]
+        assert "issuer_mode" not in serialized["issuer"]
+        assert "signing_service_id" not in serialized["issuer"]
+        assert "signing_key_reference" not in serialized["issuer"]
+        assert "kms" not in serialized["issuer"]
         assert response.trust_basis["canonical_issuance_backed"] is True
         assert response.trust_basis["distribution_channel"] == "canvas_credentials"
         assert response.delivery_record.external_credential_id == "canvas-cred-provenance"
+
+    @pytest.mark.parametrize(
+        ("selector", "value"),
+        [
+            ("delivery_record_id", "delivery-canvas-other-tenant"),
+            ("external_credential_id", "canvas-cred-other-tenant"),
+            ("credential_id", "cred-canvas-other-tenant"),
+        ],
+    )
+    async def test_canvas_mirror_provenance_rejects_cross_tenant_identifier_substitution(
+        self,
+        repo,
+        selector,
+        value,
+    ):
+        from issuance.infrastructure.api import routes
+
+        tx = _make_transaction(
+            id="tx-canvas-other-tenant",
+            organization_id="org-2",
+            status=IssuanceStatus.ISSUED,
+            issuer_did_override="did:web:other.example",
+        )
+        cred = _make_credential(
+            id="cred-canvas-other-tenant",
+            transaction_id=tx.id,
+            organization_id="org-2",
+            issuer_did="did:web:other.example",
+        )
+        delivered = _make_delivery_record(
+            id="delivery-canvas-other-tenant",
+            credential_id=cred.id,
+            transaction_id=tx.id,
+            organization_id="org-2",
+            delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
+            canvas_account_id="canvas-account-2",
+            external_credential_id="canvas-cred-other-tenant",
+        )
+        await repo.save_transaction(tx)
+        await repo.save_credential(cred)
+        await repo.save_delivery_record(delivered)
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes.get_canvas_mirror_provenance(
+                http_request=types.SimpleNamespace(
+                    headers={"X-Organization-ID": "org-1"}
+                ),
+                organization_id="org-1",
+                repo=repo,
+                **{selector: value},
+            )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Canvas mirror delivery record not found"
+
+    async def test_canvas_mirror_provenance_rejects_untrusted_or_mismatched_tenant_context(
+        self,
+        repo,
+    ):
+        from issuance.infrastructure.api import routes
+
+        with pytest.raises(routes.HTTPException) as missing:
+            await routes.get_canvas_mirror_provenance(
+                http_request=types.SimpleNamespace(headers={}),
+                organization_id="org-1",
+                delivery_record_id="delivery-001",
+                repo=repo,
+            )
+        assert missing.value.status_code == 403
+
+        with pytest.raises(routes.HTTPException) as mismatched:
+            await routes.get_canvas_mirror_provenance(
+                http_request=types.SimpleNamespace(
+                    headers={"X-Organization-ID": "org-2"}
+                ),
+                organization_id="org-1",
+                delivery_record_id="delivery-001",
+                repo=repo,
+            )
+        assert mismatched.value.status_code == 403
 
 
 class TestCanvasMirrorBatchProcessing:
