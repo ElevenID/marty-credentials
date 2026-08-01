@@ -62,6 +62,14 @@ class _CredentialTemplateClient:
         return self._response
 
 
+class _UnexpectedCredentialTemplateClient:
+    async def __aenter__(self):
+        raise AssertionError("HTTP fallback must not run after a successful gRPC lookup")
+
+    async def __aexit__(self, *_args):
+        return None
+
+
 def _create_request(**overrides) -> ApplicationTemplateCreate:
     values = {
         "organization_id": "org-123",
@@ -198,6 +206,68 @@ async def test_validate_rejects_active_credential_template_without_revocation_pr
         error["code"] == "REVOCATION_PROFILE_REQUIRED"
         for error in result["errors"]
     )
+
+
+async def test_validate_uses_internal_grpc_template_contract_first(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    created = await application_routes.create_application_template(_create_request(), repo=repo)
+
+    async def fetch_via_grpc(template_id: str, target: str):
+        assert template_id == "credential-template-1"
+        assert target == "credential-template:9003"
+        return {
+            "id": template_id,
+            "organization_id": "org-123",
+            "status": "ACTIVE",
+            "claims": [{"name": "email"}],
+            "revocation_profile_id": "revocation-profile-1",
+        }
+
+    monkeypatch.setenv("CT_GRPC_TARGET", "credential-template:9003")
+    monkeypatch.setattr(
+        application_routes,
+        "_fetch_credential_template_via_grpc",
+        fetch_via_grpc,
+    )
+    monkeypatch.setattr(
+        application_routes.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _UnexpectedCredentialTemplateClient(),
+    )
+
+    result = await application_routes.validate_application_template(created.id, repo=repo)
+
+    assert result == {"valid": True, "errors": []}
+
+
+async def test_validate_reports_dependency_unavailable_instead_of_not_found(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    created = await application_routes.create_application_template(_create_request(), repo=repo)
+
+    class _UnavailableResponse:
+        status_code = 503
+
+    class _UnavailableClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url):
+            return _UnavailableResponse()
+
+    monkeypatch.delenv("CT_GRPC_TARGET", raising=False)
+    monkeypatch.setattr(
+        application_routes.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _UnavailableClient(),
+    )
+
+    result = await application_routes.validate_application_template(created.id, repo=repo)
+
+    assert any(error["code"] == "UNAVAILABLE" for error in result["errors"])
+    assert not any(error["code"] == "NOT_FOUND" for error in result["errors"])
 
 
 async def test_validate_covers_evidence_claim_checks_and_configuration(monkeypatch) -> None:

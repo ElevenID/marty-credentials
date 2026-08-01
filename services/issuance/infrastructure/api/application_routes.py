@@ -73,6 +73,75 @@ logger = logging.getLogger(__name__)
 _INTERNAL_REVIEWER_ID = "issuance-management-api"
 
 
+class _CredentialTemplateLookupUnavailable(RuntimeError):
+    """The credential-template service could not answer a validation lookup."""
+
+
+async def _fetch_credential_template_via_grpc(
+    template_id: str,
+    target: str,
+) -> dict[str, Any] | None:
+    """Resolve a template through the stack's internal service contract."""
+
+    import grpc
+    import grpc.aio as grpc_aio
+    from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+    from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
+    try:
+        async with grpc_aio.insecure_channel(target) as channel:
+            response = await ct_grpc.CredentialTemplateServiceStub(channel).GetTemplate(
+                ct_pb2.GetTemplateRequest(template_id=template_id)
+            )
+    except grpc.RpcError as exc:
+        if exc.code() == grpc.StatusCode.NOT_FOUND:
+            return None
+        raise
+
+    if not response.id:
+        return None
+    return {
+        "id": response.id,
+        "organization_id": response.organization_id,
+        "status": response.status,
+        "revocation_profile_id": response.revocation_profile_id,
+        "claims": [{"name": claim.name} for claim in response.claims],
+    }
+
+
+async def _fetch_credential_template(template_id: str) -> dict[str, Any] | None:
+    """Fetch a template over gRPC, with HTTP compatibility for older stacks."""
+
+    grpc_target = os.environ.get("CT_GRPC_TARGET", "").strip()
+    if grpc_target:
+        try:
+            template = await _fetch_credential_template_via_grpc(template_id, grpc_target)
+            if template is not None:
+                return template
+        except Exception as exc:
+            logger.warning(
+                "Credential Template gRPC lookup failed for %s; trying HTTP: %s",
+                template_id,
+                exc,
+            )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template_id}"
+            )
+    except Exception as exc:
+        raise _CredentialTemplateLookupUnavailable from exc
+
+    if response.status_code == 200:
+        return response.json()
+    if response.status_code == 404:
+        return None
+    raise _CredentialTemplateLookupUnavailable(
+        f"credential-template service returned HTTP {response.status_code}"
+    )
+
+
 def _trusted_application_organization_id(request: Request) -> str:
     """Require the gateway-authenticated tenant on application management routes."""
 
@@ -298,17 +367,12 @@ async def _application_template_validation_errors(
         add("credential_template", "credential_template_id", "REQUIRED", "Select a Credential Template.")
         credential_template = None
     else:
-        credential_template = None
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
-                )
-            if response.status_code == 200:
-                credential_template = response.json()
-            else:
+            credential_template = await _fetch_credential_template(template.credential_template_id)
+            if credential_template is None:
                 add("credential_template", "credential_template_id", "NOT_FOUND", "Credential Template was not found.")
-        except Exception:
+        except _CredentialTemplateLookupUnavailable:
+            credential_template = None
             add("credential_template", "credential_template_id", "UNAVAILABLE", "Credential Template validation is unavailable.")
 
     if credential_template:
