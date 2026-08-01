@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.33] - 2026-08-01
+
+### Fixed
+
+- Resolve application-template credential dependencies through the stack's
+  internal gRPC contract before using the HTTP compatibility path, so
+  activation observes the same tenant-scoped active template as issuance.
+- Distinguish a missing credential template from an unavailable dependency
+  instead of reporting every internal service error as `NOT_FOUND`.
+
 ## [0.1.32] - 2026-08-01
 
 ### Security
