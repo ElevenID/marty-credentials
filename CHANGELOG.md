@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.34] - 2026-08-01
+
+### Security
+
+- Add service-key-authenticated, owner-only lookups for issuance transactions,
+  issued credentials, and application templates so the gateway can establish
+  tenant ownership before authorizing identifier-based management operations.
+- Keep public management routes tenant-scoped and return no credential,
+  transaction, template, or custody details from the internal lookup surface.
+
 ## [0.1.33] - 2026-08-01
 
 ### Fixed
