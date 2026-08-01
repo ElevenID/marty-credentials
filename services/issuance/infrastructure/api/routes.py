@@ -4421,7 +4421,7 @@ async def issue_credential(
         logger.warning(f"[credential] rid={rid} could not decode proof nonce: {_nonce_err}")
         _proof_nonce = None
 
-    if not _proof_nonce or not await _nonce_pool.consume(_proof_nonce):
+    if not _proof_nonce:
         # OID4VCI Final §8.2 distinguishes a nonce failure from a malformed
         # or invalidly-signed proof.  Keeping this mapping precise lets
         # wallets request a fresh nonce instead of treating the holder key as
@@ -4434,13 +4434,12 @@ async def issue_credential(
             },
         )
 
+    # Authenticate the proof before mutating nonce state. Consuming first
+    # would let an attacker burn a wallet's nonce with an invalid signature.
     ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
         proof_jwt, expected_nonce=_proof_nonce
     )
-    if ok:
-        holder_did = did_from_proof
-        logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
-    else:
+    if not ok:
         logger.warning(
             f"[credential] rid={rid} tx_id={tx.id} proof verification failed: {verify_err}"
         )
@@ -4451,6 +4450,21 @@ async def issue_credential(
                 "error_description": verify_err or "Proof of possession verification failed",
             },
         )
+
+    # The nonce claim is now cryptographically bound. Consume it atomically so
+    # a replay or a concurrent duplicate still fails without enabling a nonce
+    # exhaustion attack using unauthenticated bytes.
+    if not await _nonce_pool.consume(_proof_nonce):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_nonce",
+                "error_description": "Proof nonce is missing, expired, or already used",
+            },
+        )
+
+    holder_did = did_from_proof
+    logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
 
     # Filter internal workflow fields out of claims — these are metadata used by the
     # applicant service and must never appear as credential subject attributes.
