@@ -1,12 +1,12 @@
 {
   "schema": "marty.release-dependencies/v1",
   "marty-rs": {
-    "version": "0.1.27",
+    "version": "0.1.29",
     "repository": "ElevenID/marty-core",
-    "tag": "v0.1.27",
-    "commit": "bcb30b7325d91a7e7a301cc7c973fc9e4f818d26",
-    "asset": "marty_rs-0.1.27-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    "sha256": "651135fae252f41d88fb40ef4d0575f57cd1d772a4f8166bf616ad2b67a6e1e3"
+    "tag": "v0.1.29",
+    "commit": "fb460b510d8e0bd93bddf2aafeaa0ab22d9a6dd2",
+    "asset": "marty_rs-0.1.29-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "5a2a5aa02692fcd216251f2a90c8e19a4cc3c98da77f1e77c26a89777603e44a"
   },
   "marty-msf": {
     "version": "1.0.0",
