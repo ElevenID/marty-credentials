@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tenant ownership before authorizing identifier-based management operations.
 - Keep public management routes tenant-scoped and return no credential,
   transaction, template, or custody details from the internal lookup surface.
+- Make Rust, license, Bandit, and Python dependency audits release-blocking;
+  retain only the documented unfixed RSA advisory exception and explicitly
+  review the permissive transitive license families used by the dependency
+  graph.
 
 ## [0.1.33] - 2026-08-01
 
