@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Consume marty-core 0.1.31 so OID4VCI key-attestation-bound proofs accept the
+  Final-spec embedded `jwk` form only when it matches a public key in the exact
+  issuer-profile-validated attestation.
+- Remove reliance on Marty's pre-1.0 numeric `kid`-as-array-index convention;
+  only standards-defined `jwk` and `kid` key identification remain.
+- Keep imported official compliance suites, fixtures, certificates,
+  assertions, expected results, selections, and exclusions unchanged.
+
 ## [0.1.37] - 2026-08-01
 
 ### Fixed
