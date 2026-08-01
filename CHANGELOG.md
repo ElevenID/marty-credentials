@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Enforce tenant-bound issuer-profile policy for OID4VCI key-attestation
+  proofs on both HTTP and gRPC issuance paths. Wallet-provider certificate,
+  signature, freshness, nonce, assurance, and status checks complete before
+  nonce consumption, and marty-core binds the proof to the exact validated
+  attestation and selected public key.
+- Validate IETF Token Status List JWTs through profile-owned HTTPS origin,
+  trust-root, algorithm, freshness, response-size, decompression-size, and
+  private-network policies. Only a cryptographically verified `VALID` entry
+  is accepted.
+
+### Changed
+
+- Publish `key_attestations_required` only when the resolved organization and
+  issuer profile actually require it, and consume the immutable marty-core
+  0.1.30 release artifacts and source revision.
+- Preserve imported official compliance suites, fixtures, certificates,
+  assertions, selections, exclusions, and expected results byte-for-byte;
+  this change affects only ElevenID product code and owned tests.
+
 ## [0.1.35] - 2026-08-01
 
 ### Security

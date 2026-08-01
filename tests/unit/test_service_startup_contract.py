@@ -9,7 +9,6 @@ from types import SimpleNamespace
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "python"))
 
@@ -94,6 +93,40 @@ def test_native_extension_capability_contract_requires_remote_mdoc_split_signing
 
     with pytest.raises(RuntimeError, match="oid4vci_prepare_mdoc"):
         rust_integration.validate_marty_rs_capabilities()
+
+
+def test_key_attestation_binding_passes_only_the_exact_validated_token(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    captured: tuple[object, ...] | None = None
+
+    class Extension:
+        def oid4vci_verify_key_attestation_bound_proof_jwt(self, *args):
+            nonlocal captured
+            captured = args
+            return "", "nonce-1", '{"kty":"EC","crv":"P-256","x":"x","y":"y"}'
+
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
+
+    result = rust_integration.verify_key_attestation_bound_proof_jwt(
+        "proof.jwt.value",
+        "validated.attestation.value",
+        "nonce-1",
+        "https://issuer.example/org/org-a",
+    )
+
+    assert result == (
+        True,
+        "",
+        {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+        None,
+    )
+    assert captured == (
+        "proof.jwt.value",
+        "validated.attestation.value",
+        "nonce-1",
+        "https://issuer.example/org/org-a",
+    )
 
 
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:

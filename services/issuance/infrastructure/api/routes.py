@@ -42,6 +42,7 @@ from issuance.application.canvas_issuance_guard import (
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
@@ -60,6 +61,7 @@ from issuance.application.rust_integration import (
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
     oid4vci_exchange_auth_code_for_token,
+    verify_key_attestation_bound_proof_jwt,
     verify_proof_jwt,
 )
 from issuance.domain.entities import (
@@ -4436,8 +4438,15 @@ async def issue_credential(
 
     # Authenticate the proof before mutating nonce state. Consuming first
     # would let an attacker burn a wallet's nonce with an invalid signature.
-    ok, did_from_proof, holder_jwk, verify_err = verify_proof_jwt(
-        proof_jwt, expected_nonce=_proof_nonce
+    ok, did_from_proof, holder_jwk, verify_err = (
+        await verify_oid4vci_proof_with_issuer_policy(
+            proof_jwt,
+            issuer_context=issuer_context,
+            organization_id=tx.organization_id,
+            expected_nonce=_proof_nonce,
+            proof_verifier=verify_proof_jwt,
+            bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
+        )
     )
     if not ok:
         logger.warning(
