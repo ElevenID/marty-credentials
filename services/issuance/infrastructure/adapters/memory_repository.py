@@ -1967,15 +1967,26 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     async def get_credential_display_metadata_for_org(
         self, org_id: str
     ) -> dict[str, dict[str, object]]:
-        return {
-            credential_type: {
+        metadata: dict[str, dict[str, object]] = {}
+        for credential_type, _formats in await self.get_credential_type_formats_for_org(org_id):
+            issuer_did = next(
+                (
+                    tx.issuer_did_override
+                    for tx in self._transactions.values()
+                    if tx.organization_id == org_id
+                    and tx.credential_type == credential_type
+                    and tx.issuer_did_override
+                ),
+                None,
+            )
+            metadata[credential_type] = {
                 "name": credential_type,
                 "description": None,
                 "claims": [],
                 "display_style": {},
+                "issuer_did": issuer_did,
             }
-            for credential_type, _formats in await self.get_credential_type_formats_for_org(org_id)
-        }
+        return metadata
 
     async def save_authorization_session(self, auth_session: AuthorizationSession) -> None:
         self._authorization_sessions[auth_session.id] = copy.deepcopy(auth_session)

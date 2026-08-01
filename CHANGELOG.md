@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Resolve each OID4VCI credential configuration's proof and key-attestation
+  policy through the credential template's public `issuer_did`. Organization
+  metadata now remains available when a tenant owns multiple active issuer
+  identities, without accepting an issuer-profile or KMS selector from the
+  public boundary.
+
 ## [0.1.36] - 2026-08-01
 
 ### Security

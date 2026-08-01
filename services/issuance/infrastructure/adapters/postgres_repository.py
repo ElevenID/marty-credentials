@@ -923,7 +923,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         async with self._session_factory() as session:
             stmt = text(
                 """
-                SELECT credential_type, name, description, claims, display_style, vct
+                SELECT credential_type, name, description, claims, display_style, vct, issuer_did
                 FROM credential_template_service.credential_templates
                 WHERE organization_id = :org_id
                   AND status IN ('active', 'draft')
@@ -936,7 +936,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt, {"org_id": org_id})
             metadata: dict[str, dict[str, Any]] = {}
-            for ctype, name, description, claims, display_style, vct in result.all():
+            for ctype, name, description, claims, display_style, vct, issuer_did in result.all():
                 if ctype in metadata:
                     continue
                 metadata[ctype] = {
@@ -945,6 +945,9 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     "claims": claims if isinstance(claims, list) else [],
                     "display_style": display_style if isinstance(display_style, dict) else {},
                     "vct": vct,
+                    # Internal routing input for DID-first proof-policy
+                    # resolution. It is not a custody selector.
+                    "issuer_did": issuer_did,
                 }
             return metadata
 
