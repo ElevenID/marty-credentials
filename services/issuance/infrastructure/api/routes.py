@@ -713,6 +713,10 @@ internal_application_router = APIRouter(
     prefix="/internal/applications", tags=["internal-applications"]
 )
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["issued-credentials"])
+resource_owner_router = APIRouter(
+    prefix="/internal/v1/resource-owners",
+    tags=["internal-resource-owners"],
+)
 
 # ---------------------------------------------------------------------------
 # TLS-aware gRPC channel helper
@@ -1058,6 +1062,66 @@ class IssuanceTransactionResponse(BaseModel):
     issued_at: str | None = None
     revoked_at: str | None = None
     revocation_reason: str | None = None
+
+
+class ResourceOwnerResponse(BaseModel):
+    """Minimal ownership projection for gateway authorization lookups."""
+
+    organization_id: str
+
+
+@resource_owner_router.get(
+    "/issuance-transactions/{transaction_id}",
+    response_model=ResourceOwnerResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+    include_in_schema=False,
+)
+async def get_issuance_transaction_owner(
+    transaction_id: str,
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
+) -> ResourceOwnerResponse:
+    """Return only the tenant owner needed for gateway authorization."""
+
+    transaction = await repo.get_transaction(transaction_id)
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return ResourceOwnerResponse(organization_id=transaction.organization_id)
+
+
+@resource_owner_router.get(
+    "/issued-credentials/{credential_id}",
+    response_model=ResourceOwnerResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+    include_in_schema=False,
+)
+async def get_issued_credential_owner(
+    credential_id: str,
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
+) -> ResourceOwnerResponse:
+    """Return only the tenant owner needed for gateway authorization."""
+
+    credential = await repo.get_credential(credential_id)
+    if not credential:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return ResourceOwnerResponse(organization_id=credential.organization_id)
+
+
+@resource_owner_router.get(
+    "/application-templates/{template_id}",
+    response_model=ResourceOwnerResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+    include_in_schema=False,
+)
+async def get_application_template_owner(
+    template_id: str,
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
+) -> ResourceOwnerResponse:
+    """Return only the tenant owner needed for gateway authorization."""
+
+    template = await repo.get_application_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return ResourceOwnerResponse(organization_id=template.organization_id)
 
 
 class CredentialRenewalOfferResponse(BaseModel):
