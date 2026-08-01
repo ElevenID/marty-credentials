@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.32] - 2026-08-01
+
+### Security
+
+- Bind issued-credential management and lifecycle operations to the authenticated
+  organization and return non-enumerating not-found responses for cross-tenant
+  identifier substitution.
+- Keep delivery routing, pre-authorized-code state, issuer-profile identifiers,
+  signing-service references, and custody coordinates out of public responses.
+
+### Changed
+
+- Align issuance transaction, renewal, status, and issued-credential response
+  shapes with the strict Marty-Protocol contracts while retaining the existing
+  Canvas and DIDComm delivery behavior behind trusted internal boundaries.
+
 ## [0.1.31] - 2026-07-29
 
 ### Security
