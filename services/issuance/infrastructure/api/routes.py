@@ -10,9 +10,10 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Literal
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -880,6 +881,35 @@ async def _verify_management_api_key(
     return x_api_key
 
 
+def _trusted_organization_id(http_request: Request) -> str:
+    """Return the gateway-authenticated organization for management calls."""
+    organization_id = str(http_request.headers.get("X-Organization-ID") or "").strip()
+    if not organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Trusted organization context is required",
+        )
+    return organization_id
+
+
+def _require_trusted_organization(
+    http_request: Request,
+    expected_organization_id: str,
+    *,
+    hide_resource: bool = False,
+) -> str:
+    """Fail closed when a management request crosses a tenant boundary."""
+    trusted = _trusted_organization_id(http_request)
+    if not hmac.compare_digest(trusted, str(expected_organization_id)):
+        if hide_resource:
+            raise HTTPException(status_code=404, detail="Resource not found")
+        raise HTTPException(
+            status_code=403,
+            detail="Organization context does not match requested organization",
+        )
+    return trusted
+
+
 # ============================================================================
 # Request/Response Models
 # ============================================================================
@@ -924,9 +954,7 @@ class InitiateIssuanceRequest(BaseModel):
                 if exc.code == "credential_must_be_unsigned":
                     message = "credential_document must be unsigned"
                 elif exc.code == "issuer_did_mismatch":
-                    message = (
-                        "credential_document issuer must match the resolved issuer_did"
-                    )
+                    message = "credential_document issuer must match the resolved issuer_did"
                 else:
                     message = f"credential_document failed VCDM validation: {exc.code}"
                 raise ValueError(message) from exc
@@ -994,23 +1022,52 @@ class Oid4vciRegisteredClientResponse(BaseModel):
 
 
 class IssuanceResponse(BaseModel):
+    """Internal service response; gateway removes pre_auth_code publicly."""
+
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     credential_template_id: str
-    status: str
+    status: Literal[
+        "pending", "authorized", "signing", "issued", "failed", "expired", "revoked"
+    ]
     credential_offer_uri: str
-    credential_offer_uris: dict[str, str] = {}  # wallet_id → URI for each configured wallet
-    credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
+    credential_offer_uris: dict[str, str]  # wallet_id → URI for each configured wallet
+    credential_offer_labels: dict[str, str]  # wallet_id → display_name from template
     pre_auth_code: str
     expires_at: str
 
 
+class IssuanceTransactionResponse(BaseModel):
+    """Public-safe tenant management projection of an issuance transaction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    organization_id: str
+    credential_template_id: str
+    applicant_id: str | None = None
+    application_id: str | None = None
+    subject_did: str | None = None
+    status: Literal[
+        "pending", "authorized", "signing", "issued", "failed", "expired", "revoked"
+    ]
+    created_at: str
+    expires_at: str | None = None
+    issued_at: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+
+
 class CredentialRenewalOfferResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     source_credential_id: str
     transaction_id: str
     credential_offer_uri: str
-    credential_offer_uris: dict[str, str] = {}
-    credential_offer_labels: dict[str, str] = {}
+    credential_offer_uris: dict[str, str]
+    credential_offer_labels: dict[str, str]
     expires_at: str
 
 
@@ -1248,7 +1305,9 @@ class ApplicationRejection(BaseModel):
 
 
 class CredentialStatusRequest(BaseModel):
-    reason: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(None, max_length=2000)
 
 
 class CredentialStatusResponse(BaseModel):
@@ -1380,11 +1439,13 @@ class CanvasMirrorProvenanceResponse(BaseModel):
 
 
 class IssuedCredentialRecordResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     credential_id: str
     credential_type: str
-    credential_format: str
+    credential_format: Literal["MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD"]
     flow_execution_id: str
     credential_template_id: str
     application_id: str | None = None
@@ -1399,10 +1460,9 @@ class IssuedCredentialRecordResponse(BaseModel):
     issued_at: str
     valid_from: str | None = None
     valid_until: str | None = None
-    status: str
-    status_list_entries: list[IssuedCredentialStatusListEntryResponse] = Field(default_factory=list)
+    status: Literal["ACTIVE", "SUSPENDED", "REVOKED", "EXPIRED"]
+    status_list_entries: list[IssuedCredentialStatusListEntryResponse]
     credential_hash: str | None = None
-    deliveries: list[CredentialDeliveryRecordResponse] = Field(default_factory=list)
     revoked_at: str | None = None
     revocation_reason: str | None = None
     issuer_did: str | None = None
@@ -1496,7 +1556,7 @@ def _proof_audience_matches_org_issuer(audience: str | None, org_id: str) -> boo
 
 
 def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetime | None) -> str:
-    if status == CredentialStatus.ACTIVE and expires_at and expires_at < datetime.now(timezone.utc):
+    if status == CredentialStatus.ACTIVE and expires_at and expires_at < datetime.now(UTC):
         return "EXPIRED"
     return status.value.upper()
 
@@ -1765,7 +1825,6 @@ async def _issued_credential_to_protocol(
     repo: IIssuanceRepository,
 ) -> IssuedCredentialRecordResponse:
     tx = await repo.get_transaction(cred.transaction_id)
-    delivery_records = await repo.list_delivery_records_for_credential(cred.id)
     subject_id = (
         cred.subject_did
         or cred.applicant_id
@@ -1801,7 +1860,7 @@ async def _issued_credential_to_protocol(
             tx
             and tx.renewable
             and renewal_eligible_at
-            and datetime.now(timezone.utc) >= renewal_eligible_at
+            and datetime.now(UTC) >= renewal_eligible_at
             and cred.status == CredentialStatus.ACTIVE
             and not cred.renewed_to_credential_id
         ),
@@ -1813,7 +1872,6 @@ async def _issued_credential_to_protocol(
         status=protocol_status,
         status_list_entries=_status_list_entries_to_protocol(cred.status_list_entries),
         credential_hash=cred.credential_hash,
-        deliveries=[_delivery_record_to_protocol(record) for record in delivery_records],
         revoked_at=cred.revoked_at.isoformat() if cred.revoked_at else None,
         revocation_reason=cred.revocation_reason,
         issuer_did=cred.issuer_did or (tx.issuer_did_override if tx else None),
@@ -2246,7 +2304,7 @@ async def _post_canvas_mirror_alert_webhook(
         "event": "canvas_mirror_critical_alert",
         "organization_id": organization_id,
         "alerts": [_canvas_mirror_alert_to_dict(alert) for alert in alerts],
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
     try:
         async with httpx.AsyncClient(timeout=max(1.0, min(timeout_seconds, 20.0))) as client:
@@ -2366,7 +2424,7 @@ async def _sync_canvas_lifecycle_delivery_record(
     transaction: IssuanceTransaction | None = None,
 ) -> CredentialDeliveryRecord:
     tx = transaction or await repo.get_transaction(credential.transaction_id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await _hydrate_canvas_gate_metadata(record, tx, repo)
     if not canvas_delivery_feature_enabled(record.metadata, "enable_canvas_mirror_ops"):
         record.last_error = _canvas_gate_blocked_error("enable_canvas_mirror_ops")
@@ -2482,7 +2540,7 @@ async def _process_canvas_mirror_delivery_record(
     if record.status == CredentialDeliveryStatus.DELIVERED:
         return record
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     credential = credential or await repo.get_credential(record.credential_id)
     if credential is None:
         metadata = _next_canvas_publish_metadata(record, now)
@@ -2721,7 +2779,7 @@ async def run_canvas_mirror_status_sync_batch(
     for record in records_to_process:
         credential = await repo.get_credential(record.credential_id)
         if credential is None:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             lifecycle_action = (record.metadata or {}).get("last_status_sync_action") or "reinstate"
             record.last_error = f"Issued credential {record.credential_id} was not found for Canvas lifecycle resync"
             record.metadata = {
@@ -2802,7 +2860,7 @@ async def run_canvas_mirror_automation_cycle(
     limit: int = 25,
     retry_failed: bool = True,
 ) -> CanvasMirrorAutomationCycleResponse:
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     publish = await run_canvas_mirror_publish_batch(
         repo,
         organization_id=organization_id,
@@ -2814,7 +2872,7 @@ async def run_canvas_mirror_automation_cycle(
         organization_id=organization_id,
         limit=limit,
     )
-    completed_at = datetime.now(timezone.utc)
+    completed_at = datetime.now(UTC)
     metrics = {
         **{
             f"publish.{key.removeprefix('publish.')}": value
@@ -3159,9 +3217,11 @@ async def initiate_issuance(
                 "credential_subject is supported only for VCDM JWT-VC or Data Integrity templates"
             ),
         )
-    if request.credential_document is not None and _normalize_payload_format(
-        credential_payload_format
-    ) not in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+    if (
+        request.credential_document is not None
+        and _normalize_payload_format(credential_payload_format)
+        not in _DATA_INTEGRITY_PAYLOAD_FORMATS
+    ):
         raise HTTPException(
             status_code=422,
             detail="credential_document is supported only for Data Integrity templates",
@@ -3183,9 +3243,7 @@ async def initiate_issuance(
     # MIP §8.3 – when the caller supplies only a canonical application,
     # resolve its claim values from form_data. The application is a
     # first-class request field, never a hidden claim.
-    if request.application_id and (
-        not merged_claims or list(merged_claims.keys()) == ["_vct"]
-    ):
+    if request.application_id and (not merged_claims or list(merged_claims.keys()) == ["_vct"]):
         try:
             app = await repo.get_application(request.application_id)
             if app and app.form_data:
@@ -4542,12 +4600,12 @@ async def issue_credential(
         # and prevents a retry from minting a second credential identity.
         credential_document = tx.claims.get(_CREDENTIAL_DOCUMENT_FIELD)
         requested_credential_id = (
-            credential_document.get("id")
-            if isinstance(credential_document, dict)
-            else None
+            credential_document.get("id") if isinstance(credential_document, dict) else None
         )
-        credential_id = tx.reserved_credential_id or requested_credential_id or (
-            f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, f'marty:issuance:{tx.id}')}"
+        credential_id = (
+            tx.reserved_credential_id
+            or requested_credential_id
+            or (f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, f'marty:issuance:{tx.id}')}")
         )
         signing_tx = await repo.claim_transaction_for_signing(tx, credential_id)
         if signing_tx is None:
@@ -4697,7 +4755,7 @@ async def issue_credential(
             else effective_request_format or signing_format or "vc+sd-jwt"
         )
         if tx.status == IssuanceStatus.SIGNING:
-            issued_at = datetime.now(timezone.utc)
+            issued_at = datetime.now(UTC)
             expires_at = issued_at + timedelta(days=tx.validity_days)
             issued_credential = IssuedCredential(
                 id=credential_id,
@@ -5036,7 +5094,7 @@ async def _didcomm_sign_and_deliver(
         tx.nonce = None
         tx.complete()
         await repo.save_transaction(tx)
-        expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=tx.validity_days)
+        expires_at = (tx.issued_at or datetime.now(UTC)) + timedelta(days=tx.validity_days)
         issued_credential = IssuedCredential(
             id=credential_id,
             transaction_id=tx.id,
@@ -5051,7 +5109,7 @@ async def _didcomm_sign_and_deliver(
             credential_jwt=jwt_credential,
             credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
             status=CredentialStatus.ACTIVE,
-            issued_at=tx.issued_at or datetime.now(timezone.utc),
+            issued_at=tx.issued_at or datetime.now(UTC),
             expires_at=expires_at,
         )
         await repo.save_credential(issued_credential)
@@ -5316,50 +5374,67 @@ async def get_credential_offer(
     return _json.loads(offer_json_str)
 
 
-@issuance_router.get("/transactions", response_model=list[dict])
+@issuance_router.get(
+    "/transactions",
+    response_model=list[IssuanceTransactionResponse],
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def list_transactions(
+    http_request: Request,
     organization_id: str = Query(...),
     repo: IIssuanceRepository = Depends(),
-) -> list[dict]:
+) -> list[IssuanceTransactionResponse]:
     """List issuance transactions for an organization."""
+    _require_trusted_organization(http_request, organization_id)
     transactions = await repo.list_transactions(organization_id)
     return [
-        {
-            "id": tx.id,
-            "organization_id": tx.organization_id,
-            "credential_template_id": tx.credential_template_id,
-            "applicant_id": tx.applicant_id,
-            "application_id": tx.application_id,
-            "subject_did": tx.subject_did,
-            "status": tx.status.value,
-            "created_at": tx.created_at.isoformat(),
-        }
+        IssuanceTransactionResponse(
+            id=tx.id,
+            organization_id=tx.organization_id,
+            credential_template_id=tx.credential_template_id,
+            applicant_id=tx.applicant_id,
+            application_id=tx.application_id,
+            subject_did=tx.subject_did,
+            status=tx.status.value,
+            created_at=tx.created_at.isoformat(),
+        )
         for tx in transactions
     ]
 
 
-@issuance_router.get("/transactions/{tx_id}")
+@issuance_router.get(
+    "/transactions/{tx_id}",
+    response_model=IssuanceTransactionResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def get_transaction(
     tx_id: str,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
-) -> dict:
+) -> IssuanceTransactionResponse:
     """Get a specific issuance transaction."""
     tx = await repo.get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    return {
-        "id": tx.id,
-        "organization_id": tx.organization_id,
-        "credential_template_id": tx.credential_template_id,
-        "applicant_id": tx.applicant_id,
-        "subject_did": tx.subject_did,
-        "status": tx.status.value,
-        "created_at": tx.created_at.isoformat(),
-        "expires_at": tx.expires_at.isoformat(),
-        "issued_at": tx.issued_at.isoformat() if tx.issued_at else None,
-        "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
-        "revocation_reason": tx.revocation_reason,
-    }
+    _require_trusted_organization(
+        http_request,
+        tx.organization_id,
+        hide_resource=True,
+    )
+    return IssuanceTransactionResponse(
+        id=tx.id,
+        organization_id=tx.organization_id,
+        credential_template_id=tx.credential_template_id,
+        applicant_id=tx.applicant_id,
+        application_id=tx.application_id,
+        subject_did=tx.subject_did,
+        status=tx.status.value,
+        created_at=tx.created_at.isoformat(),
+        expires_at=tx.expires_at.isoformat(),
+        issued_at=tx.issued_at.isoformat() if tx.issued_at else None,
+        revoked_at=tx.revoked_at.isoformat() if tx.revoked_at else None,
+        revocation_reason=tx.revocation_reason,
+    )
 
 
 class TransactionRevokeRequest(BaseModel):
@@ -5402,12 +5477,18 @@ class IssuanceRetentionPurgeResponse(BaseModel):
 async def revoke_transaction(
     tx_id: str,
     request: TransactionRevokeRequest,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> dict:
     """Revoke an issuance transaction (and its associated credential if present)."""
     tx = await repo.get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    _require_trusted_organization(
+        http_request,
+        tx.organization_id,
+        hide_resource=True,
+    )
 
     if tx.status == IssuanceStatus.REVOKED:
         # Idempotent — already revoked, return current state
@@ -5474,15 +5555,24 @@ async def purge_organization_retention_data(
     )
 
 
-@issuance_router.get("/transactions/{tx_id}/revocation-status")
+@issuance_router.get(
+    "/transactions/{tx_id}/revocation-status",
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def get_transaction_revocation_status(
     tx_id: str,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> dict:
     """Get the revocation status of an issuance transaction."""
     tx = await repo.get_transaction(tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    _require_trusted_organization(
+        http_request,
+        tx.organization_id,
+        hide_resource=True,
+    )
 
     is_revoked = tx.status == IssuanceStatus.REVOKED
     return {
@@ -5562,11 +5652,18 @@ async def revoke_credential(
     credential_id: str,
     request: CredentialStatusRequest,
     repo: IIssuanceRepository = Depends(),
+    http_request: Request = None,
 ) -> dict:
     """Revoke a credential."""
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    if http_request is not None:
+        _require_trusted_organization(
+            http_request,
+            cred.organization_id,
+            hide_resource=True,
+        )
 
     if cred.status == CredentialStatus.REVOKED:
         raise HTTPException(status_code=400, detail="Credential already revoked")
@@ -5581,7 +5678,7 @@ async def revoke_credential(
     )
 
     cred.status = CredentialStatus.REVOKED
-    cred.status_updated_at = datetime.now(timezone.utc)
+    cred.status_updated_at = datetime.now(UTC)
     cred.revoked = True
     cred.revoked_at = cred.status_updated_at
     cred.revocation_reason = request.reason
@@ -5613,11 +5710,18 @@ async def suspend_credential(
     credential_id: str,
     request: CredentialStatusRequest,
     repo: IIssuanceRepository = Depends(),
+    http_request: Request = None,
 ) -> dict:
     """Suspend a credential temporarily."""
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    if http_request is not None:
+        _require_trusted_organization(
+            http_request,
+            cred.organization_id,
+            hide_resource=True,
+        )
 
     if cred.status == CredentialStatus.REVOKED:
         raise HTTPException(status_code=400, detail="Cannot suspend revoked credential")
@@ -5630,7 +5734,7 @@ async def suspend_credential(
     )
 
     cred.status = CredentialStatus.SUSPENDED
-    cred.status_updated_at = datetime.now(timezone.utc)
+    cred.status_updated_at = datetime.now(UTC)
     await repo.save_credential(cred)
     await _sync_canvas_lifecycle_delivery_records(
         cred,
@@ -5658,11 +5762,18 @@ async def reinstate_credential(
     credential_id: str,
     request: CredentialStatusRequest,
     repo: IIssuanceRepository = Depends(),
+    http_request: Request = None,
 ) -> dict:
     """Reinstate a suspended credential."""
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    if http_request is not None:
+        _require_trusted_organization(
+            http_request,
+            cred.organization_id,
+            hide_resource=True,
+        )
 
     if cred.status == CredentialStatus.REVOKED:
         raise HTTPException(status_code=400, detail="Cannot reinstate revoked credential")
@@ -5678,7 +5789,7 @@ async def reinstate_credential(
     )
 
     cred.status = CredentialStatus.ACTIVE
-    cred.status_updated_at = datetime.now(timezone.utc)
+    cred.status_updated_at = datetime.now(UTC)
     await repo.save_credential(cred)
     await _sync_canvas_lifecycle_delivery_records(
         cred,
@@ -5697,15 +5808,25 @@ async def reinstate_credential(
     }
 
 
-@issuance_router.get("/credentials/{credential_id}/status", response_model=CredentialStatusResponse)
+@issuance_router.get(
+    "/credentials/{credential_id}/status",
+    response_model=CredentialStatusResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def get_credential_status(
     credential_id: str,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> dict:
     """Get current status of a credential."""
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    _require_trusted_organization(
+        http_request,
+        cred.organization_id,
+        hide_resource=True,
+    )
 
     return {
         "id": cred.id,
@@ -5716,13 +5837,19 @@ async def get_credential_status(
     }
 
 
-@issuance_router.get("/credentials", response_model=list[dict])
+@issuance_router.get(
+    "/credentials",
+    response_model=list[dict],
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def list_credentials(
+    http_request: Request,
     organization_id: str = Query(...),
     status: str = Query(None),
     repo: IIssuanceRepository = Depends(),
 ) -> list[dict]:
     """List all credentials for an organization with optional status filter."""
+    _require_trusted_organization(http_request, organization_id)
     creds = await repo.list_credentials_by_org(organization_id)
 
     if status:
@@ -5742,12 +5869,18 @@ async def list_credentials(
     ]
 
 
-@issued_credential_router.get("", response_model=list[IssuedCredentialRecordResponse])
+@issued_credential_router.get(
+    "",
+    response_model=list[IssuedCredentialRecordResponse],
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def list_issued_credentials(
+    http_request: Request,
     organization_id: str = Query(...),
     status: str | None = Query(None),
     repo: IIssuanceRepository = Depends(),
 ) -> list[IssuedCredentialRecordResponse]:
+    _require_trusted_organization(http_request, organization_id)
     creds = await repo.list_credentials_by_org(organization_id)
     records = [await _issued_credential_to_protocol(cred, repo) for cred in creds]
     if status:
@@ -5756,14 +5889,24 @@ async def list_issued_credentials(
     return records
 
 
-@issued_credential_router.get("/{credential_id}", response_model=IssuedCredentialRecordResponse)
+@issued_credential_router.get(
+    "/{credential_id}",
+    response_model=IssuedCredentialRecordResponse,
+    dependencies=[Depends(_verify_management_api_key)],
+)
 async def get_issued_credential(
     credential_id: str,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> IssuedCredentialRecordResponse:
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
+    _require_trusted_organization(
+        http_request,
+        cred.organization_id,
+        hide_resource=True,
+    )
     return await _issued_credential_to_protocol(cred, repo)
 
 
@@ -5774,11 +5917,17 @@ async def get_issued_credential(
 )
 async def publish_issued_credential_canvas_mirror(
     credential_id: str,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> CredentialDeliveryRecordResponse:
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
+    _require_trusted_organization(
+        http_request,
+        cred.organization_id,
+        hide_resource=True,
+    )
 
     tx = await repo.get_transaction(cred.transaction_id)
     if not tx:
@@ -6017,9 +6166,7 @@ async def get_canvas_mirror_provenance(
     canvas_account_id: str | None = None,
     repo: IIssuanceRepository = Depends(),
 ) -> CanvasMirrorProvenanceResponse:
-    trusted_organization_id = (
-        http_request.headers.get("X-Organization-ID") or ""
-    ).strip()
+    trusted_organization_id = (http_request.headers.get("X-Organization-ID") or "").strip()
     if not trusted_organization_id:
         raise HTTPException(
             status_code=403,
@@ -6050,9 +6197,23 @@ async def get_canvas_mirror_provenance(
 async def revoke_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> IssuedCredentialRecordResponse:
-    await revoke_credential(credential_id, request, repo)
+    existing = await repo.get_credential(credential_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    _require_trusted_organization(
+        http_request,
+        existing.organization_id,
+        hide_resource=True,
+    )
+    await revoke_credential(
+        credential_id,
+        request,
+        repo,
+        http_request=http_request,
+    )
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
@@ -6067,9 +6228,23 @@ async def revoke_issued_credential(
 async def suspend_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> IssuedCredentialRecordResponse:
-    await suspend_credential(credential_id, request, repo)
+    existing = await repo.get_credential(credential_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    _require_trusted_organization(
+        http_request,
+        existing.organization_id,
+        hide_resource=True,
+    )
+    await suspend_credential(
+        credential_id,
+        request,
+        repo,
+        http_request=http_request,
+    )
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
@@ -6084,9 +6259,23 @@ async def suspend_issued_credential(
 async def reinstate_issued_credential(
     credential_id: str,
     request: CredentialStatusRequest,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> IssuedCredentialRecordResponse:
-    await reinstate_credential(credential_id, request, repo)
+    existing = await repo.get_credential(credential_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Issued credential not found")
+    _require_trusted_organization(
+        http_request,
+        existing.organization_id,
+        hide_resource=True,
+    )
+    await reinstate_credential(
+        credential_id,
+        request,
+        repo,
+        http_request=http_request,
+    )
     cred = await repo.get_credential(credential_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Issued credential not found")
@@ -6106,6 +6295,11 @@ async def renew_issued_credential(
     source = await repo.get_credential(credential_id)
     if not source:
         raise HTTPException(status_code=404, detail="Issued credential not found")
+    _require_trusted_organization(
+        http_request,
+        source.organization_id,
+        hide_resource=True,
+    )
     if source.status != CredentialStatus.ACTIVE:
         raise HTTPException(status_code=409, detail="Only active credentials can be renewed.")
     if source.renewed_to_credential_id:
@@ -6125,7 +6319,7 @@ async def renew_issued_credential(
         raise HTTPException(status_code=409, detail="Credential has no renewal eligibility date.")
 
     eligible_at = source.expires_at - timedelta(days=source_tx.renewal_window_days)
-    if datetime.now(timezone.utc) < eligible_at:
+    if datetime.now(UTC) < eligible_at:
         raise HTTPException(
             status_code=409,
             detail={
