@@ -205,6 +205,7 @@ from issuance.infrastructure.api.routes import (
     CanvasMirrorAutomationConfig,
     issuance_router,
     issued_credential_router,
+    resource_owner_router,
     run_canvas_mirror_automation_loop,
 )
 from issuance.infrastructure.api.physical_document_routes import (
@@ -337,6 +338,7 @@ def create_app() -> FastAPI:
     app.include_router(canvas_integration_router)
     app.include_router(canvas_operations_router)
     app.include_router(issued_credential_router)
+    app.include_router(resource_owner_router)
     app.include_router(application_template_router)
     app.include_router(internal_application_router)
     app.include_router(physical_document_router)
