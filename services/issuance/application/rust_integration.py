@@ -225,6 +225,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_sign_credential",
         "oid4vci_verify_pkce_s256",
         "oid4vci_verify_proof_jwt",
+        "oid4vci_verify_key_attestation_bound_proof_jwt",
         "prepare_vcdm_data_integrity_credential",
     }
 )
@@ -1060,6 +1061,37 @@ def verify_proof_jwt(
         return False, "", None, str(e)
     except Exception as e:
         return False, "", None, f"proof JWT error: {e}"
+
+
+def verify_key_attestation_bound_proof_jwt(
+    proof_jwt: str,
+    validated_key_attestation_jwt: str,
+    expected_nonce: str | None,
+    issuer_url: str | None = None,
+) -> tuple[bool, str, dict[str, Any] | None, str | None]:
+    """Verify a proof against the exact product-validated key attestation.
+
+    Certificate, assurance, status, and tenant policy are validated by the
+    issuance application before this call.  Marty Core independently parses
+    the same compact attestation, selects the numeric ``kid`` entry, and
+    cryptographically binds the proof signature to that attested public key.
+    """
+    try:
+        marty_rs = get_marty_rs()
+        holder_did, _nonce, holder_jwk_json = (
+            marty_rs.oid4vci_verify_key_attestation_bound_proof_jwt(
+                proof_jwt,
+                validated_key_attestation_jwt,
+                expected_nonce,
+                issuer_url,
+            )
+        )
+        holder_jwk = json.loads(holder_jwk_json) if holder_jwk_json else None
+        return True, holder_did, holder_jwk, None
+    except RuntimeError as e:
+        return False, "", None, str(e)
+    except Exception as e:
+        return False, "", None, f"key-attestation-bound proof JWT error: {e}"
 
 
 # ---------------------------------------------------------------------------

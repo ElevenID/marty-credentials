@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import ipaddress
 import json
+import socket
+import ssl
+import zlib
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import urlparse
 
+import httpx
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
@@ -20,6 +27,14 @@ class KeyAttestationError(ValueError):
 
 
 StatusValidator = Callable[[Mapping[str, Any]], Awaitable[bool]]
+ProofVerifier = Callable[
+    [str, str | None, str | None],
+    tuple[bool, str, dict[str, Any] | None, str | None],
+]
+BoundProofVerifier = Callable[
+    [str, str, str | None, str | None],
+    tuple[bool, str, dict[str, Any] | None, str | None],
+]
 
 
 @dataclass(frozen=True)
@@ -32,6 +47,12 @@ class KeyAttestationPolicy:
     max_age_seconds: int
     require_nonce: bool
     status_validation: Literal["disabled", "if_present", "required"]
+    status_list_allowed_origins: tuple[str, ...]
+    status_list_trusted_root_certificates_pem: tuple[str, ...]
+    status_list_allowed_algorithms: frozenset[str]
+    status_list_max_age_seconds: int
+    status_list_allow_private_hosts: bool
+    status_list_tls_ca_certificates_pem: tuple[str, ...]
 
     @classmethod
     def from_issuer_context(
@@ -59,6 +80,12 @@ class KeyAttestationPolicy:
                 max_age_seconds=300,
                 require_nonce=True,
                 status_validation="required",
+                status_list_allowed_origins=(),
+                status_list_trusted_root_certificates_pem=(),
+                status_list_allowed_algorithms=frozenset(),
+                status_list_max_age_seconds=86400,
+                status_list_allow_private_hosts=False,
+                status_list_tls_ca_certificates_pem=(),
             )
         if not isinstance(raw, Mapping):
             raise KeyAttestationError("Issuer-profile key attestation policy must be an object")
@@ -76,9 +103,38 @@ class KeyAttestationPolicy:
         max_age = raw.get("max_age_seconds", 300)
         if isinstance(max_age, bool) or not isinstance(max_age, int) or not 1 <= max_age <= 86400:
             raise KeyAttestationError("max_age_seconds must be an integer from 1 through 86400")
+        status_max_age = raw.get("status_list_max_age_seconds", 86400)
+        if (
+            isinstance(status_max_age, bool)
+            or not isinstance(status_max_age, int)
+            or not 1 <= status_max_age <= 604800
+        ):
+            raise KeyAttestationError(
+                "status_list_max_age_seconds must be an integer from 1 through 604800"
+            )
         if mode != "disabled" and (not roots or not algorithms):
             raise KeyAttestationError(
                 "Enabled key attestation policy requires trusted roots and allowed algorithms"
+            )
+        allow_private_status_hosts = raw.get("status_list_allow_private_hosts", False)
+        if not isinstance(allow_private_status_hosts, bool):
+            raise KeyAttestationError("status_list_allow_private_hosts must be a boolean")
+        require_nonce = raw.get("require_nonce", True)
+        if not isinstance(require_nonce, bool):
+            raise KeyAttestationError("require_nonce must be a boolean")
+        status_origins = tuple(
+            _normalize_https_origin(value)
+            for value in _string_tuple(raw.get("status_list_allowed_origins"))
+        )
+        status_roots = (
+            _string_tuple(raw.get("status_list_trusted_root_certificates_pem")) or roots
+        )
+        status_algorithms = (
+            frozenset(_string_tuple(raw.get("status_list_allowed_algorithms"))) or algorithms
+        )
+        if mode != "disabled" and status_validation != "disabled" and not status_origins:
+            raise KeyAttestationError(
+                "Enabled status validation requires an HTTPS status-list origin allowlist"
             )
         return cls(
             mode=mode,  # type: ignore[arg-type]
@@ -89,8 +145,16 @@ class KeyAttestationPolicy:
                 _string_tuple(raw.get("required_user_authentication"))
             ),
             max_age_seconds=max_age,
-            require_nonce=bool(raw.get("require_nonce", True)),
+            require_nonce=require_nonce,
             status_validation=status_validation,  # type: ignore[arg-type]
+            status_list_allowed_origins=status_origins,
+            status_list_trusted_root_certificates_pem=status_roots,
+            status_list_allowed_algorithms=status_algorithms,
+            status_list_max_age_seconds=status_max_age,
+            status_list_allow_private_hosts=allow_private_status_hosts,
+            status_list_tls_ca_certificates_pem=_string_tuple(
+                raw.get("status_list_tls_ca_certificates_pem")
+            ),
         )
 
 
@@ -99,6 +163,16 @@ class ValidatedKeyAttestation:
     jwt: str
     attested_keys: tuple[dict[str, Any], ...]
     claims: Mapping[str, Any]
+
+
+def _proof_header(proof_jwt: str) -> dict[str, Any]:
+    parts = proof_jwt.split(".")
+    if len(parts) != 3:
+        raise KeyAttestationError("Proof JWT must have exactly three parts")
+    try:
+        return _decode_json_part(parts[0], "proof header")
+    except KeyAttestationError as exc:
+        raise KeyAttestationError("Proof JWT has an invalid JOSE header") from exc
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:
@@ -110,6 +184,29 @@ def _string_tuple(value: Any) -> tuple[str, ...]:
     if any(not item for item in result):
         raise KeyAttestationError("Key attestation policy list values must be non-empty strings")
     return result
+
+
+def _normalize_https_origin(value: str) -> str:
+    parsed = urlparse(value)
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise KeyAttestationError(
+            "Status-list allowed origins must be HTTPS origins without paths or credentials"
+        )
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise KeyAttestationError("Status-list allowed origin has an invalid port") from exc
+    host = parsed.hostname.lower()
+    host_display = f"[{host}]" if ":" in host else host
+    return f"https://{host_display}{f':{port}' if port and port != 443 else ''}"
 
 
 def _b64url_decode(value: str) -> bytes:
@@ -186,10 +283,13 @@ def _verify_certificate_signature(child: x509.Certificate, issuer: x509.Certific
                 ec.ECDSA(child.signature_hash_algorithm),
             )
         elif isinstance(key, rsa.RSAPublicKey):
+            signature_padding = child.signature_algorithm_parameters
+            if not isinstance(signature_padding, padding.AsymmetricPadding):
+                signature_padding = padding.PKCS1v15()
             key.verify(
                 child.signature,
                 child.tbs_certificate_bytes,
-                padding.PKCS1v15(),
+                signature_padding,
                 child.signature_hash_algorithm,
             )
         elif isinstance(key, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
@@ -200,6 +300,27 @@ def _verify_certificate_signature(child: x509.Certificate, issuer: x509.Certific
         raise
     except Exception as exc:
         raise KeyAttestationError("Key attestation certificate chain signature is invalid") from exc
+
+
+def _require_ca_certificate(certificate: x509.Certificate) -> None:
+    try:
+        constraints = certificate.extensions.get_extension_for_class(
+            x509.BasicConstraints
+        ).value
+    except x509.ExtensionNotFound as exc:
+        raise KeyAttestationError(
+            "Key attestation certificate chain issuer has no CA constraint"
+        ) from exc
+    if not constraints.ca:
+        raise KeyAttestationError("Key attestation certificate chain issuer is not a CA")
+    try:
+        key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        return
+    if not key_usage.key_cert_sign:
+        raise KeyAttestationError(
+            "Key attestation certificate chain issuer cannot sign certificates"
+        )
 
 
 def _validate_certificate_chain(
@@ -223,9 +344,16 @@ def _validate_certificate_chain(
     for certificate in chain:
         if now < certificate.not_valid_before_utc or now > certificate.not_valid_after_utc:
             raise KeyAttestationError("Key attestation certificate is outside its validity period")
+    try:
+        leaf_key_usage = chain[0].extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        leaf_key_usage = None
+    if leaf_key_usage is not None and not leaf_key_usage.digital_signature:
+        raise KeyAttestationError("Key attestation certificate cannot sign digital assertions")
     for child, issuer in zip(chain, chain[1:], strict=False):
         if child.issuer != issuer.subject:
             raise KeyAttestationError("Key attestation certificate chain issuer does not match")
+        _require_ca_certificate(issuer)
         _verify_certificate_signature(child, issuer)
 
     terminal = chain[-1]
@@ -236,6 +364,7 @@ def _validate_certificate_chain(
             return chain[0]
         if terminal.issuer == root.subject:
             try:
+                _require_ca_certificate(root)
                 _verify_certificate_signature(terminal, root)
                 return chain[0]
             except KeyAttestationError:
@@ -248,6 +377,200 @@ def _required_timestamp(claims: Mapping[str, Any], name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise KeyAttestationError(f"Key attestation requires integer {name} claim")
     return value
+
+
+def _status_list_value(
+    token: str,
+    *,
+    uri: str,
+    index: int,
+    policy: KeyAttestationPolicy,
+    now: datetime,
+) -> int:
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise KeyAttestationError("Status List Token JWT must have exactly three parts")
+    header = _decode_json_part(parts[0], "status-list header")
+    claims = _decode_json_part(parts[1], "status-list claims")
+    if header.get("typ") != "statuslist+jwt":
+        raise KeyAttestationError("Status List Token typ must be statuslist+jwt")
+    algorithm = header.get("alg")
+    if not isinstance(algorithm, str) or algorithm not in policy.status_list_allowed_algorithms:
+        raise KeyAttestationError("Status List Token algorithm is not allowed by issuer profile")
+    leaf = _validate_certificate_chain(
+        header.get("x5c") if isinstance(header.get("x5c"), list) else [],
+        policy.status_list_trusted_root_certificates_pem,
+        now,
+    )
+    _verify_signature_with_key(
+        leaf.public_key(),
+        _b64url_decode(parts[2]),
+        f"{parts[0]}.{parts[1]}".encode("ascii"),
+        algorithm,
+    )
+
+    if claims.get("sub") != uri:
+        raise KeyAttestationError("Status List Token subject does not match referenced URI")
+    iat = _required_timestamp(claims, "iat")
+    now_timestamp = int(now.timestamp())
+    if iat > now_timestamp + 30:
+        raise KeyAttestationError("Status List Token iat is in the future")
+    if now_timestamp - iat > policy.status_list_max_age_seconds:
+        raise KeyAttestationError("Status List Token is older than issuer policy allows")
+    exp = claims.get("exp")
+    if exp is not None:
+        if isinstance(exp, bool) or not isinstance(exp, int):
+            raise KeyAttestationError("Status List Token exp must be an integer")
+        if exp <= now_timestamp:
+            raise KeyAttestationError("Status List Token has expired")
+    ttl = claims.get("ttl")
+    if ttl is not None and (
+        isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0
+    ):
+        raise KeyAttestationError("Status List Token ttl must be a positive integer")
+
+    status_list = claims.get("status_list")
+    if not isinstance(status_list, Mapping):
+        raise KeyAttestationError("Status List Token requires a status_list object")
+    bits = status_list.get("bits")
+    encoded_list = status_list.get("lst")
+    if bits not in {1, 2, 4, 8} or isinstance(bits, bool):
+        raise KeyAttestationError("Status List Token bits must be one of 1, 2, 4, or 8")
+    if not isinstance(encoded_list, str) or not encoded_list:
+        raise KeyAttestationError("Status List Token lst must be base64url data")
+    try:
+        compressed = _b64url_decode(encoded_list)
+        decompressor = zlib.decompressobj()
+        status_bytes = decompressor.decompress(compressed, 1_048_577)
+        if (
+            len(status_bytes) > 1_048_576
+            or decompressor.unconsumed_tail
+            or not decompressor.eof
+            or decompressor.unused_data
+        ):
+            raise KeyAttestationError("Status List Token expands beyond the safe size limit")
+    except zlib.error as exc:
+        raise KeyAttestationError("Status List Token lst is not valid ZLIB data") from exc
+
+    byte_index = (index * bits) // 8
+    if byte_index >= len(status_bytes):
+        raise KeyAttestationError("Status List Token index is out of bounds")
+    bit_offset = (index * bits) % 8
+    return (status_bytes[byte_index] >> bit_offset) & ((1 << bits) - 1)
+
+
+async def validate_token_status_list_entry(
+    status: Mapping[str, Any],
+    policy: KeyAttestationPolicy,
+    *,
+    client: httpx.AsyncClient | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Fetch and validate an IETF Token Status List JWT entry.
+
+    URLs are profile-allowlisted, redirects are disabled, private network
+    destinations require an explicit profile opt-in, response sizes are
+    bounded, and the returned list must be signed under the profile's status
+    trust roots. Only status value 0 (VALID) is accepted.
+    """
+    reference = status.get("status_list")
+    if not isinstance(reference, Mapping):
+        raise KeyAttestationError("Status claim requires a status_list object")
+    index = reference.get("idx")
+    uri = reference.get("uri")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+        raise KeyAttestationError("Status-list idx must be a non-negative integer")
+    if not isinstance(uri, str) or not uri:
+        raise KeyAttestationError("Status-list uri must be a non-empty string")
+    parsed = urlparse(uri)
+    if (
+        parsed.scheme.lower() != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise KeyAttestationError("Status-list uri must be an HTTPS URL without credentials")
+    try:
+        port = parsed.port or 443
+    except ValueError as exc:
+        raise KeyAttestationError("Status-list uri has an invalid port") from exc
+    host = parsed.hostname.lower()
+    host_display = f"[{host}]" if ":" in host else host
+    origin = f"https://{host_display}{f':{port}' if port != 443 else ''}"
+    if origin not in policy.status_list_allowed_origins:
+        raise KeyAttestationError("Status-list uri origin is not allowed by issuer profile")
+
+    try:
+        addresses = await asyncio.get_running_loop().getaddrinfo(
+            parsed.hostname,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as exc:
+        raise KeyAttestationError("Status-list hostname could not be resolved") from exc
+    try:
+        resolved_ips = {ipaddress.ip_address(item[4][0]) for item in addresses}
+    except ValueError as exc:
+        raise KeyAttestationError("Status-list hostname resolved to an invalid address") from exc
+    if not resolved_ips:
+        raise KeyAttestationError("Status-list hostname resolved to no addresses")
+    if not policy.status_list_allow_private_hosts and any(
+        not address.is_global for address in resolved_ips
+    ):
+        raise KeyAttestationError("Status-list hostname resolves to a non-public address")
+
+    owned_client = client is None
+    if owned_client:
+        tls_context = ssl.create_default_context()
+        for certificate in policy.status_list_tls_ca_certificates_pem:
+            try:
+                tls_context.load_verify_locations(cadata=certificate)
+            except ssl.SSLError as exc:
+                raise KeyAttestationError("Status-list TLS CA certificate is invalid") from exc
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0),
+            follow_redirects=False,
+            verify=tls_context,
+        )
+    assert client is not None
+    try:
+        async with client.stream(
+            "GET",
+            uri,
+            headers={"Accept": "application/statuslist+jwt"},
+        ) as response:
+            if not 200 <= response.status_code < 300:
+                raise KeyAttestationError(
+                    f"Status-list endpoint returned HTTP {response.status_code}"
+                )
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
+            if content_type != "application/statuslist+jwt":
+                raise KeyAttestationError(
+                    "Status-list endpoint did not return application/statuslist+jwt"
+                )
+            body = bytearray()
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > 1_048_576:
+                    raise KeyAttestationError("Status List Token response is too large")
+    except httpx.HTTPError as exc:
+        raise KeyAttestationError("Status-list endpoint request failed") from exc
+    finally:
+        if owned_client:
+            await client.aclose()
+
+    try:
+        token = bytes(body).decode("ascii").strip()
+    except UnicodeDecodeError as exc:
+        raise KeyAttestationError("Status List Token response is not ASCII") from exc
+    return _status_list_value(
+        token,
+        uri=uri,
+        index=index,
+        policy=policy,
+        now=now or datetime.now(UTC),
+    ) == 0
 
 
 async def validate_key_attestation_jwt(
@@ -308,26 +631,52 @@ async def validate_key_attestation_jwt(
 
     key_storage = claims.get("key_storage")
     user_authentication = claims.get("user_authentication")
-    if not isinstance(key_storage, list) or not policy.required_key_storage.issubset(key_storage):
+    if key_storage is not None and (
+        not isinstance(key_storage, list)
+        or not key_storage
+        or any(not isinstance(value, str) or not value for value in key_storage)
+    ):
+        raise KeyAttestationError("Key attestation key_storage must be a non-empty string array")
+    if policy.required_key_storage and (
+        not isinstance(key_storage, list)
+        or not policy.required_key_storage.issubset(key_storage)
+    ):
         raise KeyAttestationError("Key attestation does not meet key-storage requirements")
-    if not isinstance(
-        user_authentication, list
-    ) or not policy.required_user_authentication.issubset(user_authentication):
+    if user_authentication is not None and (
+        not isinstance(user_authentication, list)
+        or not user_authentication
+        or any(not isinstance(value, str) or not value for value in user_authentication)
+    ):
+        raise KeyAttestationError(
+            "Key attestation user_authentication must be a non-empty string array"
+        )
+    if policy.required_user_authentication and (
+        not isinstance(user_authentication, list)
+        or not policy.required_user_authentication.issubset(user_authentication)
+    ):
         raise KeyAttestationError("Key attestation does not meet user-authentication requirements")
     certification = claims.get("certification")
-    if not isinstance(certification, str) or not certification.startswith("https://"):
+    if certification is not None and (
+        not isinstance(certification, str) or not certification.startswith("https://")
+    ):
         raise KeyAttestationError("Key attestation certification must be an HTTPS URL")
 
     statuses: list[Mapping[str, Any]] = []
     status = claims.get("status")
+    if status is not None and not isinstance(status, Mapping):
+        raise KeyAttestationError("Key attestation status must be an object")
     if isinstance(status, Mapping):
         statuses.append(status)
     storage_status = claims.get("key_storage_status")
+    if storage_status is not None and not isinstance(storage_status, Mapping):
+        raise KeyAttestationError("Key attestation key_storage_status must be an object")
     if isinstance(storage_status, Mapping):
         storage_exp = _required_timestamp(storage_status, "exp")
         if storage_exp <= now_timestamp:
             raise KeyAttestationError("Key storage status has expired")
         nested = storage_status.get("status")
+        if nested is not None and not isinstance(nested, Mapping):
+            raise KeyAttestationError("Key storage status status claim must be an object")
         if isinstance(nested, Mapping):
             statuses.append(nested)
     if policy.status_validation == "required" and not statuses:
@@ -344,3 +693,79 @@ async def validate_key_attestation_jwt(
         attested_keys=tuple(dict(key) for key in keys),
         claims=claims,
     )
+
+
+async def verify_oid4vci_proof_with_issuer_policy(
+    proof_jwt: str,
+    *,
+    issuer_context: Mapping[str, Any] | None,
+    organization_id: str,
+    expected_nonce: str | None,
+    proof_verifier: ProofVerifier,
+    bound_proof_verifier: BoundProofVerifier,
+    issuer_url: str | None = None,
+    status_validator: StatusValidator | None = None,
+) -> tuple[bool, str, dict[str, Any] | None, str | None]:
+    """Verify an OID4VCI proof through its resolved issuer-profile policy.
+
+    The product boundary validates tenant ownership, wallet-provider trust,
+    assurance claims, freshness, and status.  Only the exact compact
+    attestation that passed those checks is then passed to marty-core, which
+    binds the proof signature to the selected attested public key.
+
+    A missing issuer context is tolerated only for an ordinary proof.  A
+    proof carrying a key attestation can never create its own trust policy.
+    """
+    try:
+        header = _proof_header(proof_jwt)
+        raw_attestation = header.get("key_attestation")
+
+        policy: KeyAttestationPolicy | None = None
+        if issuer_context is not None and isinstance(
+            issuer_context.get("issuer_profile"), Mapping
+        ):
+            policy = KeyAttestationPolicy.from_issuer_context(
+                issuer_context,
+                organization_id=organization_id,
+            )
+
+        if raw_attestation is None:
+            if policy is not None and policy.mode == "required":
+                raise KeyAttestationError(
+                    "Issuer profile requires a key-attestation-bound proof"
+                )
+            return proof_verifier(proof_jwt, expected_nonce, issuer_url)
+
+        if not isinstance(raw_attestation, str) or not raw_attestation:
+            raise KeyAttestationError("Proof key_attestation header must be a compact JWT")
+        if policy is None:
+            raise KeyAttestationError(
+                "Key-attestation-bound proof has no resolved tenant issuer policy"
+            )
+        if policy.mode == "disabled":
+            raise KeyAttestationError(
+                "Issuer profile does not allow key-attestation-bound proofs"
+            )
+
+        effective_status_validator = status_validator
+        if effective_status_validator is None and policy.status_validation != "disabled":
+
+            async def validate_status(entry: Mapping[str, Any]) -> bool:
+                return await validate_token_status_list_entry(entry, policy)
+
+            effective_status_validator = validate_status
+
+        validated = await validate_key_attestation_jwt(
+            raw_attestation,
+            policy,
+            expected_nonce=expected_nonce,
+            status_validator=effective_status_validator,
+        )
+        return bound_proof_verifier(
+            proof_jwt,
+            validated.jwt,
+            expected_nonce,
+            issuer_url,
+        )
+    except KeyAttestationError as exc:
+        return False, "", None, str(exc)

@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 import grpc
 from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
@@ -749,6 +750,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         """Issue a credential (requires valid access token and proof JWT)."""
         try:
             from issuance.application.rust_integration import (
+                verify_key_attestation_bound_proof_jwt,
                 verify_proof_jwt,
             )
             from issuance.domain.entities import (
@@ -822,9 +824,35 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details("Proof of possession is required (OID4VCI §7.2)")
                 return pb2.IssueCredentialResponse()
 
-            # Verify proof JWT
-            ok, holder_did, holder_jwk, verify_err = verify_proof_jwt(
-                proof_jwt, expected_nonce=tx.nonce or None
+            credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+            requested_format = request.format or "vc+sd-jwt"
+            remote_credential_format = _credential_format_for_remote_context(
+                credential_payload_fmt,
+                requested_format,
+            )
+            try:
+                issuer_context = await _resolve_remote_signing_context_for_tx(
+                    tx,
+                    credential_format=remote_credential_format,
+                )
+            except Exception as resolution_error:  # noqa: BLE001
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details(
+                    f"DID-backed issuer policy resolution failed: {resolution_error}"
+                )
+                return pb2.IssueCredentialResponse()
+
+            # Apply exactly the same tenant/profile proof policy as the HTTP
+            # credential endpoint. No transport may bypass key attestation.
+            ok, holder_did, holder_jwk, verify_err = (
+                await verify_oid4vci_proof_with_issuer_policy(
+                    proof_jwt,
+                    issuer_context=issuer_context,
+                    organization_id=tx.organization_id,
+                    expected_nonce=tx.nonce or None,
+                    proof_verifier=verify_proof_jwt,
+                    bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
+                )
             )
             if not ok:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -854,8 +882,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 else credential_type
             )
 
-            credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-            fmt = request.format or "vc+sd-jwt"
+            fmt = requested_format
             _SD_JWT_PAYLOAD_FORMATS = {
                 "w3c_vcdm_v2_sd_jwt",
                 "ietf_sd_jwt",
@@ -884,9 +911,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 )
                 return pb2.IssueCredentialResponse()
 
-            remote_credential_format = _credential_format_for_remote_context(
-                credential_payload_fmt, fmt
-            )
             try:
                 jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
                     tx,

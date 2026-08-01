@@ -165,6 +165,51 @@ def _issuer_display_entries() -> list[dict[str, str]]:
     return [{"name": os.environ.get("ISSUER_DISPLAY_NAME", "ElevenID LLC"), "locale": "en-US"}]
 
 
+async def _oid4vci_proof_types_for_org(
+    organization_id: str,
+    *,
+    credential_format: str,
+) -> dict[str, Any]:
+    """Publish the proof contract enforced by the resolved issuer profile."""
+    from issuance.infrastructure.api.signing_context import resolve_remote_issuer_context
+
+    proof_types: dict[str, Any] = {
+        "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+    }
+    key_purpose = "mdoc_dsc" if credential_format == "mso_mdoc" else "vc_jwt_issuer"
+    try:
+        issuer_context = await resolve_remote_issuer_context(
+            organization_id,
+            credential_format=credential_format,
+            key_purpose=key_purpose,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer proof policy is temporarily unavailable",
+        ) from exc
+    if not isinstance(issuer_context, dict):
+        return proof_types
+    profile = issuer_context.get("issuer_profile")
+    if not isinstance(profile, dict):
+        return proof_types
+    policy = profile.get("key_attestation_policy")
+    if not isinstance(policy, dict) or policy.get("mode") != "required":
+        return proof_types
+
+    requirement: dict[str, list[str]] = {}
+    key_storage = policy.get("required_key_storage")
+    if isinstance(key_storage, list) and key_storage:
+        requirement["key_storage"] = [str(value) for value in key_storage]
+    user_authentication = policy.get("required_user_authentication")
+    if isinstance(user_authentication, list) and user_authentication:
+        requirement["user_authentication"] = [
+            str(value) for value in user_authentication
+        ]
+    proof_types["jwt"]["key_attestations_required"] = requirement
+    return proof_types
+
+
 # ---------------------------------------------------------------------------
 # Request-ID context
 # ---------------------------------------------------------------------------
@@ -378,7 +423,12 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
 
-        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _sd_jwt_proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="dc+sd-jwt"
+        )
+        _mdoc_proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="mso_mdoc"
+        )
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
@@ -401,7 +451,7 @@ def create_app() -> FastAPI:
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _mdoc_signing_algs,
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _mdoc_proof_types,
                     "display": _credential_display_entries(ctype, ctype_metadata),
                 }
             else:
@@ -417,7 +467,7 @@ def create_app() -> FastAPI:
                         "scope": ctype,
                         "cryptographic_binding_methods_supported": _binding,
                         "credential_signing_alg_values_supported": _signing_algs,
-                        "proof_types_supported": _proof_types,
+                        "proof_types_supported": _sd_jwt_proof_types,
                         "display": _credential_display_entries(ctype, ctype_metadata),
                     },
                     ctype_metadata,
@@ -460,7 +510,9 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
 
-        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="dc+sd-jwt"
+        )
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
 
@@ -523,7 +575,9 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
 
-        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="mso_mdoc"
+        )
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
@@ -591,7 +645,15 @@ def create_app() -> FastAPI:
         issuer_url = org_issuer_url(org_id)
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
 
-        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _jwt_vc_proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="jwt_vc_json"
+        )
+        _sd_jwt_proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="dc+sd-jwt"
+        )
+        _mdoc_proof_types = await _oid4vci_proof_types_for_org(
+            org_id, credential_format="mso_mdoc"
+        )
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
@@ -620,7 +682,7 @@ def create_app() -> FastAPI:
                 "scope": ctype,
                 "cryptographic_binding_methods_supported": _binding,
                 "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _proof_types,
+                "proof_types_supported": _jwt_vc_proof_types,
                 "credential_definition": _credential_definition(ctype),
                 "credential_metadata": _credential_metadata(ctype, ctype_metadata),
             }
@@ -635,7 +697,7 @@ def create_app() -> FastAPI:
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _mdoc_signing_algs,
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _mdoc_proof_types,
                     "credential_metadata": _credential_metadata(ctype, ctype_metadata),
                 }
             # VDS-NC remains available through Marty's document issuance APIs,
@@ -653,7 +715,7 @@ def create_app() -> FastAPI:
                     "scope": ctype,
                     "cryptographic_binding_methods_supported": _binding,
                     "credential_signing_alg_values_supported": _signing_algs,
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _sd_jwt_proof_types,
                     "credential_metadata": _credential_metadata(ctype, ctype_metadata),
                 }
 
@@ -668,7 +730,7 @@ def create_app() -> FastAPI:
                 "scope": "mso_mdoc",
                 "cryptographic_binding_methods_supported": _binding,
                 "credential_signing_alg_values_supported": _mdoc_signing_algs,
-                "proof_types_supported": _proof_types,
+                "proof_types_supported": _mdoc_proof_types,
                 "credential_metadata": {
                     "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 },
@@ -681,7 +743,7 @@ def create_app() -> FastAPI:
                 "scope": "default",
                 "cryptographic_binding_methods_supported": _binding,
                 "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _proof_types,
+                "proof_types_supported": _jwt_vc_proof_types,
                 "credential_definition": {"type": ["VerifiableCredential"]},
                 "credential_metadata": {
                     "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
