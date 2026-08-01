@@ -15,8 +15,17 @@ import base64
 import hashlib
 import json
 import logging
+import os
+
+# ---------------------------------------------------------------------------
+# We can't import the real issuance package directly (it lives under
+# services/issuance/ with an implicit PYTHONPATH).  We manipulate sys.path
+# so that "issuance.domain.entities" etc. resolve.
+# ---------------------------------------------------------------------------
+import sys
 import types
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -25,14 +34,6 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
     decode_dss_signature,
     encode_dss_signature,
 )
-
-# ---------------------------------------------------------------------------
-# We can't import the real issuance package directly (it lives under
-# services/issuance/ with an implicit PYTHONPATH).  We manipulate sys.path
-# so that "issuance.domain.entities" etc. resolve.
-# ---------------------------------------------------------------------------
-import sys
-import os
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
@@ -59,7 +60,7 @@ from issuance.domain.entities import (
 from issuance.infrastructure.adapters.memory_repository import (
     InMemoryIssuanceRepository,
 )
-from issuance.infrastructure.models import issued_credentials_table, issuance_transactions_table
+from issuance.infrastructure.models import issuance_transactions_table, issued_credentials_table
 
 
 def test_authorization_redirect_preserves_registered_query_parameters():
@@ -303,6 +304,7 @@ def test_issuance_schema_tracks_credential_renewal():
 
 def test_postgres_transaction_mapper_preserves_lifecycle_dependencies():
     from types import SimpleNamespace
+
     from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 
     source = _make_transaction(
@@ -351,8 +353,8 @@ def _make_credential(**overrides) -> IssuedCredential:
         credential_jwt="eyJhbGciOiJFZERTQSJ9.test.sig",
         credential_hash=hashlib.sha256(b"eyJhbGciOiJFZERTQSJ9.test.sig").hexdigest(),
         status=CredentialStatus.ACTIVE,
-        issued_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
-        expires_at=datetime(2027, 3, 1, tzinfo=timezone.utc),
+        issued_at=datetime(2026, 3, 1, tzinfo=UTC),
+        expires_at=datetime(2027, 3, 1, tzinfo=UTC),
     )
     defaults.update(overrides)
     return IssuedCredential(**defaults)
@@ -368,8 +370,8 @@ def _make_delivery_record(**overrides) -> CredentialDeliveryRecord:
         delivery_mode="wallet_only",
         status=CredentialDeliveryStatus.DELIVERED,
         metadata={"protocol": "oid4vci"},
-        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 3, 1, tzinfo=UTC),
     )
     defaults.update(overrides)
     return CredentialDeliveryRecord(**defaults)
@@ -397,8 +399,8 @@ async def _save_canvas_program_target(
         canvas_account_id=canvas_account_id,
         canvas_base_url=canvas_base_url,
         enabled=platform_enabled,
-        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 3, 1, tzinfo=UTC),
     )
     binding = CanvasProgramBinding(
         id=binding_id,
@@ -409,8 +411,8 @@ async def _save_canvas_program_target(
         delivery_mode="wallet_plus_canvas_mirror",
         canvas_credentials=canvas_credentials or {},
         enabled=binding_enabled,
-        created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
-        updated_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 3, 1, tzinfo=UTC),
+        updated_at=datetime(2026, 3, 1, tzinfo=UTC),
     )
     await repo.save_canvas_platform(platform)
     await repo.save_canvas_program_binding(binding)
@@ -545,7 +547,7 @@ class TestRemoteIssuerFailureDetail:
             )
             return {
                 "ok": True,
-                "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme#not-a-fragment".split("#")[0],
+                "issuer_did": ["did:web:beta.elevenidllc.com:orgs:acme", "not-a-fragment"][0],
                 "issuer_profile_id": "ip-selected",
                 "issuer_mode": "elevenid_alias_for_org",
                 "signing_service_id": "svc-mdoc",
@@ -631,9 +633,7 @@ class TestRemoteIssuerFailureDetail:
         assert result["issuer_profile_id"] == "profile-1"
         assert result["signing_service_id"] == "service-1"
 
-    async def test_did_context_rejects_mismatched_legacy_profile(
-        self, monkeypatch
-    ):
+    async def test_did_context_rejects_mismatched_legacy_profile(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
 
         class FakeResponse:
@@ -681,9 +681,7 @@ class TestRemoteIssuerFailureDetail:
                 key_purpose="vc_jwt_issuer",
             )
 
-    async def test_legacy_profile_without_did_fails_before_network(
-        self, monkeypatch
-    ):
+    async def test_legacy_profile_without_did_fails_before_network(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
 
         class ForbiddenClient:
@@ -789,9 +787,8 @@ class TestRemoteIssuerFailureDetail:
         assert "cred-issuer-marty-es256" in str(excinfo.value)
 
     def test_initiate_issuance_request_accepts_only_public_did_identity(self):
-        from pydantic import ValidationError
-
         from issuance.infrastructure.api.routes import InitiateIssuanceRequest
+        from pydantic import ValidationError
 
         request = InitiateIssuanceRequest(
             organization_id="org-1",
@@ -1078,13 +1075,13 @@ class TestCredentialStatusToProtocol:
     def test_active_not_expired(self):
         from issuance.infrastructure.api.routes import _credential_status_to_protocol
 
-        future = datetime.now(timezone.utc) + timedelta(days=30)
+        future = datetime.now(UTC) + timedelta(days=30)
         assert _credential_status_to_protocol(CredentialStatus.ACTIVE, future) == "ACTIVE"
 
     def test_active_expired(self):
         from issuance.infrastructure.api.routes import _credential_status_to_protocol
 
-        past = datetime.now(timezone.utc) - timedelta(days=1)
+        past = datetime.now(UTC) - timedelta(days=1)
         assert _credential_status_to_protocol(CredentialStatus.ACTIVE, past) == "EXPIRED"
 
     def test_active_no_expiry(self):
@@ -1095,7 +1092,7 @@ class TestCredentialStatusToProtocol:
     def test_revoked(self):
         from issuance.infrastructure.api.routes import _credential_status_to_protocol
 
-        future = datetime.now(timezone.utc) + timedelta(days=30)
+        future = datetime.now(UTC) + timedelta(days=30)
         assert _credential_status_to_protocol(CredentialStatus.REVOKED, future) == "REVOKED"
 
     def test_suspended(self):
@@ -1252,8 +1249,8 @@ class TestIssuedCredentialToProtocol:
         tx.complete()
         cred = _make_credential(
             transaction_id="tx-proto",
-            issued_at=datetime(2026, 3, 15, tzinfo=timezone.utc),
-            expires_at=datetime(2027, 3, 15, tzinfo=timezone.utc),
+            issued_at=datetime(2026, 3, 15, tzinfo=UTC),
+            expires_at=datetime(2027, 3, 15, tzinfo=UTC),
         )
         await repo.save_transaction(tx)
         result = await _issued_credential_to_protocol(cred, repo)
@@ -1263,9 +1260,9 @@ class TestIssuedCredentialToProtocol:
         assert result.credential_format == "SD_JWT_VC"
         assert result.flow_execution_id == "tx-proto"
         assert result.valid_until == "2027-03-15T00:00:00+00:00"
-        assert result.deliveries == []
+        assert "deliveries" not in result.model_dump()
 
-    async def test_includes_delivery_records(self, repo):
+    async def test_does_not_expose_internal_delivery_records(self, repo):
         from issuance.infrastructure.api.routes import _issued_credential_to_protocol
 
         tx = _make_transaction(id="tx-delivery", status=IssuanceStatus.ISSUED)
@@ -1295,11 +1292,12 @@ class TestIssuedCredentialToProtocol:
 
         result = await _issued_credential_to_protocol(cred, repo)
 
-        assert [delivery.delivery_target for delivery in result.deliveries] == [
-            "wallet",
-            "canvas_credentials",
+        assert "deliveries" not in result.model_dump()
+        internal_records = await repo.list_delivery_records_for_credential(cred.id)
+        assert [record.delivery_target for record in internal_records] == [
+            DeliveryTarget.WALLET,
+            DeliveryTarget.CANVAS_CREDENTIALS,
         ]
-        assert result.deliveries[1].status == "pending"
 
     async def test_expired_credential(self, repo):
         from issuance.infrastructure.api.routes import _issued_credential_to_protocol
@@ -1308,8 +1306,8 @@ class TestIssuedCredentialToProtocol:
         tx.complete()
         cred = _make_credential(
             transaction_id="tx-exp",
-            issued_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-            expires_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+            issued_at=datetime(2024, 1, 1, tzinfo=UTC),
+            expires_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         await repo.save_transaction(tx)
         result = await _issued_credential_to_protocol(cred, repo)
@@ -1395,11 +1393,12 @@ class TestIssuedCredentialRecordResponse:
             subject_id="did:key:test",
             issued_at="2026-03-15T00:00:00+00:00",
             status="ACTIVE",
+            status_list_entries=[],
             created_at="2026-03-15T00:00:00+00:00",
         )
         assert record.status_list_entries == []
         assert record.organization_id == "org-1"
-        assert record.deliveries == []
+        assert "deliveries" not in record.model_dump()
         assert record.credential_hash is None
         assert record.revoked_at is None
 
@@ -1784,7 +1783,11 @@ class TestCanvasMirrorPublishing:
 
         monkeypatch.setattr(canvas_credentials_adapter.httpx, "AsyncClient", FakeClient)
 
-        response = await routes.publish_issued_credential_canvas_mirror(cred.id, repo)
+        response = await routes.publish_issued_credential_canvas_mirror(
+            cred.id,
+            SimpleNamespace(headers={"X-Organization-ID": cred.organization_id}),
+            repo,
+        )
         records = await repo.list_delivery_records_for_credential(cred.id)
         canvas_record = next(
             record
@@ -1810,9 +1813,7 @@ class TestCanvasMirrorPublishing:
 
     async def test_publish_canvas_mirror_persists_failure_and_raises(self, repo, monkeypatch):
         import httpx
-
         from fastapi import HTTPException
-
         from issuance.infrastructure.adapters import canvas_credentials_adapter
         from issuance.infrastructure.api import routes
 
@@ -1858,7 +1859,11 @@ class TestCanvasMirrorPublishing:
         )
 
         with pytest.raises(HTTPException) as excinfo:
-            await routes.publish_issued_credential_canvas_mirror(cred.id, repo)
+            await routes.publish_issued_credential_canvas_mirror(
+                cred.id,
+                SimpleNamespace(headers={"X-Organization-ID": cred.organization_id}),
+                repo,
+            )
 
         records = await repo.list_delivery_records_for_credential(cred.id)
         canvas_record = next(
@@ -1905,7 +1910,11 @@ class TestCanvasMirrorPublishing:
 
         monkeypatch.setattr(routes, "publish_canvas_credential_mirror", unexpected_publish)
 
-        response = await routes.publish_issued_credential_canvas_mirror(cred.id, repo)
+        response = await routes.publish_issued_credential_canvas_mirror(
+            cred.id,
+            SimpleNamespace(headers={"X-Organization-ID": cred.organization_id}),
+            repo,
+        )
 
         assert response.status == "delivered"
         assert response.external_credential_id == "canvas-cred-existing"
@@ -1950,9 +1959,7 @@ class TestCanvasMirrorPublishing:
         await repo.save_delivery_record(delivered)
 
         response = await routes.get_canvas_mirror_provenance(
-            http_request=types.SimpleNamespace(
-                headers={"X-Organization-ID": "org-1"}
-            ),
+            http_request=types.SimpleNamespace(headers={"X-Organization-ID": "org-1"}),
             organization_id="org-1",
             external_credential_id="canvas-cred-provenance",
             canvas_account_id="canvas-account-1",
@@ -1969,7 +1976,7 @@ class TestCanvasMirrorPublishing:
         assert response.canonical_credential["credential_status"] == "ACTIVE"
         assert (
             response.canonical_credential["subject_id_hash"]
-            == hashlib.sha256("did:key:z6Mk_subject".encode("utf-8")).hexdigest()
+            == hashlib.sha256(b"did:key:z6Mk_subject").hexdigest()
         )
         assert "subject_id" not in response.canonical_credential
         assert response.canonical_issuance["application_id"] == "app-canvas-provenance"
@@ -2030,9 +2037,7 @@ class TestCanvasMirrorPublishing:
 
         with pytest.raises(routes.HTTPException) as exc_info:
             await routes.get_canvas_mirror_provenance(
-                http_request=types.SimpleNamespace(
-                    headers={"X-Organization-ID": "org-1"}
-                ),
+                http_request=types.SimpleNamespace(headers={"X-Organization-ID": "org-1"}),
                 organization_id="org-1",
                 repo=repo,
                 **{selector: value},
@@ -2058,9 +2063,7 @@ class TestCanvasMirrorPublishing:
 
         with pytest.raises(routes.HTTPException) as mismatched:
             await routes.get_canvas_mirror_provenance(
-                http_request=types.SimpleNamespace(
-                    headers={"X-Organization-ID": "org-2"}
-                ),
+                http_request=types.SimpleNamespace(headers={"X-Organization-ID": "org-2"}),
                 organization_id="org-1",
                 delivery_record_id="delivery-001",
                 repo=repo,
@@ -2406,13 +2409,13 @@ class TestCanvasMirrorOps:
             id="cred-sync-retry-failed",
             transaction_id=tx_failed.id,
             status=CredentialStatus.SUSPENDED,
-            status_updated_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            status_updated_at=datetime(2026, 3, 2, tzinfo=UTC),
         )
         cred_clean = _make_credential(
             id="cred-sync-retry-clean",
             transaction_id=tx_clean.id,
             status=CredentialStatus.ACTIVE,
-            status_updated_at=datetime(2026, 3, 3, tzinfo=timezone.utc),
+            status_updated_at=datetime(2026, 3, 3, tzinfo=UTC),
         )
         failed_record = _make_delivery_record(
             id="delivery-sync-retry-failed",
@@ -2521,9 +2524,9 @@ class TestCanvasMirrorOps:
             id="cred-sync-retry-still-fails",
             transaction_id=tx.id,
             status=CredentialStatus.REVOKED,
-            revoked_at=datetime(2026, 3, 4, tzinfo=timezone.utc),
+            revoked_at=datetime(2026, 3, 4, tzinfo=UTC),
             revocation_reason="policy violation",
-            status_updated_at=datetime(2026, 3, 4, tzinfo=timezone.utc),
+            status_updated_at=datetime(2026, 3, 4, tzinfo=UTC),
         )
         record = _make_delivery_record(
             id="delivery-sync-retry-still-fails",
@@ -2582,7 +2585,7 @@ class TestCanvasMirrorOps:
             id="cred-sync-ops-disabled",
             transaction_id=tx.id,
             status=CredentialStatus.SUSPENDED,
-            status_updated_at=datetime(2026, 3, 8, tzinfo=timezone.utc),
+            status_updated_at=datetime(2026, 3, 8, tzinfo=UTC),
         )
         record = _make_delivery_record(
             id="delivery-sync-ops-disabled",
@@ -2667,7 +2670,7 @@ class TestCanvasMirrorOps:
             id="cred-automation-sync",
             transaction_id=sync_tx.id,
             status=CredentialStatus.SUSPENDED,
-            status_updated_at=datetime(2026, 3, 7, tzinfo=timezone.utc),
+            status_updated_at=datetime(2026, 3, 7, tzinfo=UTC),
         )
         failed_sync_record = _make_delivery_record(
             id="delivery-automation-sync",
@@ -2908,7 +2911,7 @@ class TestCanvasMirrorLifecycleSync:
                     "status_sync_http_status": 200,
                     "status_sync_response": {"ok": True},
                     "status_sync_request_id": "sync-req-1",
-                    "status_synced_at": datetime.now(timezone.utc).isoformat(),
+                    "status_synced_at": datetime.now(UTC).isoformat(),
                 }
             )
 
@@ -3114,9 +3117,8 @@ class TestListCredentialsByOrg:
 
 class TestRustIntegrationOrgIdValidation:
     def test_initiate_request_accepts_an_explicit_subject_set_only(self):
-        from pydantic import ValidationError
-
         from issuance.infrastructure.api.routes import InitiateIssuanceRequest
+        from pydantic import ValidationError
 
         subjects = [
             {"id": "did:example:subject"},
@@ -3153,26 +3155,19 @@ class TestRustIntegrationOrgIdValidation:
             )
 
     def test_initiate_request_accepts_only_a_matching_unsigned_vcdm_document(self):
-        from pydantic import ValidationError
-
         from issuance.infrastructure.api.routes import InitiateIssuanceRequest
+        from pydantic import ValidationError
 
         document = {
             "@context": [
                 "https://www.w3.org/ns/credentials/v2",
-                {
-                    "EmployeeCredential": (
-                        "https://issuer.example/credentials#EmployeeCredential"
-                    )
-                },
+                {"EmployeeCredential": ("https://issuer.example/credentials#EmployeeCredential")},
             ],
             "id": "urn:uuid:credential-1",
             "type": ["VerifiableCredential", "EmployeeCredential"],
             "issuer": {"id": "did:web:issuer.example", "name": "Example issuer"},
             "name": {"@value": "Employee credential", "@language": "en"},
-            "credentialSubject": [
-                {"id": "did:example:subject", "employeeNumber": "E-123"}
-            ],
+            "credentialSubject": [{"id": "did:example:subject", "employeeNumber": "E-123"}],
         }
         request = InitiateIssuanceRequest(
             organization_id="org-1",
@@ -3204,8 +3199,8 @@ class TestRustIntegrationOrgIdValidation:
     def test_raises_when_org_id_missing(self):
         """create_verifiable_credential_wrapper must raise if org_id is None
         and the issuer DID is not found in the key cache."""
-        from issuance.application.rust_integration import create_verifiable_credential_wrapper
         import issuance.application.rust_integration as rust_mod
+        from issuance.application.rust_integration import create_verifiable_credential_wrapper
 
         # Ensure the key cache is empty so the DID lookup falls through
         saved = rust_mod._org_keys.copy()
@@ -3577,9 +3572,7 @@ class TestRustIntegrationOrgIdValidation:
             "proofValue": "zFinalProof",
         }
 
-    async def test_remote_data_integrity_preserves_complete_unsigned_document(
-        self, monkeypatch
-    ):
+    async def test_remote_data_integrity_preserves_complete_unsigned_document(self, monkeypatch):
         from issuance.application import rust_integration
 
         issuer_did = "did:web:issuer.example"
@@ -3594,9 +3587,7 @@ class TestRustIntegrationOrgIdValidation:
             "@context": [
                 "https://www.w3.org/ns/credentials/v2",
                 {
-                    "EmployeeCredential": (
-                        "https://credentials.example/EmployeeCredential"
-                    ),
+                    "EmployeeCredential": ("https://credentials.example/EmployeeCredential"),
                     "employeeNumber": "https://credentials.example/employeeNumber",
                 },
             ],
@@ -3653,18 +3644,19 @@ class TestRustIntegrationOrgIdValidation:
             }
 
         monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: FakeBinding())
-        signed_json, credential_id = (
-            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
-                issuer_did=issuer_did,
-                remote_sign=fake_remote_sign,
-                subject_id=None,
-                credential_type="ignored-for-complete-document",
-                claims_json="{}",
-                public_jwk=public_jwk,
-                credential_document=document,
-                verification_method_id=verification_method_id,
-                credential_id=document["id"],
-            )
+        (
+            signed_json,
+            credential_id,
+        ) = await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+            issuer_did=issuer_did,
+            remote_sign=fake_remote_sign,
+            subject_id=None,
+            credential_type="ignored-for-complete-document",
+            claims_json="{}",
+            public_jwk=public_jwk,
+            credential_document=document,
+            verification_method_id=verification_method_id,
+            credential_id=document["id"],
         )
 
         assert captured["credential"] == document
@@ -3765,7 +3757,6 @@ class TestRustIntegrationOrgIdValidation:
     ):
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
         from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-
         from issuance.application import rust_integration
 
         binding = rust_integration.get_marty_rs()
@@ -3798,28 +3789,29 @@ class TestRustIntegrationOrgIdValidation:
                 "algorithm": "EdDSA",
             }
 
-        credential, credential_id = (
-            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
-                issuer_did=issuer_did,
-                remote_sign=valid_remote_sign,
-                subject_id="did:example:holder",
-                credential_type="https://credentials.example/EmployeeCredential",
-                claims_json=json.dumps(
-                    {
-                        "employeeNumber": "E-123",
-                        "credentialStatus": {
-                            "id": "https://issuer.example/status/1#42",
-                            "type": "BitstringStatusListEntry",
-                            "statusPurpose": "revocation",
-                            "statusListIndex": "42",
-                            "statusListCredential": "https://issuer.example/status/1",
-                        },
-                    }
-                ),
-                public_jwk=public_jwk,
-                verification_method_id=verification_method_id,
-                credential_id="urn:uuid:native-data-integrity",
-            )
+        (
+            credential,
+            credential_id,
+        ) = await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+            issuer_did=issuer_did,
+            remote_sign=valid_remote_sign,
+            subject_id="did:example:holder",
+            credential_type="https://credentials.example/EmployeeCredential",
+            claims_json=json.dumps(
+                {
+                    "employeeNumber": "E-123",
+                    "credentialStatus": {
+                        "id": "https://issuer.example/status/1#42",
+                        "type": "BitstringStatusListEntry",
+                        "statusPurpose": "revocation",
+                        "statusListIndex": "42",
+                        "statusListCredential": "https://issuer.example/status/1",
+                    },
+                }
+            ),
+            public_jwk=public_jwk,
+            verification_method_id=verification_method_id,
+            credential_id="urn:uuid:native-data-integrity",
         )
 
         document = json.loads(credential)
@@ -3834,9 +3826,7 @@ class TestRustIntegrationOrgIdValidation:
             "@context": [
                 "https://www.w3.org/ns/credentials/v2",
                 {
-                    "EmployeeCredential": (
-                        "https://credentials.example/EmployeeCredential"
-                    ),
+                    "EmployeeCredential": ("https://credentials.example/EmployeeCredential"),
                     "employeeNumber": "https://credentials.example/employeeNumber",
                 },
             ],
@@ -3851,18 +3841,19 @@ class TestRustIntegrationOrgIdValidation:
                 "employeeNumber": "E-123",
             },
         }
-        complete_credential, complete_id = (
-            await rust_integration.create_vcdm_data_integrity_with_remote_signing(
-                issuer_did=issuer_did,
-                remote_sign=valid_remote_sign,
-                subject_id=None,
-                credential_type="ignored-for-complete-document",
-                claims_json="{}",
-                public_jwk=public_jwk,
-                credential_document=complete_document,
-                verification_method_id=verification_method_id,
-                credential_id=complete_document["id"],
-            )
+        (
+            complete_credential,
+            complete_id,
+        ) = await rust_integration.create_vcdm_data_integrity_with_remote_signing(
+            issuer_did=issuer_did,
+            remote_sign=valid_remote_sign,
+            subject_id=None,
+            credential_type="ignored-for-complete-document",
+            claims_json="{}",
+            public_jwk=public_jwk,
+            credential_document=complete_document,
+            verification_method_id=verification_method_id,
+            credential_id=complete_document["id"],
         )
         complete_signed = json.loads(complete_credential)
         assert complete_id == complete_document["id"]
@@ -3896,7 +3887,6 @@ class TestRustIntegrationOrgIdValidation:
         self, monkeypatch
     ):
         from issuance.application.rust_integration import base64url_decode
-
         from issuance.infrastructure.adapters import grpc_adapter
         from issuance.infrastructure.api import signing_context
 
@@ -4065,6 +4055,7 @@ class TestIssuanceTransactionIssuerDidOverride:
 
 async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypatch):
     from types import SimpleNamespace
+
     from issuance.infrastructure.api import routes
 
     repo = _TestableRepo()
@@ -4076,7 +4067,7 @@ async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypa
         validity_days=1,
     )
     source = _make_credential(
-        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
     )
     await repo.save_transaction(source_tx)
     await repo.save_credential(source)
@@ -4096,6 +4087,8 @@ async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypa
             credential_template_id=renewal_tx.credential_template_id,
             status=renewal_tx.status.value,
             credential_offer_uri="openid-credential-offer://renewal",
+            credential_offer_uris={},
+            credential_offer_labels={},
             pre_auth_code=renewal_tx.pre_auth_code,
             expires_at=renewal_tx.expires_at.isoformat(),
         )
@@ -4104,7 +4097,7 @@ async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypa
 
     result = await routes.renew_issued_credential(
         source.id,
-        SimpleNamespace(headers={}),
+        SimpleNamespace(headers={"X-Organization-ID": source.organization_id}),
         repo,
     )
 
@@ -4113,6 +4106,63 @@ async def test_renewal_offer_links_new_transaction_to_source_credential(monkeypa
     assert result.credential_offer_uri == "openid-credential-offer://renewal"
     assert renewal_tx is not None
     assert renewal_tx.renewal_of_credential_id == source.id
+
+
+class TestIssuanceManagementTenantBoundary:
+    def test_requires_trusted_organization_context(self):
+        from issuance.infrastructure.api import routes
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            routes._require_trusted_organization(
+                SimpleNamespace(headers={}),
+                "org-1",
+            )
+
+        assert exc_info.value.status_code == 403
+
+    def test_resource_lookup_hides_cross_tenant_identity(self):
+        from issuance.infrastructure.api import routes
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            routes._require_trusted_organization(
+                SimpleNamespace(headers={"X-Organization-ID": "org-2"}),
+                "org-1",
+                hide_resource=True,
+            )
+
+        assert exc_info.value.status_code == 404
+
+    async def test_transaction_id_substitution_fails_closed(self):
+        from issuance.infrastructure.api import routes
+
+        repo = _TestableRepo()
+        transaction = _make_transaction(organization_id="org-1")
+        await repo.save_transaction(transaction)
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes.get_transaction(
+                transaction.id,
+                SimpleNamespace(headers={"X-Organization-ID": "org-2"}),
+                repo,
+            )
+
+        assert exc_info.value.status_code == 404
+
+    async def test_issued_credential_id_substitution_fails_closed(self):
+        from issuance.infrastructure.api import routes
+
+        repo = _TestableRepo()
+        credential = _make_credential(organization_id="org-1")
+        await repo.save_credential(credential)
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes.get_issued_credential(
+                credential.id,
+                SimpleNamespace(headers={"X-Organization-ID": "org-2"}),
+                repo,
+            )
+
+        assert exc_info.value.status_code == 404
 
 
 async def test_completed_renewal_supersedes_source_credential(monkeypatch):
@@ -4132,7 +4182,7 @@ async def test_completed_renewal_supersedes_source_credential(monkeypatch):
         credential = await repo.get_credential(credential_id)
         credential.status = CredentialStatus.REVOKED
         credential.revoked = True
-        credential.revoked_at = datetime.now(timezone.utc)
+        credential.revoked_at = datetime.now(UTC)
         credential.revocation_reason = request.reason
         await repo.save_credential(credential)
 
