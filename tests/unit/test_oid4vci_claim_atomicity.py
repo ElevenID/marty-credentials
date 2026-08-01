@@ -183,6 +183,11 @@ async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid
         return False
 
     monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (True, "did:key:wallet", {}, None),
+    )
     monkeypatch.setattr(routes._nonce_pool, "consume", reject_nonce)
 
     response = await routes.issue_credential(
@@ -198,6 +203,45 @@ async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid
         "error": "invalid_nonce",
         "error_description": "Proof nonce is missing, expired, or already used",
     }
+
+
+@pytest.mark.asyncio
+async def test_invalid_proof_does_not_consume_wallet_nonce(monkeypatch) -> None:
+    """Unauthenticated proof bytes cannot burn a valid wallet nonce."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    consumed: list[str] = []
+
+    async def consume_nonce(nonce: str) -> bool:
+        consumed.append(nonce)
+        return True
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (False, "", None, "invalid signature"),
+    )
+    monkeypatch.setattr(routes._nonce_pool, "consume", consume_nonce)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(format="vc+sd-jwt", proofs={"jwt": [_proof_jwt()]}),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_proof",
+        "error_description": "invalid signature",
+    }
+    assert consumed == []
 
 
 @pytest.mark.asyncio
