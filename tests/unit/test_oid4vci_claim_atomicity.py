@@ -140,9 +140,13 @@ def _credential(transaction: IssuanceTransaction, credential_id: str) -> IssuedC
 
 
 def _proof_jwt() -> str:
-    encode = lambda value: base64.urlsafe_b64encode(  # noqa: E731 - compact JWT fixture
-        json.dumps(value, separators=(",", ":")).encode()
-    ).rstrip(b"=").decode()
+    encode = lambda value: (
+        base64.urlsafe_b64encode(  # noqa: E731 - compact JWT fixture
+            json.dumps(value, separators=(",", ":")).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
     return f"{encode({'alg': 'ES256'})}.{encode({'aud': 'https://beta.elevenidllc.com/org/org-1', 'nonce': 'wallet-nonce'})}.signature"
 
 
@@ -263,9 +267,7 @@ async def test_credential_endpoint_reports_missing_proof_as_invalid_proof(monkey
 
     response = await routes.issue_credential(
         _request(),
-        routes.CredentialRequest(
-            credential_configuration_id="OpenBadgeCredential#sd-jwt"
-        ),
+        routes.CredentialRequest(credential_configuration_id="OpenBadgeCredential#sd-jwt"),
         authorization="Bearer wallet-token",
         repo=repo,
     )
@@ -337,6 +339,26 @@ async def test_credential_endpoint_reports_unknown_configuration_with_standard_e
 
 
 @pytest.mark.asyncio
+async def test_credential_endpoint_rejects_same_tenant_configuration_substitution() -> None:
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="OtherCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "unknown_credential_configuration"
+
+
+@pytest.mark.asyncio
 async def test_credential_endpoint_reports_unknown_identifier_with_standard_error() -> None:
     """OID4VCI defines a specific error for an unknown credential identifier."""
     repo = InMemoryIssuanceRepository()
@@ -380,7 +402,9 @@ def test_portable_migration_installs_and_reverses_claim_constraints(monkeypatch)
         def execute(self, _statement, _parameters=None):
             return EmptyRows()
 
-    monkeypatch.setattr(migration.op, "execute", lambda statement: upgrade_sql.append(str(statement)))
+    monkeypatch.setattr(
+        migration.op, "execute", lambda statement: upgrade_sql.append(str(statement))
+    )
     monkeypatch.setattr(migration.op, "get_bind", lambda: Bind())
     migration.upgrade()
 
@@ -390,10 +414,14 @@ def test_portable_migration_installs_and_reverses_claim_constraints(monkeypatch)
     assert "DROP INDEX IF EXISTS issuance_service.ix_issued_credentials_transaction_id" in applied
 
     downgrade_sql: list[str] = []
-    monkeypatch.setattr(migration.op, "execute", lambda statement: downgrade_sql.append(str(statement)))
+    monkeypatch.setattr(
+        migration.op, "execute", lambda statement: downgrade_sql.append(str(statement))
+    )
     migration.downgrade()
     reversed_sql = "\n".join(downgrade_sql)
-    assert "DROP INDEX IF EXISTS issuance_service.ux_issued_credentials_transaction_id" in reversed_sql
+    assert (
+        "DROP INDEX IF EXISTS issuance_service.ux_issued_credentials_transaction_id" in reversed_sql
+    )
     assert "CREATE INDEX IF NOT EXISTS ix_issued_credentials_transaction_id" in reversed_sql
     assert "DROP COLUMN IF EXISTS reserved_credential_id" in reversed_sql
 
@@ -597,13 +625,15 @@ async def test_postgres_canvas_approval_reserves_transaction_under_application_l
     )
     repo = PostgresIssuanceRepository(_SessionFactory(session))
 
-    stored_application, stored_transaction, already_issued = (
-        await repo.reserve_canvas_application_issuance(
-            prepared,
-            reviewer_id="canvas-approver",
-            review_notes="Concurrent approval",
-            reviewed_at=now,
-        )
+    (
+        stored_application,
+        stored_transaction,
+        already_issued,
+    ) = await repo.reserve_canvas_application_issuance(
+        prepared,
+        reviewer_id="canvas-approver",
+        review_notes="Concurrent approval",
+        reviewed_at=now,
     )
 
     assert session.committed is True
@@ -771,7 +801,9 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
     monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
     monkeypatch.setattr(routes, "require_canvas_issuance_ready", readiness_barrier)
-    monkeypatch.setattr(routes, "verify_proof_jwt", lambda *_args, **_kwargs: (True, "did:key:learner", {}, None))
+    monkeypatch.setattr(
+        routes, "verify_proof_jwt", lambda *_args, **_kwargs: (True, "did:key:learner", {}, None)
+    )
     monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
     monkeypatch.setattr(routes, "create_sd_jwt_vc_with_remote_signing", build_credential)
     monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
@@ -919,7 +951,7 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
     response = await routes.issue_credential(
         _request(),
         routes.CredentialRequest(
-            credential_configuration_id="EmployeeCredential",
+            credential_configuration_id="EmployeeCredential#ldp-vc",
             proofs={"jwt": [_proof_jwt()]},
         ),
         authorization="Bearer wallet-token",
@@ -944,7 +976,9 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
 
 
 @pytest.mark.asyncio
-async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(monkeypatch) -> None:
+async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
+    monkeypatch,
+) -> None:
     repo = InMemoryIssuanceRepository()
     authorization_session = AuthorizationSession(
         id="authorization-session-race",
@@ -1034,9 +1068,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         ),
     )
 
-    expected_transaction_id = routes._authorization_session_transaction_id(
-        authorization_session.id
-    )
+    expected_transaction_id = routes._authorization_session_transaction_id(authorization_session.id)
     transactions = await repo.list_transactions("org-1")
     assert [transaction.id for transaction in transactions] == [expected_transaction_id]
     assert transactions[0].status == IssuanceStatus.ISSUED

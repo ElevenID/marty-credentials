@@ -237,6 +237,27 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
     assert configurations["default"]["format"] == "jwt_vc_json"
     assert configurations["default#credential-manager"]["format"] == "dc+sd-jwt"
     assert configurations["default#credential-manager"]["vct"].endswith("/credentials/default")
+    assert configurations["default#ldp-vc"] == {
+        "format": "ldp_vc",
+        "scope": "default",
+        "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+        "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
+        "proof_types_supported": {
+            "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+        },
+        "credential_definition": {
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential"],
+        },
+        "credential_metadata": {
+            "display": [
+                {
+                    "name": "Verifiable Credential (Data Integrity)",
+                    "locale": "en-US",
+                }
+            ],
+        },
+    }
     assert configurations["default#mdoc"] == {
         "format": "mso_mdoc",
         "scope": "default",
@@ -249,11 +270,10 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "credential_metadata": {
             "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
         },
-        "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
     }
     for configuration in configurations.values():
-        assert configuration["display"][0]["name"]
-        assert configuration["credential_metadata"]["display"] == configuration["display"]
+        assert configuration["credential_metadata"]["display"][0]["name"]
+        assert "display" not in configuration
     assert "credentialSubject" not in configurations["default"]["credential_definition"]
 
     from issuance.main import _credential_definition, _credential_metadata
@@ -295,9 +315,7 @@ def test_removed_spruce_protocol_fork_is_not_routable(monkeypatch):
 
     client = TestClient(create_app())
     assert client.get("/.well-known/openid-credential-issuer/org/org-a/spruce").status_code == 404
-    assert (
-        client.get("/.well-known/oauth-authorization-server/org/org-a/spruce").status_code == 404
-    )
+    assert client.get("/.well-known/oauth-authorization-server/org/org-a/spruce").status_code == 404
 
 
 def test_issuance_transaction_schema_tracks_revocation_profile():
@@ -647,9 +665,7 @@ class TestRemoteIssuerFailureDetail:
 
         from issuance.infrastructure.api import signing_context
 
-        parameters = inspect.signature(
-            signing_context.resolve_remote_issuer_context
-        ).parameters
+        parameters = inspect.signature(signing_context.resolve_remote_issuer_context).parameters
         assert "issuer_profile_id" not in parameters
 
     async def test_required_remote_issuer_context_fails_on_incomplete_kms_profile(

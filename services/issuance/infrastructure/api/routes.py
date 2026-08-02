@@ -400,6 +400,33 @@ def _normalize_payload_format(value: str | None) -> str:
     return (value or "").strip().lower().replace("-", "_")
 
 
+def _credential_configuration_id_for_format(base: str, variant: str | None) -> str:
+    """Return the advertised configuration ID for a template representation."""
+
+    normalized_variant = _normalize_payload_format(variant)
+    if base == "default":
+        if normalized_variant in _MDOC_PAYLOAD_FORMATS:
+            return "default#mdoc"
+        if normalized_variant in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+            return "default#ldp-vc"
+        if normalized_variant in _JWT_VC_PAYLOAD_FORMATS:
+            return "default"
+        return "default#credential-manager"
+    if normalized_variant in _MDOC_PAYLOAD_FORMATS:
+        return f"{base}#mdoc"
+    if normalized_variant in _VDS_NC_PAYLOAD_FORMATS:
+        return f"{base}#vds-nc"
+    if normalized_variant in _DATA_INTEGRITY_PAYLOAD_FORMATS:
+        return f"{base}#ldp-vc"
+    if normalized_variant in _JWT_VC_PAYLOAD_FORMATS:
+        return base
+    if normalized_variant == "credential_manager":
+        return f"{base}#credential-manager"
+    if normalized_variant == "apple_wallet":
+        return f"{base}#apple-wallet"
+    return f"{base}#sd-jwt"
+
+
 def _reject_direct_signing_headers(headers: Any) -> None:
     """Reject caller attempts to route issuance to a KMS service or key.
 
@@ -464,6 +491,8 @@ def _format_from_configuration_id(configuration_id: str | None) -> str | None:
         return "mso_mdoc"
     if normalized.endswith("#vds-nc"):
         return "vds_nc"
+    if normalized.endswith("#ldp-vc"):
+        return "ldp_vc"
     return None
 
 
@@ -1021,9 +1050,7 @@ class IssuanceResponse(BaseModel):
     id: str
     organization_id: str
     credential_template_id: str
-    status: Literal[
-        "pending", "authorized", "signing", "issued", "failed", "expired", "revoked"
-    ]
+    status: Literal["pending", "authorized", "signing", "issued", "failed", "expired", "revoked"]
     credential_offer_uri: str
     credential_offer_uris: dict[str, str]  # wallet_id → URI for each configured wallet
     credential_offer_labels: dict[str, str]  # wallet_id → display_name from template
@@ -1042,9 +1069,7 @@ class IssuanceTransactionResponse(BaseModel):
     applicant_id: str | None = None
     application_id: str | None = None
     subject_did: str | None = None
-    status: Literal[
-        "pending", "authorized", "signing", "issued", "failed", "expired", "revoked"
-    ]
+    status: Literal["pending", "authorized", "signing", "issued", "failed", "expired", "revoked"]
     created_at: str
     expires_at: str | None = None
     issued_at: str | None = None
@@ -1140,10 +1165,15 @@ class CredentialRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_legacy_singular_proof(cls, value: Any) -> Any:
-        """Reject the deprecated singular proof object without rejecting extensions."""
+    def reject_obsolete_request_members(cls, value: Any) -> Any:
+        """Reject removed draft members without rejecting valid extensions."""
         if isinstance(value, dict) and "proof" in value:
-            raise ValueError("use the OID4VCI 'proofs' object instead of legacy 'proof'")
+            raise ValueError("use the OID4VCI 'proofs' object instead of removed 'proof'")
+        if isinstance(value, dict) and "format" in value:
+            raise ValueError(
+                "select credential_configuration_id or credential_identifier; "
+                "the removed 'format' member is not supported"
+            )
         return value
 
     # OID4VCI v1 §8.2: proofs is an object mapping proof_type -> list[str]
@@ -3354,46 +3384,14 @@ async def initiate_issuance(
 
     credential_config_id = credential_type or "default"
 
-    def _config_id_for_format_variant(base: str, variant: str | None) -> str:
-        """Return the credential_configuration_id for the given base type and format variant.
-
-        - Standard wallets: ``{base}#sd-jwt`` (``format: dc+sd-jwt``).
-        - ISO 18013-5 mDoc (``variant == "mso_mdoc"``): ``{base}#mdoc``
-          which maps to the ``mso_mdoc`` entry in the standard issuer metadata.
-        - ICAO VDS-NC (``variant == "vds_nc"``): ``{base}#vds-nc``
-          which maps to the ``vds_nc`` entry in issuer metadata.
-        """
-        normalized_variant = _normalize_payload_format(variant)
-        # The root issuer metadata intentionally exposes distinct default
-        # configurations: JWT VC JSON, Credential Manager SD-JWT, and mdoc.
-        # An offer must name the configuration whose representation it will
-        # issue; returning bare ``default`` here selected the JWT VC JSON
-        # metadata while later processing inferred an SD-JWT representation.
-        if base == "default":
-            if normalized_variant in _MDOC_PAYLOAD_FORMATS:
-                return "default#mdoc"
-            return "default#credential-manager"
-        if normalized_variant in _MDOC_PAYLOAD_FORMATS:
-            return f"{base}#mdoc"
-        if normalized_variant in _VDS_NC_PAYLOAD_FORMATS:
-            return f"{base}#vds-nc"
-        if normalized_variant == "credential_manager":
-            return f"{base}#credential-manager"
-        if normalized_variant == "apple_wallet":
-            return f"{base}#apple-wallet"
-        return f"{base}#sd-jwt"
-
-    # Default offer uses the standard vc+sd-jwt config (works with Walt.id and
-    # most OID4VCI-compliant wallets).  For mso_mdoc templates, use the #mdoc
-    # config id so the default offer also resolves to the correct metadata entry.
+    # The offer must select the configuration that exactly matches the template's
+    # representation. Wallets must not infer a different format from transaction
+    # state or a removed request-level ``format`` member.
     normalized_payload_format = _normalize_payload_format(credential_payload_format)
-    if normalized_payload_format in _MDOC_PAYLOAD_FORMATS:
-        default_fmt_variant = "mso_mdoc"
-    elif normalized_payload_format in _VDS_NC_PAYLOAD_FORMATS:
-        default_fmt_variant = "vds_nc"
-    else:
-        default_fmt_variant = None
-    default_config_id = _config_id_for_format_variant(credential_config_id, default_fmt_variant)
+    default_fmt_variant = normalized_payload_format or None
+    default_config_id = _credential_configuration_id_for_format(
+        credential_config_id, default_fmt_variant
+    )
     offer_json_str = oid4vci_create_credential_offer(
         issuer_url=org_issuer_url(request.organization_id),
         credential_types=[default_config_id],
@@ -3445,7 +3443,9 @@ async def initiate_issuance(
             continue
 
         if wid:
-            wallet_config_id = _config_id_for_format_variant(credential_config_id, fmt_variant)
+            wallet_config_id = _credential_configuration_id_for_format(
+                credential_config_id, fmt_variant
+            )
             wallet_issuer_url = (
                 org_issuer_url_credential_manager(request.organization_id)
                 if fmt_variant == "credential-manager"
@@ -4132,9 +4132,8 @@ async def issue_credential(
             tx = await repo.get_by_pre_auth_code(auth_session.issuer_state)
         if not tx:
             # Stub transaction for auth-code-only issuance.
-            # Strip any format suffix (e.g. #sd-jwt, #mdoc, #vds-nc) that may be
-            # present on the config ID so signing receives the bare credential type
-            # (e.g. "access_badge").
+            # Strip the selected configuration suffix before signing so the
+            # engine receives the bare credential type (e.g. "access_badge").
             raw_config_id = (
                 auth_session.credential_configuration_ids[0]
                 if auth_session.credential_configuration_ids
@@ -4182,16 +4181,13 @@ async def issue_credential(
 
     # OID4VCI Final §7.3: The access token is single-use for credential issuance.
     # §8 errors use 400 invalid_credential_request, not 401.
-    if bool(request.credential_configuration_id) == bool(
-        request.credential_identifier
-    ):
+    if bool(request.credential_configuration_id) == bool(request.credential_identifier):
         return JSONResponse(
             status_code=400,
             content={
                 "error": "invalid_credential_request",
                 "error_description": (
-                    "Provide exactly one of credential_configuration_id or "
-                    "credential_identifier"
+                    "Provide exactly one of credential_configuration_id or credential_identifier"
                 ),
             },
         )
@@ -4230,34 +4226,29 @@ async def issue_credential(
     tx = copy.deepcopy(tx)
 
     # OID4VCI §8.2: Validate credential_configuration_id if provided.
-    # It must correspond to a configuration supported by this issuer for the transaction.
+    # It must be one of the configurations granted for this exact transaction.
     if request.credential_configuration_id is not None:
         cred_type_base = tx.credential_type or "default"
-        valid_config_ids = {
-            cred_type_base,
-            f"{cred_type_base}#sd-jwt",
-            f"{cred_type_base}#mdoc",
-            f"{cred_type_base}#vds-nc",
-            "default",
-            "default#sd-jwt",
-            "default#credential-manager",
-            "default#mdoc",
-            "default#vds-nc",
-        }
-        # Also include org's published credential types so validation is
-        # consistent with GET /.well-known/openid-credential-issuer/org/{org_id}.
-        tx_own_ids = set(valid_config_ids)
-        if tx.organization_id:
-            for _ctype in await repo.get_credential_types_for_org(tx.organization_id):
-                valid_config_ids.update(
-                    {
-                        _ctype,
-                        f"{_ctype}#sd-jwt",
-                        f"{_ctype}#mdoc",
-                        f"{_ctype}#vds-nc",
-                    }
+        if auth_session:
+            valid_config_ids = set(
+                getattr(auth_session, "credential_configuration_ids", []) or []
+            )
+        else:
+            valid_config_ids = {
+                _credential_configuration_id_for_format(
+                    cred_type_base, tx.credential_payload_format
                 )
-        if request.credential_configuration_id not in valid_config_ids:
+            }
+            for wallet_config in tx.wallet_configs or []:
+                variant = wallet_config.get("format_variant")
+                if isinstance(variant, str) and variant:
+                    valid_config_ids.add(
+                        _credential_configuration_id_for_format(
+                            cred_type_base, variant
+                        )
+                    )
+        selected_configuration = request.credential_configuration_id
+        if selected_configuration not in valid_config_ids:
             return JSONResponse(
                 status_code=400,
                 content={
@@ -4265,10 +4256,8 @@ async def issue_credential(
                     "error_description": f"Unknown credential_configuration_id: {request.credential_configuration_id!r}",
                 },
             )
-        # If the config ID was validated via org DB (not tx's stored type),
-        # fix credential_type on the transaction so signing uses the correct type.
-        if request.credential_configuration_id not in tx_own_ids:
-            tx.credential_type = request.credential_configuration_id.split("#")[0]
+        if auth_session:
+            tx.credential_type = selected_configuration.split("#", 1)[0]
 
     # OID4VCI §8.2: Validate credential_identifier if provided.
     # credential_identifier is only valid in auth-code flows where the AS issued it.
@@ -4401,15 +4390,13 @@ async def issue_credential(
 
     # Authenticate the proof before mutating nonce state. Consuming first
     # would let an attacker burn a wallet's nonce with an invalid signature.
-    ok, did_from_proof, holder_jwk, verify_err = (
-        await verify_oid4vci_proof_with_issuer_policy(
-            proof_jwt,
-            issuer_context=issuer_context,
-            organization_id=tx.organization_id,
-            expected_nonce=_proof_nonce,
-            proof_verifier=verify_proof_jwt,
-            bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
-        )
+    ok, did_from_proof, holder_jwk, verify_err = await verify_oid4vci_proof_with_issuer_policy(
+        proof_jwt,
+        issuer_context=issuer_context,
+        organization_id=tx.organization_id,
+        expected_nonce=_proof_nonce,
+        proof_verifier=verify_proof_jwt,
+        bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
     )
     if not ok:
         logger.warning(
@@ -4741,9 +4728,7 @@ async def issue_credential(
                 credential_id=credential_id,
                 holder_jwk=holder_jwk,
                 certificate_chain=(
-                    remote_context.get("issuer_x5c")
-                    if isinstance(remote_context, dict)
-                    else None
+                    remote_context.get("issuer_x5c") if isinstance(remote_context, dict) else None
                 ),
                 profile_sign=_issuer_profile_mdoc_sign,
             )
@@ -4777,9 +4762,7 @@ async def issue_credential(
                 selective_disclosure_claims=sd_claims,
                 credential_format=effective_request_format,
                 issuer_certificate_chain=(
-                    remote_context.get("issuer_x5c")
-                    if isinstance(remote_context, dict)
-                    else None
+                    remote_context.get("issuer_x5c") if isinstance(remote_context, dict) else None
                 ),
                 **signing_arguments,
             )
@@ -5069,9 +5052,7 @@ async def _didcomm_sign_and_deliver(
         credential_format=effective_request_format,
         credential_id=credential_id,
         issuer_certificate_chain=(
-            remote_context.get("issuer_x5c")
-            if isinstance(remote_context, dict)
-            else None
+            remote_context.get("issuer_x5c") if isinstance(remote_context, dict) else None
         ),
     )
 

@@ -115,9 +115,7 @@ async def _resolve_remote_signing_context_for_tx(
         context.get("issuer_profile") or {}
     ).get("id")
     if not issuer_did or not issuer_profile_id:
-        raise RuntimeError(
-            "Resolved issuer context is missing issuer_profile_id or issuer_did"
-        )
+        raise RuntimeError("Resolved issuer context is missing issuer_profile_id or issuer_did")
 
     tx.issuer_did_override = issuer_did
     # Preserve the resolved custody service only as internal audit/readiness
@@ -180,9 +178,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
         algorithm=algorithm,
         verification_method_id=verification_method_id,
         credential_format=credential_format,
-        issuer_certificate_chain=(
-            remote_context.get("issuer_x5c")
-        ),
+        issuer_certificate_chain=(remote_context.get("issuer_x5c")),
     )
     return credential, credential_id, remote_context
 
@@ -465,15 +461,8 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             await repo.save_transaction(tx)
 
             credential_config_id = credential_type or "default"
-            # credential_payload_format may be the enum value "MDOC", the alias
-            # "mso_mdoc", or the raw string "mdoc" depending on the code path that
-            # stored the template.  All three indicate an mso_mdoc offer.
-            _MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
-            default_fmt_variant = (
-                "mso_mdoc" if credential_payload_format in _MDOC_PAYLOAD_FORMATS else None
-            )
             default_config_id = _config_id_for_format_variant(
-                credential_config_id, default_fmt_variant
+                credential_config_id, credential_payload_format
             )
 
             offer_json_str = oid4vci_create_credential_offer(
@@ -588,9 +577,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         client_assertion_type=(
                             getattr(request, "client_assertion_type", "") or None
                         ),
-                        client_assertion=(
-                            getattr(request, "client_assertion", "") or None
-                        ),
+                        client_assertion=(getattr(request, "client_assertion", "") or None),
                         allowed_audiences=(
                             [_org_issuer_url(auth_session.organization_id)]
                             if auth_session.organization_id
@@ -694,12 +681,8 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     organization_id=tx.organization_id,
                     expected_client_id=tx.oid4vci_client_id,
                     client_id=getattr(request, "client_id", "") or None,
-                    client_assertion_type=(
-                        getattr(request, "client_assertion_type", "") or None
-                    ),
-                    client_assertion=(
-                        getattr(request, "client_assertion", "") or None
-                    ),
+                    client_assertion_type=(getattr(request, "client_assertion_type", "") or None),
+                    client_assertion=(getattr(request, "client_assertion", "") or None),
                     allowed_audiences=[
                         _org_issuer_url(tx.organization_id),
                         f"{ISSUER_BASE_URL.rstrip('/')}/v1/issuance/token",
@@ -840,15 +823,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             # Apply exactly the same tenant/profile proof policy as the HTTP
             # credential endpoint. No transport may bypass key attestation.
-            ok, holder_did, holder_jwk, verify_err = (
-                await verify_oid4vci_proof_with_issuer_policy(
-                    proof_jwt,
-                    issuer_context=issuer_context,
-                    organization_id=tx.organization_id,
-                    expected_nonce=tx.nonce or None,
-                    proof_verifier=verify_proof_jwt,
-                    bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
-                )
+            ok, holder_did, holder_jwk, verify_err = await verify_oid4vci_proof_with_issuer_policy(
+                proof_jwt,
+                issuer_context=issuer_context,
+                organization_id=tx.organization_id,
+                expected_nonce=tx.nonce or None,
+                proof_verifier=verify_proof_jwt,
+                bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
             )
             if not ok:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -1557,12 +1538,33 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
 def _config_id_for_format_variant(base: str, variant: str | None) -> str:
     """Return the credential_configuration_id for the given base type and format variant."""
+    normalized = (variant or "").strip().lower().replace("-", "_")
     if base == "default":
-        return base
-    if variant == "mso_mdoc":
+        if normalized in {"mso_mdoc", "mdoc"}:
+            return "default#mdoc"
+        if normalized in {"json_ld", "ldp_vc", "w3c_vcdm_v2_di"}:
+            return "default#ldp-vc"
+        if normalized in {
+            "jwt_vc",
+            "jwt_vc_json",
+            "w3c_vcdm_v2_jwt",
+            "w3c_vcdm_v2_jwt_vc",
+        }:
+            return "default"
+        return "default#credential-manager"
+    if normalized in {"mso_mdoc", "mdoc"}:
         return f"{base}#mdoc"
-    if variant == "credential-manager":
+    if normalized in {"json_ld", "ldp_vc", "w3c_vcdm_v2_di"}:
+        return f"{base}#ldp-vc"
+    if normalized in {
+        "jwt_vc",
+        "jwt_vc_json",
+        "w3c_vcdm_v2_jwt",
+        "w3c_vcdm_v2_jwt_vc",
+    }:
+        return base
+    if normalized == "credential_manager":
         return f"{base}#credential-manager"
-    if variant == "apple-wallet":
+    if normalized == "apple_wallet":
         return f"{base}#apple-wallet"
     return f"{base}#sd-jwt"
