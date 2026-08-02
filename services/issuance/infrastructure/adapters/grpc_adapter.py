@@ -24,6 +24,7 @@ from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
 )
+from issuance.infrastructure.grpc_security import create_service_channel
 from marty_proto.v1 import (
     issuance_service_pb2 as pb2,
 )
@@ -219,12 +220,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             # Validate organization exists via gRPC (best-effort)
             try:
-                import grpc.aio as grpc_aio
                 from marty_proto.v1 import organization_service_pb2 as org_pb2
                 from marty_proto.v1 import organization_service_pb2_grpc as org_grpc
 
                 org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-                async with grpc_aio.insecure_channel(org_grpc_target) as channel:
+                async with create_service_channel(org_grpc_target) as channel:
                     org_stub = org_grpc.OrganizationServiceStub(channel)
                     org_resp = await org_stub.GetOrganization(
                         org_pb2.GetOrganizationRequest(organization_id=request.organization_id)
@@ -273,12 +273,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             if request.credential_template_id:
                 # Fetch template via gRPC (CredentialTemplateService.GetTemplate)
                 try:
-                    import grpc.aio as grpc_aio
                     from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
                     from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
 
                     ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
-                    async with grpc_aio.insecure_channel(ct_grpc_target) as channel:
+                    async with create_service_channel(ct_grpc_target) as channel:
                         ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
                         tmpl_resp = await ct_stub.GetTemplate(
                             ct_pb2.GetTemplateRequest(template_id=request.credential_template_id)
@@ -374,12 +373,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 return pb2.IssuanceResponse()
 
             try:
-                import grpc.aio as grpc_aio
                 from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
                 from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
 
                 rp_grpc_target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
-                async with grpc_aio.insecure_channel(rp_grpc_target) as channel:
+                async with create_service_channel(rp_grpc_target) as channel:
                     profile = await rp_grpc.RevocationProfileServiceStub(
                         channel
                     ).GetRevocationProfile(
@@ -1340,12 +1338,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 raise RuntimeError(
                     "credential has no Revocation Profile and allocated status-list entry"
                 )
-            import grpc.aio as grpc_aio
             from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
             from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
 
             rp_grpc_target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
-            async with grpc_aio.insecure_channel(rp_grpc_target) as channel:
+            async with create_service_channel(rp_grpc_target) as channel:
                 rp_stub = rp_grpc.RevocationProfileServiceStub(channel)
                 resp = await rp_stub.ProcessRevocation(
                     rp_pb2.ProcessRevocationRequest(

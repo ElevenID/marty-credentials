@@ -99,6 +99,7 @@ from issuance.infrastructure.api.signing_context import (
     resolve_remote_issuer_context,
     sign_payload_with_issuer_did,
 )
+from issuance.infrastructure.grpc_security import create_service_channel
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
@@ -736,20 +737,11 @@ resource_owner_router = APIRouter(
 )
 
 # ---------------------------------------------------------------------------
-# TLS-aware gRPC channel helper
+# Authenticated, TLS-aware gRPC channel helper
 # ---------------------------------------------------------------------------
-_GRPC_CA_CERT = os.environ.get("GRPC_CA_CERT", "")
-
-
 def _create_grpc_channel(target: str):
-    """Create a gRPC channel, using TLS when GRPC_CA_CERT is set."""
-    import grpc.aio as _grpc_aio
-
-    if _GRPC_CA_CERT:
-        with open(_GRPC_CA_CERT, "rb") as f:
-            creds = _grpc_aio.ssl_channel_credentials(root_certificates=f.read())
-        return _grpc_aio.secure_channel(target, creds)
-    return _grpc_aio.insecure_channel(target)
+    """Create an authenticated channel, using TLS when a CA is configured."""
+    return create_service_channel(target)
 
 
 # ---------------------------------------------------------------------------
@@ -1834,7 +1826,7 @@ async def _require_active_revocation_profile_binding(
 
     target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
     try:
-        async with grpc.aio.insecure_channel(target) as channel:
+        async with create_service_channel(target) as channel:
             response = await rp_grpc.RevocationProfileServiceStub(channel).GetRevocationProfile(
                 rp_pb2.GetRevocationProfileRequest(profile_id=profile_id),
                 timeout=3.0,
