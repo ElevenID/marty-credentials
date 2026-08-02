@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-08-01
+
+### Changed
+
+- Enforce the OpenID4VCI 1.0 Final credential request and response shapes:
+  callers select exactly one credential configuration or credential identifier,
+  and issued credentials are returned only through the `credentials` array.
+- Resolve issuer signing exclusively from the public issuer DID; callers can no
+  longer provide an issuer-profile selector or consume the old `mdoc_x5c` alias.
+- Preserve profile-mediated KMS signing while removing pre-1.0 public aliases.
+
 ## [0.1.38] - 2026-08-01
 
 ### Fixed
