@@ -243,7 +243,10 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "cryptographic_binding_methods_supported": ["did:key", "jwk"],
         "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
         "proof_types_supported": {
-            "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+            "jwt": {
+                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "key_attestations_required": {},
+            }
         },
         "credential_definition": {
             "@context": ["https://www.w3.org/ns/credentials/v2"],
@@ -265,7 +268,10 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "cryptographic_binding_methods_supported": ["did:key", "jwk"],
         "credential_signing_alg_values_supported": [-7, -8],
         "proof_types_supported": {
-            "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+            "jwt": {
+                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "key_attestations_required": {},
+            }
         },
         "credential_metadata": {
             "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-08-02
+
+### Fixed
+
+- Emit the current EUDI OpenID4VCI profile metadata shape required by the
+  official wallet parser, including `key_attestations_required` for every JWT
+  proof configuration and an empty object when no additional wallet-key
+  constraints are imposed.
+- Consume marty-core 0.1.32 so current ETSI key-attestation-bound proofs use
+  canonical `kid: "0"` to select only the first key in the already
+  issuer-profile-validated attestation.
+
+### Security
+
+- Keep key-attestation trust tenant- and issuer-profile-bound; the public
+  issuance request still contains only the organization and issuer DID and
+  never accepts a KMS, service, key-reference, or issuer-profile selector.
+- Remove the obsolete named-key and `did:key` compatibility interpretation
+  from the key-attestation-bound proof path.
+
 ## [0.1.41] - 2026-08-01
 
 ### Changed
