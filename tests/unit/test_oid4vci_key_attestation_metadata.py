@@ -57,7 +57,7 @@ async def test_metadata_publishes_resolved_required_key_attestation_policy(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["disabled", "optional"])
-async def test_metadata_does_not_claim_optional_attestation_is_required(
+async def test_metadata_publishes_empty_requirement_when_attestation_is_not_required(
     monkeypatch: pytest.MonkeyPatch,
     mode: str,
 ) -> None:
@@ -78,7 +78,7 @@ async def test_metadata_does_not_claim_optional_attestation_is_required(
         credential_format="mso_mdoc",
     )
 
-    assert "key_attestations_required" not in proof_types["jwt"]
+    assert proof_types["jwt"]["key_attestations_required"] == {}
 
 
 @pytest.mark.asyncio

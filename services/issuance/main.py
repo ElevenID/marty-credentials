@@ -195,7 +195,14 @@ async def _oid4vci_proof_types_for_org(
     from issuance.infrastructure.api.signing_context import resolve_remote_issuer_context
 
     proof_types: dict[str, Any] = {
-        "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
+        "jwt": {
+            "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+            # The current EUDI profile makes the attestation requirement part
+            # of every JWT proof metadata entry. An empty object imposes no
+            # additional wallet-key constraints; current EUDI wallets reject
+            # a configuration that omits the member.
+            "key_attestations_required": {},
+        }
     }
     key_purpose = "mdoc_dsc" if credential_format == "mso_mdoc" else "vc_jwt_issuer"
     try:
@@ -578,7 +585,12 @@ def create_app() -> FastAPI:
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
-        _unbound_proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _unbound_proof_types = {
+            "jwt": {
+                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "key_attestations_required": {},
+            }
+        }
 
         # Pull distinct credential types from the issuance DB — self-contained,
         # no external auth required, and grows automatically with new templates.
@@ -726,7 +738,12 @@ def create_app() -> FastAPI:
         """
         from issuance.infrastructure.api.routes import ISSUER_BASE_URL
 
-        _proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
+        _proof_types = {
+            "jwt": {
+                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "key_attestations_required": {},
+            }
+        }
         return {
             "credential_issuer": ISSUER_BASE_URL,
             "authorization_servers": [ISSUER_BASE_URL],
