@@ -287,6 +287,19 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
     assert type_metadata.json()["vct"].endswith("/credentials/access_badge")
 
 
+def test_removed_spruce_protocol_fork_is_not_routable(monkeypatch):
+    monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
+
+    from fastapi.testclient import TestClient
+    from issuance.main import create_app
+
+    client = TestClient(create_app())
+    assert client.get("/.well-known/openid-credential-issuer/org/org-a/spruce").status_code == 404
+    assert (
+        client.get("/.well-known/oauth-authorization-server/org/org-a/spruce").status_code == 404
+    )
+
+
 def test_issuance_transaction_schema_tracks_revocation_profile():
     column = issuance_transactions_table.c.revocation_profile_id
 
@@ -468,7 +481,7 @@ def repo():
 # ============================================================================
 
 
-class TestSpruceClaimDescriptions:
+class TestOid4vciClaimDescriptions:
     def test_sd_jwt_claims_are_oid4vci_final_descriptor_array(self):
         from issuance.main import _with_claims
 
@@ -513,7 +526,7 @@ class TestSpruceClaimDescriptions:
             },
         ]
 
-        config = _with_claim_descriptions({"format": "spruce-vc+sd-jwt"}, metadata)
+        config = _with_claim_descriptions({"format": "dc+sd-jwt"}, metadata)
         assert isinstance(config["claims"], list)
         assert config["claims"][0]["path"] == ["email"]
 
@@ -1104,10 +1117,6 @@ class TestProofAudienceMatching:
             org_id,
         )
         assert _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}/spruce",
-            org_id,
-        )
-        assert _proof_audience_matches_org_issuer(
             f"https://beta.elevenidllc.com/org/{org_id}/credential-manager",
             org_id,
         )
@@ -1129,7 +1138,7 @@ class TestProofAudienceMatching:
             org_id,
         )
         assert not _proof_audience_matches_org_issuer(
-            "https://beta.elevenidllc.com/org/other/spruce",
+            f"https://beta.elevenidllc.com/org/{org_id}/spruce",
             org_id,
         )
 

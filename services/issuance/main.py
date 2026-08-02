@@ -414,99 +414,13 @@ def create_app() -> FastAPI:
     # wallets that probe without an org context.
     # ------------------------------------------------------------------
 
-    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
-    async def get_org_issuer_metadata_spruce(org_id: str) -> dict:
-        """Return per-org OID4VCI issuer metadata compatible with SpruceID mobile-sdk-rs.
-
-        SpruceID's ``oid4vci-rs @ e97b01e`` uses a custom ``ProfilesCredentialConfiguration``
-        untagged serde enum whose only SD-JWT variant requires ``format: "spruce-vc+sd-jwt"``.
-        Any ``vc+sd-jwt`` entry in the same document causes the entire metadata deserialisation
-        to fail, so SpruceID credential offers point to the ``/org/{id}/spruce`` issuer URL and
-        this endpoint emits *only* ``spruce-vc+sd-jwt`` (+ ``jwt_vc_json``) entries.
-
-        Walt.id and every other OID4VCI-conformant wallet use the normal ``/org/{id}`` path.
-        """
-        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
-
-        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
-        credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
-
-        _sd_jwt_proof_types = await _oid4vci_proof_types_for_org(
-            org_id, credential_format="dc+sd-jwt"
-        )
-        _mdoc_proof_types = await _oid4vci_proof_types_for_org(
-            org_id, credential_format="mso_mdoc"
-        )
-        _binding = ["did:key", "jwk"]
-        _signing_algs = ["ES256", "EdDSA"]
-        _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
-
-        repo = get_repo()
-        known_types = await repo.get_credential_types_for_org(org_id)
-        display_metadata = await repo.get_credential_display_metadata_for_org(org_id)
-
-        credential_configurations: dict = {}
-        for ctype in known_types:
-            ctype_metadata = display_metadata.get(ctype, {})
-            if ctype.startswith("org.iso.18013"):
-                # ISO 18013-5 mDoc — SpruceKit's ProfilesCredentialConfiguration supports
-                # mso_mdoc natively. Only emit the mso_mdoc entry; jwt_vc_json and
-                # spruce-vc+sd-jwt entries for other types cause the SpruceID SDK's
-                # untagged-enum deserialisation to fail for the whole metadata document.
-                credential_configurations[f"{ctype}#mdoc"] = {
-                    "format": "mso_mdoc",
-                    "doctype": ctype,
-                    "scope": ctype,
-                    "cryptographic_binding_methods_supported": _binding,
-                    "credential_signing_alg_values_supported": _mdoc_signing_algs,
-                    "proof_types_supported": _mdoc_proof_types,
-                    "display": _credential_display_entries(ctype, ctype_metadata),
-                }
-            else:
-                # Non-ISO SD-JWT credential — emit as spruce-vc+sd-jwt so
-                # SpruceKit's ProfilesCredentialConfiguration enum can parse it.
-                # Only spruce-vc+sd-jwt (and mso_mdoc above) are valid variants in
-                # that enum; vc+sd-jwt or jwt_vc_json would cause the whole document
-                # to fail to deserialise in the SpruceID Rust SDK.
-                credential_configurations[f"{ctype}#spruce-sd-jwt"] = _with_claim_descriptions(
-                    {
-                        "format": "spruce-vc+sd-jwt",
-                        "vct": _credential_vct(ctype, ctype_metadata, ISSUER_BASE_URL),
-                        "scope": ctype,
-                        "cryptographic_binding_methods_supported": _binding,
-                        "credential_signing_alg_values_supported": _signing_algs,
-                        "proof_types_supported": _sd_jwt_proof_types,
-                        "display": _credential_display_entries(ctype, ctype_metadata),
-                    },
-                    ctype_metadata,
-                )
-
-        nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
-        deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
-        notification_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/notification"
-
-        return {
-            "credential_issuer": issuer_url,
-            # Be explicit even though OID4VCI permits omitting this value when
-            # the Credential Issuer is also the Authorization Server.  The
-            # EUDI reference wallet follows the advertised issuer into RFC
-            # 8414 discovery and does not reliably apply the omission rule.
-            "authorization_servers": [issuer_url],
-            "display": _issuer_display_entries(),
-            "credential_endpoint": credential_endpoint,
-            "nonce_endpoint": nonce_endpoint,
-            "deferred_credential_endpoint": deferred_credential_endpoint,
-            "notification_endpoint": notification_endpoint,
-            "credential_configurations_supported": credential_configurations,
-        }
-
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}/credential-manager")
     async def get_org_issuer_metadata_credential_manager(org_id: str) -> dict:
         """Return per-org issuer metadata compatible with Google CredentialManager API.
 
         Google's Android CredentialManager SDK only supports ``dc+sd-jwt``
-        format entries.  Any ``jwt_vc_json``, ``spruce-vc+sd-jwt``, or
-        ``mso_mdoc`` entry in the same metadata document causes the SDK's
+        format entries.  Any ``jwt_vc_json`` or ``mso_mdoc`` entry in the same
+        metadata document causes the SDK's
         format parser to reject the entire document.
 
         This endpoint emits *only* ``dc+sd-jwt`` entries (using the
@@ -570,8 +484,8 @@ def create_app() -> FastAPI:
         """Return per-org issuer metadata compatible with Apple Wallet.
 
         Apple's Verify with Wallet and ISO 18013-5 issuance path expects
-        ``mso_mdoc`` format entries.  Any ``jwt_vc_json``, ``dc+sd-jwt``, or
-        ``spruce-vc+sd-jwt`` entry in the same metadata document may cause
+        ``mso_mdoc`` format entries.  Any ``jwt_vc_json`` or ``dc+sd-jwt``
+        entry in the same metadata document may cause
         the wallet to fail format negotiation.
 
         This endpoint emits *only* ``mso_mdoc`` entries (using the
@@ -754,9 +668,6 @@ def create_app() -> FastAPI:
             if not ctype.startswith("org.iso.18013"):
                 # SD-JWT: use "dc+sd-jwt" per OID4VCI-1FINAL Appendix A (Final spec format ID).
                 # "vc+sd-jwt" was the Draft identifier; "dc+sd-jwt" is the Final spec name.
-                # NOTE: do NOT emit a "spruce-vc+sd-jwt" entry — Walt.id's
-                # CredentialFormatSerializer rejects any unknown format string in
-                # the entire metadata document, causing a 400 on all requests.
                 credential_configurations[f"{ctype}#sd-jwt"] = {
                     "format": "dc+sd-jwt",
                     "vct": _credential_vct(ctype, ctype_metadata, ISSUER_BASE_URL),
@@ -958,39 +869,6 @@ def create_app() -> FastAPI:
         from issuance.infrastructure.api.routes import ISSUER_BASE_URL
 
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
-        return {
-            "issuer": issuer_url,
-            "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",
-            "token_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/token",
-            "pushed_authorization_request_endpoint": (
-                f"{ISSUER_BASE_URL}/v1/issuance/par?issuer_org={org_id}"
-            ),
-            "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
-            "token_endpoint_auth_signing_alg_values_supported": ["ES256"],
-            "grant_types_supported": [
-                "urn:ietf:params:oauth:grant-type:pre-authorized_code",
-                "authorization_code",
-            ],
-            "response_types_supported": ["code"],
-            "code_challenge_methods_supported": ["S256"],
-            "pre-authorized_grant_anonymous_access_supported": True,
-        }
-
-    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
-    async def get_org_spruce_as_metadata(org_id: str) -> dict:
-        """Per-org OAuth 2.0 AS metadata for SpruceID SDK (RFC 8414).
-
-        SpruceID's oid4vci-rs derives the AS metadata URL from the
-        ``credential_issuer`` field of the issuer metadata.  When
-        ``credential_issuer = https://host/org/{id}/spruce`` the SDK fetches:
-            /org/{id}/spruce/.well-known/oauth-authorization-server
-        nginx rewrites that to:
-            /.well-known/oauth-authorization-server/org/{id}/spruce
-        The ``issuer`` value MUST match ``credential_issuer`` exactly.
-        """
-        from issuance.infrastructure.api.routes import ISSUER_BASE_URL
-
-        issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
         return {
             "issuer": issuer_url,
             "authorization_endpoint": f"{ISSUER_BASE_URL}/v1/issuance/authorize?issuer_org={org_id}",

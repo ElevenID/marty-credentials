@@ -453,8 +453,6 @@ def _format_from_configuration_id(configuration_id: str | None) -> str | None:
     normalized = (configuration_id or "").strip().lower()
     if not normalized:
         return None
-    if normalized.endswith("#spruce-sd-jwt"):
-        return "spruce-vc+sd-jwt"
     if normalized.endswith("#credential-manager"):
         return "dc+sd-jwt"
     if normalized.endswith("#sd-jwt"):
@@ -1539,27 +1537,12 @@ def org_issuer_url(org_id: str) -> str:
     return f"{ISSUER_BASE_URL}/org/{org_id}"
 
 
-def org_issuer_url_spruce(org_id: str) -> str:
-    """Return the SpruceID-compatible per-org OID4VCI credential_issuer URL.
-
-    SpruceID's ``oid4vci-rs @ e97b01e`` requires ``format: "spruce-vc+sd-jwt"`` for all
-    SD-JWT credential configurations.  Any ``vc+sd-jwt`` entry in the same metadata document
-    causes the entire metadata deserialisation to fail.  We therefore use a distinct issuer
-    path for SpruceID credential offers so the metadata endpoint can emit only the
-    ``spruce-vc+sd-jwt`` format without affecting Walt.id and other wallets.
-
-      credential_issuer = https://issuer.example.com/org/<id>/spruce
-      well-known URL   = https://issuer.example.com/.well-known/openid-credential-issuer/org/<id>/spruce
-    """
-    return f"{ISSUER_BASE_URL}/org/{org_id}/spruce"
-
-
 def org_issuer_url_credential_manager(org_id: str) -> str:
     """Return the Google CredentialManager-compatible per-org issuer URL.
 
     Google's CredentialManager SDK (Android) only supports ``dc+sd-jwt`` format
-    entries.  Any ``jwt_vc_json`` or ``spruce-vc+sd-jwt`` entry in the same
-    metadata document causes the SDK's format parser to fail.  We therefore use
+    entries.  Any additional credential format in the same metadata document
+    causes the SDK's format parser to fail.  We therefore use
     a distinct issuer path for CredentialManager offers so the metadata endpoint
     can emit only ``dc+sd-jwt`` entries.
 
@@ -1574,8 +1557,8 @@ def org_issuer_url_apple_wallet(org_id: str) -> str:
 
     Apple's Verify with Wallet / ISO 18013-5 issuance path only supports
     ``mso_mdoc`` format entries.  Any ``jwt_vc_json``, ``dc+sd-jwt``, or
-    ``spruce-vc+sd-jwt`` entry in the same metadata document may confuse
-    the wallet's format parser.  We use a distinct issuer path so the metadata
+    additional format entries in the same metadata document may confuse the
+    wallet's format parser.  We use a distinct issuer path so the metadata
     endpoint can emit only ``mso_mdoc`` entries.
 
       credential_issuer = https://issuer.example.com/org/<id>/apple-wallet
@@ -1588,7 +1571,6 @@ def _allowed_credential_issuer_audience_paths(org_id: str) -> tuple[str, ...]:
     """Credential issuer URL paths accepted in holder proof JWT audiences."""
     return (
         f"/org/{org_id}",
-        f"/org/{org_id}/spruce",
         f"/org/{org_id}/credential-manager",
         f"/org/{org_id}/apple-wallet",
         f"/org/{org_id}/waltid",
@@ -3375,11 +3357,7 @@ async def initiate_issuance(
     def _config_id_for_format_variant(base: str, variant: str | None) -> str:
         """Return the credential_configuration_id for the given base type and format variant.
 
-        - Standard wallets (Walt.id, Marty native, etc.): ``{base}#sd-jwt``
-          (``format: vc+sd-jwt`` in the standard metadata document).
-        - SpruceID mobile SDK (``variant == "spruce-vc+sd-jwt"``): ``{base}#spruce-sd-jwt``
-          which maps to the ``spruce-vc+sd-jwt`` entry in the ``/org/{id}/spruce``
-          metadata document.
+        - Standard wallets: ``{base}#sd-jwt`` (``format: dc+sd-jwt``).
         - ISO 18013-5 mDoc (``variant == "mso_mdoc"``): ``{base}#mdoc``
           which maps to the ``mso_mdoc`` entry in the standard issuer metadata.
         - ICAO VDS-NC (``variant == "vds_nc"``): ``{base}#vds-nc``
@@ -3395,8 +3373,6 @@ async def initiate_issuance(
             if normalized_variant in _MDOC_PAYLOAD_FORMATS:
                 return "default#mdoc"
             return "default#credential-manager"
-        if normalized_variant == "spruce_vc+sd_jwt":
-            return f"{base}#spruce-sd-jwt"
         if normalized_variant in _MDOC_PAYLOAD_FORMATS:
             return f"{base}#mdoc"
         if normalized_variant in _VDS_NC_PAYLOAD_FORMATS:
@@ -3429,7 +3405,7 @@ async def initiate_issuance(
     offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json_str)}"
 
     # Build per-wallet offer URIs.  Each wallet entry may carry an optional
-    # "format_variant" key (e.g. "spruce-vc+sd-jwt") that selects the right
+    # "format_variant" key that selects the right
     # credential_configuration_id for that wallet's SDK.
     credential_offer_uris: dict[str, str] = {}
     credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
@@ -3470,14 +3446,8 @@ async def initiate_issuance(
 
         if wid:
             wallet_config_id = _config_id_for_format_variant(credential_config_id, fmt_variant)
-            # SpruceID SDK requires a dedicated issuer URL whose metadata document
-            # only emits formats its ProfilesCredentialConfiguration enum can parse.
-            # This applies to both spruce-vc+sd-jwt AND mso_mdoc — any unrecognised
-            # entry in the standard metadata causes the whole fetch to fail.
             wallet_issuer_url = (
-                org_issuer_url_spruce(request.organization_id)
-                if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
-                else org_issuer_url_credential_manager(request.organization_id)
+                org_issuer_url_credential_manager(request.organization_id)
                 if fmt_variant == "credential-manager"
                 else org_issuer_url_apple_wallet(request.organization_id)
                 if fmt_variant == "apple-wallet"
@@ -4170,7 +4140,7 @@ async def issue_credential(
                 if auth_session.credential_configuration_ids
                 else "default"
             )
-            bare_ctype = raw_config_id.split("#")[0]  # strips #sd-jwt, #spruce-sd-jwt, etc.
+            bare_ctype = raw_config_id.split("#")[0]
             tx = IssuanceTransaction(
                 id=_authorization_session_transaction_id(auth_session.id),
                 organization_id=auth_session.organization_id or "",
@@ -4268,7 +4238,6 @@ async def issue_credential(
             f"{cred_type_base}#sd-jwt",
             f"{cred_type_base}#mdoc",
             f"{cred_type_base}#vds-nc",
-            f"{cred_type_base}#spruce-sd-jwt",
             "default",
             "default#sd-jwt",
             "default#credential-manager",
@@ -4286,7 +4255,6 @@ async def issue_credential(
                         f"{_ctype}#sd-jwt",
                         f"{_ctype}#mdoc",
                         f"{_ctype}#vds-nc",
-                        f"{_ctype}#spruce-sd-jwt",
                     }
                 )
         if request.credential_configuration_id not in valid_config_ids:
@@ -4367,7 +4335,7 @@ async def issue_credential(
 
     # OID4VCI-1FINAL Appendix F.4: aud in proof JWT MUST be the credential_issuer URL.
     # We validate the issuer URL path to accept both localhost and production
-    # hostnames while honoring wallet-specific issuer paths such as /spruce.
+    # hostnames while honoring current wallet-specific issuer paths.
     if tx.organization_id:
         try:
             import base64 as _b64
@@ -4514,8 +4482,6 @@ async def issue_credential(
     # mso_mdoc: always forced regardless of what the wallet requests.
     # SD-JWT templates: force vc+sd-jwt so Rust dispatches to the SD-JWT signer
     #   rather than falling through to plain JWT-VC.
-    # spruce-vc+sd-jwt: SpruceKit's custom alias — normalise to vc+sd-jwt for Rust;
-    #   the response uses the original request.format so SpruceKit parses it correctly.
     normalized_payload_format = _normalize_payload_format(credential_payload_fmt)
     if normalized_payload_format in _MDOC_PAYLOAD_FORMATS:
         signing_format = "mso_mdoc"
@@ -4530,8 +4496,6 @@ async def issue_credential(
         signing_format = "vc+sd-jwt"
     elif normalized_payload_format in _DATA_INTEGRITY_PAYLOAD_FORMATS:
         signing_format = "ldp_vc"
-    elif effective_request_format == "spruce-vc+sd-jwt":
-        signing_format = "vc+sd-jwt"
     else:
         signing_format = effective_request_format
     # For mdoc/vds_nc, pass the stored credential_type directly. SD-JWT uses vct URI.

@@ -50,7 +50,6 @@ _SD_JWT_PAYLOAD_FORMATS = {
     "sd_jwt_vc",
     "vc+sd-jwt",
     "dc+sd-jwt",
-    "spruce-vc+sd-jwt",
 }
 
 
@@ -497,9 +496,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         credential_config_id, fmt_variant
                     )
                     wallet_issuer_url = (
-                        f"{ISSUER_BASE_URL}/org/{request.organization_id}/spruce"
-                        if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
-                        else f"{ISSUER_BASE_URL}/org/{request.organization_id}/credential-manager"
+                        f"{ISSUER_BASE_URL}/org/{request.organization_id}/credential-manager"
                         if fmt_variant == "credential-manager"
                         else f"{ISSUER_BASE_URL}/org/{request.organization_id}/apple-wallet"
                         if fmt_variant == "apple-wallet"
@@ -893,8 +890,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             if credential_payload_fmt == "mso_mdoc":
                 signing_format = "mso_mdoc"
             elif credential_payload_fmt in _SD_JWT_PAYLOAD_FORMATS:
-                signing_format = "vc+sd-jwt"
-            elif fmt == "spruce-vc+sd-jwt":
                 signing_format = "vc+sd-jwt"
             else:
                 signing_format = fmt
@@ -1564,8 +1559,6 @@ def _config_id_for_format_variant(base: str, variant: str | None) -> str:
     """Return the credential_configuration_id for the given base type and format variant."""
     if base == "default":
         return base
-    if variant == "spruce-vc+sd-jwt":
-        return f"{base}#spruce-sd-jwt"
     if variant == "mso_mdoc":
         return f"{base}#mdoc"
     if variant == "credential-manager":
