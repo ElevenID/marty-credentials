@@ -393,7 +393,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     """Create an SD-JWT VC using the selected issuer profile's DID signer.
 
     Args:
-        credential_format: OID4VCI format string (e.g. ``"spruce-vc+sd-jwt"``)
+        credential_format: OID4VCI format string (for example, ``"dc+sd-jwt"``)
         used in the credential response metadata and JWT ``typ`` header.
     """
     claims = json.loads(claims_json or "{}")

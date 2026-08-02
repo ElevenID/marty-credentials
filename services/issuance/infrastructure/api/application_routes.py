@@ -1254,11 +1254,9 @@ def _build_wallet_offer_uris(
 
     Mirrors the logic in routes.initiate_issuance so that GET endpoints return
     the same correctly-keyed deep-link URIs as the POST that created the offer.
-    SpruceKit (mso_mdoc / spruce-vc+sd-jwt) gets the /spruce issuer URL so its
-    ProfilesCredentialConfiguration enum can parse the metadata without error.
     """
     from issuance.application.rust_integration import oid4vci_create_credential_offer
-    from issuance.infrastructure.api.routes import org_issuer_url, org_issuer_url_spruce
+    from issuance.infrastructure.api.routes import org_issuer_url
     uris: dict[str, str] = {}
     for wc in wallet_configs:
         wid = wc.get("wallet_id", "")
@@ -1267,18 +1265,11 @@ def _build_wallet_offer_uris(
         if not wid:
             continue
         # Select credential_configuration_id suffix for this format variant
-        if fmt_variant == "spruce-vc+sd-jwt":
-            config_id = f"{credential_type}#spruce-sd-jwt"
-        elif fmt_variant == "mso_mdoc":
+        if fmt_variant == "mso_mdoc":
             config_id = f"{credential_type}#mdoc"
         else:
             config_id = credential_type
-        # SpruceKit requires the /spruce issuer URL to avoid metadata parse errors
-        issuer_url = (
-            org_issuer_url_spruce(org_id)
-            if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
-            else org_issuer_url(org_id)
-        )
+        issuer_url = org_issuer_url(org_id)
         offer_json = oid4vci_create_credential_offer(
             issuer_url=issuer_url,
             credential_types=[config_id],
