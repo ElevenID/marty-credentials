@@ -631,25 +631,11 @@ async def test_manual_non_canvas_approval_keeps_live_template_path(
     await repo.save_application_template(template)
     await repo.save_application(app)
 
-    class Response:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "credential_type": "EmployeeCredential",
-                "vct": "https://issuer.example/credentials/employee",
-            }
-
-    class Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def get(self, _url):
-            return Response()
+    async def fetch_template(_template_id: str):
+        return {
+            "credential_type": "EmployeeCredential",
+            "vct": "https://issuer.example/credentials/employee",
+        }
 
     ordinary_calls: list[str] = []
 
@@ -658,9 +644,9 @@ async def test_manual_non_canvas_approval_keeps_live_template_path(
         return None
 
     async def reject_required(_tx):
-        pytest.fail("non-Canvas approval must not use the Canvas KMS contract")
+        pytest.fail("non-Canvas approval must not use the Canvas-specific issuer context")
 
-    monkeypatch.setattr(application_routes.httpx, "AsyncClient", lambda **_kwargs: Client())
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
     monkeypatch.setattr(application_routes, "apply_remote_issuer_context", apply_ordinary)
     monkeypatch.setattr(
         application_routes,

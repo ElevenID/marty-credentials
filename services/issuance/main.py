@@ -349,9 +349,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if ISSUANCE_GRPC_ENABLED:
         import grpc.aio as grpc_aio
         from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
+        from issuance.infrastructure.grpc_security import server_interceptors
         from marty_proto.v1 import issuance_service_pb2_grpc
 
-        grpc_server = grpc_aio.server()
+        grpc_server = grpc_aio.server(interceptors=server_interceptors())
         servicer = IssuanceServiceGrpc(get_repo_fn=get_repo)
         issuance_service_pb2_grpc.add_IssuanceServiceServicer_to_server(servicer, grpc_server)
         grpc_server.add_insecure_port(f"[::]:{ISSUANCE_GRPC_PORT}")
