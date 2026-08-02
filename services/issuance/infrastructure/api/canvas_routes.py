@@ -138,7 +138,10 @@ from issuance.infrastructure.api.routes import (
     _verify_management_api_key,
     apply_required_remote_issuer_context,
 )
-from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_profile
+from issuance.infrastructure.api.signing_context import (
+    resolve_remote_issuer_did,
+    sign_payload_with_issuer_did,
+)
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from starlette.responses import RedirectResponse
 
@@ -1874,145 +1877,23 @@ def _jwk_uint(jwk: dict[str, Any], field: str) -> int:
 _RSA_PRIVATE_JWK_FIELDS = {"d", "p", "q", "dp", "dq", "qi", "oth"}
 
 
-def _rsa_jwk_with_kid(jwk: dict[str, Any]) -> dict[str, Any]:
-    normalized = dict(jwk)
-    if normalized.get("kty") != "RSA" or not normalized.get("n") or not normalized.get("e"):
-        raise HTTPException(status_code=409, detail="Canvas LTI tool signing keys must be RSA JWKs")
-    if normalized.get("alg") not in {None, "RS256"}:
-        raise HTTPException(status_code=409, detail="Canvas LTI tool signing keys must use RS256")
-    if not normalized.get("kid"):
-        thumbprint_input = json.dumps(
-            {"e": normalized["e"], "kty": "RSA", "n": normalized["n"]},
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-        normalized["kid"] = _b64url_encode(hashlib.sha256(thumbprint_input).digest())
-    normalized["kid"] = str(normalized["kid"])
-    normalized["alg"] = "RS256"
-    normalized.setdefault("use", "sig")
-    return normalized
-
-
-def _load_tool_signing_jwks() -> list[dict[str, Any]]:
-    raw = os.environ.get("CANVAS_LTI_TOOL_PRIVATE_JWKS") or os.environ.get(
-        "CANVAS_LTI_DEEP_LINKING_PRIVATE_JWK"
-    )
-    file_path = os.environ.get("CANVAS_LTI_TOOL_PRIVATE_JWKS_FILE") or os.environ.get(
-        "CANVAS_LTI_DEEP_LINKING_PRIVATE_JWK_FILE"
-    )
-    if not raw and file_path:
-        try:
-            with open(file_path, "r", encoding="utf-8") as handle:
-                raw = handle.read()
-        except OSError as exc:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Canvas LTI tool signing JWKS file cannot be read: {exc}",
-            ) from exc
-    if not raw:
-        raise HTTPException(
-            status_code=409,
-            detail="Canvas LTI RS256 tool signing key is not configured",
-        )
-    try:
-        jwk_config = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=409, detail="Canvas LTI tool signing JWKS is invalid JSON") from exc
-    if not isinstance(jwk_config, dict):
-        raise HTTPException(status_code=409, detail="Canvas LTI tool signing JWKS must be a JSON object")
-
-    keys = jwk_config.get("keys")
-    if isinstance(keys, list):
-        configured_keys = [_rsa_jwk_with_kid(key) for key in keys if isinstance(key, dict)]
-    else:
-        configured_keys = [_rsa_jwk_with_kid(jwk_config)]
-    if not configured_keys:
-        raise HTTPException(status_code=409, detail="Canvas LTI tool signing JWKS contains no keys")
-    kids = [key["kid"] for key in configured_keys]
-    if len(kids) != len(set(kids)):
-        raise HTTPException(status_code=409, detail="Canvas LTI tool signing JWKS contains duplicate kid values")
-    return configured_keys
-
-
-def _load_deep_linking_private_jwk() -> dict[str, Any]:
-    """Load the active RS256 key (legacy function name retained for callers/tests)."""
-
-    configured_keys = _load_tool_signing_jwks()
-    requested_kid = (
-        os.environ.get("CANVAS_LTI_TOOL_ACTIVE_KID")
-        or os.environ.get("CANVAS_LTI_DEEP_LINKING_KEY_ID")
-        or ""
-    ).strip()
-    private_keys = [key for key in configured_keys if key.get("d")]
-    if requested_kid:
-        private_keys = [key for key in private_keys if key.get("kid") == requested_kid]
-    if len(private_keys) != 1:
-        detail = (
-            "Canvas LTI tool signing JWKS has no matching active private key"
-            if not private_keys
-            else "CANVAS_LTI_TOOL_ACTIVE_KID is required when multiple private keys are configured"
-        )
-        raise HTTPException(status_code=409, detail=detail)
-    return private_keys[0]
-
-
-def _deep_linking_private_key_and_kid() -> tuple[Any, str | None]:
-    jwk = _load_deep_linking_private_jwk()
-    private_key = rsa.RSAPrivateNumbers(
-        p=_jwk_uint(jwk, "p"),
-        q=_jwk_uint(jwk, "q"),
-        d=_jwk_uint(jwk, "d"),
-        dmp1=_jwk_uint(jwk, "dp"),
-        dmq1=_jwk_uint(jwk, "dq"),
-        iqmp=_jwk_uint(jwk, "qi"),
-        public_numbers=rsa.RSAPublicNumbers(
-            e=_jwk_uint(jwk, "e"),
-            n=_jwk_uint(jwk, "n"),
-        ),
-    )
-    return private_key.private_key(), str(jwk["kid"])
-
-
 class ToolJwtSigner(Protocol):
     async def sign_jwt(self, payload: dict[str, Any]) -> str: ...
 
     async def public_jwks(self) -> dict[str, Any]: ...
 
 
-class LocalJwkToolJwtSigner:
-    """Development/test signer. Production key custody must never use this class."""
+class IssuerDidToolJwtSigner:
+    """Production RS256 signer selected by organization-scoped issuer DID.
 
-    async def sign_jwt(self, payload: dict[str, Any]) -> str:
-        private_key, kid = _deep_linking_private_key_and_kid()
-        header: dict[str, Any] = {"alg": "RS256", "typ": "JWT", "kid": kid}
-        signing_input = f"{_json_b64url(header)}.{_json_b64url(payload)}"
-        signature = private_key.sign(signing_input.encode("ascii"), padding.PKCS1v15(), hashes.SHA256())
-        return f"{signing_input}.{_b64url_encode(signature)}"
-
-    async def public_jwks(self) -> dict[str, Any]:
-        active = _load_deep_linking_private_jwk()
-        configured = _load_tool_signing_jwks()
-        configured.sort(key=lambda key: key.get("kid") != active.get("kid"))
-        return {
-            "keys": [
-                {key: value for key, value in configured_key.items() if key not in _RSA_PRIVATE_JWK_FIELDS}
-                for configured_key in configured
-            ]
-        }
-
-
-class IssuerProfileToolJwtSigner:
-    """Production RS256 signer selected by issuer profile and DID.
-
-    The signing-keys service owns the profile's KMS binding.  This adapter never
-    accepts or forwards a KMS service identifier or provider key reference.
+    The signing-keys service resolves the DID to exactly one active issuer
+    profile and owns that profile's KMS binding. This adapter never accepts or
+    forwards a profile ID, KMS service identifier, or provider key reference.
     """
 
     def __init__(self) -> None:
         self.organization_id = os.environ.get("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "").strip()
-        self.issuer_profile_id = os.environ.get("CANVAS_LTI_TOOL_ISSUER_PROFILE_ID", "").strip()
         self.issuer_did = os.environ.get("CANVAS_LTI_TOOL_ISSUER_DID", "").strip()
-        self.kid = os.environ.get("CANVAS_LTI_TOOL_ACTIVE_KID", "").strip()
         signing_url = os.environ.get("SIGNING_KEYS_INTERNAL_URL", "").strip()
         signing_api_key = (
             os.environ.get("SIGNING_KEYS_INTERNAL_API_KEY", "").strip()
@@ -2021,9 +1902,7 @@ class IssuerProfileToolJwtSigner:
         if not all(
             (
                 self.organization_id,
-                self.issuer_profile_id,
                 self.issuer_did,
-                self.kid,
                 signing_url,
                 signing_api_key,
             )
@@ -2032,94 +1911,130 @@ class IssuerProfileToolJwtSigner:
                 status_code=503,
                 detail=(
                     "Production Canvas LTI signing requires SIGNING_KEYS_INTERNAL_URL/API key and "
-                    "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID/ISSUER_PROFILE_ID/ISSUER_DID/ACTIVE_KID"
+                    "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID/ISSUER_DID"
                 ),
             )
-        if not self.issuer_did.startswith("did:") or not self.kid.startswith(f"{self.issuer_did}#"):
+        if not self.issuer_did.startswith("did:"):
             raise HTTPException(
                 status_code=503,
-                detail="Canvas LTI active kid must be a verification method of the configured issuer DID",
+                detail="Canvas LTI issuer identity must be a DID",
             )
 
-    def _configured_public_jwks(self) -> dict[str, Any]:
-        raw = os.environ.get("CANVAS_LTI_TOOL_PUBLIC_JWKS", "").strip()
-        if not raw:
-            raise HTTPException(status_code=503, detail="CANVAS_LTI_TOOL_PUBLIC_JWKS is required")
+    async def _resolved_identity(
+        self,
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
         try:
-            document = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=503, detail="CANVAS_LTI_TOOL_PUBLIC_JWKS is invalid JSON") from exc
-        keys = document.get("keys") if isinstance(document, dict) else None
-        if not isinstance(keys, list):
-            raise HTTPException(status_code=503, detail="CANVAS_LTI_TOOL_PUBLIC_JWKS must contain keys")
-        now = datetime.now(timezone.utc)
-        public_keys: list[dict[str, Any]] = []
-        for raw_key in keys:
-            if not isinstance(raw_key, dict):
-                continue
-            if _RSA_PRIVATE_JWK_FIELDS.intersection(raw_key):
-                raise HTTPException(
-                    status_code=503,
-                    detail="CANVAS_LTI_TOOL_PUBLIC_JWKS must not contain private key material",
-                )
-            key = _rsa_jwk_with_kid(raw_key)
-            if key["kid"] != self.kid:
-                retired_at_raw = raw_key.get("retired_at")
-                try:
-                    retired_at = datetime.fromisoformat(str(retired_at_raw).replace("Z", "+00:00"))
-                except (TypeError, ValueError):
-                    continue
-                if retired_at.tzinfo is None:
-                    retired_at = retired_at.replace(tzinfo=timezone.utc)
-                if now > retired_at.astimezone(timezone.utc) + timedelta(days=7):
-                    continue
-            public_keys.append(
-                {name: value for name, value in key.items() if name not in _RSA_PRIVATE_JWK_FIELDS | {"retired_at"}}
-            )
-        if not any(key.get("kid") == self.kid for key in public_keys):
-            raise HTTPException(status_code=503, detail="Active Canvas LTI signing kid is not published")
-        return {"keys": sorted(public_keys, key=lambda key: key.get("kid") != self.kid)}
-
-    async def sign_jwt(self, payload: dict[str, Any]) -> str:
-        header = {"alg": "RS256", "typ": "JWT", "kid": self.kid}
-        signing_input = f"{_json_b64url(header)}.{_json_b64url(payload)}"
-        try:
-            result = await sign_payload_with_issuer_profile(
-                organization_id=self.organization_id,
-                issuer_profile_id=self.issuer_profile_id,
-                payload=signing_input.encode("ascii"),
+            resolution = await resolve_remote_issuer_did(
+                self.organization_id,
+                issuer_did=self.issuer_did,
+                credential_format="lti_tool_jwt",
+                key_purpose="lti_tool_signing",
                 algorithm="RS256",
-                expected_issuer_did=self.issuer_did,
-                expected_verification_method_id=self.kid,
             )
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
-                detail=f"Canvas LTI issuer-profile signing failed: {exc}",
+                detail=f"Canvas LTI issuer DID resolution failed: {exc}",
+            ) from exc
+        if not isinstance(resolution, dict) or resolution.get("issuer_did") != self.issuer_did:
+            raise HTTPException(status_code=503, detail="Canvas LTI issuer DID could not be resolved")
+        verification_method_id = str(resolution.get("verification_method_id") or "").strip()
+        public_jwk = resolution.get("public_jwk")
+        if isinstance(public_jwk, dict) and _RSA_PRIVATE_JWK_FIELDS.intersection(public_jwk):
+            raise HTTPException(
+                status_code=503,
+                detail="Canvas LTI DID resolver output must not contain private key material",
+            )
+        if (
+            not verification_method_id.startswith(f"{self.issuer_did}#")
+            or not isinstance(public_jwk, dict)
+            or public_jwk.get("kid") != verification_method_id
+            or public_jwk.get("kty") != "RSA"
+            or public_jwk.get("alg") not in {None, "RS256"}
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Canvas LTI issuer DID did not resolve to a public RS256 verification method",
+            )
+        return verification_method_id, dict(public_jwk), resolution
+
+    def _public_jwks_from_resolution(
+        self,
+        *,
+        active_verification_method_id: str,
+        active_public_jwk: dict[str, Any],
+        resolution: dict[str, Any],
+    ) -> dict[str, Any]:
+        keys_by_id = {active_verification_method_id: dict(active_public_jwk)}
+        did_document = resolution.get("did_document")
+        methods = did_document.get("verificationMethod") if isinstance(did_document, dict) else None
+        assertions = did_document.get("assertionMethod") if isinstance(did_document, dict) else None
+        assertion_ids = {
+            str(item.get("id") if isinstance(item, dict) else item)
+            for item in (assertions if isinstance(assertions, list) else [])
+        }
+        for method in methods if isinstance(methods, list) else []:
+            if not isinstance(method, dict):
+                continue
+            method_id = str(method.get("id") or "").strip()
+            public_jwk = method.get("publicKeyJwk")
+            if (
+                method_id not in assertion_ids
+                or not method_id.startswith(f"{self.issuer_did}#")
+                or not isinstance(public_jwk, dict)
+                or _RSA_PRIVATE_JWK_FIELDS.intersection(public_jwk)
+                or public_jwk.get("kty") != "RSA"
+                or public_jwk.get("alg") not in {None, "RS256"}
+            ):
+                continue
+            keys_by_id.setdefault(
+                method_id,
+                {**public_jwk, "kid": method_id, "alg": "RS256", "use": "sig"},
+            )
+        ordered_ids = [
+            active_verification_method_id,
+            *sorted(method_id for method_id in keys_by_id if method_id != active_verification_method_id),
+        ]
+        return {"keys": [keys_by_id[method_id] for method_id in ordered_ids]}
+
+    async def sign_jwt(self, payload: dict[str, Any]) -> str:
+        verification_method_id, _public_jwk, _resolution = await self._resolved_identity()
+        header = {"alg": "RS256", "typ": "JWT", "kid": verification_method_id}
+        signing_input = f"{_json_b64url(header)}.{_json_b64url(payload)}"
+        try:
+            result = await sign_payload_with_issuer_did(
+                organization_id=self.organization_id,
+                issuer_did=self.issuer_did,
+                credential_format="lti_tool_jwt",
+                key_purpose="lti_tool_signing",
+                payload=signing_input.encode("ascii"),
+                algorithm="RS256",
+                expected_verification_method_id=verification_method_id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Canvas LTI DID-mediated signing failed: {exc}",
             ) from exc
         signature = str(result.get("signature_raw_b64") or result.get("signature_b64") or "").strip()
         if not signature:
             raise HTTPException(
                 status_code=503,
-                detail="Canvas LTI issuer-profile signer returned no signature",
+                detail="Canvas LTI DID-mediated signer returned no signature",
             )
         return f"{signing_input}.{signature.rstrip('=')}"
 
     async def public_jwks(self) -> dict[str, Any]:
-        return self._configured_public_jwks()
+        verification_method_id, public_jwk, resolution = await self._resolved_identity()
+        return self._public_jwks_from_resolution(
+            active_verification_method_id=verification_method_id,
+            active_public_jwk=public_jwk,
+            resolution=resolution,
+        )
 
 
 def _tool_jwt_signer() -> ToolJwtSigner:
-    allow_local = os.environ.get("CANVAS_LTI_ALLOW_LOCAL_PRIVATE_JWK", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    environment = os.environ.get("ENVIRONMENT", os.environ.get("APP_ENV", "development")).strip().lower()
-    if allow_local and environment not in {"production", "prod"}:
-        return LocalJwkToolJwtSigner()
-    return IssuerProfileToolJwtSigner()
+    return IssuerDidToolJwtSigner()
 
 
 async def _sign_deep_linking_jwt(payload: dict[str, Any]) -> str:
