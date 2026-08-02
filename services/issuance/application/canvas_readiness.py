@@ -676,7 +676,6 @@ async def run_canvas_kms_did_challenge(
     try:
         context = await signing_context.resolve_remote_issuer_context(
             organization_id,
-            issuer_profile_id=expected.profile_id,
             issuer_did=expected.issuer_did,
             issuer_mode="org_managed",
             credential_format=expected.credential_format,

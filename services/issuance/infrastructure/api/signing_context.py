@@ -51,29 +51,17 @@ def _response_error_detail(response: httpx.Response) -> str:
 async def resolve_remote_issuer_context(
     organization_id: str,
     *,
-    issuer_profile_id: str | None = None,
     issuer_did: str | None = None,
     issuer_mode: str | None = None,
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, Any] | None:
-    """Resolve the active issuer profile and its DID for an organization.
-
-    ``issuer_profile_id`` is an internal migration assertion, never an
-    alternate selector. When present it must accompany ``issuer_did`` and
-    exactly match the profile selected by DID resolution.
-    """
+    """Resolve the active issuer profile and its DID for an organization."""
     if not organization_id:
         return None
-    if issuer_profile_id and not issuer_did:
-        raise RuntimeError(
-            "Legacy issuer_profile_id requires issuer_did for exact-match resolution"
-        )
 
     params: dict[str, str] = {"organization_id": organization_id}
-    if issuer_profile_id:
-        params["issuer_profile_id"] = issuer_profile_id
     if issuer_did:
         params["issuer_did"] = issuer_did
     if issuer_mode:
@@ -115,10 +103,6 @@ async def resolve_remote_issuer_context(
     if not isinstance(profile, dict) or not profile.get("id"):
         raise RuntimeError("Issuer DID resolver returned no active issuer profile")
     resolved_profile_id = str(profile["id"])
-    if issuer_profile_id and resolved_profile_id != issuer_profile_id:
-        raise RuntimeError(
-            "Resolved issuer DID does not match legacy issuer_profile_id"
-        )
     normalized = dict(data)
     normalized["issuer_profile_id"] = resolved_profile_id
     normalized["issuer_mode"] = profile.get("issuer_mode") or issuer_mode or "org_managed"

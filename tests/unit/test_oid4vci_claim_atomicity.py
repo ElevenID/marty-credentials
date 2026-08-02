@@ -192,7 +192,10 @@ async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid
 
     response = await routes.issue_credential(
         _request(),
-        routes.CredentialRequest(format="vc+sd-jwt", proofs={"jwt": [_proof_jwt()]}),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
         authorization="Bearer wallet-token",
         repo=repo,
     )
@@ -230,7 +233,10 @@ async def test_invalid_proof_does_not_consume_wallet_nonce(monkeypatch) -> None:
 
     response = await routes.issue_credential(
         _request(),
-        routes.CredentialRequest(format="vc+sd-jwt", proofs={"jwt": [_proof_jwt()]}),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
         authorization="Bearer wallet-token",
         repo=repo,
     )
@@ -257,7 +263,9 @@ async def test_credential_endpoint_reports_missing_proof_as_invalid_proof(monkey
 
     response = await routes.issue_credential(
         _request(),
-        routes.CredentialRequest(format="vc+sd-jwt"),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt"
+        ),
         authorization="Bearer wallet-token",
         repo=repo,
     )
@@ -271,6 +279,40 @@ async def test_credential_endpoint_reports_missing_proof_as_invalid_proof(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential_request",
+    [
+        routes.CredentialRequest(),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            credential_identifier="OpenBadgeCredential-2026",
+        ),
+    ],
+)
+async def test_credential_endpoint_requires_exactly_one_final_selector(
+    credential_request: routes.CredentialRequest,
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        credential_request,
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_credential_request",
+        "error_description": (
+            "Provide exactly one of credential_configuration_id or credential_identifier"
+        ),
+    }
+
+
+@pytest.mark.asyncio
 async def test_credential_endpoint_reports_unknown_configuration_with_standard_error() -> None:
     """OID4VCI defines a specific error for an unknown configuration id."""
     repo = InMemoryIssuanceRepository()
@@ -279,7 +321,6 @@ async def test_credential_endpoint_reports_unknown_configuration_with_standard_e
     response = await routes.issue_credential(
         _request(),
         routes.CredentialRequest(
-            format="vc+sd-jwt",
             credential_configuration_id="unknown-configuration",
             proofs={"jwt": [_proof_jwt()]},
         ),
@@ -304,7 +345,6 @@ async def test_credential_endpoint_reports_unknown_identifier_with_standard_erro
     response = await routes.issue_credential(
         _request(),
         routes.CredentialRequest(
-            format="vc+sd-jwt",
             credential_identifier="unknown-identifier",
             proofs={"jwt": [_proof_jwt()]},
         ),
@@ -740,7 +780,7 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     monkeypatch.setattr(routes, "record_post_issuance_deliveries", no_op_positional)
 
     credential_request = routes.CredentialRequest(
-        format="vc+sd-jwt",
+        credential_configuration_id="OpenBadgeCredential#sd-jwt",
         proofs={"jwt": [_proof_jwt()]},
     )
 
@@ -879,7 +919,7 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
     response = await routes.issue_credential(
         _request(),
         routes.CredentialRequest(
-            format="ldp_vc",
+            credential_configuration_id="EmployeeCredential",
             proofs={"jwt": [_proof_jwt()]},
         ),
         authorization="Bearer wallet-token",
@@ -887,7 +927,6 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
     )
 
     assert isinstance(response, routes.CredentialResponse)
-    assert response.credential is None
     assert response.credentials[0]["format"] == "ldp_vc"
     assert response.credentials[0]["credential"]["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
     assert captured["resolution"]["credential_format"] == "ldp_vc"
@@ -983,7 +1022,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
     monkeypatch.setattr(routes, "record_post_issuance_deliveries", no_op_positional)
 
     credential_request = routes.CredentialRequest(
-        format="vc+sd-jwt",
+        credential_configuration_id="OpenBadgeCredential#sd-jwt",
         proofs={"jwt": [_proof_jwt()]},
     )
     results = await asyncio.gather(
