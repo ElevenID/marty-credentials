@@ -723,7 +723,7 @@ class TestRemoteIssuerFailureDetail:
         assert tx.issuer_did_override == "did:web:issuer.example"
         assert tx.signing_service_id == "service-1"
 
-    async def test_issuer_profile_signing_preserves_gateway_error_detail(self, monkeypatch):
+    async def test_issuer_did_signing_preserves_gateway_error_detail(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
 
         class FakeResponse:
@@ -751,14 +751,16 @@ class TestRemoteIssuerFailureDetail:
         monkeypatch.setenv("ISSUANCE_API_KEY", "test-key")
 
         with pytest.raises(RuntimeError) as excinfo:
-            await signing_context.sign_payload_with_issuer_profile(
+            await signing_context.sign_payload_with_issuer_did(
                 organization_id="org-1",
-                issuer_profile_id="issuer-profile-1",
+                issuer_did="did:web:issuer.example",
+                credential_format="dc+sd-jwt",
+                key_purpose="vc_jwt_issuer",
                 payload=b"payload",
                 algorithm="ES256",
             )
 
-        assert "Issuer-profile DID signing failed (HTTP 503)" in str(excinfo.value)
+        assert "DID-mediated signing failed (HTTP 503)" in str(excinfo.value)
         assert "cred-issuer-marty-es256" in str(excinfo.value)
 
     def test_initiate_issuance_request_accepts_only_public_did_identity(self):
@@ -776,59 +778,6 @@ class TestRemoteIssuerFailureDetail:
                 issuer_did="did:web:issuer.example",
                 issuer_profile_id="profile-1",
             )
-
-    async def test_issuer_profile_signing_never_sends_kms_routing(self, monkeypatch):
-        from issuance.infrastructure.api import signing_context
-
-        issuer_did = "did:web:issuer.example"
-        verification_method = f"{issuer_did}#key-1"
-        captured: dict[str, object] = {}
-
-        class FakeResponse:
-            status_code = 200
-            reason_phrase = "OK"
-            text = ""
-
-            def json(self):
-                return {
-                    "ok": True,
-                    "issuer_profile_id": "issuer-profile-1",
-                    "issuer_did": issuer_did,
-                    "verification_method_id": verification_method,
-                    "signature_raw_b64": "AQID",
-                    "algorithm": "ES256",
-                }
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                return None
-
-            async def post(self, url, **kwargs):
-                captured.update(url=url, **kwargs)
-                return FakeResponse()
-
-        monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
-        result = await signing_context.sign_payload_with_issuer_profile(
-            organization_id="org-1",
-            issuer_profile_id="issuer-profile-1",
-            payload=b"payload",
-            algorithm="ES256",
-            expected_issuer_did=issuer_did,
-            expected_verification_method_id=verification_method,
-        )
-
-        assert str(captured["url"]).endswith("/issuer-profiles/issuer-profile-1/sign")
-        assert captured["params"] == {"organization_id": "org-1"}
-        assert captured["json"] == {"payload_b64": "cGF5bG9hZA", "algorithm": "ES256"}
-        assert "service" not in json.dumps(captured["json"])
-        assert "key_reference" not in captured["json"]
-        assert result["issuer_did"] == issuer_did
 
     async def test_issuer_did_signing_never_sends_profile_or_kms_routing(self, monkeypatch):
         from issuance.infrastructure.api import signing_context
