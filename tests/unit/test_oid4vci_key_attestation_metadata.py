@@ -110,7 +110,7 @@ def test_org_metadata_resolves_each_template_policy_by_public_issuer_did(
         async def get_credential_type_formats_for_org(
             self, _organization_id: str
         ) -> list[tuple[str, list[str]]]:
-            return [("PID", ["sd_jwt_vc"])]
+            return [("PID", ["sd_jwt_vc", "w3c_vcdm_v2_di"])]
 
         async def get_credential_display_metadata_for_org(
             self, _organization_id: str
@@ -142,23 +142,45 @@ def test_org_metadata_resolves_each_template_policy_by_public_issuer_did(
     monkeypatch.setattr(main, "_repo", Repository())
     monkeypatch.setattr(signing_context, "resolve_remote_issuer_context", resolve)
 
-    response = TestClient(main.create_app()).get(
-        "/.well-known/openid-credential-issuer/org/org-a"
-    )
+    response = TestClient(main.create_app()).get("/.well-known/openid-credential-issuer/org/org-a")
 
     assert response.status_code == 200
     configurations = response.json()["credential_configurations_supported"]
-    assert configurations["PID#sd-jwt"]["proof_types_supported"]["jwt"][
-        "key_attestations_required"
-    ] == {}
-    assert "key_attestations_required" not in configurations["PID"][
-        "proof_types_supported"
-    ]["jwt"]
+    assert (
+        configurations["PID#sd-jwt"]["proof_types_supported"]["jwt"]["key_attestations_required"]
+        == {}
+    )
+    assert "PID" not in configurations
+    assert configurations["PID#ldp-vc"] == {
+        "format": "ldp_vc",
+        "scope": "PID",
+        "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+        "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
+        "proof_types_supported": {
+            "jwt": {
+                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "key_attestations_required": {},
+            }
+        },
+        "credential_definition": {
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "PID"],
+        },
+        "credential_metadata": {
+            "display": [{"name": "Official PID", "locale": "en-US"}],
+        },
+    }
     assert calls == [
         {
             "organization_id": "org-a",
             "issuer_did": issuer_did,
             "credential_format": "dc+sd-jwt",
             "key_purpose": "vc_jwt_issuer",
-        }
+        },
+        {
+            "organization_id": "org-a",
+            "issuer_did": issuer_did,
+            "credential_format": "ldp_vc",
+            "key_purpose": "vc_jwt_issuer",
+        },
     ]

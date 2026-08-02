@@ -23,6 +23,8 @@ from issuance.application.rust_integration import (
     validate_marty_rs_capabilities,
 )
 
+_VCDM_V2_CONTEXT = "https://www.w3.org/ns/credentials/v2"
+
 # ── Staged-rollout feature flag ───────────────────────────────────────────────
 # Set VDSNC_RUST_ENABLED=false in an environment to suppress VDS-NC credential
 # configuration entries from the OID4VCI metadata and disable VDS-NC signing.
@@ -127,6 +129,18 @@ def _credential_definition(ctype: str) -> dict[str, Any]:
     return {"type": ["VerifiableCredential", ctype]}
 
 
+def _data_integrity_credential_definition(ctype: str) -> dict[str, Any]:
+    """Build the required OID4VCI ``ldp_vc`` VCDM v2 definition."""
+
+    types = ["VerifiableCredential"]
+    if ctype != "VerifiableCredential":
+        types.append(ctype)
+    return {
+        "@context": [_VCDM_V2_CONTEXT],
+        "type": types,
+    }
+
+
 def _credential_metadata(ctype: str, metadata: dict[str, Any] | None) -> dict[str, Any]:
     """Return OID4VCI Final display and claim metadata for one format."""
 
@@ -211,9 +225,7 @@ async def _oid4vci_proof_types_for_org(
         requirement["key_storage"] = [str(value) for value in key_storage]
     user_authentication = policy.get("required_user_authentication")
     if isinstance(user_authentication, list) and user_authentication:
-        requirement["user_authentication"] = [
-            str(value) for value in user_authentication
-        ]
+        requirement["user_authentication"] = [str(value) for value in user_authentication]
     proof_types["jwt"]["key_attestations_required"] = requirement
     return proof_types
 
@@ -432,9 +444,7 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/credential-manager"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
 
-        _proof_types = await _oid4vci_proof_types_for_org(
-            org_id, credential_format="dc+sd-jwt"
-        )
+        _proof_types = await _oid4vci_proof_types_for_org(org_id, credential_format="dc+sd-jwt")
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
 
@@ -497,9 +507,7 @@ def create_app() -> FastAPI:
         issuer_url = f"{ISSUER_BASE_URL}/org/{org_id}/apple-wallet"
         credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/credential"
 
-        _proof_types = await _oid4vci_proof_types_for_org(
-            org_id, credential_format="mso_mdoc"
-        )
+        _proof_types = await _oid4vci_proof_types_for_org(org_id, credential_format="mso_mdoc")
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
@@ -570,9 +578,7 @@ def create_app() -> FastAPI:
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
-        _unbound_proof_types = {
-            "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
-        }
+        _unbound_proof_types = {"jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}}
 
         # Pull distinct credential types from the issuance DB — self-contained,
         # no external auth required, and grows automatically with new templates.
@@ -586,9 +592,8 @@ def create_app() -> FastAPI:
         ) -> dict[str, Any]:
             issuer_did = str(ctype_metadata.get("issuer_did") or "").strip()
             if not issuer_did:
-                # A compatibility-only fallback configuration has no concrete
-                # identity. Do not invent a tenant policy for an ambiguous
-                # profile; actual issuance still resolves and enforces its DID.
+                # Metadata without a concrete public DID cannot claim a tenant
+                # key-attestation policy. Actual issuance still resolves the DID.
                 return _unbound_proof_types
             cache_key = (issuer_did, credential_format)
             if cache_key not in proof_types_cache:
@@ -612,15 +617,18 @@ def create_app() -> FastAPI:
         for ctype, formats in type_formats:
             ctype_metadata = display_metadata.get(ctype, {})
             normalized_formats = {
-                str(value).strip().lower().replace("-", "_")
-                for value in (formats or [])
+                str(value).strip().lower().replace("-", "_") for value in (formats or [])
             }
-            legacy_untyped = not normalized_formats
-            supports_jwt_vc = legacy_untyped or bool(
+            supports_jwt_vc = bool(
                 normalized_formats
-                & {"jwt_vc", "jwt_vc_json", "w3c_vcdm_v2_jwt"}
+                & {
+                    "jwt_vc",
+                    "jwt_vc_json",
+                    "w3c_vcdm_v2_jwt",
+                    "w3c_vcdm_v2_jwt_vc",
+                }
             )
-            supports_sd_jwt = legacy_untyped or bool(
+            supports_sd_jwt = bool(
                 normalized_formats
                 & {
                     "sd_jwt_vc",
@@ -629,6 +637,9 @@ def create_app() -> FastAPI:
                     "w3c_vcdm_v2_sd_jwt",
                 }
             )
+            supports_data_integrity = bool(
+                normalized_formats & {"json_ld", "ldp_vc", "w3c_vcdm_v2_di"}
+            )
             jwt_vc_proof_types = await proof_types_for_template(
                 ctype_metadata if supports_jwt_vc else {}, "jwt_vc_json"
             )
@@ -636,19 +647,18 @@ def create_app() -> FastAPI:
                 ctype_metadata if supports_sd_jwt else {}, "dc+sd-jwt"
             )
             # JWT-VC format entry (primary — used by most wallets by default)
-            credential_configurations[ctype] = {
-                "format": "jwt_vc_json",
-                "scope": ctype,
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": jwt_vc_proof_types,
-                "credential_definition": _credential_definition(ctype),
-                "credential_metadata": _credential_metadata(ctype, ctype_metadata),
-            }
+            if supports_jwt_vc:
+                credential_configurations[ctype] = {
+                    "format": "jwt_vc_json",
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": _signing_algs,
+                    "proof_types_supported": jwt_vc_proof_types,
+                    "credential_definition": _credential_definition(ctype),
+                    "credential_metadata": _credential_metadata(ctype, ctype_metadata),
+                }
             if ctype.startswith("org.iso.18013") or ctype in mdoc_types:
-                mdoc_proof_types = await proof_types_for_template(
-                    ctype_metadata, "mso_mdoc"
-                )
+                mdoc_proof_types = await proof_types_for_template(ctype_metadata, "mso_mdoc")
                 # mDoc — emit mso_mdoc format entry.
                 # Covers ISO 18013-5 types (doctype = ctype) and any credential
                 # type whose template declares mDoc in supported_formats
@@ -662,10 +672,23 @@ def create_app() -> FastAPI:
                     "proof_types_supported": mdoc_proof_types,
                     "credential_metadata": _credential_metadata(ctype, ctype_metadata),
                 }
+            if supports_data_integrity:
+                data_integrity_proof_types = await proof_types_for_template(
+                    ctype_metadata, "ldp_vc"
+                )
+                credential_configurations[f"{ctype}#ldp-vc"] = {
+                    "format": "ldp_vc",
+                    "scope": ctype,
+                    "cryptographic_binding_methods_supported": _binding,
+                    "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
+                    "proof_types_supported": data_integrity_proof_types,
+                    "credential_definition": _data_integrity_credential_definition(ctype),
+                    "credential_metadata": _credential_metadata(ctype, ctype_metadata),
+                }
             # VDS-NC remains available through Marty's document issuance APIs,
             # but it is not an OID4VCI Appendix A credential format. Do not
             # advertise it from this OID4VCI metadata endpoint.
-            if not ctype.startswith("org.iso.18013"):
+            if supports_sd_jwt and not ctype.startswith("org.iso.18013"):
                 # SD-JWT: use "dc+sd-jwt" per OID4VCI-1FINAL Appendix A (Final spec format ID).
                 # "vc+sd-jwt" was the Draft identifier; "dc+sd-jwt" is the Final spec name.
                 credential_configurations[f"{ctype}#sd-jwt"] = {
@@ -677,37 +700,6 @@ def create_app() -> FastAPI:
                     "proof_types_supported": sd_jwt_proof_types,
                     "credential_metadata": _credential_metadata(ctype, ctype_metadata),
                 }
-
-        # OID4VCI-1FINAL Appendix A.2: mso_mdoc MUST appear in credential_configurations_supported
-        # so conformant wallets can discover mDoc support. This generic entry covers all
-        # non-ISO-typed credentials that request mso_mdoc format; the Rust signing engine
-        # defaults the doctype to org.iso.18013.5.1.mDL when not explicitly set.
-        if not any(v.get("format") == "mso_mdoc" for v in credential_configurations.values()):
-            credential_configurations["generic_mdoc"] = {
-                "format": "mso_mdoc",
-                "doctype": "org.iso.18013.5.1.mDL",
-                "scope": "mso_mdoc",
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _mdoc_signing_algs,
-                "proof_types_supported": _unbound_proof_types,
-                "credential_metadata": {
-                    "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
-                },
-            }
-
-        # Always include a generic "default" entry so that offer fallbacks work too.
-        if "default" not in credential_configurations:
-            credential_configurations["default"] = {
-                "format": "jwt_vc_json",
-                "scope": "default",
-                "cryptographic_binding_methods_supported": _binding,
-                "credential_signing_alg_values_supported": _signing_algs,
-                "proof_types_supported": _unbound_proof_types,
-                "credential_definition": {"type": ["VerifiableCredential"]},
-                "credential_metadata": {
-                    "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
-                },
-            }
 
         nonce_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/nonce"
         deferred_credential_endpoint = f"{ISSUER_BASE_URL}/v1/issuance/deferred-credential"
@@ -754,11 +746,6 @@ def create_app() -> FastAPI:
                     "credential_metadata": {
                         "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
                     },
-                    # EUDI's pinned draft-era web wallet tester still reads
-                    # the pre-Final top-level member. Keep this compatibility
-                    # alias in the root view while credential_metadata remains
-                    # the authoritative OID4VCI Final representation.
-                    "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
                 },
                 # The shared issuer supports the same SD-JWT route used by
                 # Credential Manager.  Keep its configuration identifier in
@@ -774,7 +761,24 @@ def create_app() -> FastAPI:
                     "credential_metadata": {
                         "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
                     },
-                    "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
+                },
+                "default#ldp-vc": {
+                    "format": "ldp_vc",
+                    "scope": "default",
+                    "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+                    "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
+                    "proof_types_supported": _proof_types,
+                    "credential_definition": _data_integrity_credential_definition(
+                        "VerifiableCredential"
+                    ),
+                    "credential_metadata": {
+                        "display": [
+                            {
+                                "name": "Verifiable Credential (Data Integrity)",
+                                "locale": "en-US",
+                            }
+                        ],
+                    },
                 },
                 # ``#mdoc`` is the configuration suffix the issuance request
                 # validator resolves to mso_mdoc.  Advertising that exact ID
@@ -790,7 +794,6 @@ def create_app() -> FastAPI:
                     "credential_metadata": {
                         "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                     },
-                    "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                 },
             },
         }
