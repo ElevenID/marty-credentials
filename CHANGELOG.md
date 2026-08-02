@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.43] - 2026-08-02
+
+### Changed
+
+- Resolve Canvas LTI and issuer-readiness signing exclusively from the
+  organization-scoped issuer DID, credential format, key purpose, and
+  algorithm. Issuer-profile IDs and KMS routing remain private gateway state.
+- Publish active and rotating Canvas RSA assertion keys from the resolved DID
+  document instead of environment-selected JWK configuration.
+
+### Security
+
+- Remove the production local-private-JWK Canvas signer and the internal
+  profile-ID signing helper. All production Canvas signatures now use the
+  DID-resolved issuer profile and its managed custody service.
+- Reject private JWK material, cross-DID verification methods, and mismatched
+  signing results on the Canvas DID-mediated path.
+
 ## [0.1.42] - 2026-08-02
 
 ### Fixed
