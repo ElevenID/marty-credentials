@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-08-02
+
+### Changed
+
+- Route every issuance service gRPC client through one authenticated,
+  TLS-capable channel factory, including all unary and streaming RPC shapes.
+- Use the credential-template service's authenticated gRPC read contract for
+  issuance validation and wallet discovery instead of private HTTP fallbacks.
+- Require non-Canvas approvals to resolve an actual credential template and
+  credential type instead of fabricating an mDL default.
+
+### Security
+
+- Require a non-placeholder service token of at least 32 characters for the
+  issuance gRPC server and clients outside development and test environments.
+- Load the token from a mounted secret file or environment value, reject
+  ambiguous configuration, and preserve RPC cardinality on authentication
+  failures.
+- Keep signing issuer-profile mediated: public requests continue to select an
+  organization and issuer DID, never a KMS, key, signing service, or profile ID.
+
 ## [0.1.43] - 2026-08-02
 
 ### Changed
