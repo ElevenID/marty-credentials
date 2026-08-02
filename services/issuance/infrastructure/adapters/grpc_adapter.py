@@ -103,7 +103,6 @@ async def _resolve_remote_signing_context_for_tx(
 
     context = await resolve_remote_issuer_context(
         tx.organization_id,
-        issuer_profile_id=getattr(tx, "issuer_profile_id", None),
         issuer_did=getattr(tx, "issuer_did_override", None),
         issuer_mode=getattr(tx, "issuer_mode", "org_managed"),
         credential_format=credential_format,
@@ -183,7 +182,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
         verification_method_id=verification_method_id,
         credential_format=credential_format,
         issuer_certificate_chain=(
-            remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c")
+            remote_context.get("issuer_x5c")
         ),
     )
     return credential, credential_id, remote_context

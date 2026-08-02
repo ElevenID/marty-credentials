@@ -527,7 +527,6 @@ class TestRemoteIssuerFailureDetail:
         async def fake_resolve_remote_issuer_context(
             organization_id: str,
             *,
-            issuer_profile_id: str | None = None,
             issuer_did: str | None = None,
             issuer_mode: str | None = None,
             credential_format: str | None = None,
@@ -537,7 +536,6 @@ class TestRemoteIssuerFailureDetail:
             captured.update(
                 {
                     "organization_id": organization_id,
-                    "issuer_profile_id": issuer_profile_id,
                     "issuer_did": issuer_did,
                     "issuer_mode": issuer_mode,
                     "credential_format": credential_format,
@@ -573,7 +571,6 @@ class TestRemoteIssuerFailureDetail:
         assert tx.signing_service_id == "svc-mdoc"
         assert captured == {
             "organization_id": "org-1",
-            "issuer_profile_id": "ip-selected",
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "issuer_mode": "elevenid_alias_for_org",
             "credential_format": "mso_mdoc",
@@ -621,7 +618,6 @@ class TestRemoteIssuerFailureDetail:
         monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
         result = await signing_context.resolve_remote_issuer_context(
             "org-1",
-            issuer_profile_id="profile-1",
             issuer_did="did:web:issuer.example",
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -629,75 +625,19 @@ class TestRemoteIssuerFailureDetail:
 
         assert str(captured["url"]).endswith("/resolve-issuer-did")
         assert captured["params"]["issuer_did"] == "did:web:issuer.example"
-        assert captured["params"]["issuer_profile_id"] == "profile-1"
+        assert "issuer_profile_id" not in captured["params"]
         assert result["issuer_profile_id"] == "profile-1"
         assert result["signing_service_id"] == "service-1"
 
-    async def test_did_context_rejects_mismatched_legacy_profile(self, monkeypatch):
+    async def test_context_resolver_has_no_profile_selector(self):
+        import inspect
+
         from issuance.infrastructure.api import signing_context
 
-        class FakeResponse:
-            status_code = 200
-            reason_phrase = "OK"
-            text = ""
-
-            def json(self):
-                return {
-                    "ok": True,
-                    "organization_id": "org-1",
-                    "issuer_did": "did:web:issuer.example",
-                    "issuer_profile": {
-                        "id": "profile-selected-by-did",
-                        "issuer_mode": "org_managed",
-                        "signing_service_id": "service-1",
-                        "signing_key_reference": "key-1",
-                    },
-                }
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                return None
-
-            async def get(self, *_args, **_kwargs):
-                return FakeResponse()
-
-        monkeypatch.setattr(signing_context.httpx, "AsyncClient", FakeClient)
-
-        with pytest.raises(
-            RuntimeError,
-            match="does not match legacy issuer_profile_id",
-        ):
-            await signing_context.resolve_remote_issuer_context(
-                "org-1",
-                issuer_profile_id="profile-stale",
-                issuer_did="did:web:issuer.example",
-                credential_format="dc+sd-jwt",
-                key_purpose="vc_jwt_issuer",
-            )
-
-    async def test_legacy_profile_without_did_fails_before_network(self, monkeypatch):
-        from issuance.infrastructure.api import signing_context
-
-        class ForbiddenClient:
-            def __init__(self, *_args, **_kwargs):
-                raise AssertionError("network must not be called")
-
-        monkeypatch.setattr(signing_context.httpx, "AsyncClient", ForbiddenClient)
-
-        with pytest.raises(
-            RuntimeError,
-            match="requires issuer_did",
-        ):
-            await signing_context.resolve_remote_issuer_context(
-                "org-1",
-                issuer_profile_id="profile-stale",
-            )
+        parameters = inspect.signature(
+            signing_context.resolve_remote_issuer_context
+        ).parameters
+        assert "issuer_profile_id" not in parameters
 
     async def test_required_remote_issuer_context_fails_on_incomplete_kms_profile(
         self, monkeypatch
@@ -3897,7 +3837,6 @@ class TestRustIntegrationOrgIdValidation:
         async def fake_resolve_remote_issuer_context(
             organization_id: str,
             *,
-            issuer_profile_id: str | None = None,
             issuer_did: str | None = None,
             issuer_mode: str | None = None,
             credential_format: str | None = None,
@@ -3906,7 +3845,6 @@ class TestRustIntegrationOrgIdValidation:
         ):
             captured["resolve"] = {
                 "organization_id": organization_id,
-                "issuer_profile_id": issuer_profile_id,
                 "issuer_did": issuer_did,
                 "issuer_mode": issuer_mode,
                 "credential_format": credential_format,
@@ -3966,7 +3904,6 @@ class TestRustIntegrationOrgIdValidation:
         assert remote_context["verification_method_id"] == verification_method_id
         assert captured["resolve"] == {
             "organization_id": "org-1",
-            "issuer_profile_id": "ip-grpc",
             "issuer_did": issuer_did,
             "issuer_mode": "org_managed",
             "credential_format": "dc+sd-jwt",

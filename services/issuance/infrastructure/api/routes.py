@@ -486,20 +486,12 @@ def _effective_request_format(
     request: "CredentialRequest",
     tx: IssuanceTransaction | None = None,
 ) -> str:
-    """Resolve the effective wallet-request format when ``format`` is omitted."""
+    """Resolve the format from the selected configuration and stored transaction."""
     return (
-        request.format
-        or _format_from_configuration_id(request.credential_configuration_id)
+        _format_from_configuration_id(request.credential_configuration_id)
         or _format_from_configuration_id(request.credential_identifier)
         or _default_request_format_for_payload(tx.credential_payload_format if tx else None)
     )
-
-
-def _requests_legacy_credential_alias(request: "CredentialRequest") -> bool:
-    """Whether a caller explicitly selected the pre-final response shape."""
-    if request.credential_configuration_id or request.credential_identifier:
-        return False
-    return _normalize_payload_format(request.format) in {"vc+sd_jwt", "jwt_vc", "jwt_vc_json"}
 
 
 def _key_purpose_for_credential_format(credential_format: str) -> str:
@@ -595,10 +587,6 @@ async def apply_remote_issuer_context(
     try:
         context = await resolve_remote_issuer_context(
             tx.organization_id,
-            # New transactions carry only the caller's public DID. A stored
-            # profile ID is an internal migration assertion and must exactly
-            # match the profile selected by that DID.
-            issuer_profile_id=tx.issuer_profile_id,
             issuer_did=tx.issuer_did_override,
             issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
             credential_format=resolved_format,
@@ -1160,7 +1148,6 @@ class CredentialRequest(BaseModel):
             raise ValueError("use the OID4VCI 'proofs' object instead of legacy 'proof'")
         return value
 
-    format: str | None = None
     # OID4VCI v1 §8.2: proofs is an object mapping proof_type -> list[str]
     proofs: dict[str, list[str]] | None = None
     # v1: identify credential by config id or credential_identifier from token response
@@ -1169,10 +1156,9 @@ class CredentialRequest(BaseModel):
 
 
 class CredentialResponse(BaseModel):
-    # Final OID4VCI uses ``credentials``. ``credential`` is retained only for
-    # an explicit legacy-format request and omitted from final responses.
-    credentials: list[str | dict]
-    credential: str | None = None  # Walt.id / Draft-11 compatibility alias
+    """OID4VCI 1.0 Final credential response."""
+
+    credentials: list[dict[str, Any]]
     notification_id: str | None = None
 
 
@@ -4226,6 +4212,20 @@ async def issue_credential(
 
     # OID4VCI Final §7.3: The access token is single-use for credential issuance.
     # §8 errors use 400 invalid_credential_request, not 401.
+    if bool(request.credential_configuration_id) == bool(
+        request.credential_identifier
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_credential_request",
+                "error_description": (
+                    "Provide exactly one of credential_configuration_id or "
+                    "credential_identifier"
+                ),
+            },
+        )
+
     if tx.status == IssuanceStatus.ISSUED:
         existing_cred = await repo.get_credential_by_transaction_id(tx.id)
         if existing_cred:
@@ -4236,11 +4236,6 @@ async def issue_credential(
             notification_id = str(_uuid.uuid4())
             return CredentialResponse(
                 credentials=[credential_obj],
-                credential=(
-                    existing_cred.credential_jwt
-                    if _requests_legacy_credential_alias(request)
-                    else None
-                ),
                 notification_id=notification_id,
             )
         return JSONResponse(
@@ -4714,11 +4709,6 @@ async def issue_credential(
                             ),
                         }
                     ],
-                    credential=(
-                        existing_credential.credential_jwt
-                        if _requests_legacy_credential_alias(request)
-                        else None
-                    ),
                     notification_id=str(uuid.uuid4()),
                 )
             return JSONResponse(
@@ -4787,7 +4777,7 @@ async def issue_credential(
                 credential_id=credential_id,
                 holder_jwk=holder_jwk,
                 certificate_chain=(
-                    (remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c"))
+                    remote_context.get("issuer_x5c")
                     if isinstance(remote_context, dict)
                     else None
                 ),
@@ -4823,7 +4813,7 @@ async def issue_credential(
                 selective_disclosure_claims=sd_claims,
                 credential_format=effective_request_format,
                 issuer_certificate_chain=(
-                    remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c")
+                    remote_context.get("issuer_x5c")
                     if isinstance(remote_context, dict)
                     else None
                 ),
@@ -4896,11 +4886,9 @@ async def issue_credential(
         logger.info(
             f"[credential] rid={rid} tx_id={tx.id} issued credential_id={credential_id} cred_type={credential_type}"
         )
-        # OID4VCI hybrid response:
-        # - "credentials" as object array for SpruceID mobile-sdk-rs (expects Oid4vciCredential struct)
-        # - "credential" as bare string for Walt.id / Draft-11 clients
-        # Use the request format in the response object (not signing_format which may
-        # have been normalised from spruce-vc+sd-jwt → vc+sd-jwt for Rust).
+        # OID4VCI 1.0 Final returns an object array under ``credentials``.
+        # Use the requested format in that object rather than the Rust layer's
+        # normalized signing format.
         credential_obj = {
             "format": response_format,
             "credential": _credential_for_oid4vci_response(jwt_credential, signing_format),
@@ -4910,7 +4898,6 @@ async def issue_credential(
         notification_id = str(_uuid.uuid4())
         return CredentialResponse(
             credentials=[credential_obj],
-            credential=(jwt_credential if _requests_legacy_credential_alias(request) else None),
             notification_id=notification_id,
         )
 
@@ -5118,7 +5105,7 @@ async def _didcomm_sign_and_deliver(
         credential_format=effective_request_format,
         credential_id=credential_id,
         issuer_certificate_chain=(
-            remote_context.get("issuer_x5c") or remote_context.get("mdoc_x5c")
+            remote_context.get("issuer_x5c")
             if isinstance(remote_context, dict)
             else None
         ),
