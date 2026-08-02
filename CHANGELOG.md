@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-08-01
+
+### Changed
+
+- Publish OID4VCI Final `ldp_vc` configurations for W3C VCDM v2 Data
+  Integrity templates and select them in generated credential offers.
+- Restrict credential requests to the exact configurations granted for the
+  transaction or authorization session, preventing template/format substitution.
+- Remove draft request members, draft-era metadata aliases, and invented
+  per-organization format fallbacks.
+
 ## [0.1.40] - 2026-08-01
 
 ### Changed
