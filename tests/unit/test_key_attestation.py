@@ -270,9 +270,7 @@ async def test_rejects_untrusted_tampered_and_revoked_attestations() -> None:
         base64.urlsafe_b64decode(encoded_signature + "=" * (-len(encoded_signature) % 4))
     )
     tampered_signature[0] ^= 1
-    tampered = (
-        f"{encoded_header}.{encoded_claims}.{_b64url(bytes(tampered_signature))}"
-    )
+    tampered = f"{encoded_header}.{encoded_claims}.{_b64url(bytes(tampered_signature))}"
     with pytest.raises(KeyAttestationError, match="signature verification failed"):
         await validate_key_attestation_jwt(
             tampered,
@@ -291,6 +289,41 @@ async def test_rejects_untrusted_tampered_and_revoked_attestations() -> None:
             policy,
             expected_nonce="nonce-1",
             status_validator=revoked_status,
+            now=now,
+        )
+
+
+@pytest.mark.asyncio
+async def test_rejects_attestation_algorithm_that_mismatches_certificate_key() -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    attestation_key, certificate = _attestation_material(now)
+    jwt = _sign_attestation(
+        attestation_key,
+        certificate,
+        _claims(now, ec.generate_private_key(ec.SECP256R1())),
+    )
+    encoded_header, encoded_claims, encoded_signature = jwt.split(".")
+    header = json.loads(base64.urlsafe_b64decode(encoded_header + "=" * (-len(encoded_header) % 4)))
+    header["alg"] = "EdDSA"
+    mismatched = (
+        f"{_b64url(json.dumps(header, separators=(',', ':')).encode())}."
+        f"{encoded_claims}.{encoded_signature}"
+    )
+    context = _context(certificate)
+    context["issuer_profile"]["key_attestation_policy"]["allowed_algorithms"] = ["EdDSA"]
+    policy = KeyAttestationPolicy.from_issuer_context(
+        context,
+        organization_id="org-a",
+    )
+
+    with pytest.raises(
+        KeyAttestationError,
+        match="algorithm does not match certificate key",
+    ):
+        await validate_key_attestation_jwt(
+            mismatched,
+            policy,
+            expected_nonce="nonce-1",
             now=now,
         )
 
