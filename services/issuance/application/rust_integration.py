@@ -1106,14 +1106,20 @@ def verify_key_attestation_bound_proof_jwt(
 # ---------------------------------------------------------------------------
 
 
-def didcomm_resolve_did(did: str, universal_resolver_url: str | None = None) -> dict:
+def didcomm_resolve_did(did: str) -> dict:
     """Resolve a DID to its DID Document via Rust.
 
     Supports did:key, did:web, did:peer, did:jwk natively.
-    Falls back to the Universal Resolver for unknown methods.
+    Falls back to the deployment-managed Universal Resolver for unknown methods.
+    Resolver infrastructure is configuration, never caller-controlled protocol input.
     """
     marty_rs = get_marty_rs()
-    doc_json = marty_rs.didcomm_resolve_did(did, universal_resolver_url)
+    resolver_url = (
+        os.environ.get("DIDCOMM_UNIVERSAL_RESOLVER_URL", "").strip()
+        or os.environ.get("UNIVERSAL_RESOLVER_URL", "").strip()
+        or None
+    )
+    doc_json = marty_rs.didcomm_resolve_did(did, resolver_url)
     return json.loads(doc_json)
 
 

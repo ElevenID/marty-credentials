@@ -5,9 +5,11 @@ import base64
 import copy
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
+import socket
 import time
 import uuid
 from collections.abc import Callable
@@ -1295,9 +1297,11 @@ class ApplicationTemplatePatch(BaseModel):
 
 
 class DidcommDeliverRequest(BaseModel):
-    transaction_id: str
-    holder_did: str
-    universal_resolver_url: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    holder_did: str = Field(min_length=1, pattern=r"^did:")
 
 
 class DidcommDeliveryResponse(BaseModel):
@@ -1310,10 +1314,67 @@ class DidcommDeliveryResponse(BaseModel):
     error: str | None = None
 
 
-class DidcommAckResponse(BaseModel):
-    status: str  # "acknowledged"
-    message_id: str
-    transaction_id: str | None = None
+def _didcomm_private_endpoints_enabled() -> bool:
+    """Allow local HTTP agents only when a deployment opts in explicitly."""
+
+    return os.environ.get("DIDCOMM_ALLOW_PRIVATE_ENDPOINTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
+async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
+    """Reject endpoints that could turn DID resolution into an SSRF primitive."""
+
+    if len(endpoint) > 2048:
+        raise HTTPException(status_code=422, detail="DIDComm service endpoint is invalid")
+
+    parsed = urlparse(endpoint)
+    allow_private = _didcomm_private_endpoints_enabled()
+    if parsed.scheme not in ({"http", "https"} if allow_private else {"https"}):
+        raise HTTPException(
+            status_code=422,
+            detail="DIDComm service endpoint must use HTTPS",
+        )
+    if not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(status_code=422, detail="DIDComm service endpoint is invalid")
+
+    hostname = parsed.hostname.rstrip(".").lower()
+    if not allow_private and (hostname == "localhost" or hostname.endswith(".localhost")):
+        raise HTTPException(
+            status_code=422,
+            detail="DIDComm service endpoint is not publicly routable",
+        )
+
+    try:
+        addresses = await asyncio.get_running_loop().getaddrinfo(
+            hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="DIDComm service endpoint could not be resolved",
+        ) from exc
+
+    if not allow_private:
+        for address in addresses:
+            try:
+                ip = ipaddress.ip_address(address[4][0].split("%", 1)[0])
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail="DIDComm service endpoint resolved to an invalid address",
+                ) from exc
+            if not ip.is_global:
+                raise HTTPException(
+                    status_code=422,
+                    detail="DIDComm service endpoint is not publicly routable",
+                )
+
+    return endpoint
 
 
 class ApplicationTemplateResponse(BaseModel):
@@ -4864,7 +4925,6 @@ async def _didcomm_sign_and_deliver(
     tx: "IssuanceTransaction",
     holder_did: str,
     repo: "IIssuanceRepository",
-    universal_resolver_url: str | None = None,
 ) -> DidcommDeliveryResponse:
     """Sign a credential and deliver it to the holder via DIDComm v2.
 
@@ -5054,13 +5114,14 @@ async def _didcomm_sign_and_deliver(
         credential_format=credential_payload_fmt,
         issuer_did=effective_issuer_did_dc,
         holder_did=holder_did,
+        thread_id=tx.id,
         credential_id=credential_id,
     )
     didcomm_msg = json.loads(didcomm_message_json)
     didcomm_message_id = didcomm_msg.get("id", "")
 
     # Step 3: Resolve holder DID → service endpoint
-    did_doc = didcomm_resolve_did(holder_did, universal_resolver_url)
+    did_doc = didcomm_resolve_did(holder_did)
     service_endpoint = didcomm_extract_endpoint(did_doc)
     if not service_endpoint:
         raise HTTPException(
@@ -5068,20 +5129,20 @@ async def _didcomm_sign_and_deliver(
             detail=f"Holder DID {holder_did} has no DIDComm service endpoint",
         )
 
-    # Step 3b: Encrypt if the holder has an X25519 key agreement key
+    service_endpoint = await _validated_didcomm_delivery_endpoint(service_endpoint)
+
+    # Step 3b: Encryption is mandatory. A delivery must never silently
+    # downgrade a credential-bearing DIDComm message to plaintext.
     # (anoncrypt: ECDH-ES+A256KW + A256GCM per DIDComm v2 §4.1)
-    delivery_content = didcomm_message_json
-    delivery_content_type = "application/didcomm-plain+json"
     try:
-        encrypted = didcomm_encrypt(didcomm_message_json, did_doc)
-        delivery_content = encrypted
-        delivery_content_type = "application/didcomm-encrypted+json"
-        logger.info(f"DIDComm message encrypted for {holder_did}")
+        delivery_content = didcomm_encrypt(didcomm_message_json, did_doc)
     except Exception as enc_err:
-        # No key agreement key or encryption failure — fall back to plaintext
-        logger.info(
-            f"DIDComm encryption not available for {holder_did}, sending plaintext: {enc_err}"
-        )
+        logger.warning("DIDComm encryption failed for holder DID %s", holder_did)
+        raise HTTPException(
+            status_code=422,
+            detail="Holder DID does not provide a compatible DIDComm key agreement method",
+        ) from enc_err
+    delivery_content_type = "application/didcomm-encrypted+json"
 
     # Step 4: POST the DIDComm message to the holder's endpoint
     delivery_status = "delivered"
@@ -5173,6 +5234,7 @@ async def _didcomm_sign_and_deliver(
 )
 async def didcomm_deliver(
     request: DidcommDeliverRequest,
+    http_request: Request,
     repo: IIssuanceRepository = Depends(),
 ) -> DidcommDeliveryResponse:
     """Deliver a credential to a holder via DIDComm v2 push.
@@ -5181,9 +5243,19 @@ async def didcomm_deliver(
     message, resolves the holder's DID Document for their service endpoint,
     and POSTs the message.
     """
+    _require_trusted_organization(
+        http_request,
+        request.organization_id,
+        hide_resource=True,
+    )
     tx = await repo.get_transaction(request.transaction_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")
+    _require_trusted_organization(
+        http_request,
+        tx.organization_id,
+        hide_resource=True,
+    )
     if tx.status == IssuanceStatus.ISSUED:
         raise HTTPException(status_code=409, detail="Credential already issued")
     if tx.status not in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
@@ -5193,83 +5265,7 @@ async def didcomm_deliver(
         tx=tx,
         holder_did=request.holder_did,
         repo=repo,
-        universal_resolver_url=request.universal_resolver_url,
     )
-
-
-@issuance_router.post("/didcomm/receive")
-async def didcomm_receive(
-    http_request: Request,
-    repo: IIssuanceRepository = Depends(),
-) -> JSONResponse:
-    """Receive a DIDComm v2 message (acknowledgments, problem-reports, etc.).
-
-    This is the **inbound** DIDComm endpoint — other agents POST messages
-    here. Handles:
-    - `https://didcomm.org/notification/1.0/ack` — delivery acknowledgment
-    - `https://didcomm.org/report-problem/2.0/problem-report` — error report
-    """
-    body = await http_request.body()
-    content_type = http_request.headers.get("content-type", "")
-
-    if "didcomm-encrypted" in content_type:
-        # For now, we don't decrypt inbound JWE — log and accept
-        logger.info(
-            "Received encrypted DIDComm message (encrypted ack processing not yet supported)"
-        )
-        return JSONResponse(status_code=202, content={"status": "accepted"})
-
-    try:
-        msg = json.loads(body)
-    except json.JSONDecodeError:
-        return JSONResponse(status_code=400, content={"error": "invalid_json"})
-
-    msg_type = msg.get("type", "")
-    msg_id = msg.get("id", "")
-    thid = msg.get("thid", "")  # Thread ID — correlates to the original message
-
-    if "ack" in msg_type or "notification" in msg_type:
-        logger.info(f"DIDComm ack received: msg_id={msg_id} thid={thid}")
-        # Record the ack as an event if we can find the transaction
-        if thid:
-            # Try to find a credential with this message ID
-            # The thid should match the didcomm_message_id from delivery
-            try:
-                await repo.save_event(
-                    IssuanceEvent(
-                        transaction_id=thid,
-                        application_id=None,
-                        event_type=EventType.CREDENTIAL_ISSUED,
-                        metadata={
-                            "didcomm_ack": True,
-                            "ack_message_id": msg_id,
-                            "original_message_id": thid,
-                            "ack_from": msg.get("from", ""),
-                        },
-                    )
-                )
-            except Exception as e:
-                logger.warning(f"Could not record DIDComm ack event: {e}")
-
-        return JSONResponse(
-            status_code=200,
-            content={"status": "acknowledged", "message_id": msg_id},
-        )
-
-    if "problem-report" in msg_type:
-        problem_code = msg.get("body", {}).get("code", "unknown")
-        problem_comment = msg.get("body", {}).get("comment", "")
-        logger.warning(
-            f"DIDComm problem-report: msg_id={msg_id} thid={thid} "
-            f"code={problem_code} comment={problem_comment}"
-        )
-        return JSONResponse(
-            status_code=200,
-            content={"status": "received", "message_id": msg_id},
-        )
-
-    logger.info(f"DIDComm message received: type={msg_type} id={msg_id}")
-    return JSONResponse(status_code=202, content={"status": "accepted", "message_id": msg_id})
 
 
 @issuance_router.post("/deferred-credential")

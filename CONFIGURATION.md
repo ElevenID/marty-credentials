@@ -52,6 +52,25 @@ ISSUER_BASE_URL=https://issuer.marty.dev
 STATUS_LIST_BASE_URL=https://api.marty.dev
 ```
 
+### DIDComm Delivery
+
+```bash
+# Optional deployment-managed fallback for DID methods that Marty cannot
+# resolve natively. This value is never accepted from an API caller.
+DIDCOMM_UNIVERSAL_RESOLVER_URL=https://resolver.example.com/1.0/identifiers
+
+# Keep false in production. Local interoperability environments may set this
+# to true only when their DIDComm agent intentionally uses HTTP or private IPs.
+DIDCOMM_ALLOW_PRIVATE_ENDPOINTS=false
+```
+
+DIDComm credential delivery always encrypts the message and requires a
+publicly routable HTTPS service endpoint in production. Resolver, key, KMS,
+and signing-service selectors are deployment or issuer-profile concerns and
+are not part of the public delivery request. If
+`DIDCOMM_UNIVERSAL_RESOLVER_URL` is unset, `UNIVERSAL_RESOLVER_URL` is used as
+the managed fallback.
+
 ### Feature Flags
 
 ```bash
