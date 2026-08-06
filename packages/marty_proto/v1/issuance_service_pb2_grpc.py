@@ -91,11 +91,6 @@ class IssuanceServiceStub(object):
                 request_serializer=issuance__service__pb2.StreamCredentialEventsRequest.SerializeToString,
                 response_deserializer=issuance__service__pb2.CredentialEvent.FromString,
                 _registered_method=True)
-        self.DidcommDeliver = channel.unary_unary(
-                '/marty.ui.issuance.v1.IssuanceService/DidcommDeliver',
-                request_serializer=issuance__service__pb2.DidcommDeliverRequest.SerializeToString,
-                response_deserializer=issuance__service__pb2.DidcommDeliverResponse.FromString,
-                _registered_method=True)
         self.HealthCheck = channel.unary_unary(
                 '/marty.ui.issuance.v1.IssuanceService/HealthCheck',
                 request_serializer=issuance__service__pb2.HealthCheckRequest.SerializeToString,
@@ -188,13 +183,6 @@ class IssuanceServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def DidcommDeliver(self, request, context):
-        """Deliver a credential via DIDComm v2 push.
-        """
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def HealthCheck(self, request, context):
         """Health check.
         """
@@ -259,11 +247,6 @@ def add_IssuanceServiceServicer_to_server(servicer, server):
                     servicer.StreamCredentialEvents,
                     request_deserializer=issuance__service__pb2.StreamCredentialEventsRequest.FromString,
                     response_serializer=issuance__service__pb2.CredentialEvent.SerializeToString,
-            ),
-            'DidcommDeliver': grpc.unary_unary_rpc_method_handler(
-                    servicer.DidcommDeliver,
-                    request_deserializer=issuance__service__pb2.DidcommDeliverRequest.FromString,
-                    response_serializer=issuance__service__pb2.DidcommDeliverResponse.SerializeToString,
             ),
             'HealthCheck': grpc.unary_unary_rpc_method_handler(
                     servicer.HealthCheck,
@@ -570,33 +553,6 @@ class IssuanceService(object):
             '/marty.ui.issuance.v1.IssuanceService/StreamCredentialEvents',
             issuance__service__pb2.StreamCredentialEventsRequest.SerializeToString,
             issuance__service__pb2.CredentialEvent.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def DidcommDeliver(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/marty.ui.issuance.v1.IssuanceService/DidcommDeliver',
-            issuance__service__pb2.DidcommDeliverRequest.SerializeToString,
-            issuance__service__pb2.DidcommDeliverResponse.FromString,
             options,
             channel_credentials,
             insecure,
