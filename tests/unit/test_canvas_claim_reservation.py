@@ -52,12 +52,15 @@ def _credential_context() -> CredentialContext:
         credential_type="OpenBadgeCredential",
         credential_payload_format="w3c_vcdm_v2_sd_jwt",
         revocation_profile_id="status-profile-1",
-        issuer_profile_id="issuer-profile-1",
+        issuer_did="did:web:issuer.example",
+        issuer_algorithm="ES256",
     )
 
 
 async def _apply_issuer_context(tx: IssuanceTransaction) -> None:
-    tx.issuer_did_override = "did:web:issuer.example"
+    assert tx.issuer_did_override == "did:web:issuer.example"
+    assert tx.issuer_algorithm == "ES256"
+    tx.issuer_profile_id = "resolved-profile-1"
     tx.signing_service_id = "openbao-transit"
 
 

@@ -190,18 +190,8 @@ def _fixtures(algorithm: str = "ES256") -> tuple[
         "credential_type": "OpenBadgeCredential",
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "revocation_profile_id": "status-profile-1",
-        "issuer_profile_id": "issuer-profile-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
-        "issuer_key_id": "badge-key-1",
         "issuer_algorithm": algorithm,
-        "key_access_mode": "REMOTE_SIGNING",
-        "remote_signing_config": {
-            "provider": "managed-signing-service",
-            "signing_service_id": "kms-service-1",
-            "signing_key_reference": "badge-key-1",
-            "verification_method_id": "did:web:issuer.example:orgs:org-1#badge-key-1",
-            "key_purpose": "vc_jwt_issuer",
-        },
     }
     status_profile = {
         "id": "status-profile-1",
@@ -401,12 +391,14 @@ async def test_kms_challenge_needs_no_profile_or_kms_selector_in_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _platform, _binding, _application, credential, _status_profile = _fixtures("ES256")
-    credential.pop("issuer_profile_id")
-    remote = credential["remote_signing_config"]
-    assert isinstance(remote, dict)
-    remote.pop("signing_service_id")
-    remote.pop("signing_key_reference")
-    remote.pop("verification_method_id")
+    assert set(credential).isdisjoint(
+        {
+            "issuer_profile_id",
+            "issuer_key_id",
+            "key_access_mode",
+            "remote_signing_config",
+        }
+    )
 
     signing_private, public_jwk = _key_material("ES256")
     _install_kms_fakes(

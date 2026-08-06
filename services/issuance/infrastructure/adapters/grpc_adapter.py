@@ -107,6 +107,7 @@ async def _resolve_remote_signing_context_for_tx(
         issuer_mode=getattr(tx, "issuer_mode", "org_managed"),
         credential_format=credential_format,
         key_purpose=_key_purpose_for_credential_format(credential_format),
+        algorithm=getattr(tx, "issuer_algorithm", None),
     )
     if not context:
         raise RuntimeError("No active DID issuer profile is configured for this organization")
@@ -115,10 +116,18 @@ async def _resolve_remote_signing_context_for_tx(
     issuer_profile_id = context.get("issuer_profile_id") or (
         context.get("issuer_profile") or {}
     ).get("id")
-    if not issuer_did or not issuer_profile_id:
-        raise RuntimeError("Resolved issuer context is missing issuer_profile_id or issuer_did")
+    algorithm = context.get("algorithm") or (
+        context.get("issuer_profile") or {}
+    ).get("algorithm")
+    if (
+        not issuer_profile_id
+        or not tx.issuer_did_override
+        or issuer_did != tx.issuer_did_override
+        or not tx.issuer_algorithm
+        or algorithm != tx.issuer_algorithm
+    ):
+        raise RuntimeError("Resolved issuer context does not match the requested DID and algorithm")
 
-    tx.issuer_did_override = issuer_did
     # Preserve the resolved custody service only as internal audit/readiness
     # state. Runtime signing addresses the issuer profile and asserts its DID.
     tx.signing_service_id = context.get("signing_service_id")
@@ -148,22 +157,21 @@ async def _create_remote_signed_sd_jwt_for_tx(
     remote_context = await _resolve_remote_signing_context_for_tx(
         tx, credential_format=credential_format
     )
-    service = (
-        remote_context.get("service") if isinstance(remote_context.get("service"), dict) else {}
-    )
-    algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
+    algorithm = str(tx.issuer_algorithm)
     verification_method_id = (
         remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
     )
 
     async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
+        if algorithm_hint and algorithm_hint != algorithm:
+            raise RuntimeError("Credential builder requested a different issuer algorithm")
         return await sign_payload_with_issuer_did(
             organization_id=tx.organization_id,
             issuer_did=tx.issuer_did_override,
             credential_format=credential_format,
             key_purpose=_key_purpose_for_credential_format(credential_format),
             payload=payload,
-            algorithm=algorithm_hint or algorithm,
+            algorithm=algorithm,
             expected_verification_method_id=verification_method_id,
         )
 

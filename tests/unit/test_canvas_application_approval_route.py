@@ -94,8 +94,8 @@ async def test_canvas_application_approval_is_owned_and_uses_canonical_guard(
         credential_type="OpenBadgeCredential",
         credential_payload_format="w3c_vcdm_v2_jwt",
         revocation_profile_id="status-profile-1",
-        issuer_profile_id="issuer-profile-1",
-        issuer_key_id="kms-key-1",
+        issuer_did="did:web:issuer.example:orgs:org-1",
+        issuer_algorithm="ES256",
     )
     captured: dict[str, object] = {}
 

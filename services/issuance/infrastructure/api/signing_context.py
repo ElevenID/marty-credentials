@@ -162,7 +162,7 @@ async def sign_payload_with_issuer_did(
     credential_format: str,
     key_purpose: str,
     payload: bytes,
-    algorithm: str | None = None,
+    algorithm: str,
     expected_verification_method_id: str | None = None,
 ) -> dict[str, Any]:
     """Sign through the active profile resolved from an organization-scoped DID.
@@ -181,6 +181,8 @@ async def sign_payload_with_issuer_did(
         raise RuntimeError("credential_format is required for DID-mediated signing")
     if not key_purpose:
         raise RuntimeError("key_purpose is required for DID-mediated signing")
+    if algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
+        raise RuntimeError("a supported algorithm is required for DID-mediated signing")
     if not payload:
         raise RuntimeError("payload is required for DID-mediated signing")
 
@@ -190,8 +192,7 @@ async def sign_payload_with_issuer_did(
         "key_purpose": key_purpose,
         "payload_b64": base64.urlsafe_b64encode(payload).decode().rstrip("="),
     }
-    if algorithm:
-        body["algorithm"] = algorithm
+    body["algorithm"] = algorithm
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
@@ -213,6 +214,8 @@ async def sign_payload_with_issuer_did(
         raise RuntimeError("DID-mediated signer returned an invalid response")
     if data.get("issuer_did") != issuer_did:
         raise RuntimeError("DID-mediated signer returned a different issuer DID")
+    if data.get("algorithm") != algorithm:
+        raise RuntimeError("DID-mediated signer returned a different algorithm")
     if (
         expected_verification_method_id
         and data.get("verification_method_id") != expected_verification_method_id

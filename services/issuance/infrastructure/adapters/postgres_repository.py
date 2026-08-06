@@ -602,6 +602,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             issuer_profile_id=getattr(row, "issuer_profile_id", None),
             issuer_mode=getattr(row, "issuer_mode", None) or "org_managed",
             issuer_did_override=getattr(row, "issuer_did_override", None),
+            issuer_algorithm=getattr(row, "issuer_algorithm", None),
             signing_service_id=getattr(row, "signing_service_id", None),
             reserved_credential_id=getattr(row, "reserved_credential_id", None),
             oid4vci_client_id=getattr(row, "oid4vci_client_id", None),
@@ -643,6 +644,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 "issuer_profile_id": tx.issuer_profile_id,
                 "issuer_mode": tx.issuer_mode or "org_managed",
                 "issuer_did_override": tx.issuer_did_override,
+                "issuer_algorithm": tx.issuer_algorithm,
                 "signing_service_id": tx.signing_service_id,
                 "reserved_credential_id": tx.reserved_credential_id,
                 "oid4vci_client_id": tx.oid4vci_client_id,
@@ -923,7 +925,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         async with self._session_factory() as session:
             stmt = text(
                 """
-                SELECT credential_type, name, description, claims, display_style, vct, issuer_did
+                SELECT credential_type, name, description, claims, display_style, vct,
+                       issuer_did, issuer_algorithm
                 FROM credential_template_service.credential_templates
                 WHERE organization_id = :org_id
                   AND status IN ('active', 'draft')
@@ -936,7 +939,16 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             result = await session.execute(stmt, {"org_id": org_id})
             metadata: dict[str, dict[str, Any]] = {}
-            for ctype, name, description, claims, display_style, vct, issuer_did in result.all():
+            for (
+                ctype,
+                name,
+                description,
+                claims,
+                display_style,
+                vct,
+                issuer_did,
+                issuer_algorithm,
+            ) in result.all():
                 if ctype in metadata:
                     continue
                 metadata[ctype] = {
@@ -948,6 +960,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     # Internal routing input for DID-first proof-policy
                     # resolution. It is not a custody selector.
                     "issuer_did": issuer_did,
+                    "issuer_algorithm": issuer_algorithm,
                 }
             return metadata
 
@@ -1979,6 +1992,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     "issuer_profile_id": prepared_transaction.issuer_profile_id,
                     "issuer_mode": prepared_transaction.issuer_mode or "org_managed",
                     "issuer_did_override": prepared_transaction.issuer_did_override,
+                    "issuer_algorithm": prepared_transaction.issuer_algorithm,
                     "signing_service_id": prepared_transaction.signing_service_id,
                     "reserved_credential_id": prepared_transaction.reserved_credential_id,
                     "oid4vci_client_id": prepared_transaction.oid4vci_client_id,
@@ -2292,6 +2306,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     issuer_profile_id=prepared_transaction.issuer_profile_id,
                     issuer_mode=prepared_transaction.issuer_mode or "org_managed",
                     issuer_did_override=prepared_transaction.issuer_did_override,
+                    issuer_algorithm=prepared_transaction.issuer_algorithm,
                     signing_service_id=prepared_transaction.signing_service_id,
                 )
                 .returning(issuance_transactions_table)

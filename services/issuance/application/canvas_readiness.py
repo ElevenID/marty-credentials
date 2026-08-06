@@ -258,16 +258,11 @@ class _ExpectedIssuer:
 
 
 def _expected_issuer(template: Mapping[str, Any]) -> _ExpectedIssuer:
-    remote = _mapping(template.get("remote_signing_config"))
     payload_format = _payload_format(template)
     return _ExpectedIssuer(
         issuer_did=_string(template.get("issuer_did")),
-        algorithm=_first(
-            template.get("issuer_algorithm"),
-            template.get("signing_algorithm"),
-            remote.get("algorithm"),
-        ),
-        key_purpose=_string(remote.get("key_purpose")) or "vc_jwt_issuer",
+        algorithm=_string(template.get("issuer_algorithm")),
+        key_purpose="vc_jwt_issuer",
         credential_format=_remote_format(payload_format),
     )
 
@@ -275,8 +270,7 @@ def _expected_issuer(template: Mapping[str, Any]) -> _ExpectedIssuer:
 def _issuer_configuration_valid(template: Mapping[str, Any]) -> bool:
     expected = _expected_issuer(template)
     return bool(
-        _status(template.get("key_access_mode")) == "remote_signing"
-        and expected.issuer_did.startswith("did:")
+        expected.issuer_did.startswith("did:")
         and expected.algorithm in SUPPORTED_ISSUER_ALGORITHMS
         and expected.credential_format == "dc+sd-jwt"
     )
@@ -1070,7 +1064,7 @@ async def evaluate_canvas_binding_readiness(
             component="kms_did",
             ready=issuer_config_ready,
             blocking=True,
-            remediation="Configure an active REMOTE_SIGNING issuer profile, service, key, DID verification method, and supported algorithm.",
+            remediation="Configure an active issuer DID and supported algorithm backed by a managed issuer profile.",
             timestamp=timestamp,
         )
     )

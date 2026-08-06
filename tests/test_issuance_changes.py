@@ -339,6 +339,12 @@ def test_issuance_schema_tracks_credential_renewal():
     assert issued_credentials_table.c.renewed_to_credential_id.nullable is True
 
 
+def test_issuance_schema_tracks_server_owned_issuer_algorithm():
+    column = issuance_transactions_table.c.issuer_algorithm
+    assert column.nullable is True
+    assert column.type.length == 20
+
+
 def test_postgres_transaction_mapper_preserves_lifecycle_dependencies():
     from types import SimpleNamespace
 
@@ -347,6 +353,7 @@ def test_postgres_transaction_mapper_preserves_lifecycle_dependencies():
     source = _make_transaction(
         revocation_profile_id="revocation-profile-1",
         renewal_of_credential_id="credential-1",
+        issuer_algorithm="ES256",
     )
     row_data = {**source.__dict__, "status": source.status.value, "c_nonce": source.nonce}
     row = SimpleNamespace(**row_data)
@@ -355,6 +362,7 @@ def test_postgres_transaction_mapper_preserves_lifecycle_dependencies():
 
     assert mapped.revocation_profile_id == "revocation-profile-1"
     assert mapped.renewal_of_credential_id == "credential-1"
+    assert mapped.issuer_algorithm == "ES256"
 
 
 # ============================================================================
@@ -585,6 +593,7 @@ class TestRemoteIssuerFailureDetail:
                 "issuer_did": ["did:web:beta.elevenidllc.com:orgs:acme", "not-a-fragment"][0],
                 "issuer_profile_id": "ip-selected",
                 "issuer_mode": "elevenid_alias_for_org",
+                "algorithm": "ES256",
                 "signing_service_id": "svc-mdoc",
                 "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
                 "service": {"id": "svc-mdoc"},
@@ -599,6 +608,7 @@ class TestRemoteIssuerFailureDetail:
             issuer_profile_id="ip-selected",
             issuer_mode="elevenid_alias_for_org",
             credential_payload_format="mso_mdoc",
+            issuer_algorithm="ES256",
         )
 
         context = await routes.apply_remote_issuer_context(tx, credential_format="mso_mdoc")
@@ -612,7 +622,7 @@ class TestRemoteIssuerFailureDetail:
             "issuer_mode": "elevenid_alias_for_org",
             "credential_format": "mso_mdoc",
             "key_purpose": "mdoc_dsc",
-            "algorithm": None,
+            "algorithm": "ES256",
         }
 
     async def test_did_context_uses_the_did_resolver(self, monkeypatch):
@@ -685,11 +695,15 @@ class TestRemoteIssuerFailureDetail:
                 "issuer_profile_id": "profile-1",
                 "signing_service_id": "service-1",
                 "verification_method_id": "did:web:issuer.example#key-1",
+                "algorithm": "ES256",
                 "issuer_profile": {"id": "profile-1", "status": "active"},
             }
 
         monkeypatch.setattr(routes, "resolve_remote_issuer_context", incomplete_context)
-        tx = _make_transaction()
+        tx = _make_transaction(
+            issuer_did_override="did:web:issuer.example",
+            issuer_algorithm="ES256",
+        )
 
         with pytest.raises(RuntimeError, match="signing_key_reference"):
             await routes.apply_required_remote_issuer_context(tx)
@@ -704,6 +718,7 @@ class TestRemoteIssuerFailureDetail:
                 "signing_service_id": "service-1",
                 "signing_key_reference": "kms-key-1",
                 "verification_method_id": "did:web:issuer.example#key-1",
+                "algorithm": "ES256",
                 "issuer_profile": {
                     "id": "profile-1",
                     "status": "active",
@@ -714,7 +729,10 @@ class TestRemoteIssuerFailureDetail:
             }
 
         monkeypatch.setattr(routes, "resolve_remote_issuer_context", complete_context)
-        tx = _make_transaction()
+        tx = _make_transaction(
+            issuer_did_override="did:web:issuer.example",
+            issuer_algorithm="ES256",
+        )
 
         context = await routes.apply_required_remote_issuer_context(tx)
 
@@ -3859,6 +3877,7 @@ class TestRustIntegrationOrgIdValidation:
             signing_service_id="svc-old",
             issuer_profile_id="ip-grpc",
             issuer_mode="org_managed",
+            issuer_algorithm="ES256",
         )
 
         (
@@ -3888,7 +3907,7 @@ class TestRustIntegrationOrgIdValidation:
             "issuer_mode": "org_managed",
             "credential_format": "dc+sd-jwt",
             "key_purpose": "vc_jwt_issuer",
-            "algorithm": None,
+            "algorithm": "ES256",
         }
         assert captured["sign"]["organization_id"] == "org-1"
         assert captured["sign"]["issuer_did"] == issuer_did

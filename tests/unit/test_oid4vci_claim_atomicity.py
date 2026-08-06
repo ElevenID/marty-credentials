@@ -119,6 +119,8 @@ def _transaction(**overrides) -> IssuanceTransaction:
         "claims": {"achievement": "Portable Canvas"},
         "credential_type": "OpenBadgeCredential",
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "issuer_did_override": "did:web:issuer.example",
+        "issuer_algorithm": "ES256",
     }
     values.update(overrides)
     return IssuanceTransaction(**values)
@@ -846,6 +848,7 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
         credential_payload_format="w3c_vcdm_v2_di",
         credential_type="EmployeeCredential",
         issuer_did_override="did:web:issuer.example",
+        issuer_algorithm="EdDSA",
     )
     credential_document = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
@@ -989,6 +992,20 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         status="exchanged",
     )
     await repo.save_authorization_session(authorization_session)
+
+    async def display_metadata(_organization_id: str):
+        return {
+            "OpenBadgeCredential": {
+                "issuer_did": "did:web:issuer.example",
+                "issuer_algorithm": "ES256",
+            }
+        }
+
+    monkeypatch.setattr(
+        repo,
+        "get_credential_display_metadata_for_org",
+        display_metadata,
+    )
 
     remote_context = {
         "issuer_profile_id": "issuer-profile-1",
