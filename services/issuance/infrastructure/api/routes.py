@@ -621,6 +621,7 @@ async def apply_remote_issuer_context(
             issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
             credential_format=resolved_format,
             key_purpose=_key_purpose_for_credential_format(resolved_format),
+            algorithm=tx.issuer_algorithm,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
@@ -634,6 +635,9 @@ async def apply_remote_issuer_context(
         return None
 
     resolved_issuer_did = context.get("issuer_did")
+    resolved_algorithm = context.get("algorithm") or (
+        context.get("issuer_profile") or {}
+    ).get("algorithm")
     resolved_service_id = context.get("signing_service_id")
     resolved_profile_id = context.get("issuer_profile_id") or (
         context.get("issuer_profile") or {}
@@ -641,20 +645,16 @@ async def apply_remote_issuer_context(
     resolved_issuer_mode = context.get("issuer_mode") or (context.get("issuer_profile") or {}).get(
         "issuer_mode"
     )
+    if not tx.issuer_did_override or resolved_issuer_did != tx.issuer_did_override:
+        raise RuntimeError("Resolved issuer DID does not match the requested issuer DID")
+    if not tx.issuer_algorithm or resolved_algorithm != tx.issuer_algorithm:
+        raise RuntimeError(
+            "Resolved issuer algorithm does not match the credential template"
+        )
     if resolved_profile_id and resolved_profile_id != tx.issuer_profile_id:
         tx.issuer_profile_id = str(resolved_profile_id)
     if resolved_issuer_mode:
         tx.issuer_mode = _normalize_issuer_mode(str(resolved_issuer_mode))
-    if resolved_issuer_did and resolved_issuer_did != tx.issuer_did_override:
-        logger.info(
-            "Resolved issuer DID for tx=%s org=%s format=%s: %s -> %s",
-            tx.id,
-            tx.organization_id,
-            resolved_format,
-            tx.issuer_did_override,
-            resolved_issuer_did,
-        )
-        tx.issuer_did_override = resolved_issuer_did
     if resolved_service_id and resolved_service_id != tx.signing_service_id:
         logger.info(
             "Resolved signing service for tx=%s org=%s format=%s: %s -> %s",
@@ -695,6 +695,7 @@ async def apply_required_remote_issuer_context(
     required = {
         "issuer_profile_id": context.get("issuer_profile_id") or profile.get("id"),
         "issuer_did": context.get("issuer_did") or profile.get("issuer_did"),
+        "issuer_algorithm": context.get("algorithm") or profile.get("algorithm"),
         "signing_service_id": context.get("signing_service_id")
         or profile.get("signing_service_id"),
         "signing_key_reference": context.get("signing_key_reference")
@@ -711,6 +712,10 @@ async def apply_required_remote_issuer_context(
         raise RuntimeError("Resolved issuer profile was not attached to the issuance transaction")
     if tx.issuer_did_override != str(required["issuer_did"]):
         raise RuntimeError("Resolved issuer DID was not attached to the issuance transaction")
+    if tx.issuer_algorithm != str(required["issuer_algorithm"]):
+        raise RuntimeError(
+            "Resolved issuer algorithm was not attached to the issuance transaction"
+        )
     if tx.signing_service_id != str(required["signing_service_id"]):
         raise RuntimeError("Resolved signing service was not attached to the issuance transaction")
     return context
@@ -3200,6 +3205,7 @@ async def initiate_issuance(
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
     revocation_profile_id: str | None = None
     template_issuer_did: str | None = None
+    template_issuer_algorithm: str | None = None
     wallet_configs: list[dict] = []
     validity_days = 365
     renewable = False
@@ -3237,6 +3243,9 @@ async def initiate_issuance(
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             revocation_profile_id = tmpl_resp.revocation_profile_id or None
             template_issuer_did = getattr(tmpl_resp, "issuer_did", None) or None
+            template_issuer_algorithm = (
+                getattr(tmpl_resp, "issuer_algorithm", None) or None
+            )
             wallet_configs = (
                 json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
             )
@@ -3294,6 +3303,7 @@ async def initiate_issuance(
             )
             revocation_profile_id = tmpl.get("revocation_profile_id") or None
             template_issuer_did = tmpl.get("issuer_did") or None
+            template_issuer_algorithm = tmpl.get("issuer_algorithm") or None
             wallet_configs = tmpl.get("wallet_configs") or []
             validity_rules = tmpl.get("validity_rules") or {}
             validity_days = int(validity_rules.get("default_validity_days") or 0)
@@ -3323,6 +3333,11 @@ async def initiate_issuance(
             raise HTTPException(
                 status_code=422,
                 detail="issuer_did cannot override the credential template issuer DID.",
+            )
+        if template_issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
+            raise HTTPException(
+                status_code=422,
+                detail="credential_template_id must define a supported issuer_algorithm.",
             )
 
     if request.credential_subject is not None and _normalize_payload_format(
@@ -3412,6 +3427,7 @@ async def initiate_issuance(
         issuer_profile_id=None,
         issuer_mode="org_managed",
         issuer_did_override=request.issuer_did,
+        issuer_algorithm=template_issuer_algorithm,
         signing_service_id=None,
         oid4vci_client_id=authorized_client.client_id if authorized_client else None,
         delivery_mode=delivery_mode,
@@ -4193,6 +4209,26 @@ async def issue_credential(
                 else "default"
             )
             bare_ctype = raw_config_id.split("#")[0]
+            display_metadata = await repo.get_credential_display_metadata_for_org(
+                auth_session.organization_id or ""
+            )
+            template_identity = display_metadata.get(bare_ctype) or {}
+            issuer_did = str(template_identity.get("issuer_did") or "").strip()
+            issuer_algorithm = str(
+                template_identity.get("issuer_algorithm") or ""
+            ).strip()
+            if (
+                not issuer_did.startswith("did:")
+                or issuer_algorithm
+                not in {"ES256", "ES384", "RS256", "EdDSA"}
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "The selected credential configuration has no active "
+                        "DID-mediated issuer identity."
+                    ),
+                )
             tx = IssuanceTransaction(
                 id=_authorization_session_transaction_id(auth_session.id),
                 organization_id=auth_session.organization_id or "",
@@ -4201,6 +4237,8 @@ async def issue_credential(
                 claims={"_dpop_jkt": auth_session.dpop_jkt} if auth_session.dpop_jkt else {},
                 nonce=auth_session.nonce,
                 credential_type=bare_ctype,
+                issuer_did_override=issuer_did,
+                issuer_algorithm=issuer_algorithm,
             )
             try:
                 await repo.save_transaction(tx)
@@ -4329,6 +4367,33 @@ async def issue_credential(
             )
 
     effective_request_format = _effective_request_format(request, tx)
+
+    # Authorization-code-only issuance has no pre-authorized transaction to
+    # carry the template identity. Reconstruct only the public DID and
+    # algorithm from the selected active configuration; custody routing still
+    # comes exclusively from the live organization-scoped DID resolver.
+    if auth_session and not (tx.issuer_did_override and tx.issuer_algorithm):
+        display_metadata = await repo.get_credential_display_metadata_for_org(
+            tx.organization_id
+        )
+        template_identity = display_metadata.get(tx.credential_type or "") or {}
+        issuer_did = str(template_identity.get("issuer_did") or "").strip()
+        issuer_algorithm = str(
+            template_identity.get("issuer_algorithm") or ""
+        ).strip()
+        if (
+            not issuer_did.startswith("did:")
+            or issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The selected credential configuration has no active "
+                    "DID-mediated issuer identity."
+                ),
+            )
+        tx.issuer_did_override = issuer_did
+        tx.issuer_algorithm = issuer_algorithm
 
     # Resolve the issuer profile and its DID before proof validation. The
     # actual signing key is loaded only if we must fall back to legacy local
@@ -4597,13 +4662,13 @@ async def issue_credential(
                     issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
                     credential_format=remote_credential_format,
                     key_purpose=_key_purpose_for_credential_format(remote_credential_format),
+                    algorithm=tx.issuer_algorithm,
                 )
             except Exception as exc:  # noqa: BLE001
                 detail = _did_resolution_failure_detail(tx, exc)
                 logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
                 raise HTTPException(status_code=503, detail=detail) from exc
             if remote_context:
-                tx.issuer_did_override = remote_context.get("issuer_did") or tx.issuer_did_override
                 tx.signing_service_id = (
                     remote_context.get("signing_service_id") or tx.signing_service_id
                 )
@@ -4617,6 +4682,17 @@ async def issue_credential(
                     or (remote_context.get("issuer_profile") or {}).get("issuer_mode")
                     or tx.issuer_mode
                 )
+                resolved_algorithm = remote_context.get("algorithm") or (
+                    remote_context.get("issuer_profile") or {}
+                ).get("algorithm")
+                if (
+                    remote_context.get("issuer_did") != tx.issuer_did_override
+                    or resolved_algorithm != tx.issuer_algorithm
+                ):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Resolved issuer context changed during credential issuance.",
+                    )
         if not remote_context:
             detail = (
                 "Unable to resolve the remote DID issuer profile for this organization. "
@@ -4648,13 +4724,7 @@ async def issue_credential(
             logger.error("[credential] rid=%s tx_id=%s %s", rid, tx.id, detail)
             raise HTTPException(status_code=503, detail=detail)
 
-        service = remote_context.get("service") if isinstance(remote_context, dict) else {}
-        service = service if isinstance(service, dict) else {}
-        signing_algorithm = str(
-            service.get("algorithm")
-            or remote_context.get("algorithm")
-            or ("EdDSA" if signing_format == "ldp_vc" else "ES256")
-        )
+        signing_algorithm = str(tx.issuer_algorithm)
         verification_method_id = (
             remote_context.get("verification_method_id")
             if isinstance(remote_context, dict)
@@ -4670,13 +4740,15 @@ async def issue_credential(
         effective_issuer_did = tx.issuer_did_override
 
         async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
+            if algorithm and algorithm != signing_algorithm:
+                raise RuntimeError("Credential builder requested a different issuer algorithm")
             return await sign_payload_with_issuer_did(
                 organization_id=tx.organization_id,
                 issuer_did=effective_issuer_did,
                 credential_format=remote_credential_format,
                 key_purpose=_key_purpose_for_credential_format(remote_credential_format),
                 payload=payload,
-                algorithm=algorithm or signing_algorithm,
+                algorithm=signing_algorithm,
                 expected_verification_method_id=verification_method_id,
             )
 
@@ -4757,16 +4829,20 @@ async def issue_credential(
             assert holder_jwk is not None
 
             async def _issuer_profile_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
+                if algorithm != signing_algorithm:
+                    raise RuntimeError(
+                        "mdoc builder requested a different issuer algorithm"
+                    )
                 result = await sign_payload_with_issuer_did(
                     organization_id=tx.organization_id,
                     issuer_did=effective_issuer_did,
                     credential_format=remote_credential_format,
                     key_purpose=_key_purpose_for_credential_format(remote_credential_format),
                     payload=tbs_data,
-                    algorithm=algorithm,
+                    algorithm=signing_algorithm,
                     expected_verification_method_id=verification_method_id,
                 )
-                return _remote_mdoc_signature_raw(result, algorithm)
+                return _remote_mdoc_signature_raw(result, signing_algorithm)
 
             (
                 jwt_credential,
@@ -5027,13 +5103,13 @@ async def _didcomm_sign_and_deliver(
                 issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
                 credential_format=remote_credential_format,
                 key_purpose=_key_purpose_for_credential_format(remote_credential_format),
+                algorithm=tx.issuer_algorithm,
             )
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=503, detail=_did_resolution_failure_detail(tx, exc)
             ) from exc
         if remote_context:
-            tx.issuer_did_override = remote_context.get("issuer_did") or tx.issuer_did_override
             tx.signing_service_id = (
                 remote_context.get("signing_service_id") or tx.signing_service_id
             )
@@ -5047,6 +5123,17 @@ async def _didcomm_sign_and_deliver(
                 or (remote_context.get("issuer_profile") or {}).get("issuer_mode")
                 or tx.issuer_mode
             )
+            resolved_algorithm = remote_context.get("algorithm") or (
+                remote_context.get("issuer_profile") or {}
+            ).get("algorithm")
+            if (
+                remote_context.get("issuer_did") != tx.issuer_did_override
+                or resolved_algorithm != tx.issuer_algorithm
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Resolved issuer context changed during credential issuance.",
+                )
             await repo.save_transaction(tx)
     if not remote_context:
         raise HTTPException(
@@ -5054,22 +5141,22 @@ async def _didcomm_sign_and_deliver(
             detail="Unable to resolve the remote DID issuer profile for this organization.",
         )
 
-    service = remote_context.get("service") if isinstance(remote_context, dict) else {}
-    service = service if isinstance(service, dict) else {}
-    signing_algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
+    signing_algorithm = str(tx.issuer_algorithm)
     verification_method_id = (
         remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
     )
     effective_issuer_did_dc = tx.issuer_did_override
 
     async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
+        if algorithm and algorithm != signing_algorithm:
+            raise RuntimeError("Credential builder requested a different issuer algorithm")
         return await sign_payload_with_issuer_did(
             organization_id=tx.organization_id,
             issuer_did=effective_issuer_did_dc,
             credential_format=remote_credential_format,
             key_purpose=_key_purpose_for_credential_format(remote_credential_format),
             payload=payload,
-            algorithm=algorithm or signing_algorithm,
+            algorithm=signing_algorithm,
             expected_verification_method_id=verification_method_id,
         )
 

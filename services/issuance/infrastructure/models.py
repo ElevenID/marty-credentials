@@ -46,6 +46,7 @@ issuance_transactions_table = Table(
     Column("issuer_profile_id", String, nullable=True),
     Column("issuer_mode", String, nullable=False, default="org_managed"),
     Column("issuer_did_override", String, nullable=True),
+    Column("issuer_algorithm", String(20), nullable=True),
     Column("signing_service_id", String, nullable=True),
     Column("reserved_credential_id", String, nullable=True),
     Column("oid4vci_client_id", String(512), nullable=True),

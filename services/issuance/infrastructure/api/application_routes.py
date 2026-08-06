@@ -102,9 +102,84 @@ async def _fetch_credential_template_via_grpc(
         "status": response.status,
         "credential_type": response.credential_type,
         "vct": response.vct,
+        "credential_payload_format": response.credential_payload_format,
         "revocation_profile_id": response.revocation_profile_id,
+        "issuer_did": getattr(response, "issuer_did", ""),
+        "issuer_algorithm": response.issuer_algorithm,
+        "wallet_configs": (
+            json.loads(response.wallet_configs_json)
+            if response.wallet_configs_json
+            else []
+        ),
+        "selective_disclosure_fields": list(response.selective_disclosure_fields),
+        "zk_predicate_claims": list(response.zk_predicate_claims),
+        "validity_rules": {
+            "default_validity_days": response.validity_rules.default_validity_days,
+            "renewable": response.validity_rules.renewable,
+            "renewal_window_days": response.validity_rules.renewal_window_days,
+        },
         "claims": [{"name": claim.name} for claim in response.claims],
     }
+
+
+def _credential_context_from_live_template(
+    template: dict[str, Any],
+    *,
+    organization_id: str,
+) -> CredentialContext:
+    """Validate the tenant-owned DID-first template used for issuance."""
+
+    if str(template.get("organization_id") or "").strip() != organization_id:
+        raise ValueError("Credential Template is not owned by this organization")
+    if str(template.get("status") or "").strip().upper() != "ACTIVE":
+        raise ValueError("Credential Template must be active")
+    credential_type = str(template.get("credential_type") or "").strip()
+    credential_format = str(template.get("credential_payload_format") or "").strip()
+    issuer_did = str(template.get("issuer_did") or "").strip()
+    issuer_algorithm = str(template.get("issuer_algorithm") or "").strip()
+    if not credential_type:
+        raise ValueError("Credential Template must define a credential type")
+    if not credential_format:
+        raise ValueError("Credential Template must define a credential payload format")
+    if not issuer_did.startswith("did:"):
+        raise ValueError("Credential Template must define an issuer DID")
+    if issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
+        raise ValueError("Credential Template must define a supported issuer algorithm")
+    validity = template.get("validity_rules")
+    validity = validity if isinstance(validity, dict) else {}
+    return CredentialContext(
+        credential_type=credential_type,
+        credential_vct=resolve_credential_vct(
+            template.get("vct"), credential_type, ISSUER_BASE_URL
+        ),
+        credential_payload_format=credential_format,
+        revocation_profile_id=str(
+            template.get("revocation_profile_id") or ""
+        ).strip()
+        or None,
+        wallet_configs=tuple(
+            dict(item)
+            for item in (template.get("wallet_configs") or [])
+            if isinstance(item, dict)
+        ),
+        selective_disclosure_claims=tuple(
+            str(item)
+            for item in (template.get("selective_disclosure_fields") or [])
+            if str(item)
+        ),
+        zk_predicate_claims=tuple(
+            str(item)
+            for item in (template.get("zk_predicate_claims") or [])
+            if str(item)
+        ),
+        validity_days=max(1, int(validity.get("default_validity_days") or 365)),
+        renewable=bool(validity.get("renewable", False)),
+        renewal_window_days=max(
+            1, int(validity.get("renewal_window_days") or 30)
+        ),
+        issuer_did=issuer_did,
+        issuer_algorithm=issuer_algorithm,
+    )
 
 
 async def _fetch_credential_template(template_id: str) -> dict[str, Any] | None:
@@ -1065,22 +1140,15 @@ async def approve_application(
             ) from exc
         if credential_template is None:
             raise HTTPException(status_code=422, detail="Credential Template not found.")
-        credential_type = str(credential_template.get("credential_type") or "").strip()
-        if not credential_type:
-            raise HTTPException(
-                status_code=422,
-                detail="Credential Template must define a credential type.",
+        try:
+            credential_context = _credential_context_from_live_template(
+                credential_template,
+                organization_id=app.organization_id,
             )
-        credential_vct = resolve_credential_vct(
-            credential_template.get("vct"),
-            credential_type,
-            ISSUER_BASE_URL,
-        )
-        credential_context = CredentialContext(
-            credential_type=credential_type,
-            credential_vct=credential_vct,
-        )
-        issuer_context_applier = apply_remote_issuer_context
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        credential_type = credential_context.credential_type
+        issuer_context_applier = apply_required_remote_issuer_context
 
     logger.info(
         "[approve] app=%s template=%s cred_type=%s form_data_keys=%s",
@@ -1378,6 +1446,7 @@ async def _get_or_refresh_transaction(
 
     credential_template_id = template.credential_template_id if template else None
     revocation_profile_id: str | None = None
+    credential_context: CredentialContext | None = None
     if credential_template_id:
         try:
             credential_template = await _fetch_credential_template(credential_template_id)
@@ -1388,9 +1457,14 @@ async def _get_or_refresh_transaction(
             ) from exc
         if credential_template is None:
             raise HTTPException(status_code=422, detail="Credential Template not found.")
-        revocation_profile_id = str(
-            credential_template.get("revocation_profile_id") or ""
-        ).strip() or None
+        try:
+            credential_context = _credential_context_from_live_template(
+                credential_template,
+                organization_id=app.organization_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        revocation_profile_id = credential_context.revocation_profile_id
         await _require_active_revocation_profile_binding(
             organization_id=app.organization_id,
             revocation_profile_id=revocation_profile_id,
@@ -1401,13 +1475,16 @@ async def _get_or_refresh_transaction(
         tx = await repo.get_transaction(app.issuance_transaction_id)
 
     if tx and tx.status == IssuanceStatus.PENDING and not tx.is_expired:
-        delivery_before = tx.delivery_mode
         tx.delivery_mode = delivery_mode_from_integration_context(app.integration_context)
         tx.revocation_profile_id = revocation_profile_id
-        before = (tx.issuer_did_override, tx.signing_service_id)
-        await apply_remote_issuer_context(tx)
-        if before != (tx.issuer_did_override, tx.signing_service_id) or delivery_before != tx.delivery_mode:
-            await repo.save_transaction(tx)
+        if credential_context is None:
+            raise HTTPException(status_code=422, detail="Credential Template is required.")
+        tx.issuer_did_override = credential_context.issuer_did
+        tx.issuer_algorithm = credential_context.issuer_algorithm
+        tx.issuer_profile_id = None
+        tx.signing_service_id = None
+        await apply_required_remote_issuer_context(tx)
+        await repo.save_transaction(tx)
         return tx
 
     # Create a fresh transaction
@@ -1420,8 +1497,10 @@ async def _get_or_refresh_transaction(
         delivery_mode=delivery_mode_from_integration_context(app.integration_context),
         claims=app.form_data,
         revocation_profile_id=revocation_profile_id,
+        issuer_did_override=(credential_context.issuer_did if credential_context else None),
+        issuer_algorithm=(credential_context.issuer_algorithm if credential_context else None),
     )
-    await apply_remote_issuer_context(tx)
+    await apply_required_remote_issuer_context(tx)
     await repo.save_transaction(tx)
     app.issuance_transaction_id = tx.id
     await repo.save_application(app)

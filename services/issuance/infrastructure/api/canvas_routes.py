@@ -5024,8 +5024,8 @@ async def _validate_managed_canvas_binding(
     async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
         try:
             response = await client.get(
-                f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/"
-                f"{quote(binding.credential_template_id, safe='')}"
+                f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/internal/credential-templates/"
+                f"{quote(binding.credential_template_id, safe='')}/issuance-context"
             )
             if response.status_code == 200:
                 payload = response.json()

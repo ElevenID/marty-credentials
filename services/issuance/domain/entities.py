@@ -109,6 +109,7 @@ class IssuanceTransaction:
     issuer_profile_id: str | None = None
     issuer_mode: str = "org_managed"
     issuer_did_override: str | None = None
+    issuer_algorithm: str | None = None
     signing_service_id: str | None = None
     reserved_credential_id: str | None = None
     oid4vci_client_id: str | None = None

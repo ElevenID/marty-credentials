@@ -43,6 +43,10 @@ class _CredentialTemplateResponse:
         return {
             "organization_id": "org-123",
             "status": "active",
+            "credential_type": "MembershipCredential",
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "issuer_did": "did:web:issuer.example:orgs:org-123",
+            "issuer_algorithm": "ES256",
             "claims": [{"name": "email"}],
             "revocation_profile_id": self._revocation_profile_id,
         }
@@ -370,7 +374,9 @@ async def test_claim_transaction_inherits_and_validates_revocation_profile(monke
     async def validate_binding(**kwargs):
         validated.append(kwargs)
 
-    async def apply_issuer_context(_transaction):
+    async def apply_issuer_context(transaction):
+        transaction.issuer_profile_id = "resolved-profile-1"
+        transaction.signing_service_id = "resolved-service-1"
         return None
 
     monkeypatch.setattr(
@@ -379,11 +385,17 @@ async def test_claim_transaction_inherits_and_validates_revocation_profile(monke
         _credential_template_fetcher("revocation-profile-1"),
     )
     monkeypatch.setattr(application_routes, "_require_active_revocation_profile_binding", validate_binding)
-    monkeypatch.setattr(application_routes, "apply_remote_issuer_context", apply_issuer_context)
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
 
     transaction = await application_routes._get_or_refresh_transaction(app, repo, template)
 
     assert transaction.revocation_profile_id == "revocation-profile-1"
+    assert transaction.issuer_did_override == "did:web:issuer.example:orgs:org-123"
+    assert transaction.issuer_algorithm == "ES256"
     assert validated == [{
         "organization_id": "org-123",
         "revocation_profile_id": "revocation-profile-1",

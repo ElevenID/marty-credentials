@@ -1979,12 +1979,23 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 ),
                 None,
             )
+            issuer_algorithm = next(
+                (
+                    tx.issuer_algorithm
+                    for tx in self._transactions.values()
+                    if tx.organization_id == org_id
+                    and tx.credential_type == credential_type
+                    and tx.issuer_algorithm
+                ),
+                None,
+            )
             metadata[credential_type] = {
                 "name": credential_type,
                 "description": None,
                 "claims": [],
                 "display_style": {},
                 "issuer_did": issuer_did,
+                "issuer_algorithm": issuer_algorithm,
             }
         return metadata
 
