@@ -7,19 +7,11 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import UTC, datetime, timezone
-from typing import Any, Awaitable, Callable, Tuple
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from issuance.infrastructure.models import issuer_signing_keys_table
-from status_list.infrastructure.security.encryption import SymmetricEncryption
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-_issuer_key_session_factory: async_sessionmaker[AsyncSession] | None = None
-_issuer_key_encryption: SymmetricEncryption | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -66,112 +58,6 @@ def base64url_decode(data: str) -> bytes:
 
 
 # base64url_decode removed — PKCE verification now delegated to Rust.
-
-
-# ---------------------------------------------------------------------------
-# Issuer key management
-# ---------------------------------------------------------------------------
-
-# In-process cache so every credential for the same org has the same issuer DID.
-# In production this should be backed by the database / a KMS.
-_org_keys: dict = {}
-
-
-def configure_issuer_key_store(
-    session_factory: async_sessionmaker[AsyncSession] | None,
-) -> None:
-    """Configure database-backed encrypted issuer key persistence."""
-    global _issuer_key_session_factory
-    _issuer_key_session_factory = session_factory
-    if session_factory is not None:
-        logger.info("Configured database-backed issuer key store")
-
-
-def _persistent_key_store_available() -> bool:
-    """Return True when encrypted database-backed key storage is configured."""
-    return _issuer_key_session_factory is not None and bool(os.environ.get("ISSUER_KEY_MASTER_KEY"))
-
-
-def _get_issuer_key_encryption() -> SymmetricEncryption:
-    """Return the encryption service for persisted issuer keys."""
-    global _issuer_key_encryption
-    if _issuer_key_encryption is None:
-        _issuer_key_encryption = SymmetricEncryption.from_env("ISSUER_KEY_MASTER_KEY")
-    return _issuer_key_encryption
-
-
-async def _load_persisted_issuer_key(organization_id: str) -> dict | None:
-    """Load and decrypt issuer key material from PostgreSQL."""
-    if not _persistent_key_store_available() or _issuer_key_session_factory is None:
-        return None
-
-    encryption = _get_issuer_key_encryption()
-    async with _issuer_key_session_factory() as session:
-        stmt = select(issuer_signing_keys_table).where(
-            issuer_signing_keys_table.c.organization_id == organization_id
-        )
-        result = await session.execute(stmt)
-        row = result.mappings().first()
-
-    if row is None:
-        return None
-
-    jwk_json = encryption.decrypt(row["encrypted_jwk_json"])
-    jwk = json.loads(jwk_json)
-    public_key = base64url_decode(jwk["x"])
-    private_key = base64url_decode(jwk["d"])
-    key_info = {
-        "did": row["issuer_did"],
-        "private_key": private_key,
-        "public_key": public_key,
-        "jwk_json": jwk_json,
-    }
-    _org_keys[organization_id] = key_info
-    logger.info("Loaded issuer signing key from database for org %r", organization_id)
-    return key_info
-
-
-async def _save_persisted_issuer_key(organization_id: str, key_info: dict) -> None:
-    """Encrypt and persist issuer key material to PostgreSQL."""
-    if not _persistent_key_store_available() or _issuer_key_session_factory is None:
-        return
-
-    encryption = _get_issuer_key_encryption()
-    encrypted_jwk_json = encryption.encrypt(key_info["jwk_json"])
-    now = datetime.now(timezone.utc)
-
-    async with _issuer_key_session_factory() as session:
-        stmt = select(issuer_signing_keys_table).where(
-            issuer_signing_keys_table.c.organization_id == organization_id
-        )
-        result = await session.execute(stmt)
-        existing = result.mappings().first()
-
-        payload = {
-            "organization_id": organization_id,
-            "issuer_did": key_info["did"],
-            "key_algorithm": "Ed25519",
-            "encrypted_jwk_json": encrypted_jwk_json,
-            "public_key_b64": base64url_encode(key_info["public_key"]),
-            "updated_at": now,
-        }
-
-        if existing:
-            update_stmt = (
-                issuer_signing_keys_table.update()
-                .where(issuer_signing_keys_table.c.organization_id == organization_id)
-                .values(**payload)
-            )
-            await session.execute(update_stmt)
-        else:
-            payload["id"] = str(uuid.uuid4())
-            payload["created_at"] = now
-            insert_stmt = issuer_signing_keys_table.insert().values(**payload)
-            await session.execute(insert_stmt)
-
-        await session.commit()
-
-    logger.info("Persisted encrypted issuer signing key for org %r", organization_id)
 
 
 def get_marty_rs():
@@ -222,7 +108,6 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_create_credential_offer",
         "oid4vci_create_token_response",
         "oid4vci_exchange_auth_code_for_token",
-        "oid4vci_sign_credential",
         "oid4vci_verify_pkce_s256",
         "oid4vci_verify_proof_jwt",
         "oid4vci_verify_key_attestation_bound_proof_jwt",
@@ -243,122 +128,6 @@ def validate_marty_rs_capabilities() -> None:
         raise RuntimeError(
             "marty-rs native extension is missing required capabilities: " + ", ".join(missing)
         )
-
-
-async def get_or_generate_issuer_key(organization_id: str = "default") -> dict:
-    """Return the KMS-backed issuer signing key for an organization.
-
-    Loads from database-backed encrypted storage (requires ``ISSUER_KEY_MASTER_KEY``
-    and a configured session factory). Raises ``RuntimeError`` when no persisted
-    key is found — ephemeral software key generation is not supported.
-
-    Returns:
-        dict with 'did' (did:key:z6Mk...), 'private_key' (bytes), 'public_key' (bytes)
-    """
-    global _org_keys
-    if organization_id in _org_keys:
-        return _org_keys[organization_id]
-
-    persisted_key = await _load_persisted_issuer_key(organization_id)
-    if persisted_key is not None:
-        return persisted_key
-
-    raise RuntimeError(
-        f"No signing key found for organization {organization_id!r}. "
-        "Provision a KMS-backed key via the signing-keys service before issuing credentials."
-    )
-
-
-def _fix_mdoc_issuer_auth(credential_b64: str) -> str:
-    """Fix mso_mdoc issuerAuth CBOR encoding.
-
-    The Rust engine wraps the COSE_Sign1 issuerAuth as a CBOR byte string,
-    but ISO 18013-5 requires the COSE_Sign1 array to be embedded directly
-    in the IssuerSigned map (not wrapped in bstr). This function decodes
-    the byte string and re-embeds the COSE_Sign1 structure.
-    """
-    import cbor2
-
-    # base64url-decode (add padding)
-    padding = 4 - len(credential_b64) % 4
-    if padding < 4:
-        credential_b64 += "=" * padding
-    raw = base64.urlsafe_b64decode(credential_b64)
-
-    issuer_signed = cbor2.loads(raw)
-    auth = issuer_signed.get("issuerAuth")
-    if isinstance(auth, bytes):
-        decoded = cbor2.loads(auth)
-        # Strip COSE tag 18 if present — Walt.id expects the raw array
-        if isinstance(decoded, cbor2.CBORTag) and decoded.tag == 18:
-            issuer_signed["issuerAuth"] = decoded.value
-        else:
-            issuer_signed["issuerAuth"] = decoded
-
-        fixed = cbor2.dumps(issuer_signed)
-        return base64.urlsafe_b64encode(fixed).rstrip(b"=").decode()
-
-    return credential_b64
-
-
-def create_verifiable_credential_wrapper(
-    issuer_did: str,
-    issuer_jwk_json: str,
-    subject_id: str,
-    credential_type: str,
-    claims_json: str,
-    expiration_seconds: int = 31536000,
-    organization_id: str | None = None,
-    format: str = "jwt_vc_json",
-    selective_disclosure_claims: list[str] | None = None,
-    zk_predicate_claims: list[str] | None = None,
-    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt",
-) -> Tuple[str, str]:
-    """Create a signed verifiable credential using the Rust OID4VCI engine.
-
-    Uses the supplied issuer JWK when present, otherwise falls back to the
-    in-process cache. Delegates format-aware signing entirely to the Rust
-    marty-oid4vci engine. Supports jwt_vc_json, vc+sd-jwt, mso_mdoc,
-    vds_nc, and zk_mdoc formats.
-    """
-    signing_jwk_json = issuer_jwk_json.strip() if issuer_jwk_json else ""
-    if signing_jwk_json in ("", "{}"):
-        issuer_key = next((k for k in _org_keys.values() if k["did"] == issuer_did), None)
-        if issuer_key is None:
-            if not organization_id:
-                raise RuntimeError(
-                    "organization_id is required to look up the issuer key. "
-                    "Pass the caller's organization_id explicitly."
-                )
-            raise RuntimeError(
-                f"No signing key cached for issuer DID {issuer_did!r}. "
-                "Call await get_or_generate_issuer_key(org_id) before issuing a credential."
-            )
-        signing_jwk_json = issuer_key["jwk_json"]
-
-    marty_rs = get_marty_rs()
-    result = marty_rs.oid4vci_sign_credential(
-        issuer_did,
-        signing_jwk_json,
-        subject_id or None,
-        credential_type,
-        claims_json,
-        expiration_seconds,
-        format,
-        selective_disclosure_claims or [],
-        zk_predicate_claims or [],
-        credential_payload_format,
-    )
-
-    # Fix mso_mdoc CBOR encoding: the Rust engine wraps issuerAuth as a CBOR
-    # byte string, but ISO 18013-5 / Walt.id expect the COSE_Sign1 array
-    # to be embedded directly (not wrapped in bstr).
-    if credential_payload_format.lower() in ("mso_mdoc", "mdoc"):
-        credential_str, credential_id = result
-        credential_str = _fix_mdoc_issuer_auth(credential_str)
-        return (credential_str, credential_id)
-
-    return result
 
 
 def _json_dumps_compact(value: Any) -> str:
@@ -389,7 +158,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     credential_format: str | None = None,
     credential_id: str | None = None,
     issuer_certificate_chain: list[str] | None = None,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Create an SD-JWT VC using the selected issuer profile's DID signer.
 
     Args:
@@ -406,7 +175,7 @@ async def create_sd_jwt_vc_with_remote_signing(
             "verification_method_id must identify a key controlled by the issuer DID"
         )
 
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
     credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
     sd_claims = set(selective_disclosure_claims or [])
 
@@ -497,7 +266,7 @@ async def create_jwt_vc_with_remote_signing(
     algorithm: str | None = None,
     verification_method_id: str,
     credential_id: str | None = None,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Create a VCDM v2 JWT VC using the selected issuer profile's DID signer.
 
     This is intentionally parallel to ``create_sd_jwt_vc_with_remote_signing``:
@@ -515,7 +284,7 @@ async def create_jwt_vc_with_remote_signing(
             "verification_method_id must identify a key controlled by the issuer DID"
         )
 
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
     credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
     credential_status = claims.pop("credentialStatus", None)
     if credential_subject is None:
@@ -546,9 +315,9 @@ async def create_jwt_vc_with_remote_signing(
         # ``iss`` is required by JWT, but VCDM consumers process this nested
         # object and require its own issuer identifier and validity period.
         "issuer": issuer_did,
-        "validFrom": datetime.fromtimestamp(now, timezone.utc).isoformat().replace("+00:00", "Z"),
+        "validFrom": datetime.fromtimestamp(now, UTC).isoformat().replace("+00:00", "Z"),
         "validUntil": datetime.fromtimestamp(
-            now + int(expiration_seconds or 31536000), timezone.utc
+            now + int(expiration_seconds or 31536000), UTC
         )
         .isoformat()
         .replace("+00:00", "Z"),
@@ -1094,12 +863,6 @@ def verify_key_attestation_bound_proof_jwt(
         return False, "", None, f"key-attestation-bound proof JWT error: {e}"
 
 
-# ---------------------------------------------------------------------------
-# NOTE: All verifiable credential creation is handled by create_verifiable_credential_wrapper
-# above, which delegates entirely to the Rust marty-oid4vci engine via oid4vci_sign_credential.
-# Do NOT reimplement credential signing in Python — use create_verifiable_credential_wrapper.
-# ---------------------------------------------------------------------------
-
 
 # ---------------------------------------------------------------------------
 # DIDComm v2 Protocol Wrappers (delegate to Rust marty-didcomm crate)
@@ -1201,7 +964,7 @@ async def create_mdoc_credential_with_issuer_profile_signing(
     holder_jwk: dict[str, Any],
     certificate_chain: list[str] | None,
     profile_sign: Callable[[bytes, str | None], Awaitable[bytes]],
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Issue an mDoc through the authoritative issuer-profile split API.
 
     The PyO3 object preserves the protected COSE header, MSO and issuer-signed

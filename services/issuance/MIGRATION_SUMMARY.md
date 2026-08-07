@@ -15,7 +15,7 @@ marty-credentials/services/issuance/
 │   ├── ports.py                     # IIssuanceRepository interface
 │   └── __init__.py
 ├── application/                     # Use cases and orchestration
-│   ├── rust_integration.py          # get_marty_rs(), get_or_generate_issuer_key()
+│   ├── rust_integration.py          # Rust helpers; signing delegates to managed issuer profiles
 │   └── __init__.py
 ├── infrastructure/                  # External system adapters
 │   ├── models.py                    # SQLAlchemy table definitions
