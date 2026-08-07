@@ -239,7 +239,7 @@ jobs:
           python -c "import pathlib, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(next(pathlib.Path('dist').glob('*.whl')))])"
           cd ../..
           pip install -e .[dev]
-          pytest tests/
+          pytest tests/ packages/tests/
 
   create-release-draft:
     name: Create complete source-artifact draft

@@ -103,8 +103,11 @@ class TestProtoPackageLazyImports:
         assert update_fields["issuer_did"].number == 13
         assert response_fields["issuer_did"].number == 28
 
-        for public_fields in (create_fields, update_fields):
-            assert "issuer_profile_id" not in public_fields
-            assert "issuer_key_id" not in public_fields
-            assert "key_access_mode" not in public_fields
-            assert "remote_signing_config_json" not in public_fields
+        forbidden_custody_fields = {
+            "issuer_profile_id",
+            "issuer_key_id",
+            "key_access_mode",
+            "remote_signing_config_json",
+        }
+        for public_fields in (create_fields, update_fields, response_fields):
+            assert forbidden_custody_fields.isdisjoint(public_fields)
