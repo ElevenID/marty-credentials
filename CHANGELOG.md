@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.45] - 2026-08-06
+
+### Changed
+
+- Resolve issuance identity from the public organization and issuer DID, while
+  keeping issuer-profile, key, custody, and signing-service routing internal.
+- Align the generated credential-template package with the DID-first public
+  contract and include package contract tests in CI and stable releases.
+- Route DIDComm credential delivery through deployment-managed resolution and
+  require encrypted delivery to a publicly routable HTTPS endpoint by default.
+
+### Security
+
+- Reject unknown, inactive, ambiguous, incompatible, or cross-organization
+  issuer-DID mappings instead of accepting caller-selected custody metadata.
+- Bind key-attestation algorithms to the configured issuer-profile policy and
+  the attestation certificate key type.
+- Remove unauthenticated and plaintext DIDComm state-mutation paths, and reject
+  caller-controlled resolver selection.
+
 ## [0.1.44] - 2026-08-02
 
 ### Changed
