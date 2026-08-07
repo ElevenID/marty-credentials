@@ -1164,8 +1164,9 @@ def didcomm_unpack_message(message_json: str) -> dict:
 def didcomm_encrypt(plaintext_json: str, recipient_did_document: dict) -> str:
     """Encrypt a DIDComm v2 plaintext message for a recipient (anoncrypt).
 
-    Uses ECDH-ES+A256KW key agreement with AES-256-GCM content encryption.
-    The recipient's X25519 key agreement key is extracted from their DID Document.
+    Uses the X25519 DIDComm Messaging 2.1 credential-delivery profile with
+    ECDH-ES+A256KW key wrapping and required A256CBC-HS512 content encryption.
+    The recipient key is extracted from their DID Document.
 
     Returns JWE JSON Serialization string.
     """

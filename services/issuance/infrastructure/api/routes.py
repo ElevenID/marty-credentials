@@ -5245,7 +5245,8 @@ async def _didcomm_sign_and_deliver(
 
     # Step 3b: Encryption is mandatory. A delivery must never silently
     # downgrade a credential-bearing DIDComm message to plaintext.
-    # (anoncrypt: ECDH-ES+A256KW + A256GCM per DIDComm v2 §4.1)
+    # (anoncrypt: X25519 + ECDH-ES+A256KW + the required
+    # A256CBC-HS512 content-encryption profile from DIDComm Messaging 2.1)
     try:
         delivery_content = didcomm_encrypt(didcomm_message_json, did_doc)
     except Exception as enc_err:
