@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.47] - 2026-08-07
+
+### Changed
+
+- Pin the Rust source dependencies and production Python wheel to the released
+  Marty Core 0.1.34 commit.
+- Refresh the immutable Marty Common bootstrap artifact from 0.2.0 to 0.2.6.
+- Correct the issuance-service documentation to describe the supported
+  X25519, ECDH-ES+A256KW, and A256CBC-HS512 DIDComm Messaging 2.1 profile.
+
+### Security
+
+- Require the exact released Marty Core DIDComm wheel and SHA-256 digest when
+  building credential-service images, replacing the older envelope runtime.
+
 ## [0.1.46] - 2026-08-06
 
 ### Changed
