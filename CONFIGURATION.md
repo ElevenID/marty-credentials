@@ -64,9 +64,9 @@ DIDCOMM_UNIVERSAL_RESOLVER_URL=https://resolver.example.com/1.0/identifiers
 # verification remains mandatory.
 DIDCOMM_TLS_CA_FILE=/run/secrets/didcomm-root-ca.pem
 
-# Keep false in production. Local interoperability environments may set this
-# to true only when their DIDComm agent intentionally uses HTTP or private IPs.
-DIDCOMM_ALLOW_PRIVATE_ENDPOINTS=false
+# Keep false in production. Isolated interoperability environments may set
+# this to true for an HTTPS agent reached through a private test network.
+DIDCOMM_ALLOW_PRIVATE_IPS=false
 ```
 
 DIDComm credential delivery always encrypts the message and requires a

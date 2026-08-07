@@ -253,3 +253,23 @@ async def test_delivery_rejects_private_or_plaintext_endpoints(
 
     assert exc.value.status_code == 422
     assert packed["thread_id"] == "tx-a"
+
+
+@pytest.mark.asyncio
+async def test_private_test_agent_still_requires_https(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
+
+    assert (
+        await routes._validated_didcomm_delivery_endpoint(
+            "https://127.0.0.1:18444/inbox"
+        )
+        == "https://127.0.0.1:18444/inbox"
+    )
+    with pytest.raises(HTTPException, match="must use HTTPS") as exc:
+        await routes._validated_didcomm_delivery_endpoint(
+            "http://127.0.0.1:18444/inbox"
+        )
+
+    assert exc.value.status_code == 422

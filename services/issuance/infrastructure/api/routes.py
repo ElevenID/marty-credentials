@@ -1320,10 +1320,10 @@ class DidcommDeliveryResponse(BaseModel):
     error: str | None = None
 
 
-def _didcomm_private_endpoints_enabled() -> bool:
-    """Allow local HTTP agents only when a deployment opts in explicitly."""
+def _didcomm_private_ips_enabled() -> bool:
+    """Allow private-address agents only when a deployment opts in explicitly."""
 
-    return os.environ.get("DIDCOMM_ALLOW_PRIVATE_ENDPOINTS", "").strip().lower() in {
+    return os.environ.get("DIDCOMM_ALLOW_PRIVATE_IPS", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -1361,8 +1361,8 @@ async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
         raise HTTPException(status_code=422, detail="DIDComm service endpoint is invalid")
 
     parsed = urlparse(endpoint)
-    allow_private = _didcomm_private_endpoints_enabled()
-    if parsed.scheme not in ({"http", "https"} if allow_private else {"https"}):
+    allow_private_ips = _didcomm_private_ips_enabled()
+    if parsed.scheme != "https":
         raise HTTPException(
             status_code=422,
             detail="DIDComm service endpoint must use HTTPS",
@@ -1371,7 +1371,7 @@ async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
         raise HTTPException(status_code=422, detail="DIDComm service endpoint is invalid")
 
     hostname = parsed.hostname.rstrip(".").lower()
-    if not allow_private and (hostname == "localhost" or hostname.endswith(".localhost")):
+    if not allow_private_ips and (hostname == "localhost" or hostname.endswith(".localhost")):
         raise HTTPException(
             status_code=422,
             detail="DIDComm service endpoint is not publicly routable",
@@ -1380,7 +1380,7 @@ async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
     try:
         addresses = await asyncio.get_running_loop().getaddrinfo(
             hostname,
-            parsed.port or (443 if parsed.scheme == "https" else 80),
+            parsed.port or 443,
             type=socket.SOCK_STREAM,
         )
     except (OSError, ValueError) as exc:
@@ -1389,7 +1389,7 @@ async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
             detail="DIDComm service endpoint could not be resolved",
         ) from exc
 
-    if not allow_private:
+    if not allow_private_ips:
         for address in addresses:
             try:
                 ip = ipaddress.ip_address(address[4][0].split("%", 1)[0])
