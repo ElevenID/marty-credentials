@@ -240,7 +240,7 @@ jobs:
 
       - name: Run Python tests
         working-directory: marty-credentials
-        run: pytest tests/ -v
+        run: pytest tests/ packages/tests/ -v
 
   test-wasm:
     name: WASM Tests
