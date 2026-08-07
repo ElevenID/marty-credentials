@@ -1292,19 +1292,3 @@ authorization_sessions_table = Table(
     Index("ix_authorization_sessions_issuer_state", "issuer_state"),
     schema="issuance_service",
 )
-
-# Issuer Signing Keys table — encrypted Ed25519 JWKs per organization
-issuer_signing_keys_table = Table(
-    "issuer_signing_keys",
-    mapper_registry.metadata,
-    Column("id", String, primary_key=True),
-    Column("organization_id", String, nullable=False, unique=True),
-    Column("issuer_did", String, nullable=False),
-    Column("key_algorithm", String, nullable=False, server_default="Ed25519"),
-    Column("encrypted_jwk_json", Text, nullable=False),
-    Column("public_key_b64", String, nullable=False),
-    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
-    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
-    Index("ix_issuer_signing_keys_organization_id", "organization_id"),
-    schema="issuance_service",
-)

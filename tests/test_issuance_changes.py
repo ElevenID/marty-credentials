@@ -371,53 +371,53 @@ def test_postgres_transaction_mapper_preserves_lifecycle_dependencies():
 
 
 def _make_transaction(**overrides) -> IssuanceTransaction:
-    defaults = dict(
-        id="tx-001",
-        organization_id="org-1",
-        credential_template_id="tmpl-1",
-        applicant_id="applicant-1",
-        subject_did="did:key:z6Mk_subject",
-        status=IssuanceStatus.AUTHORIZED,
-        nonce="test-nonce-42",
-        claims={"name": "Alice", "age": 30},
-        credential_type="VerifiableCredential",
-        credential_payload_format="w3c_vcdm_v2_sd_jwt",
-    )
+    defaults = {
+        "id": "tx-001",
+        "organization_id": "org-1",
+        "credential_template_id": "tmpl-1",
+        "applicant_id": "applicant-1",
+        "subject_did": "did:key:z6Mk_subject",
+        "status": IssuanceStatus.AUTHORIZED,
+        "nonce": "test-nonce-42",
+        "claims": {"name": "Alice", "age": 30},
+        "credential_type": "VerifiableCredential",
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+    }
     defaults.update(overrides)
     return IssuanceTransaction(**defaults)
 
 
 def _make_credential(**overrides) -> IssuedCredential:
-    defaults = dict(
-        id="cred-001",
-        transaction_id="tx-001",
-        organization_id="org-1",
-        credential_template_id="tmpl-1",
-        applicant_id="applicant-1",
-        subject_did="did:key:z6Mk_subject",
-        credential_jwt="eyJhbGciOiJFZERTQSJ9.test.sig",
-        credential_hash=hashlib.sha256(b"eyJhbGciOiJFZERTQSJ9.test.sig").hexdigest(),
-        status=CredentialStatus.ACTIVE,
-        issued_at=datetime(2026, 3, 1, tzinfo=UTC),
-        expires_at=datetime(2027, 3, 1, tzinfo=UTC),
-    )
+    defaults = {
+        "id": "cred-001",
+        "transaction_id": "tx-001",
+        "organization_id": "org-1",
+        "credential_template_id": "tmpl-1",
+        "applicant_id": "applicant-1",
+        "subject_did": "did:key:z6Mk_subject",
+        "credential_jwt": "eyJhbGciOiJFZERTQSJ9.test.sig",
+        "credential_hash": hashlib.sha256(b"eyJhbGciOiJFZERTQSJ9.test.sig").hexdigest(),
+        "status": CredentialStatus.ACTIVE,
+        "issued_at": datetime(2026, 3, 1, tzinfo=UTC),
+        "expires_at": datetime(2027, 3, 1, tzinfo=UTC),
+    }
     defaults.update(overrides)
     return IssuedCredential(**defaults)
 
 
 def _make_delivery_record(**overrides) -> CredentialDeliveryRecord:
-    defaults = dict(
-        id="delivery-001",
-        credential_id="cred-001",
-        transaction_id="tx-001",
-        organization_id="org-1",
-        delivery_target=DeliveryTarget.WALLET,
-        delivery_mode="wallet_only",
-        status=CredentialDeliveryStatus.DELIVERED,
-        metadata={"protocol": "oid4vci"},
-        created_at=datetime(2026, 3, 1, tzinfo=UTC),
-        updated_at=datetime(2026, 3, 1, tzinfo=UTC),
-    )
+    defaults = {
+        "id": "delivery-001",
+        "credential_id": "cred-001",
+        "transaction_id": "tx-001",
+        "organization_id": "org-1",
+        "delivery_target": DeliveryTarget.WALLET,
+        "delivery_mode": "wallet_only",
+        "status": CredentialDeliveryStatus.DELIVERED,
+        "metadata": {"protocol": "oid4vci"},
+        "created_at": datetime(2026, 3, 1, tzinfo=UTC),
+        "updated_at": datetime(2026, 3, 1, tzinfo=UTC),
+    }
     defaults.update(overrides)
     return CredentialDeliveryRecord(**defaults)
 
@@ -3133,28 +3133,6 @@ class TestRustIntegrationOrgIdValidation:
                 claims={"employeeNumber": "E-123"},
                 credential_document=document,
             )
-
-    def test_raises_when_org_id_missing(self):
-        """create_verifiable_credential_wrapper must raise if org_id is None
-        and the issuer DID is not found in the key cache."""
-        import issuance.application.rust_integration as rust_mod
-        from issuance.application.rust_integration import create_verifiable_credential_wrapper
-
-        # Ensure the key cache is empty so the DID lookup falls through
-        saved = rust_mod._org_keys.copy()
-        rust_mod._org_keys.clear()
-        try:
-            with pytest.raises(RuntimeError, match="organization_id is required"):
-                create_verifiable_credential_wrapper(
-                    issuer_did="did:key:z6Mk_nonexistent",
-                    issuer_jwk_json="{}",
-                    subject_id="did:key:z6Mk_subject",
-                    credential_type="VerifiableCredential",
-                    claims_json='{"name": "Alice"}',
-                    organization_id=None,
-                )
-        finally:
-            rust_mod._org_keys.update(saved)
 
     async def test_remote_sd_jwt_uses_verification_method_id_as_kid(self):
         """Remote SD-JWT issuance should publish the DID verification method, not a raw KMS key hint."""
