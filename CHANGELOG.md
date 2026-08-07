@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.46] - 2026-08-06
+
+### Changed
+
+- Allow deployments to add an operator-controlled private CA to normal Web
+  PKI validation for outbound DIDComm delivery.
+- Separate private-address authorization from transport selection so isolated
+  interoperability agents can be reached without enabling plaintext delivery.
+
+### Security
+
+- Require HTTPS and hostname verification for every DIDComm delivery,
+  including explicitly authorized private-address agents.
+- Fail closed when a configured DIDComm trust bundle cannot be loaded, without
+  exposing its filesystem path through the public API.
+
 ## [0.1.45] - 2026-08-06
 
 ### Changed
