@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import socket
+import ssl
 import time
 import uuid
 from collections.abc import Callable
@@ -1327,6 +1328,30 @@ def _didcomm_private_endpoints_enabled() -> bool:
         "true",
         "yes",
     }
+
+
+def _didcomm_tls_verifier() -> bool | ssl.SSLContext:
+    """Return normal Web PKI verification plus an optional operator CA.
+
+    Private trust material is deployment configuration, never a public API
+    selector. Loading it into a default context preserves the system trust
+    store instead of replacing public roots or disabling verification.
+    """
+
+    ca_file = os.environ.get("DIDCOMM_TLS_CA_FILE", "").strip()
+    if not ca_file:
+        return True
+
+    try:
+        context = ssl.create_default_context()
+        context.load_verify_locations(cafile=ca_file)
+    except (OSError, ssl.SSLError) as exc:
+        logger.error("DIDComm TLS trust configuration could not be loaded")
+        raise HTTPException(
+            status_code=503,
+            detail="DIDComm TLS trust configuration is unavailable",
+        ) from exc
+    return context
 
 
 async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
@@ -5234,8 +5259,12 @@ async def _didcomm_sign_and_deliver(
     # Step 4: POST the DIDComm message to the holder's endpoint
     delivery_status = "delivered"
     delivery_error = None
+    tls_verifier = _didcomm_tls_verifier()
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            verify=tls_verifier,
+        ) as client:
             resp = await client.post(
                 service_endpoint,
                 content=delivery_content,

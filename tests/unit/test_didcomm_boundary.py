@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import ssl
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import HTTPException
@@ -66,6 +67,45 @@ def test_resolver_uses_only_deployment_managed_configuration(
             "did:example:holder",
             "https://attacker.example/resolve",
         )
+
+
+def test_delivery_uses_normal_web_pki_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DIDCOMM_TLS_CA_FILE", raising=False)
+
+    assert routes._didcomm_tls_verifier() is True
+
+
+def test_delivery_adds_operator_ca_to_default_trust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = Mock(spec=ssl.SSLContext)
+    create_default_context = Mock(return_value=context)
+    monkeypatch.setenv("DIDCOMM_TLS_CA_FILE", "/run/secrets/didcomm-root-ca.pem")
+    monkeypatch.setattr(routes.ssl, "create_default_context", create_default_context)
+
+    assert routes._didcomm_tls_verifier() is context
+    create_default_context.assert_called_once_with()
+    context.load_verify_locations.assert_called_once_with(
+        cafile="/run/secrets/didcomm-root-ca.pem"
+    )
+
+
+def test_delivery_fails_closed_when_operator_ca_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_TLS_CA_FILE", "/missing/didcomm-root-ca.pem")
+    monkeypatch.setattr(
+        routes.ssl,
+        "create_default_context",
+        Mock(side_effect=OSError("missing")),
+    )
+
+    with pytest.raises(HTTPException, match="trust configuration is unavailable") as exc:
+        routes._didcomm_tls_verifier()
+
+    assert exc.value.status_code == 503
 
 
 @pytest.mark.asyncio
