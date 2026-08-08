@@ -140,12 +140,13 @@ async def submit_presentation(
         )
         
         is_valid = session.status.value == "verified"
+        evidence = session.verification_evidence
         return VerificationResult(
             valid=is_valid,
             overall_result="PASS" if is_valid else "FAIL",
-            trust_chain_valid=is_valid,
-            revocation_checked=is_valid,
-            revocation_status="VALID" if is_valid else "SKIPPED",
+            trust_chain_valid=evidence.get("trust_chain_valid") is True,
+            revocation_checked=evidence.get("revocation_checked") is True,
+            revocation_status=evidence.get("revocation_status", "SKIPPED"),
             evaluated_at=session.verified_at.isoformat() if session.verified_at else None,
             verifier_nonce=session.nonce if hasattr(session, 'nonce') else None,
             verified_claims=session.verified_claims,
@@ -204,11 +205,11 @@ async def verify_presentation_direct(
         is_valid = result["valid"]
         return VerificationResult(
             valid=is_valid,
-            overall_result="PASS" if is_valid else "FAIL",
-            trust_chain_valid=is_valid,
-            revocation_checked=is_valid,
-            revocation_status="VALID" if is_valid else "SKIPPED",
-            verified_claims=result.get("verified_claims"),
+            overall_result=result.get("overall_result", "FAIL"),
+            trust_chain_valid=result.get("trust_chain_valid") is True,
+            revocation_checked=result.get("revocation_checked") is True,
+            revocation_status=result.get("revocation_status", "SKIPPED"),
+            verified_claims=result.get("verified_claims") if is_valid else {},
             verification_method=result.get("verification_method"),
             error=result.get("error"),
         )

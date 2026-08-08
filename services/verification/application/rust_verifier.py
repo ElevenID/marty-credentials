@@ -150,6 +150,20 @@ class RustCredentialVerifier:
             return {
                 "valid": signature_verified,
                 "signature_verified": signature_verified,
+                "issuer_trusted": bool(
+                    issuer_resolution
+                    and (
+                        (trusted_issuers and issuer in trusted_issuers)
+                        or (
+                            organization_id
+                            and not (
+                                isinstance(issuer_resolution.get("resolver"), dict)
+                                and issuer_resolution["resolver"].get("type")
+                                == "public_did_resolution"
+                            )
+                        )
+                    )
+                ),
                 "issuer": issuer,
                 "issuer_did_resolved": issuer_did_doc is not None,
                 "issuer_public_key": issuer_public_key,
@@ -207,10 +221,20 @@ class RustCredentialVerifier:
 
             vp = payload.get("vp", {})
             return {
-                "valid": True,
-                "claims": vp.get("verifiableCredential", []),
+                # The outer JWT establishes only the holder presentation proof.
+                # Its embedded issuer credentials still require independent
+                # format verification, trust resolution, and status checks.
+                "valid": False,
+                "cryptographic_valid": False,
+                "presentation_proof_valid": True,
+                "credential_proofs_valid": False,
+                "claims": [],
                 "holder": payload.get("iss") or vp.get("holder"),
                 "method": "jwt_vp",
+                "error": (
+                    "Holder presentation proof verified, but embedded credential "
+                    "issuer proofs were not verified"
+                ),
             }
 
         except Exception as e:
@@ -237,11 +261,39 @@ class RustCredentialVerifier:
             credentials = presentation.get("verifiableCredential", [])
             if not isinstance(credentials, list):
                 credentials = [credentials]
+            if not credentials:
+                return {
+                    "valid": False,
+                    "cryptographic_valid": False,
+                    "error": "Presentation contains no verifiable credentials",
+                }
+
+            descriptors = presentation_definition.get("input_descriptors")
+            if not isinstance(descriptors, list) or not descriptors:
+                return {
+                    "valid": False,
+                    "cryptographic_valid": False,
+                    "error": "Presentation definition contains no input descriptors",
+                }
+
+            submission = presentation.get("presentation_submission")
+            if not isinstance(submission, dict):
+                return {
+                    "valid": False,
+                    "cryptographic_valid": False,
+                    "error": "Presentation submission is required",
+                }
 
             verified_creds: list[dict[str, Any]] = []
             all_claims: dict[str, Any] = {}
 
             for cred in credentials:
+                if not isinstance(cred, dict):
+                    return {
+                        "valid": False,
+                        "cryptographic_valid": False,
+                        "error": "Unsupported embedded credential serialization",
+                    }
                 cred_result = await self.verify_w3c_vc(
                     cred,
                     verifier_did,
@@ -259,33 +311,44 @@ class RustCredentialVerifier:
                     all_claims.update(cred_result["claims"])
 
             # ── Step 2: Validate presentation_definition constraints ──
-            # Extract presentation_submission from the presentation if present
-            submission = presentation.get("presentation_submission")
-            if submission and presentation_definition:
-                try:
-                    structure_result_json = self.marty_rs.verify_presentation_structure(
-                        verifier_id=verifier_did,
-                        response_uri=verifier_did,
-                        definition_json=json.dumps(presentation_definition),
-                        submission_json=json.dumps(submission),
-                    )
-                    structure_result = json.loads(structure_result_json)
-                    if not structure_result.get("valid"):
-                        errors = structure_result.get("errors", [])
-                        descriptor_errors = [
-                            r.get("error")
-                            for r in structure_result.get("descriptor_results", [])
-                            if not r.get("valid") and r.get("error")
-                        ]
-                        all_errors = errors + descriptor_errors
-                        error_msg = "; ".join(all_errors) if all_errors else "Presentation structure invalid"
-                        return {"valid": False, "error": error_msg}
-                except Exception as e:
-                    logger.warning(f"Presentation structure check failed: {e}")
-                    # Non-fatal: fall through without structure validation
+            try:
+                structure_result_json = self.marty_rs.verify_presentation_structure(
+                    verifier_id=verifier_did,
+                    response_uri=verifier_did,
+                    definition_json=json.dumps(presentation_definition),
+                    submission_json=json.dumps(submission),
+                )
+                structure_result = json.loads(structure_result_json)
+                if not structure_result.get("valid"):
+                    errors = structure_result.get("errors", [])
+                    descriptor_errors = [
+                        r.get("error")
+                        for r in structure_result.get("descriptor_results", [])
+                        if not r.get("valid") and r.get("error")
+                    ]
+                    all_errors = errors + descriptor_errors
+                    error_msg = "; ".join(all_errors) if all_errors else "Presentation structure invalid"
+                    return {
+                        "valid": False,
+                        "cryptographic_valid": False,
+                        "error": error_msg,
+                    }
+            except Exception as e:
+                logger.warning("Presentation structure check failed: %s", e)
+                return {
+                    "valid": False,
+                    "cryptographic_valid": False,
+                    "error": f"Presentation structure verification failed: {e}",
+                }
 
             return {
                 "valid": True,
+                "cryptographic_valid": True,
+                "trust_chain_valid": all(
+                    cred.get("issuer_trusted") is True for cred in verified_creds
+                ),
+                "revocation_checked": False,
+                "revocation_status": "SKIPPED",
                 "verified_claims": all_claims,
                 "credentials_verified": len(verified_creds),
                 "method": "presentation",
