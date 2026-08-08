@@ -44,6 +44,9 @@ class VerificationSession:
     verified_claims: dict[str, Any] | None = None
     verification_method: VerificationMethod | None = None
     verified_at: datetime | None = None
+    # Decision evidence returned by the active verifier. This is intentionally
+    # distinct from the final status so adapters cannot manufacture checks.
+    verification_evidence: dict[str, Any] = field(default_factory=dict)
     
     # Metadata
     created_at: datetime = field(default_factory=datetime.utcnow)
@@ -59,13 +62,15 @@ class VerificationSession:
         self,
         presentation: dict[str, Any],
         verified_claims: dict[str, Any],
-        method: VerificationMethod
+        method: VerificationMethod,
+        verification_evidence: dict[str, Any],
     ) -> None:
         """Mark session as successfully verified."""
         self.status = VerificationStatus.VERIFIED
         self.presentation_data = presentation
         self.verified_claims = verified_claims
         self.verification_method = method
+        self.verification_evidence = verification_evidence
         self.verified_at = datetime.utcnow()
         self.updated_at = datetime.utcnow()
     

@@ -453,6 +453,7 @@ class TestRustCredentialVerifierIssuerResolution:
         )
 
         assert result["valid"] is True
+        assert result["issuer_trusted"] is True
         resolver.assert_awaited_once_with(
             issuer_did,
             organization_id="org-acme",
@@ -521,7 +522,14 @@ class TestVerificationServiceContextPropagation:
 
             async def verify_presentation(self, **kwargs):
                 self.kwargs = kwargs
-                return {"valid": True, "verified_claims": {"employee_id": "E-123"}}
+                return {
+                    "valid": True,
+                    "cryptographic_valid": True,
+                    "trust_chain_valid": True,
+                    "revocation_checked": True,
+                    "revocation_status": "VALID",
+                    "verified_claims": {"employee_id": "E-123"},
+                }
 
         fake_verifier = FakeVerifier()
         service = VerificationService(repository=MagicMock(), verifier=fake_verifier)
