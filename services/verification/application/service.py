@@ -10,6 +10,43 @@ from ..domain.entities import VerificationMethod, VerificationSession, Verificat
 from ..domain.ports import ICredentialVerifier, IVerificationRepository
 
 
+def reduce_verification_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Derive the authorization result only from explicit required evidence."""
+    cryptographic_valid = result.get("cryptographic_valid", result.get("valid")) is True
+    trust_chain_valid = result.get("trust_chain_valid") is True
+    revocation_checked = result.get("revocation_checked") is True
+    revocation_status = str(result.get("revocation_status") or "SKIPPED").upper()
+    not_revoked = revocation_checked and revocation_status == "VALID"
+    valid = cryptographic_valid and trust_chain_valid and not_revoked
+
+    error = result.get("error")
+    if not error and not valid:
+        missing: list[str] = []
+        if not cryptographic_valid:
+            missing.append("cryptographic verification")
+        if not trust_chain_valid:
+            missing.append("issuer trust")
+        if not revocation_checked:
+            missing.append("revocation check")
+        elif not not_revoked:
+            missing.append(f"non-revoked status ({revocation_status})")
+        error = f"Required verification evidence unavailable or failed: {', '.join(missing)}"
+
+    return {
+        **result,
+        "valid": valid,
+        "overall_result": "PASS" if valid else "FAIL",
+        "cryptographic_valid": cryptographic_valid,
+        "trust_chain_valid": trust_chain_valid,
+        "revocation_checked": revocation_checked,
+        "revocation_status": revocation_status,
+        "error": error,
+        "verified_claims": (
+            result.get("claims", result.get("verified_claims", {})) if valid else {}
+        ),
+    }
+
+
 class VerificationService:
     """Application service coordinating verification operations."""
     
@@ -78,11 +115,10 @@ class VerificationService:
             )
             method = VerificationMethod.W3C_VC
         
+        reduced = reduce_verification_result(result)
         return {
-            "valid": result.get("valid", False),
-            "verified_claims": result.get("claims", result.get("verified_claims", {})),
+            **reduced,
             "verification_method": method.value,
-            "error": result.get("error")
         }
     
     async def submit_presentation(
@@ -128,14 +164,21 @@ class VerificationService:
                 )
                 method = VerificationMethod.W3C_VC
             
-            if result.get("valid"):
+            reduced = reduce_verification_result(result)
+            if reduced["valid"]:
                 session.verify(
                     presentation=presentation if isinstance(presentation, dict) else {},
-                    verified_claims=result.get("claims", result.get("verified_claims", {})),
-                    method=method
+                    verified_claims=reduced["verified_claims"],
+                    method=method,
+                    verification_evidence={
+                        "cryptographic_valid": reduced["cryptographic_valid"],
+                        "trust_chain_valid": reduced["trust_chain_valid"],
+                        "revocation_checked": reduced["revocation_checked"],
+                        "revocation_status": reduced["revocation_status"],
+                    },
                 )
             else:
-                session.fail(result.get("error", "Verification failed"))
+                session.fail(reduced.get("error", "Verification failed"))
             
         except Exception as e:
             session.fail(str(e))
