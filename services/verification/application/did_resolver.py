@@ -5,17 +5,28 @@ with public key material.  Used by the verification service to look up
 issuer keys for credential signature validation.
 """
 
+import asyncio
 import base64
+import hashlib
+import ipaddress
 import json
 import logging
 import os
-import re
+import socket
+from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_MAX_DID_DOCUMENT_BYTES = 1024 * 1024
+_DID_DOCUMENT_CONTENT_TYPES = {
+    "application/did+json",
+    "application/json",
+    "application/ld+json",
+}
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -70,6 +81,10 @@ def extract_public_key_jwk(
     methods = did_document.get("verificationMethod", [])
     did = str(did_document.get("id") or "")
     target = normalize_verification_method_id(did, verification_method_id)
+    if target and not target.startswith(f"{did}#"):
+        return None
+
+    assertion_methods = _verification_relationship_ids(did_document, "assertionMethod")
 
     for method in methods:
         if not isinstance(method, dict):
@@ -77,10 +92,16 @@ def extract_public_key_jwk(
         method_id = normalize_verification_method_id(did, method.get("id"))
         if target and method_id != target:
             continue
+        if method_id not in assertion_methods:
+            continue
 
         jwk = method.get("publicKeyJwk")
         if jwk:
-            sanitized = {k: v for k, v in jwk.items() if k not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}}
+            sanitized = {
+                k: v
+                for k, v in jwk.items()
+                if k not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+            }
             if method_id and not sanitized.get("kid"):
                 sanitized["kid"] = method_id
             return sanitized
@@ -118,6 +139,48 @@ def extract_credential_verification_method(credential: dict[str, Any]) -> str | 
     return None
 
 
+def _assert_jwk_algorithm(jwk: dict[str, Any], algorithm: str | None) -> None:
+    if not algorithm:
+        return
+
+    declared_algorithm = jwk.get("alg")
+    if declared_algorithm and declared_algorithm != algorithm:
+        raise ValueError("Resolved issuer key algorithm does not match the requested algorithm")
+
+    key_type = jwk.get("kty")
+    curve = jwk.get("crv")
+    compatible = {
+        "ES256": key_type == "EC" and curve == "P-256",
+        "ES384": key_type == "EC" and curve == "P-384",
+        "ES512": key_type == "EC" and curve == "P-521",
+        "EdDSA": key_type == "OKP" and curve in {"Ed25519", "Ed448"},
+        "RS256": key_type == "RSA",
+        "RS384": key_type == "RSA",
+        "RS512": key_type == "RSA",
+        "PS256": key_type == "RSA",
+        "PS384": key_type == "RSA",
+        "PS512": key_type == "RSA",
+    }.get(algorithm)
+    if compatible is not True:
+        raise ValueError("Resolved issuer key is not compatible with the requested algorithm")
+
+
+def _assertion_key_ids(did_document: dict[str, Any]) -> list[str]:
+    did = str(did_document.get("id") or "")
+    assertion_methods = _verification_relationship_ids(did_document, "assertionMethod")
+    result: list[str] = []
+    for method in did_document.get("verificationMethod", []):
+        if not isinstance(method, dict):
+            continue
+        method_id = normalize_verification_method_id(did, method.get("id"))
+        if method_id in assertion_methods and (
+            isinstance(method.get("publicKeyJwk"), dict)
+            or isinstance(method.get("publicKeyMultibase"), str)
+        ):
+            result.append(method_id)
+    return result
+
+
 def _read_secret_value(name: str) -> str:
     direct = os.environ.get(name)
     if direct:
@@ -126,18 +189,22 @@ def _read_secret_value(name: str) -> str:
     if not file_path:
         return ""
     try:
-        with open(file_path, "r", encoding="utf-8") as handle:
+        with open(file_path, encoding="utf-8") as handle:
             return handle.read().strip()
     except OSError:
         return ""
 
 
 def _internal_signing_base_url() -> str:
-    return os.environ.get("SIGNING_KEYS_INTERNAL_URL", "http://gateway:8000/internal/signing-keys").rstrip("/")
+    return os.environ.get(
+        "SIGNING_KEYS_INTERNAL_URL", "http://gateway:8000/internal/signing-keys"
+    ).rstrip("/")
 
 
 def _internal_headers() -> dict[str, str]:
-    api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("VERIFICATION_API_KEY")
+    api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value(
+        "VERIFICATION_API_KEY"
+    )
     return {"X-API-Key": api_key} if api_key else {}
 
 
@@ -226,23 +293,42 @@ async def resolve_issuer_did(
                 algorithm=algorithm,
                 timeout=timeout,
             )
-            public_jwk = resolved.get("public_jwk") if isinstance(resolved.get("public_jwk"), dict) else None
+            public_jwk = (
+                resolved.get("public_jwk") if isinstance(resolved.get("public_jwk"), dict) else None
+            )
             if public_jwk is None:
-                did_doc = resolved.get("did_document") if isinstance(resolved.get("did_document"), dict) else {}
-                public_jwk = extract_public_key_jwk(did_doc, resolved.get("verification_method_id") or verification_method_id)
+                did_doc_value = resolved.get("did_document")
+                did_doc: dict[str, Any] = did_doc_value if isinstance(did_doc_value, dict) else {}
+                public_jwk = extract_public_key_jwk(
+                    did_doc, resolved.get("verification_method_id") or verification_method_id
+                )
             if public_jwk is None:
                 raise ValueError(f"Org-scoped DID resolver returned no public key for {issuer_did}")
+            _assert_jwk_algorithm(public_jwk, algorithm)
             return {**resolved, "public_jwk": public_jwk}
         except ValueError:
             if not allow_public_fallback:
                 raise
             logger.warning("Falling back to public DID resolution for issuer %s", issuer_did)
 
+    if not allow_public_fallback:
+        raise ValueError("Public DID resolution was not explicitly authorized")
+    if not trusted_issuers or issuer_did not in trusted_issuers:
+        raise ValueError("Public DID resolution requires an explicitly trusted issuer")
+
     did_document = await resolve_did(issuer_did, timeout=timeout)
-    public_jwk = extract_public_key_jwk(did_document, verification_method_id)
+    selected_verification_method = verification_method_id
+    if selected_verification_method is None:
+        assertion_key_ids = _assertion_key_ids(did_document)
+        if len(assertion_key_ids) != 1:
+            raise ValueError("Public DID resolution requires an unambiguous assertion key")
+        selected_verification_method = assertion_key_ids[0]
+
+    public_jwk = extract_public_key_jwk(did_document, selected_verification_method)
     if public_jwk is None:
         raise ValueError(f"No public key matched issuer DID {issuer_did}")
-    normalized_vm = normalize_verification_method_id(issuer_did, verification_method_id)
+    _assert_jwk_algorithm(public_jwk, algorithm)
+    normalized_vm = normalize_verification_method_id(issuer_did, selected_verification_method)
     return {
         "ok": True,
         "issuer_did": issuer_did,
@@ -252,6 +338,11 @@ async def resolve_issuer_did(
         "resolver": {
             "type": "public_did_resolution",
             "public_fallback_used": bool(organization_id),
+            "requested_algorithm": algorithm,
+            "retrieved_at": datetime.now(UTC).isoformat(),
+            "did_document_sha256": hashlib.sha256(
+                json.dumps(did_document, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
         },
     }
 
@@ -260,12 +351,9 @@ async def resolve_issuer_did(
 # did:web
 # ---------------------------------------------------------------------------
 
-async def resolve_did_web(did: str, *, timeout: float = 10.0) -> dict[str, Any]:
-    """Resolve a did:web DID by fetching its DID Document over HTTPS.
 
-    did:web:example.com             → https://example.com/.well-known/did.json
-    did:web:example.com:path:to:doc → https://example.com/path/to/doc/did.json
-    """
+def _did_web_url(did: str) -> tuple[str, str, int]:
+    """Build a canonical did:web URL and reject URL parser ambiguities."""
     if not did.startswith("did:web:"):
         raise ValueError(f"Not a did:web DID: {did}")
 
@@ -273,36 +361,206 @@ async def resolve_did_web(did: str, *, timeout: float = 10.0) -> dict[str, Any]:
     if len(parts) < 3 or not parts[2]:
         raise ValueError(f"Malformed did:web DID: {did}")
 
-    # URL-decode each segment (e.g. %3A → :) for port numbers
-    domain = unquote(parts[2])
-    path_segments = [unquote(p) for p in parts[3:]]
-
-    if path_segments:
-        url = f"https://{domain}/{'/'.join(path_segments)}/did.json"
-    else:
-        url = f"https://{domain}/.well-known/did.json"
+    authority = unquote(parts[2])
+    if any(char in authority for char in "/\\@?#") or any(ord(char) < 0x20 for char in authority):
+        raise ValueError(f"Malformed did:web authority: {did}")
 
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            doc = resp.json()
-    except httpx.HTTPStatusError as exc:
-        raise ValueError(
-            f"Failed to fetch DID document for {did}: HTTP {exc.response.status_code}"
-        ) from exc
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
-        raise ValueError(f"Could not reach DID document for {did}: {exc}") from exc
-    except Exception as exc:
-        raise ValueError(f"Error resolving {did}: {exc}") from exc
+        parsed = urlsplit(f"https://{authority}")
+        host = parsed.hostname
+        port = parsed.port or 443
+    except ValueError as exc:
+        raise ValueError(f"Malformed did:web authority: {did}") from exc
 
-    if doc.get("id") != did:
-        logger.warning(
-            "DID document id mismatch: expected %s, got %s",
-            did, doc.get("id"),
+    if (
+        not host
+        or parsed.username
+        or parsed.password
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(f"Malformed did:web authority: {did}")
+
+    host = host.rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        raise ValueError("did:web host is not publicly routable")
+    try:
+        host_address = ipaddress.ip_address(host)
+    except ValueError:
+        host_address = None
+    if host_address is not None:
+        raise ValueError("did:web IP literals are not permitted")
+
+    try:
+        ascii_host = host.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError(f"Malformed did:web host: {did}") from exc
+
+    configured_hosts = {
+        value.strip().lower().rstrip(".")
+        for value in os.environ.get("DID_WEB_ALLOWED_HOSTS", "").split(",")
+        if value.strip()
+    }
+    environment = os.environ.get("ENVIRONMENT", os.environ.get("APP_ENV", "development")).lower()
+    if environment in {"production", "prod"} and not configured_hosts:
+        raise ValueError("Production did:web resolution requires a configured egress allowlist")
+    if environment in {"production", "prod"} and port != 443:
+        raise ValueError("Production did:web resolution requires the default HTTPS port")
+    if configured_hosts and ascii_host not in configured_hosts:
+        raise ValueError("did:web host is not in the configured egress allowlist")
+
+    path_segments: list[str] = []
+    for raw_segment in parts[3:]:
+        segment = unquote(raw_segment)
+        if (
+            not segment
+            or segment in {".", ".."}
+            or any(char in segment for char in "/\\?#")
+            or any(ord(char) < 0x20 for char in segment)
+        ):
+            raise ValueError(f"Malformed did:web path: {did}")
+        path_segments.append(quote(segment, safe="-._~"))
+
+    url_authority = ascii_host if port == 443 else f"{ascii_host}:{port}"
+    if path_segments:
+        url = f"https://{url_authority}/{'/'.join(path_segments)}/did.json"
+    else:
+        url = f"https://{url_authority}/.well-known/did.json"
+    return url, ascii_host, port
+
+
+async def _require_public_dns(host: str, port: int) -> tuple[str, ...]:
+    """Resolve a did:web host and reject every non-public address."""
+    try:
+        addresses = await asyncio.get_running_loop().getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
         )
+    except OSError as exc:
+        raise ValueError("Could not resolve did:web host") from exc
 
+    resolved = sorted({str(item[4][0]).split("%", 1)[0] for item in addresses})
+    if not resolved:
+        raise ValueError("Could not resolve did:web host")
+    for address in resolved:
+        try:
+            public = ipaddress.ip_address(address).is_global
+        except ValueError as exc:
+            raise ValueError("did:web DNS returned an invalid address") from exc
+        if not public:
+            raise ValueError("did:web DNS resolved to a non-public address")
+    return tuple(resolved)
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate JSON member in DID document: {key}")
+        result[key] = value
+    return result
+
+
+def _verification_relationship_ids(
+    did_document: dict[str, Any],
+    relationship: str,
+) -> set[str]:
+    did = str(did_document.get("id") or "")
+    entries = did_document.get(relationship)
+    if not isinstance(entries, list):
+        return set()
+
+    result: set[str] = set()
+    for entry in entries:
+        value = entry.get("id") if isinstance(entry, dict) else entry
+        normalized = normalize_verification_method_id(did, value)
+        if normalized:
+            result.add(normalized)
+    return result
+
+
+def _validate_did_document(doc: Any, did: str) -> dict[str, Any]:
+    if not isinstance(doc, dict):
+        raise ValueError("DID document must be a JSON object")
+    if doc.get("id") != did:
+        raise ValueError("DID document id does not match the requested DID")
+
+    methods = doc.get("verificationMethod")
+    if not isinstance(methods, list) or not methods:
+        raise ValueError("DID document has no verification methods")
+
+    method_ids: set[str] = set()
+    for method in methods:
+        if not isinstance(method, dict):
+            raise ValueError("DID document contains an invalid verification method")
+        method_id = normalize_verification_method_id(did, method.get("id"))
+        if not method_id or not method_id.startswith(f"{did}#"):
+            raise ValueError("DID verification method is not controlled by the requested DID")
+        if method_id in method_ids:
+            raise ValueError("DID document contains duplicate verification method ids")
+        if method.get("controller") != did:
+            raise ValueError("DID verification method controller does not match the requested DID")
+        method_ids.add(method_id)
+
+    assertion_methods = _verification_relationship_ids(doc, "assertionMethod")
+    if not assertion_methods or not assertion_methods.issubset(method_ids):
+        raise ValueError("DID document has an invalid assertionMethod relationship")
     return doc
+
+
+async def _resolve_did_web_hardened(did: str, *, timeout: float) -> dict[str, Any]:
+    url, host, port = _did_web_url(did)
+    await _require_public_dns(host, port)
+
+    try:
+        async with (
+            httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client,
+            client.stream(
+                "GET",
+                url,
+                headers={"Accept": "application/did+json, application/json"},
+            ) as resp,
+        ):
+            if 300 <= resp.status_code < 400:
+                raise ValueError("DID document redirects are not permitted")
+            if resp.status_code != 200:
+                raise ValueError(f"DID document fetch failed with HTTP {resp.status_code}")
+
+            content_type = resp.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+            if content_type not in _DID_DOCUMENT_CONTENT_TYPES:
+                raise ValueError("DID document response has an unsupported content type")
+
+            content_length = resp.headers.get("content-length")
+            if content_length:
+                try:
+                    length = int(content_length)
+                except ValueError as exc:
+                    raise ValueError("DID document response has an invalid content length") from exc
+                if length < 0:
+                    raise ValueError("DID document response has an invalid content length")
+                if length > _MAX_DID_DOCUMENT_BYTES:
+                    raise ValueError("DID document exceeds the maximum response size")
+
+            body = bytearray()
+            async for chunk in resp.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > _MAX_DID_DOCUMENT_BYTES:
+                    raise ValueError("DID document exceeds the maximum response size")
+
+        doc = json.loads(body.decode("utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    except httpx.RequestError as exc:
+        raise ValueError("Could not reach DID document") from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("DID document response is not valid UTF-8 JSON") from exc
+
+    return _validate_did_document(doc, did)
+
+
+async def resolve_did_web(did: str, *, timeout: float = 10.0) -> dict[str, Any]:
+    """Resolve a did:web document through bounded, public-only HTTPS egress."""
+    return await _resolve_did_web_hardened(did, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +580,7 @@ def resolve_did_key(did: str) -> dict[str, Any]:
     if not did.startswith("did:key:"):
         raise ValueError(f"Not a did:key DID: {did}")
 
-    multibase_value = did[len("did:key:"):]
+    multibase_value = did[len("did:key:") :]
     if not multibase_value.startswith("z"):
         raise ValueError(f"Unsupported multibase encoding (expected base58btc 'z'): {did}")
 
@@ -356,9 +614,7 @@ def resolve_did_key(did: str) -> dict[str, Any]:
         }
         key_type = "JsonWebKey2020"
     else:
-        raise ValueError(
-            f"Unsupported did:key codec: 0x{raw[0]:02x}{raw[1]:02x}"
-        )
+        raise ValueError(f"Unsupported did:key codec: 0x{raw[0]:02x}{raw[1]:02x}")
 
     vm_id = f"{did}#{multibase_value}"
     return {
@@ -393,7 +649,7 @@ def resolve_did_jwk(did: str) -> dict[str, Any]:
     if not did.startswith("did:jwk:"):
         raise ValueError(f"Not a did:jwk DID: {did}")
 
-    b64_part = did[len("did:jwk:"):]
+    b64_part = did[len("did:jwk:") :]
     # Add padding
     padding = 4 - len(b64_part) % 4
     if padding != 4:
