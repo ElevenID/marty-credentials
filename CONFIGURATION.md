@@ -52,6 +52,26 @@ ISSUER_BASE_URL=https://issuer.marty.dev
 STATUS_LIST_BASE_URL=https://api.marty.dev
 ```
 
+### Verification DID Resolution
+
+Issuer verification uses the organization-scoped signing-key registry first.
+Public DID resolution is disabled unless the verification request explicitly
+enables it and the exact issuer appears in a non-empty trusted-issuer list.
+
+```bash
+# Required in production before any did:web network resolution. Use exact,
+# comma-separated DNS hostnames; wildcards, IP literals, and non-default ports
+# are not supported in production.
+DID_WEB_ALLOWED_HOSTS=issuer.example.com,partner-issuer.example.org
+```
+
+The verifier permits only bounded HTTPS `did:web` responses from public DNS
+addresses. Redirects, private or local addresses, ambiguous paths, oversized
+documents, unexpected media types, DID id/controller mismatches, duplicate
+verification methods, and keys not authorized by `assertionMethod` fail closed.
+Network-level egress policy should enforce the same hostname and private-range
+restrictions to eliminate DNS rebinding races outside the application process.
+
 ### DIDComm Delivery
 
 ```bash
