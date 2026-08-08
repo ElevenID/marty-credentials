@@ -9,10 +9,12 @@ Covers:
 """
 
 import base64
+import hashlib
 import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -85,9 +87,18 @@ class TestResolveDidKey:
         doc = {
             "id": did,
             "verificationMethod": [
-                {"id": f"{did}#old", "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "old", "y": "old"}},
-                {"id": f"{did}#active", "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "new", "y": "new"}},
+                {
+                    "id": f"{did}#old",
+                    "controller": did,
+                    "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "old", "y": "old"},
+                },
+                {
+                    "id": f"{did}#active",
+                    "controller": did,
+                    "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "new", "y": "new"},
+                },
             ],
+            "assertionMethod": [f"{did}#old", f"{did}#active"],
         }
 
         jwk = extract_public_key_jwk(doc, f"{did}#active")
@@ -97,11 +108,12 @@ class TestResolveDidKey:
         assert jwk["kid"] == f"{did}#active"
 
     def test_extract_credential_verification_method_from_proof(self):
-        credential = {
-            "proof": {"verificationMethod": "did:web:issuer.example.com#active"}
-        }
+        credential = {"proof": {"verificationMethod": "did:web:issuer.example.com#active"}}
 
-        assert extract_credential_verification_method(credential) == "did:web:issuer.example.com#active"
+        assert (
+            extract_credential_verification_method(credential)
+            == "did:web:issuer.example.com#active"
+        )
 
 
 # ============================================================================
@@ -113,9 +125,7 @@ class TestResolveDidJwk:
     """did:jwk resolution."""
 
     def _make_did_jwk(self, jwk_dict: dict) -> str:
-        encoded = base64.urlsafe_b64encode(
-            json.dumps(jwk_dict).encode()
-        ).rstrip(b"=").decode()
+        encoded = base64.urlsafe_b64encode(json.dumps(jwk_dict).encode()).rstrip(b"=").decode()
         return f"did:jwk:{encoded}"
 
     def test_resolves_ec_jwk(self):
@@ -157,66 +167,156 @@ class TestResolveDidJwk:
 class TestResolveDidWeb:
     """did:web resolution with mocked HTTP."""
 
+    @staticmethod
+    def _document(did: str) -> dict:
+        method_id = f"{did}#key-1"
+        return {
+            "id": did,
+            "verificationMethod": [
+                {
+                    "id": method_id,
+                    "controller": did,
+                    "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "abc"},
+                }
+            ],
+            "assertionMethod": [method_id],
+        }
+
+    async def _resolve_with_transport(self, did: str, handler):
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        with (
+            patch("verification.application.did_resolver.httpx.AsyncClient", return_value=client),
+            patch(
+                "verification.application.did_resolver._require_public_dns",
+                new=AsyncMock(return_value=("93.184.216.34",)),
+            ),
+        ):
+            return await resolve_did(did)
+
     @pytest.mark.asyncio
     async def test_resolves_simple_domain(self):
-        mock_doc = {
-            "id": "did:web:example.com",
-            "verificationMethod": [
-                {"id": "did:web:example.com#key-1", "publicKeyJwk": {"kty": "OKP"}}
-            ],
-        }
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = mock_doc
-        mock_response.raise_for_status = MagicMock()
+        requested_urls = []
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        def handler(request):
+            requested_urls.append(str(request.url))
+            return httpx.Response(
+                200,
+                json=self._document("did:web:example.com"),
+                headers={"content-type": "application/did+json"},
+            )
 
-        with patch("verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client):
-            doc = await resolve_did("did:web:example.com")
+        doc = await self._resolve_with_transport("did:web:example.com", handler)
 
         assert doc["id"] == "did:web:example.com"
-        mock_client.get.assert_called_once_with("https://example.com/.well-known/did.json")
+        assert requested_urls == ["https://example.com/.well-known/did.json"]
 
     @pytest.mark.asyncio
     async def test_resolves_path_based_domain(self):
-        mock_doc = {"id": "did:web:example.com:orgs:acme"}
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = mock_doc
-        mock_response.raise_for_status = MagicMock()
+        requested_urls = []
+        did = "did:web:example.com:orgs:acme"
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+        def handler(request):
+            requested_urls.append(str(request.url))
+            return httpx.Response(
+                200,
+                json=self._document(did),
+                headers={"content-type": "application/json"},
+            )
 
-        with patch("verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client):
-            doc = await resolve_did("did:web:example.com:orgs:acme")
+        await self._resolve_with_transport(did, handler)
 
-        mock_client.get.assert_called_once_with("https://example.com/orgs/acme/did.json")
+        assert requested_urls == ["https://example.com/orgs/acme/did.json"]
 
     @pytest.mark.asyncio
     async def test_rejects_http_error(self):
-        import httpx
+        with pytest.raises(ValueError, match="HTTP 404"):
+            await self._resolve_with_transport(
+                "did:web:example.com",
+                lambda _request: httpx.Response(404, headers={"content-type": "application/json"}),
+            )
 
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "Not Found", request=MagicMock(), response=mock_response
-        )
+    @pytest.mark.asyncio
+    async def test_rejects_redirects(self):
+        with pytest.raises(ValueError, match="redirects are not permitted"):
+            await self._resolve_with_transport(
+                "did:web:example.com",
+                lambda _request: httpx.Response(302, headers={"location": "https://internal.test"}),
+            )
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=mock_response)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
+    @pytest.mark.asyncio
+    async def test_rejects_oversized_document(self):
+        with pytest.raises(ValueError, match="maximum response size"):
+            await self._resolve_with_transport(
+                "did:web:example.com",
+                lambda _request: httpx.Response(
+                    200,
+                    content=b"x" * (1024 * 1024 + 1),
+                    headers={"content-type": "application/did+json"},
+                ),
+            )
 
-        with patch("verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client):
-            with pytest.raises(ValueError, match="HTTP 404"):
-                await resolve_did("did:web:example.com")
+    @pytest.mark.asyncio
+    async def test_rejects_document_id_mismatch(self):
+        with pytest.raises(ValueError, match="id does not match"):
+            await self._resolve_with_transport(
+                "did:web:example.com",
+                lambda _request: httpx.Response(
+                    200,
+                    json=self._document("did:web:attacker.example"),
+                    headers={"content-type": "application/did+json"},
+                ),
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_duplicate_verification_method_ids(self):
+        did = "did:web:example.com"
+        document = self._document(did)
+        document["verificationMethod"].append(document["verificationMethod"][0].copy())
+
+        with pytest.raises(ValueError, match="duplicate verification method ids"):
+            await self._resolve_with_transport(
+                did,
+                lambda _request: httpx.Response(
+                    200,
+                    json=document,
+                    headers={"content-type": "application/did+json"},
+                ),
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_private_ip_literal_without_network_request(self):
+        with pytest.raises(ValueError, match="IP literals are not permitted"):
+            await resolve_did("did:web:127.0.0.1")
+
+    @pytest.mark.asyncio
+    async def test_rejects_hostname_resolving_to_private_address(self):
+        from verification.application import did_resolver
+
+        loop = MagicMock()
+        loop.getaddrinfo = AsyncMock(return_value=[(2, 1, 6, "", ("10.0.0.8", 443))])
+        with patch.object(did_resolver.asyncio, "get_running_loop", return_value=loop):
+            with pytest.raises(ValueError, match="non-public address"):
+                await did_resolver._require_public_dns("example.com", 443)
+
+    @pytest.mark.asyncio
+    async def test_rejects_encoded_path_separator_without_network_request(self):
+        with pytest.raises(ValueError, match="Malformed did:web path"):
+            await resolve_did("did:web:example.com:orgs%2Finternal")
+
+    @pytest.mark.asyncio
+    async def test_enforces_configured_host_allowlist(self, monkeypatch):
+        monkeypatch.setenv("DID_WEB_ALLOWED_HOSTS", "issuer.example.com")
+
+        with pytest.raises(ValueError, match="egress allowlist"):
+            await resolve_did("did:web:example.com")
+
+    @pytest.mark.asyncio
+    async def test_production_requires_configured_host_allowlist(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.delenv("DID_WEB_ALLOWED_HOSTS", raising=False)
+
+        with pytest.raises(ValueError, match="requires a configured egress allowlist"):
+            await resolve_did("did:web:example.com")
 
 
 # ============================================================================
@@ -275,7 +375,9 @@ class TestResolveIssuerDid:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client
+        ):
             resolved = await resolve_issuer_did(
                 issuer_did,
                 organization_id="org-acme",
@@ -310,7 +412,9 @@ class TestResolveIssuerDid:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "verification.application.did_resolver.httpx.AsyncClient", return_value=mock_client
+        ):
             with pytest.raises(ValueError, match="Org-scoped DID resolution failed"):
                 await resolve_issuer_did(issuer_did, organization_id="org-acme")
 
@@ -321,6 +425,116 @@ class TestResolveIssuerDid:
                 "did:web:issuer.example.com",
                 organization_id="org-acme",
                 trusted_issuers=["did:web:other.example.com"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_public_resolution_requires_explicit_authorization(self):
+        issuer_did = "did:web:issuer.example.com"
+
+        with pytest.raises(ValueError, match="not explicitly authorized"):
+            await resolve_issuer_did(issuer_did, trusted_issuers=[issuer_did])
+
+    @pytest.mark.asyncio
+    async def test_public_resolution_requires_nonempty_trusted_issuer_list(self):
+        with pytest.raises(ValueError, match="explicitly trusted issuer"):
+            await resolve_issuer_did(
+                "did:web:issuer.example.com",
+                allow_public_fallback=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_public_resolution_records_document_provenance(self):
+        from verification.application import did_resolver
+
+        issuer_did = "did:web:issuer.example.com"
+        method_id = f"{issuer_did}#issuer-key"
+        document = {
+            "id": issuer_did,
+            "verificationMethod": [
+                {
+                    "id": method_id,
+                    "controller": issuer_did,
+                    "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "abc"},
+                }
+            ],
+            "assertionMethod": [method_id],
+        }
+        expected_digest = hashlib.sha256(
+            json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+        with patch.object(did_resolver, "resolve_did", new=AsyncMock(return_value=document)):
+            resolved = await resolve_issuer_did(
+                issuer_did,
+                verification_method_id=method_id,
+                trusted_issuers=[issuer_did],
+                allow_public_fallback=True,
+            )
+
+        assert resolved["resolver"]["public_fallback_used"] is False
+        assert resolved["resolver"]["did_document_sha256"] == expected_digest
+        assert resolved["resolver"]["retrieved_at"].endswith("+00:00")
+
+    @pytest.mark.asyncio
+    async def test_public_resolution_rejects_ambiguous_assertion_keys(self):
+        from verification.application import did_resolver
+
+        issuer_did = "did:web:issuer.example.com"
+        document = {
+            "id": issuer_did,
+            "verificationMethod": [
+                {
+                    "id": f"{issuer_did}#one",
+                    "controller": issuer_did,
+                    "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "one"},
+                },
+                {
+                    "id": f"{issuer_did}#two",
+                    "controller": issuer_did,
+                    "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "two"},
+                },
+            ],
+            "assertionMethod": [f"{issuer_did}#one", f"{issuer_did}#two"],
+        }
+
+        with (
+            patch.object(did_resolver, "resolve_did", new=AsyncMock(return_value=document)),
+            pytest.raises(ValueError, match="unambiguous assertion key"),
+        ):
+            await resolve_issuer_did(
+                issuer_did,
+                trusted_issuers=[issuer_did],
+                allow_public_fallback=True,
+            )
+
+    @pytest.mark.asyncio
+    async def test_public_resolution_rejects_requested_algorithm_mismatch(self):
+        from verification.application import did_resolver
+
+        issuer_did = "did:web:issuer.example.com"
+        method_id = f"{issuer_did}#issuer-key"
+        document = {
+            "id": issuer_did,
+            "verificationMethod": [
+                {
+                    "id": method_id,
+                    "controller": issuer_did,
+                    "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "abc"},
+                }
+            ],
+            "assertionMethod": [method_id],
+        }
+
+        with (
+            patch.object(did_resolver, "resolve_did", new=AsyncMock(return_value=document)),
+            pytest.raises(ValueError, match="not compatible"),
+        ):
+            await resolve_issuer_did(
+                issuer_did,
+                verification_method_id=method_id,
+                trusted_issuers=[issuer_did],
+                algorithm="ES256",
+                allow_public_fallback=True,
             )
 
 
@@ -347,9 +561,13 @@ class TestVdsNcDidResolutionRoute:
             monkeypatch.setitem(sys.modules, "mmf.core.exceptions", mmf_exceptions_module)
             monkeypatch.setitem(sys.modules, "mmf.infrastructure", mmf_infra_module)
             monkeypatch.setitem(sys.modules, "mmf.infrastructure.database", mmf_db_module)
-            monkeypatch.setitem(sys.modules, "mmf.infrastructure.database.session", mmf_session_module)
+            monkeypatch.setitem(
+                sys.modules, "mmf.infrastructure.database.session", mmf_session_module
+            )
 
-        postgres_repo_module = types.ModuleType("verification.infrastructure.persistence.postgres_repository")
+        postgres_repo_module = types.ModuleType(
+            "verification.infrastructure.persistence.postgres_repository"
+        )
 
         class PostgresVerificationRepository:
             def __init__(self, *args, **kwargs):
@@ -382,7 +600,13 @@ class TestVdsNcDidResolutionRoute:
 
             async def verify_vds_nc(self, *, barcode: str, issuer_jwk_json: str):
                 self.issuer_jwk_json = issuer_jwk_json
-                return {"valid": True, "country": "XA", "payload": {"sub": "123"}, "signature_status": "VALID", "errors": []}
+                return {
+                    "valid": True,
+                    "country": "XA",
+                    "payload": {"sub": "123"},
+                    "signature_status": "VALID",
+                    "errors": [],
+                }
 
         verifier = FakeVerifier()
         result = await routes.verify_vds_nc_barcode(
@@ -438,7 +662,9 @@ class TestRustCredentialVerifierIssuerResolution:
         )
         monkeypatch.setattr(rust_verifier, "resolve_issuer_did", resolver)
 
-        verifier = rust_verifier.RustCredentialVerifier.__new__(rust_verifier.RustCredentialVerifier)
+        verifier = rust_verifier.RustCredentialVerifier.__new__(
+            rust_verifier.RustCredentialVerifier
+        )
         verifier.marty_rs = MagicMock()
         verifier.marty_rs.verify_w3c_vc_signature.return_value = json.dumps({"valid": True})
 
@@ -473,16 +699,25 @@ class TestRustCredentialVerifierIssuerResolution:
         credential = {
             "issuer": issuer_did,
             "credentialSubject": {"employee_id": "E-123"},
-            "proof": {"type": "JsonWebSignature2020", "verificationMethod": f"{issuer_did}#issuer-key"},
+            "proof": {
+                "type": "JsonWebSignature2020",
+                "verificationMethod": f"{issuer_did}#issuer-key",
+            },
         }
 
         monkeypatch.setattr(
             rust_verifier,
             "resolve_issuer_did",
-            AsyncMock(side_effect=ValueError("Issuer DID is not an active issuer identity for this organization")),
+            AsyncMock(
+                side_effect=ValueError(
+                    "Issuer DID is not an active issuer identity for this organization"
+                )
+            ),
         )
 
-        verifier = rust_verifier.RustCredentialVerifier.__new__(rust_verifier.RustCredentialVerifier)
+        verifier = rust_verifier.RustCredentialVerifier.__new__(
+            rust_verifier.RustCredentialVerifier
+        )
         verifier.marty_rs = MagicMock()
 
         result = await verifier.verify_w3c_vc(
@@ -565,9 +800,7 @@ class TestIssuedCredentialIssuerDid:
         assert cred.issuer_did is None
 
     def test_stores_issuer_did(self):
-        cred = IssuedCredential(
-            issuer_did="did:web:beta.elevenidllc.com:orgs:acme"
-        )
+        cred = IssuedCredential(issuer_did="did:web:beta.elevenidllc.com:orgs:acme")
         assert cred.issuer_did == "did:web:beta.elevenidllc.com:orgs:acme"
 
     def test_stores_did_key_issuer(self):
