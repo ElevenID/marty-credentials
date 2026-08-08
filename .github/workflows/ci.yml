@@ -238,6 +238,10 @@ jobs:
         working-directory: marty-credentials/services/issuance/infrastructure/migrations
         run: python -m alembic -c alembic.ini heads
 
+      - name: Verify verification migration graph has one head
+        working-directory: marty-credentials/services/verification/infrastructure/migrations
+        run: python -m alembic -c alembic.ini heads
+
       - name: Run Python tests
         working-directory: marty-credentials
         run: pytest tests/ packages/tests/ -v
