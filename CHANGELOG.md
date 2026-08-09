@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-08-09
+
+### Changed
+
+- Project authenticated mdoc issuer, digest, algorithm, document-type, and
+  validity evidence from the released Marty Core 0.1.35 verification result.
+- Accept trusted roots and exact document-signer certificate pins as separate
+  inputs so callers cannot accidentally treat a pinned leaf as a generic CA.
+
+### Security
+
+- Fail closed on invalid trust configuration, certificate profile, protected
+  algorithm, document type, validity window, or disclosure digest evidence.
+- Report revocation as unchecked/unknown instead of inventing non-revocation
+  evidence, and expose only a stable SHA-256 certificate identity.
+
 ## [0.1.48] - 2026-08-09
 
 ### Changed
