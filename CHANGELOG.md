@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.48] - 2026-08-09
+
+### Changed
+
+- Add a tenant-scoped `Idempotency-Key` contract to HTTP and gRPC issuance
+  initiation and preserve nested request semantics across both transports.
+- Reserve issuance transactions atomically in PostgreSQL and recover the
+  original transaction and pre-authorized code for identical retries.
+
+### Security
+
+- Reject conflicting reuse of an idempotency key and reject idempotent DIDComm
+  push initiation until that side effect has a durable replay-safe contract.
+- Exercise concurrent reservation, committed-offer recovery, and changed-
+  semantics rejection through the production repository against PostgreSQL.
+
 ## [0.1.47] - 2026-08-07
 
 ### Changed
