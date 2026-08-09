@@ -201,12 +201,13 @@ jobs:
     permissions:
       contents: read
     env:
-      ISSUANCE_IDEMPOTENCY_SOURCE_REVISION: ${{ github.sha }}
+      ISSUANCE_IDEMPOTENCY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
       COMPOSE_PROJECT_NAME: issuance-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
         with:
           path: marty-credentials
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Validate disposable idempotency topology
         working-directory: marty-credentials
@@ -236,7 +237,7 @@ jobs:
           test "$(jq -r '.same_transaction' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.same_pre_authorized_code' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.raw_key_persisted' tests/artifacts/issuance-idempotency/contract-result.json)" = false
-          test "$(jq -r '.source_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$GITHUB_SHA"
+          test "$(jq -r '.source_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$ISSUANCE_IDEMPOTENCY_SOURCE_REVISION"
 
       - name: Upload issuance idempotency evidence
         if: always()
