@@ -9,7 +9,9 @@ config = context.config
 target_metadata = config.attributes.get("target_metadata")
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Migrations run in-process during deployment and tests. Loading Alembic's
+    # logger configuration must not disable existing service/audit loggers.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def _configure(**kwargs) -> None:
