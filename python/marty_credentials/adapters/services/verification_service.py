@@ -324,12 +324,10 @@ class VerificationService(ICredentialVerifier):
             # Use the newly exposed verify_age_zkp from marty_verification_py
             try:
                 from marty_verification_py import verify_age_zkp
-            except ImportError:
-                logger.warning("marty_verification_py not found, using mock checking")
-                def verify_age_zkp(nonce, mso, proof):
-                    # Mock verification: proof must act as if it's signed by nonce
-                    # For testing we can just check if proof is non-empty
-                    return len(proof) > 0
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Native ZK verification backend is unavailable; refusing verification"
+                ) from exc
 
             is_valid = verify_age_zkp(nonce_bytes, mso, proof)
             
@@ -366,10 +364,10 @@ class VerificationService(ICredentialVerifier):
             # Import from the unified marty_verification_py package
             try:
                 from marty_verification_py import verify_age_zkp
-            except ImportError:
-                logger.warning("marty_verification_py.verify_age_zkp not found, using mock checking")
-                def verify_age_zkp(nonce, mso, proof):
-                    return len(proof) > 0
+            except ImportError as exc:
+                raise RuntimeError(
+                    "Native ZK verification backend is unavailable; refusing verification"
+                ) from exc
 
             is_valid = verify_age_zkp(session_nonce, mso_bytes, proof_bytes)
             
@@ -572,10 +570,7 @@ class VerificationService(ICredentialVerifier):
             try:
                 trusted_certs = _load_trusted_certs()
                 if not trusted_certs:
-                    # No trusted certificates configured - skip signature validation
-                    # This is expected in test/dev environments
-                    signature_valid = True
-                    logger.debug("No trusted mDoc certificates configured, skipping signature validation")
+                    signature_error = "No trusted mDoc issuer certificates configured"
                 elif hasattr(_marty_rs, 'verify_mdoc_signature'):
                     verification_result = _marty_rs.verify_mdoc_signature(
                         mdoc_bytes=mdoc_bytes,  # Fixed: was presentation_bytes (undefined)
@@ -585,9 +580,7 @@ class VerificationService(ICredentialVerifier):
                     if not signature_valid:  # Fixed: was checking signature_error instead
                         signature_error = verification_result.error
                 else:
-                    # Function not available - treat as validation not performed
-                    signature_valid = True
-                    logger.debug("mDoc signature verification not available in _marty_rs")
+                    signature_error = "Native mDoc signature verification is unavailable"
             except Exception as e:
                 signature_error = str(e)
                 logger.warning(f"mDoc signature verification failed: {e}")
