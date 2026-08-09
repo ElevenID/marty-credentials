@@ -31,6 +31,7 @@ services:
       DATABASE_URL: postgresql://issuance_contract:issuance_contract_only@postgres:5432/issuance_idempotency_contract
       CONTRACT_RESULT_PATH: /artifacts/contract-result.json
       CONTRACT_SOURCE_REVISION: ${ISSUANCE_IDEMPOTENCY_SOURCE_REVISION:-local-worktree}
+      TOKEN_HMAC_KEY: issuance-idempotency-contract-only-key
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - type: bind

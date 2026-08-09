@@ -237,6 +237,8 @@ jobs:
           test "$(jq -r '.same_transaction' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.same_pre_authorized_code' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.raw_key_persisted' tests/artifacts/issuance-idempotency/contract-result.json)" = false
+          test "$(jq -r '.production_repository_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.changed_semantics_rejected' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.source_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$ISSUANCE_IDEMPOTENCY_SOURCE_REVISION"
 
       - name: Upload issuance idempotency evidence

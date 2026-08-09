@@ -1,26 +1,31 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
-import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
 from alembic import command
 from alembic.config import Config
+from issuance.domain.entities import (
+    IssuanceIdempotencyConflictError,
+    IssuanceTransaction,
+)
+from issuance.infrastructure.adapters.postgres_repository import (
+    PostgresIssuanceRepository,
+)
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 RESULT_PATH = Path(os.environ["CONTRACT_RESULT_PATH"])
 SOURCE_REVISION = os.environ.get("CONTRACT_SOURCE_REVISION", "local-worktree")
 RAW_KEY = "c" * 64
-KEY_HASH = hashlib.sha256(
-    f"marty:issuance-idempotency-key:v1:{RAW_KEY}".encode()
-).hexdigest()
+KEY_HASH = hashlib.sha256(f"marty:issuance-idempotency-key:v1:{RAW_KEY}".encode()).hexdigest()
 REQUEST_HASH = "b" * 64
+CHANGED_REQUEST_HASH = "d" * 64
 
 
 def _upgrade() -> None:
@@ -47,64 +52,53 @@ def _upgrade() -> None:
     command.upgrade(config, "head")
 
 
-def _reserve(barrier: threading.Barrier) -> tuple[str, str, bool]:
-    transaction_id = str(uuid.uuid4())
-    pre_auth_code = f"pre-{uuid.uuid4()}"
-    now = datetime.now(UTC)
-    barrier.wait(timeout=10)
-    with psycopg.connect(DATABASE_URL) as connection:
-        created = connection.execute(
-            """
-            INSERT INTO issuance_service.issuance_transactions (
-                id, organization_id, credential_template_id, status,
-                pre_auth_code, claims, credential_payload_format,
-                wallet_configs, validity_days, renewable, renewal_window_days,
-                created_at, expires_at, idempotency_key_hash,
-                idempotency_request_hash
-            ) VALUES (
-                %s, 'org-race', 'template-race', 'pending', %s,
-                '{}'::json, 'w3c_vcdm_v2_sd_jwt', '[]'::json,
-                365, false, 30, %s, %s, %s, %s
+def _transaction(*, request_hash: str = REQUEST_HASH) -> IssuanceTransaction:
+    return IssuanceTransaction(
+        id=str(uuid.uuid4()),
+        organization_id="org-race",
+        credential_template_id="template-race",
+        idempotency_key_hash=KEY_HASH,
+        idempotency_request_hash=request_hash,
+        pre_auth_code=f"pre-{uuid.uuid4()}",
+        claims={"achievement": "production-repository-contract"},
+    )
+
+
+async def _exercise_production_repository() -> tuple[list[tuple[IssuanceTransaction, bool]], bool]:
+    async_database_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+    engine = create_async_engine(async_database_url)
+    repository = PostgresIssuanceRepository(async_sessionmaker(engine, expire_on_commit=False))
+    assert repository.__class__.__module__ == (
+        "issuance.infrastructure.adapters.postgres_repository"
+    )
+
+    try:
+        results = await asyncio.gather(
+            repository.reserve_transaction_idempotently(_transaction()),
+            repository.reserve_transaction_idempotently(_transaction()),
+        )
+
+        changed_semantics_rejected = False
+        try:
+            await repository.reserve_transaction_idempotently(
+                _transaction(request_hash=CHANGED_REQUEST_HASH)
             )
-            ON CONFLICT (organization_id, idempotency_key_hash) DO NOTHING
-            RETURNING id, pre_auth_code
-            """,
-            (
-                transaction_id,
-                pre_auth_code,
-                now,
-                now + timedelta(days=7),
-                KEY_HASH,
-                REQUEST_HASH,
-            ),
-        ).fetchone()
-        if created is not None:
-            connection.commit()
-            return str(created[0]), str(created[1]), True
-        existing = connection.execute(
-            """
-            SELECT id, pre_auth_code, idempotency_request_hash
-            FROM issuance_service.issuance_transactions
-            WHERE organization_id = 'org-race' AND idempotency_key_hash = %s
-            """,
-            (KEY_HASH,),
-        ).fetchone()
-        assert existing is not None and existing[2] == REQUEST_HASH
-        connection.commit()
-        return str(existing[0]), str(existing[1]), False
+        except IssuanceIdempotencyConflictError:
+            changed_semantics_rejected = True
+        assert changed_semantics_rejected
+        return list(results), changed_semantics_rejected
+    finally:
+        await engine.dispose()
 
 
 def main() -> None:
     _upgrade()
-    barrier = threading.Barrier(2)
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        first = executor.submit(_reserve, barrier)
-        second = executor.submit(_reserve, barrier)
-        results = [first.result(timeout=20), second.result(timeout=20)]
+    results, changed_semantics_rejected = asyncio.run(_exercise_production_repository())
 
-    assert sorted(created for _, _, created in results) == [False, True]
-    assert len({transaction_id for transaction_id, _, _ in results}) == 1
-    assert len({pre_auth_code for _, pre_auth_code, _ in results}) == 1
+    assert sorted(created for _, created in results) == [False, True]
+    assert len({transaction.id for transaction, _ in results}) == 1
+    assert len({transaction.pre_auth_code for transaction, _ in results}) == 1
+    assert all(transaction.idempotency_request_hash == REQUEST_HASH for transaction, _ in results)
 
     with psycopg.connect(DATABASE_URL) as connection:
         count, stored_key_hash, stored_request_hash = connection.execute(
@@ -134,10 +128,10 @@ def main() -> None:
         ).fetchone()[0]
         assert version == "issuance_offer_idempotency"
 
-    created_count = sum(created for _, _, created in results)
+    created_count = sum(created for _, created in results)
     recovered_count = len(results) - created_count
-    same_transaction = len({transaction_id for transaction_id, _, _ in results}) == 1
-    same_pre_authorized_code = len({code for _, code, _ in results}) == 1
+    same_transaction = len({transaction.id for transaction, _ in results}) == 1
+    same_pre_authorized_code = len({transaction.pre_auth_code for transaction, _ in results}) == 1
 
     RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
     RESULT_PATH.write_text(
@@ -151,6 +145,8 @@ def main() -> None:
                 "same_transaction": same_transaction,
                 "same_pre_authorized_code": same_pre_authorized_code,
                 "raw_key_persisted": raw_key_persisted,
+                "production_repository_exercised": True,
+                "changed_semantics_rejected": changed_semantics_rejected,
             },
             indent=2,
             sort_keys=True,
