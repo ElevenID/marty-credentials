@@ -38,6 +38,7 @@ python = [
     "tokio",
     "isomdl",
     "coset",
+    "coset-isomdl",
     "time",
     "ssi-status",
     "flate2",
@@ -49,8 +50,7 @@ python = [
     "jsonwebtoken",
     "p256",
     "ed25519-dalek",
-    "sha2",
-    "serde_cbor"
+    "sha2"
 ]
 wasm = [
     "dep:marty-crypto",
@@ -80,7 +80,8 @@ console_error_panic_hook = { version = "0.1", optional = true }
 getrandom = { version = "0.2", optional = true }
 
 # From workspace - shared dependencies
-ssi = { workspace = true }
+ssi-crypto = { workspace = true }
+ssi-jwk = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 bs58 = { workspace = true }
@@ -95,6 +96,7 @@ rand = { workspace = true }
 tokio = { workspace = true, optional = true }
 isomdl = { workspace = true, optional = true }
 coset = { workspace = true, optional = true }
+coset-isomdl = { package = "coset", version = "=0.3.8", optional = true }
 time = { workspace = true, optional = true }
 ssi-status = { workspace = true, optional = true }
 flate2 = { workspace = true, optional = true }
@@ -111,10 +113,9 @@ sd-jwt-rs = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
 
 # Crypto for signatures
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"], optional = true }
-ed25519-dalek = { version = "2.1", features = ["rand_core"], optional = true }
-sha2 = { version = "0.10", optional = true }
-serde_cbor = { version = "0.11", optional = true }
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8"], optional = true }
+ed25519-dalek = { version = "3.0", features = ["rand_core"], optional = true }
+sha2 = { version = "0.11", optional = true }
 
 # From marty-core
 marty-crypto = { workspace = true, optional = true }
@@ -125,6 +126,10 @@ marty-oid4vci = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# UUID 1.24 uses getrandom 0.4, which requires an explicit browser backend.
+getrandom_v04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
 
 # Python wheels must be portable and cannot rely on a host OpenSSL package.
 # Enabling the vendored feature here also applies to native-tls pulled in by

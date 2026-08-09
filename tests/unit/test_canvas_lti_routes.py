@@ -51,14 +51,6 @@ from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceR
 from issuance.infrastructure.api import canvas_routes
 
 
-@pytest.fixture(autouse=True)
-def _enable_local_canvas_tool_signer(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CANVAS_LTI_ALLOW_LOCAL_PRIVATE_JWK", "true")
-    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
-    monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1,org-123")
-    monkeypatch.setenv("APP_ENV", "test")
-
-
 def _json_request(payload: dict[str, object], path: str = "/v1/integrations/canvas/lti/launch/test") -> Request:
     body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     sent = False
@@ -197,6 +189,48 @@ def _private_rsa_jwk(kid: str = "tool-key-1") -> tuple[dict[str, str], object]:
     return jwk, private_key.public_key()
 
 
+class _TestToolJwtSigner:
+    """In-memory test double; production code has no local private-key signer."""
+
+    def __init__(self, kid: str = "tool-key-1") -> None:
+        self.private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        numbers = self.private_key.public_key().public_numbers()
+        self.public_jwk = {
+            "kty": "RSA",
+            "kid": kid,
+            "alg": "RS256",
+            "use": "sig",
+            "n": _rsa_uint(numbers.n),
+            "e": _rsa_uint(numbers.e),
+        }
+
+    async def sign_jwt(self, payload: dict[str, object]) -> str:
+        header = {"alg": "RS256", "typ": "JWT", "kid": self.public_jwk["kid"]}
+        signing_input = (
+            f"{_b64url(json.dumps(header, separators=(',', ':'), sort_keys=True).encode())}."
+            f"{_b64url(json.dumps(payload, separators=(',', ':'), sort_keys=True).encode())}"
+        )
+        signature = self.private_key.sign(
+            signing_input.encode("ascii"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return f"{signing_input}.{_b64url(signature)}"
+
+    async def public_jwks(self) -> dict[str, object]:
+        return {"keys": [dict(self.public_jwk)]}
+
+
+@pytest.fixture(autouse=True)
+def _stub_canvas_tool_signer(monkeypatch: pytest.MonkeyPatch) -> _TestToolJwtSigner:
+    signer = _TestToolJwtSigner()
+    monkeypatch.setattr(canvas_routes, "_tool_jwt_signer", lambda: signer)
+    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1,org-123")
+    monkeypatch.setenv("APP_ENV", "test")
+    return signer
+
+
 def _jwt_payload(token: str) -> dict[str, object]:
     return json.loads(_b64url_decode(token.split(".")[1]))
 
@@ -226,18 +260,6 @@ async def test_canvas_registration_config_exposes_public_jwks_and_standard_place
     repo = InMemoryIssuanceRepository()
     platform = CanvasPlatform(id="portable-platform", organization_id="org-1", canvas_account_id="account-1")
     await repo.save_canvas_platform(platform)
-    jwk, _public_key = _private_rsa_jwk()
-    retiring_jwk, _retiring_public_key = _private_rsa_jwk("tool-key-retiring")
-    retiring_public_jwk = {
-        key: value
-        for key, value in retiring_jwk.items()
-        if key not in {"d", "p", "q", "dp", "dq", "qi"}
-    }
-    monkeypatch.setenv(
-        "CANVAS_LTI_TOOL_PRIVATE_JWKS",
-        json.dumps({"keys": [retiring_public_jwk, jwk]}),
-    )
-    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "tool-key-1")
     monkeypatch.setattr(canvas_routes, "ISSUER_BASE_URL", "https://issuer.example.edu")
 
     registration = await canvas_routes.get_canvas_lti_registration_config(platform.id, repo=repo)
@@ -248,7 +270,7 @@ async def test_canvas_registration_config_exposes_public_jwks_and_standard_place
     placements = registration.developer_key_configuration["extensions"][0]["settings"]["placements"]
     assert {item["message_type"] for item in placements} == {"LtiResourceLinkRequest", "LtiDeepLinkingRequest"}
     assert public_jwks["keys"][0]["kid"] == "tool-key-1"
-    assert {key["kid"] for key in public_jwks["keys"]} == {"tool-key-1", "tool-key-retiring"}
+    assert {key["kid"] for key in public_jwks["keys"]} == {"tool-key-1"}
     assert all(key["alg"] == "RS256" and "d" not in key for key in public_jwks["keys"])
     assert registration.developer_key_configuration["custom_fields"]["canvas_user_id"] == "$Canvas.user.id"
     assert registration.developer_key_configuration["custom_fields"]["canvas_course_id"] == "$Canvas.course.id"
@@ -265,8 +287,6 @@ async def test_canvas_registration_config_token_rotates_and_is_publicly_revocabl
         canvas_account_id="account-1",
     )
     await repo.save_canvas_platform(platform)
-    jwk, _public_key = _private_rsa_jwk()
-    monkeypatch.setenv("CANVAS_LTI_TOOL_PRIVATE_JWKS", json.dumps(jwk))
     monkeypatch.setattr(canvas_routes, "ISSUER_BASE_URL", "https://issuer.example.edu")
 
     first = await canvas_routes.get_canvas_lti_registration_config(
@@ -307,43 +327,95 @@ async def test_canvas_registration_config_token_rotates_and_is_publicly_revocabl
 
 
 @pytest.mark.asyncio
-async def test_production_canvas_tool_signer_rejects_local_private_jwk(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_canvas_tool_signer_rejects_local_private_jwk_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     jwk, _public_key = _private_rsa_jwk()
     monkeypatch.setenv("CANVAS_LTI_TOOL_PRIVATE_JWKS", json.dumps(jwk))
-    monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.delenv("SIGNING_KEYS_INTERNAL_URL", raising=False)
     monkeypatch.delenv("SIGNING_KEYS_INTERNAL_API_KEY", raising=False)
     with pytest.raises(HTTPException, match="Production Canvas LTI signing"):
-        await canvas_routes.get_canvas_lti_tool_jwks()
+        canvas_routes.IssuerDidToolJwtSigner()
 
 
 @pytest.mark.asyncio
-async def test_production_canvas_tool_signer_requires_lti_key_purpose(
+async def test_production_canvas_tool_signer_uses_only_organization_and_issuer_did(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
+    resolved: dict[str, object] = {}
+    private_jwk, _public_key = _private_rsa_jwk()
 
     async def sign(**kwargs):
         captured.update(kwargs)
         return {"signature_raw_b64": "c2ln"}
 
+    async def resolve(*args, **kwargs):
+        resolved.update(args=args, **kwargs)
+        return {
+            "ok": True,
+            "issuer_did": issuer_did,
+            "verification_method_id": kid,
+            "public_jwk": {
+                **{
+                    name: value
+                    for name, value in private_jwk.items()
+                    if name not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+                },
+                "kid": kid,
+                "alg": "RS256",
+            },
+        }
+
     monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_SERVICE_ID", "canvas-lti-rs256")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE", "canvas-lti-key")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "canvas-lti-kid")
+    issuer_did = "did:web:issuer.example:canvas"
+    kid = f"{issuer_did}#lti-tool-rs256"
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", issuer_did)
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
-    monkeypatch.setattr(canvas_routes, "sign_payload_with_remote_service", sign)
+    monkeypatch.setattr(canvas_routes, "resolve_remote_issuer_did", resolve)
+    monkeypatch.setattr(canvas_routes, "sign_payload_with_issuer_did", sign)
 
-    token = await canvas_routes.RemoteKmsToolJwtSigner().sign_jwt(
+    token = await canvas_routes.IssuerDidToolJwtSigner().sign_jwt(
         {"iss": "client-123", "aud": "https://canvas.example.edu/login/oauth2/token"}
     )
 
     assert token.endswith(".c2ln")
-    assert captured["signing_service_id"] == "canvas-lti-rs256"
-    assert captured["key_reference"] == "canvas-lti-key"
-    assert captured["algorithm"] == "RS256"
+    assert resolved["args"] == ("system-tools",)
+    assert resolved["issuer_did"] == issuer_did
+    assert resolved["credential_format"] == "lti_tool_jwt"
+    assert resolved["key_purpose"] == "lti_tool_signing"
+    assert resolved["algorithm"] == "RS256"
+    assert captured["issuer_did"] == issuer_did
+    assert captured["credential_format"] == "lti_tool_jwt"
     assert captured["key_purpose"] == "lti_tool_signing"
+    assert captured["expected_verification_method_id"] == kid
+    assert captured["algorithm"] == "RS256"
+    assert "issuer_profile_id" not in captured
+    assert "signing_service_id" not in captured
+    assert "key_reference" not in captured
+
+
+@pytest.mark.asyncio
+async def test_production_canvas_tool_signer_rejects_kid_outside_issuer_did(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def resolve(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "issuer_did": "did:web:issuer.example:canvas",
+            "verification_method_id": "did:web:other.example#key-1",
+            "public_jwk": {"kid": "did:web:other.example#key-1", "kty": "RSA"},
+        }
+
+    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", "did:web:issuer.example:canvas")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
+    monkeypatch.setattr(canvas_routes, "resolve_remote_issuer_did", resolve)
+
+    with pytest.raises(HTTPException, match="verification method"):
+        await canvas_routes.IssuerDidToolJwtSigner().sign_jwt({"iss": "client-123"})
 
 
 @pytest.mark.asyncio
@@ -352,53 +424,107 @@ async def test_production_canvas_tool_jwks_rejects_private_material(
 ) -> None:
     private_jwk, _public_key = _private_rsa_jwk("canvas-lti-kid")
     monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_SERVICE_ID", "canvas-lti-rs256")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "canvas-lti-kid")
+    issuer_did = "did:web:issuer.example:canvas"
+    kid = f"{issuer_did}#lti-tool-rs256"
+    private_jwk["kid"] = kid
+
+    async def resolve(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "issuer_did": issuer_did,
+            "verification_method_id": kid,
+            "public_jwk": private_jwk,
+        }
+
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", issuer_did)
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
-    monkeypatch.setenv(
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-        json.dumps({"keys": [private_jwk]}),
-    )
+    monkeypatch.setattr(canvas_routes, "resolve_remote_issuer_did", resolve)
 
     with pytest.raises(HTTPException, match="must not contain private key material"):
-        await canvas_routes.RemoteKmsToolJwtSigner().public_jwks()
+        await canvas_routes.IssuerDidToolJwtSigner().public_jwks()
+
+
+@pytest.mark.asyncio
+async def test_production_canvas_tool_jwks_uses_did_assertion_methods_for_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer_did = "did:web:issuer.example:canvas"
+    active_id = f"{issuer_did}#lti-active"
+    retired_id = f"{issuer_did}#lti-retiring"
+    active_private, _active_public_key = _private_rsa_jwk(active_id)
+    retired_private, _retired_public_key = _private_rsa_jwk(retired_id)
+    active_public = {
+        name: value
+        for name, value in active_private.items()
+        if name not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+    }
+    retired_public = {
+        name: value
+        for name, value in retired_private.items()
+        if name not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+    }
+
+    async def resolve(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "issuer_did": issuer_did,
+            "verification_method_id": active_id,
+            "public_jwk": active_public,
+            "did_document": {
+                "id": issuer_did,
+                "verificationMethod": [
+                    {"id": retired_id, "publicKeyJwk": retired_public},
+                    {"id": active_id, "publicKeyJwk": active_public},
+                    {
+                        "id": f"{issuer_did}#not-an-assertion",
+                        "publicKeyJwk": retired_public,
+                    },
+                ],
+                "assertionMethod": [active_id, retired_id],
+            },
+        }
+
+    monkeypatch.setenv("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
+    monkeypatch.setenv("CANVAS_LTI_TOOL_ISSUER_DID", issuer_did)
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://gateway/internal/signing-keys")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
+    monkeypatch.setattr(canvas_routes, "resolve_remote_issuer_did", resolve)
+
+    document = await canvas_routes.IssuerDidToolJwtSigner().public_jwks()
+
+    assert [key["kid"] for key in document["keys"]] == [active_id, retired_id]
+    assert all(
+        not canvas_routes._RSA_PRIVATE_JWK_FIELDS.intersection(key)
+        for key in document["keys"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_lti_tool_readiness_challenge_requires_signer_to_match_published_jwk(
     monkeypatch: pytest.MonkeyPatch,
+    _stub_canvas_tool_signer: _TestToolJwtSigner,
 ) -> None:
-    private_jwk, _public_key = _private_rsa_jwk("canvas-lti-active")
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("CANVAS_LTI_ALLOW_LOCAL_PRIVATE_JWK", "true")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_PRIVATE_JWKS", json.dumps(private_jwk))
-    monkeypatch.setenv("CANVAS_LTI_TOOL_ACTIVE_KID", "canvas-lti-active")
-
     assert await canvas_routes._lti_tool_signing_challenge_ready() is True
 
-    other_private_jwk, _other_public_key = _private_rsa_jwk("canvas-lti-active")
+    other_private_jwk, _other_public_key = _private_rsa_jwk("tool-key-1")
     other_public_jwk = {
         key: value
         for key, value in other_private_jwk.items()
         if key not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
     }
 
-    async def mismatched_jwks(_self) -> dict[str, object]:
+    async def mismatched_jwks() -> dict[str, object]:
         return {"keys": [other_public_jwk]}
 
-    monkeypatch.setattr(
-        canvas_routes.LocalJwkToolJwtSigner,
-        "public_jwks",
-        mismatched_jwks,
-    )
+    monkeypatch.setattr(_stub_canvas_tool_signer, "public_jwks", mismatched_jwks)
     assert await canvas_routes._lti_tool_signing_challenge_ready() is False
 
 
 @pytest.mark.asyncio
 async def test_canvas_lti_service_client_assertion_is_rs256_with_active_kid(monkeypatch: pytest.MonkeyPatch) -> None:
-    jwk, public_key = _private_rsa_jwk("active-rsa-key")
-    monkeypatch.setenv("CANVAS_LTI_TOOL_PRIVATE_JWKS", json.dumps(jwk))
+    signer = _TestToolJwtSigner("active-rsa-key")
+    monkeypatch.setattr(canvas_routes, "_tool_jwt_signer", lambda: signer)
     platform = CanvasPlatform(id="platform", lti_client_id="client-123")
 
     assertion = await canvas_routes._lti_service_client_assertion(
@@ -406,7 +532,7 @@ async def test_canvas_lti_service_client_assertion_is_rs256_with_active_kid(monk
         "https://canvas.example.edu/login/oauth2/token",
     )
 
-    _verify_rs256_jwt_signature(assertion, public_key)
+    _verify_rs256_jwt_signature(assertion, signer.private_key.public_key())
     header = json.loads(_b64url_decode(assertion.split(".")[0]))
     payload = _jwt_payload(assertion)
     assert header == {"alg": "RS256", "kid": "active-rsa-key", "typ": "JWT"}
@@ -1970,7 +2096,10 @@ async def test_canvas_lti_experience_launch_redirects_and_persists_session(monke
 
 
 @pytest.mark.asyncio
-async def test_canvas_lti_deep_linking_response_signs_lti_resource_link(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_canvas_lti_deep_linking_response_signs_lti_resource_link(
+    monkeypatch: pytest.MonkeyPatch,
+    _stub_canvas_tool_signer: _TestToolJwtSigner,
+) -> None:
     repo = InMemoryIssuanceRepository()
     platform = CanvasPlatform(
         id="canvas-platform-deep-link",
@@ -2005,8 +2134,6 @@ async def test_canvas_lti_deep_linking_response_signs_lti_resource_link(monkeypa
     )
     await repo.save_canvas_platform(platform)
     await repo.save_canvas_program_binding(binding)
-    jwk, public_key = _private_rsa_jwk()
-    monkeypatch.setenv("CANVAS_LTI_TOOL_PRIVATE_JWKS", json.dumps(jwk))
     monkeypatch.setattr(canvas_routes, "ISSUER_BASE_URL", "https://issuer.example.com")
     monkeypatch.setattr(canvas_routes, "CANVAS_LTI_EXPERIENCE_BASE_URL", "https://app.example.edu")
 
@@ -2063,7 +2190,10 @@ async def test_canvas_lti_deep_linking_response_signs_lti_resource_link(monkeypa
         repo=repo,
     )
 
-    _verify_rs256_jwt_signature(response.jwt, public_key)
+    _verify_rs256_jwt_signature(
+        response.jwt,
+        _stub_canvas_tool_signer.private_key.public_key(),
+    )
     header = json.loads(_b64url_decode(response.jwt.split(".")[0]))
     payload = _jwt_payload(response.jwt)
     stored_state = await repo.get_canvas_lti_launch_state(
@@ -2272,8 +2402,6 @@ async def test_canvas_lti_evidence_sync_is_durable_and_worker_reads_ags(monkeypa
     await repo.save_canvas_platform(platform)
     await repo.save_application_template(template)
     await repo.save_canvas_program_binding(binding)
-    jwk, _public_key = _private_rsa_jwk()
-    monkeypatch.setenv("CANVAS_LTI_TOOL_PRIVATE_JWKS", json.dumps(jwk))
     monkeypatch.setattr(canvas_routes, "CANVAS_LTI_EXPERIENCE_BASE_URL", "https://app.example.edu")
 
     login = await canvas_routes.initiate_canvas_lti_experience_login_route(

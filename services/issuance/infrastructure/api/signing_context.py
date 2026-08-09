@@ -51,19 +51,19 @@ def _response_error_detail(response: httpx.Response) -> str:
 async def resolve_remote_issuer_context(
     organization_id: str,
     *,
-    issuer_profile_id: str | None = None,
+    issuer_did: str | None = None,
     issuer_mode: str | None = None,
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, Any] | None:
-    """Resolve the active issuer DID and remote signing service for an org."""
+    """Resolve the active issuer profile and its DID for an organization."""
     if not organization_id:
         return None
 
     params: dict[str, str] = {"organization_id": organization_id}
-    if issuer_profile_id:
-        params["issuer_profile_id"] = issuer_profile_id
+    if issuer_did:
+        params["issuer_did"] = issuer_did
     if issuer_mode:
         params["issuer_mode"] = issuer_mode
     if credential_format:
@@ -73,9 +73,10 @@ async def resolve_remote_issuer_context(
     if algorithm:
         params["algorithm"] = algorithm
 
+    endpoint = "/resolve-issuer-did" if issuer_did else "/issuer-context"
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.get(
-            f"{_internal_signing_base_url()}/issuer-context",
+            f"{_internal_signing_base_url()}{endpoint}",
             params=params,
             headers=_internal_headers(),
         )
@@ -89,7 +90,25 @@ async def resolve_remote_issuer_context(
             f"DID issuer context resolution failed (HTTP {response.status_code}): {_response_error_detail(response)}"
         )
     data = response.json()
-    return data if isinstance(data, dict) and data.get("ok") else None
+    if not isinstance(data, dict) or not data.get("ok"):
+        return None
+    if not issuer_did:
+        return data
+
+    # The DID resolver is the source of truth for public identity, tenant
+    # ownership, format/purpose/algorithm compatibility, DID-document key
+    # binding, and ambiguity. Normalize its private profile result to the
+    # internal context shape used by signing code.
+    profile = data.get("issuer_profile")
+    if not isinstance(profile, dict) or not profile.get("id"):
+        raise RuntimeError("Issuer DID resolver returned no active issuer profile")
+    resolved_profile_id = str(profile["id"])
+    normalized = dict(data)
+    normalized["issuer_profile_id"] = resolved_profile_id
+    normalized["issuer_mode"] = profile.get("issuer_mode") or issuer_mode or "org_managed"
+    normalized["signing_service_id"] = profile.get("signing_service_id")
+    normalized["signing_key_reference"] = profile.get("signing_key_reference")
+    return normalized
 
 
 async def resolve_remote_issuer_did(
@@ -136,36 +155,48 @@ async def resolve_remote_issuer_did(
     return data if isinstance(data, dict) and data.get("ok") else None
 
 
-async def sign_payload_with_remote_service(
+async def sign_payload_with_issuer_did(
     *,
     organization_id: str,
-    signing_service_id: str,
+    issuer_did: str,
+    credential_format: str,
+    key_purpose: str,
     payload: bytes,
-    algorithm: str | None = None,
-    key_reference: str | None = None,
-    key_purpose: str | None = None,
+    algorithm: str,
+    expected_verification_method_id: str | None = None,
 ) -> dict[str, Any]:
-    """Ask the registered remote KMS service to sign a payload."""
+    """Sign through the active profile resolved from an organization-scoped DID.
+
+    The issuance service deliberately does not send a profile, signing-service,
+    or provider-key selector.  The gateway resolves the DID and operation to a
+    single active issuer profile, then signs through that profile's custody
+    backend.  This keeps the protocol boundary DID-first even though the
+    gateway retains profile data as private configuration and audit state.
+    """
     if not organization_id:
-        raise RuntimeError("organization_id is required for remote signing")
-    if not signing_service_id:
-        raise RuntimeError("signing_service_id is required for remote signing")
+        raise RuntimeError("organization_id is required for DID-mediated signing")
+    if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
+        raise RuntimeError("issuer_did must be a DID string for DID-mediated signing")
+    if not credential_format:
+        raise RuntimeError("credential_format is required for DID-mediated signing")
+    if not key_purpose:
+        raise RuntimeError("key_purpose is required for DID-mediated signing")
+    if algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
+        raise RuntimeError("a supported algorithm is required for DID-mediated signing")
     if not payload:
-        raise RuntimeError("payload is required for remote signing")
+        raise RuntimeError("payload is required for DID-mediated signing")
 
     body: dict[str, Any] = {
+        "issuer_did": issuer_did,
+        "credential_format": credential_format,
+        "key_purpose": key_purpose,
         "payload_b64": base64.urlsafe_b64encode(payload).decode().rstrip("="),
     }
-    if algorithm:
-        body["algorithm"] = algorithm
-    if key_reference:
-        body["key_reference"] = key_reference
-    if key_purpose:
-        body["key_purpose"] = key_purpose
+    body["algorithm"] = algorithm
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(
-            f"{_internal_signing_base_url()}/services/{signing_service_id}/sign",
+            f"{_internal_signing_base_url()}/issuer-dids/sign",
             params={"organization_id": organization_id},
             json=body,
             headers=_internal_headers(),
@@ -175,13 +206,26 @@ async def sign_payload_with_remote_service(
         raise RuntimeError("Internal signing API rejected the service API key")
     if response.status_code >= 400:
         raise RuntimeError(
-            f"DID-backed signing failed (HTTP {response.status_code}): {_response_error_detail(response)}"
+            f"DID-mediated signing failed (HTTP {response.status_code}): "
+            f"{_response_error_detail(response)}"
         )
     data = response.json()
     if not isinstance(data, dict) or not data.get("ok"):
-        raise RuntimeError("Remote signing service returned an invalid response")
-
+        raise RuntimeError("DID-mediated signer returned an invalid response")
+    if data.get("issuer_did") != issuer_did:
+        raise RuntimeError("DID-mediated signer returned a different issuer DID")
+    if data.get("algorithm") != algorithm:
+        raise RuntimeError("DID-mediated signer returned a different algorithm")
+    if (
+        expected_verification_method_id
+        and data.get("verification_method_id") != expected_verification_method_id
+    ):
+        raise RuntimeError(
+            "DID-mediated signer returned a different DID verification method"
+        )
+    if data.get("issuer_profile_id") or data.get("service_id"):
+        raise RuntimeError("DID-mediated signer exposed private signing routing")
     signature = str(data.get("signature_raw_b64") or data.get("signature_b64") or "")
     if not signature:
-        raise RuntimeError("Remote signing service did not return a signature")
+        raise RuntimeError("DID-mediated signer did not return a signature")
     return data

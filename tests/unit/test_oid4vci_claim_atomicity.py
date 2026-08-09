@@ -119,6 +119,8 @@ def _transaction(**overrides) -> IssuanceTransaction:
         "claims": {"achievement": "Portable Canvas"},
         "credential_type": "OpenBadgeCredential",
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "issuer_did_override": "did:web:issuer.example",
+        "issuer_algorithm": "ES256",
     }
     values.update(overrides)
     return IssuanceTransaction(**values)
@@ -140,9 +142,13 @@ def _credential(transaction: IssuanceTransaction, credential_id: str) -> IssuedC
 
 
 def _proof_jwt() -> str:
-    encode = lambda value: base64.urlsafe_b64encode(  # noqa: E731 - compact JWT fixture
-        json.dumps(value, separators=(",", ":")).encode()
-    ).rstrip(b"=").decode()
+    encode = lambda value: (
+        base64.urlsafe_b64encode(  # noqa: E731 - compact JWT fixture
+            json.dumps(value, separators=(",", ":")).encode()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
     return f"{encode({'alg': 'ES256'})}.{encode({'aud': 'https://beta.elevenidllc.com/org/org-1', 'nonce': 'wallet-nonce'})}.signature"
 
 
@@ -168,6 +174,216 @@ def _request() -> Request:
     )
 
 
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid_proof(
+    monkeypatch,
+) -> None:
+    """A replayed or expired nonce is recoverable with a fresh nonce request."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    async def reject_nonce(_nonce: str) -> bool:
+        return False
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (True, "did:key:wallet", {}, None),
+    )
+    monkeypatch.setattr(routes._nonce_pool, "consume", reject_nonce)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_nonce",
+        "error_description": "Proof nonce is missing, expired, or already used",
+    }
+
+
+@pytest.mark.asyncio
+async def test_invalid_proof_does_not_consume_wallet_nonce(monkeypatch) -> None:
+    """Unauthenticated proof bytes cannot burn a valid wallet nonce."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    consumed: list[str] = []
+
+    async def consume_nonce(nonce: str) -> bool:
+        consumed.append(nonce)
+        return True
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (False, "", None, "invalid signature"),
+    )
+    monkeypatch.setattr(routes._nonce_pool, "consume", consume_nonce)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_proof",
+        "error_description": "invalid signature",
+    }
+    assert consumed == []
+
+
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_missing_proof_as_invalid_proof(monkeypatch) -> None:
+    """OID4VCI uses the standard invalid_proof code for an absent proof."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(credential_configuration_id="OpenBadgeCredential#sd-jwt"),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_proof",
+        "error_description": "Proof of possession is required per OID4VCI §7.2",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "credential_request",
+    [
+        routes.CredentialRequest(),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            credential_identifier="OpenBadgeCredential-2026",
+        ),
+    ],
+)
+async def test_credential_endpoint_requires_exactly_one_final_selector(
+    credential_request: routes.CredentialRequest,
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        credential_request,
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_credential_request",
+        "error_description": (
+            "Provide exactly one of credential_configuration_id or credential_identifier"
+        ),
+    }
+
+
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_unknown_configuration_with_standard_error() -> None:
+    """OID4VCI defines a specific error for an unknown configuration id."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="unknown-configuration",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "unknown_credential_configuration",
+        "error_description": "Unknown credential_configuration_id: 'unknown-configuration'",
+    }
+
+
+@pytest.mark.asyncio
+async def test_credential_endpoint_rejects_same_tenant_configuration_substitution() -> None:
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="OtherCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "unknown_credential_configuration"
+
+
+@pytest.mark.asyncio
+async def test_credential_endpoint_reports_unknown_identifier_with_standard_error() -> None:
+    """OID4VCI defines a specific error for an unknown credential identifier."""
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_identifier="unknown-identifier",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "unknown_credential_identifier",
+        "error_description": "Unknown credential_identifier: 'unknown-identifier'",
+    }
+
+
 def test_schema_enforces_one_credential_per_transaction() -> None:
     assert issuance_transactions_table.c.reserved_credential_id.nullable is True
     indexes = {index.name: index for index in issued_credentials_table.indexes}
@@ -188,7 +404,9 @@ def test_portable_migration_installs_and_reverses_claim_constraints(monkeypatch)
         def execute(self, _statement, _parameters=None):
             return EmptyRows()
 
-    monkeypatch.setattr(migration.op, "execute", lambda statement: upgrade_sql.append(str(statement)))
+    monkeypatch.setattr(
+        migration.op, "execute", lambda statement: upgrade_sql.append(str(statement))
+    )
     monkeypatch.setattr(migration.op, "get_bind", lambda: Bind())
     migration.upgrade()
 
@@ -198,10 +416,14 @@ def test_portable_migration_installs_and_reverses_claim_constraints(monkeypatch)
     assert "DROP INDEX IF EXISTS issuance_service.ix_issued_credentials_transaction_id" in applied
 
     downgrade_sql: list[str] = []
-    monkeypatch.setattr(migration.op, "execute", lambda statement: downgrade_sql.append(str(statement)))
+    monkeypatch.setattr(
+        migration.op, "execute", lambda statement: downgrade_sql.append(str(statement))
+    )
     migration.downgrade()
     reversed_sql = "\n".join(downgrade_sql)
-    assert "DROP INDEX IF EXISTS issuance_service.ux_issued_credentials_transaction_id" in reversed_sql
+    assert (
+        "DROP INDEX IF EXISTS issuance_service.ux_issued_credentials_transaction_id" in reversed_sql
+    )
     assert "CREATE INDEX IF NOT EXISTS ix_issued_credentials_transaction_id" in reversed_sql
     assert "DROP COLUMN IF EXISTS reserved_credential_id" in reversed_sql
 
@@ -271,6 +493,44 @@ async def test_stale_authorized_save_cannot_reopen_a_signing_transaction() -> No
     assert stored.status == IssuanceStatus.SIGNING
     assert stored.reserved_credential_id == "urn:uuid:reserved"
     assert stored.nonce == "wallet-nonce"
+
+
+@pytest.mark.asyncio
+async def test_postgres_token_claim_uses_pending_compare_and_set() -> None:
+    prepared = _transaction(
+        status=IssuanceStatus.AUTHORIZED,
+        access_token="new-wallet-token",
+        nonce=None,
+    )
+    returned = _transaction(
+        status=IssuanceStatus.AUTHORIZED,
+        access_token="hashed-at-rest",
+        nonce=None,
+    )
+    winner_session = _Session([_Result(_transaction_row(returned))])
+    winner_repo = PostgresIssuanceRepository(_SessionFactory(winner_session))
+
+    claimed = await winner_repo.claim_transaction_for_token(prepared)
+
+    assert claimed is not None
+    assert claimed.status == IssuanceStatus.AUTHORIZED
+    assert claimed.access_token == "new-wallet-token"
+    assert winner_session.committed is True
+    statement = winner_session.statements[0]
+    sql = str(statement).upper()
+    parameters = statement.compile().params
+    assert "PRE_AUTH_CODE" in sql
+    assert "STATUS =" in sql
+    assert "RETURNING" in sql
+    assert IssuanceStatus.PENDING.value in parameters.values()
+    assert IssuanceStatus.AUTHORIZED.value in parameters.values()
+
+    loser_session = _Session([_Result(None, rowcount=0)])
+    loser_repo = PostgresIssuanceRepository(_SessionFactory(loser_session))
+
+    assert await loser_repo.claim_transaction_for_token(prepared) is None
+    assert loser_session.rolled_back is True
+    assert loser_session.committed is False
 
 
 @pytest.mark.asyncio
@@ -367,13 +627,15 @@ async def test_postgres_canvas_approval_reserves_transaction_under_application_l
     )
     repo = PostgresIssuanceRepository(_SessionFactory(session))
 
-    stored_application, stored_transaction, already_issued = (
-        await repo.reserve_canvas_application_issuance(
-            prepared,
-            reviewer_id="canvas-approver",
-            review_notes="Concurrent approval",
-            reviewed_at=now,
-        )
+    (
+        stored_application,
+        stored_transaction,
+        already_issued,
+    ) = await repo.reserve_canvas_application_issuance(
+        prepared,
+        reviewer_id="canvas-approver",
+        review_notes="Concurrent approval",
+        reviewed_at=now,
     )
 
     assert session.committed is True
@@ -515,7 +777,11 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
 
     counts = {"builder": 0, "kms": 0}
 
-    async def kms_sign(**_kwargs):
+    async def did_sign(**kwargs):
+        assert kwargs["issuer_did"] == remote_context["issuer_did"]
+        assert kwargs["credential_format"] == "dc+sd-jwt"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert "issuer_profile_id" not in kwargs
         counts["kms"] += 1
         await asyncio.sleep(0)
         return {"signature": "remote-signature", "algorithm": "ES256"}
@@ -537,8 +803,10 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
     monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
     monkeypatch.setattr(routes, "require_canvas_issuance_ready", readiness_barrier)
-    monkeypatch.setattr(routes, "verify_proof_jwt", lambda *_args, **_kwargs: (True, "did:key:learner", {}, None))
-    monkeypatch.setattr(routes, "sign_payload_with_remote_service", kms_sign)
+    monkeypatch.setattr(
+        routes, "verify_proof_jwt", lambda *_args, **_kwargs: (True, "did:key:learner", {}, None)
+    )
+    monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
     monkeypatch.setattr(routes, "create_sd_jwt_vc_with_remote_signing", build_credential)
     monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
     monkeypatch.setattr(routes, "record_canvas_credential_claim", no_op)
@@ -546,7 +814,7 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     monkeypatch.setattr(routes, "record_post_issuance_deliveries", no_op_positional)
 
     credential_request = routes.CredentialRequest(
-        format="vc+sd-jwt",
+        credential_configuration_id="OpenBadgeCredential#sd-jwt",
         proofs={"jwt": [_proof_jwt()]},
     )
 
@@ -574,7 +842,146 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
 
 
 @pytest.mark.asyncio
-async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(monkeypatch) -> None:
+async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    transaction = _transaction(
+        credential_payload_format="w3c_vcdm_v2_di",
+        credential_type="EmployeeCredential",
+        issuer_did_override="did:web:issuer.example",
+        issuer_algorithm="EdDSA",
+    )
+    credential_document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "id": "urn:uuid:official-document",
+        "type": ["VerifiableCredential", "EmployeeCredential"],
+        "issuer": "did:web:issuer.example",
+        "credentialSubject": {"id": "did:key:learner", "role": "member"},
+    }
+    transaction.claims["_credential_document"] = credential_document
+    await repo.save_transaction(transaction)
+
+    verification_method_id = "did:web:issuer.example#data-integrity"
+    public_jwk = {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("="),
+        "kid": verification_method_id,
+    }
+    remote_context = {
+        "issuer_profile_id": "issuer-profile-data-integrity",
+        "issuer_did": "did:web:issuer.example",
+        "signing_service_id": "managed-custody",
+        "verification_method_id": verification_method_id,
+        "public_jwk": public_jwk,
+        "service": {"algorithm": "EdDSA"},
+    }
+    captured: dict[str, object] = {}
+
+    async def resolve_context(tx, **kwargs):
+        captured["resolution"] = kwargs
+        tx.issuer_profile_id = remote_context["issuer_profile_id"]
+        tx.issuer_did_override = remote_context["issuer_did"]
+        tx.signing_service_id = remote_context["signing_service_id"]
+        return remote_context
+
+    async def did_sign(**kwargs):
+        captured["sign"] = kwargs
+        assert kwargs["organization_id"] == "org-1"
+        assert kwargs["issuer_did"] == "did:web:issuer.example"
+        assert kwargs["credential_format"] == "ldp_vc"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert kwargs["algorithm"] == "EdDSA"
+        assert "issuer_profile_id" not in kwargs
+        assert "signing_service_id" not in kwargs
+        assert "key_reference" not in kwargs
+        return {
+            "ok": True,
+            "issuer_did": kwargs["issuer_did"],
+            "verification_method_id": verification_method_id,
+            "algorithm": "EdDSA",
+            "signature_raw_b64": base64.urlsafe_b64encode(bytes(64)).decode().rstrip("="),
+        }
+
+    async def build_data_integrity(*, remote_sign, credential_id, **kwargs):
+        captured["builder"] = kwargs
+        await remote_sign(b"canonical-data-integrity-input", "EdDSA")
+        return (
+            json.dumps(
+                {
+                    "@context": ["https://www.w3.org/ns/credentials/v2"],
+                    "id": credential_id,
+                    "type": ["VerifiableCredential"],
+                    "issuer": kwargs["issuer_did"],
+                    "credentialSubject": {"id": kwargs["subject_id"]},
+                    "proof": {
+                        "type": "DataIntegrityProof",
+                        "cryptosuite": "eddsa-rdfc-2022",
+                        "verificationMethod": kwargs["verification_method_id"],
+                        "proofPurpose": "assertionMethod",
+                        "proofValue": "zProof",
+                    },
+                },
+                separators=(",", ":"),
+            ),
+            credential_id,
+        )
+
+    async def allocate_status(**_kwargs):
+        return "status-profile", []
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
+    monkeypatch.setattr(routes, "require_canvas_issuance_ready", no_op)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (True, "did:key:learner", {}, None),
+    )
+    monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
+    monkeypatch.setattr(
+        routes,
+        "create_vcdm_data_integrity_with_remote_signing",
+        build_data_integrity,
+    )
+    monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
+    monkeypatch.setattr(routes, "record_canvas_credential_claim", no_op)
+    monkeypatch.setattr(routes, "_finalize_credential_renewal", no_op)
+    monkeypatch.setattr(routes, "record_post_issuance_deliveries", no_op)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="EmployeeCredential#ldp-vc",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, routes.CredentialResponse)
+    assert response.credentials[0]["format"] == "ldp_vc"
+    assert response.credentials[0]["credential"]["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
+    assert captured["resolution"]["credential_format"] == "ldp_vc"
+    assert captured["builder"]["public_jwk"] == public_jwk
+    assert captured["builder"]["verification_method_id"] == verification_method_id
+    assert captured["builder"]["credential_document"] == credential_document
+    assert captured["sign"]["payload"] == b"canonical-data-integrity-input"
+
+    credentials = await repo.list_credentials_by_org("org-1")
+    assert len(credentials) == 1
+    persisted = json.loads(credentials[0].credential_jwt)
+    assert persisted["issuer"] == "did:web:issuer.example"
+    assert persisted["id"] == credential_document["id"]
+    assert persisted["proof"]["verificationMethod"] == verification_method_id
+
+
+@pytest.mark.asyncio
+async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
+    monkeypatch,
+) -> None:
     repo = InMemoryIssuanceRepository()
     authorization_session = AuthorizationSession(
         id="authorization-session-race",
@@ -585,6 +992,20 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         status="exchanged",
     )
     await repo.save_authorization_session(authorization_session)
+
+    async def display_metadata(_organization_id: str):
+        return {
+            "OpenBadgeCredential": {
+                "issuer_did": "did:web:issuer.example",
+                "issuer_algorithm": "ES256",
+            }
+        }
+
+    monkeypatch.setattr(
+        repo,
+        "get_credential_display_metadata_for_org",
+        display_metadata,
+    )
 
     remote_context = {
         "issuer_profile_id": "issuer-profile-1",
@@ -613,7 +1034,11 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
 
     counts = {"builder": 0, "kms": 0}
 
-    async def kms_sign(**_kwargs):
+    async def did_sign(**kwargs):
+        assert kwargs["issuer_did"] == remote_context["issuer_did"]
+        assert kwargs["credential_format"] == "dc+sd-jwt"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert "issuer_profile_id" not in kwargs
         counts["kms"] += 1
         await asyncio.sleep(0)
         return {"signature": "remote-signature", "algorithm": "ES256"}
@@ -640,7 +1065,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         "verify_proof_jwt",
         lambda *_args, **_kwargs: (True, "did:key:learner", {}, None),
     )
-    monkeypatch.setattr(routes, "sign_payload_with_remote_service", kms_sign)
+    monkeypatch.setattr(routes, "sign_payload_with_issuer_did", did_sign)
     monkeypatch.setattr(routes, "create_sd_jwt_vc_with_remote_signing", build_credential)
     monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocate_status)
     monkeypatch.setattr(routes, "record_canvas_credential_claim", no_op)
@@ -648,7 +1073,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
     monkeypatch.setattr(routes, "record_post_issuance_deliveries", no_op_positional)
 
     credential_request = routes.CredentialRequest(
-        format="vc+sd-jwt",
+        credential_configuration_id="OpenBadgeCredential#sd-jwt",
         proofs={"jwt": [_proof_jwt()]},
     )
     results = await asyncio.gather(
@@ -660,9 +1085,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         ),
     )
 
-    expected_transaction_id = routes._authorization_session_transaction_id(
-        authorization_session.id
-    )
+    expected_transaction_id = routes._authorization_session_transaction_id(authorization_session.id)
     transactions = await repo.list_transactions("org-1")
     assert [transaction.id for transaction in transactions] == [expected_transaction_id]
     assert transactions[0].status == IssuanceStatus.ISSUED

@@ -31,10 +31,8 @@ class CredentialContext:
     validity_days: int = 365
     renewable: bool = False
     renewal_window_days: int = 30
-    issuer_profile_id: str | None = None
-    issuer_mode: str = "org_managed"
+    issuer_did: str | None = None
     issuer_algorithm: str | None = None
-    issuer_key_id: str | None = None
 
 
 def credential_context_from_template_snapshot(snapshot: dict[str, Any]) -> CredentialContext:
@@ -47,31 +45,19 @@ def credential_context_from_template_snapshot(snapshot: dict[str, Any]) -> Crede
 
     if not isinstance(snapshot, dict) or not snapshot:
         raise ValueError("Credential template snapshot is required")
-    remote_signing_config = (
-        snapshot.get("remote_signing_config")
-        if isinstance(snapshot.get("remote_signing_config"), dict)
-        else {}
-    )
     credential_type = str(snapshot.get("credential_type") or "").strip()
     payload_format = str(snapshot.get("credential_payload_format") or "").strip()
     revocation_profile_id = str(snapshot.get("revocation_profile_id") or "").strip()
-    issuer_profile_id = str(snapshot.get("issuer_profile_id") or "").strip()
-    issuer_algorithm = str(
-        snapshot.get("issuer_algorithm")
-        or snapshot.get("signing_algorithm")
-        or remote_signing_config.get("algorithm")
-        or ""
-    ).strip()
-    issuer_key_id = str(
-        snapshot.get("issuer_key_id")
-        or remote_signing_config.get("signing_key_reference")
-        or ""
-    ).strip()
+    issuer_did = str(snapshot.get("issuer_did") or "").strip()
+    issuer_algorithm = str(snapshot.get("issuer_algorithm") or "").strip()
     if not credential_type:
         raise ValueError("Credential template snapshot is missing credential_type")
     normalized_credential_type = "".join(
         character for character in credential_type.lower() if character.isalnum()
     )
+    # Open Badges 2 is the sole temporary pre-1.0 compatibility exception.
+    # Keep it on the current DID-mediated signing path while ElevenID/marty-ui#260
+    # and ElevenID/marty-core#96 track removal after the short migration window.
     if normalized_credential_type not in {
         "openbadge",
         "openbadgev2",
@@ -83,16 +69,12 @@ def credential_context_from_template_snapshot(snapshot: dict[str, Any]) -> Crede
         raise ValueError("Credential template snapshot is missing credential_payload_format")
     if not revocation_profile_id:
         raise ValueError("Credential template snapshot is missing revocation_profile_id")
-    if not issuer_profile_id:
-        raise ValueError("Credential template snapshot is missing issuer_profile_id")
-    if str(snapshot.get("key_access_mode") or "").strip().upper() != "REMOTE_SIGNING":
-        raise ValueError("Credential template snapshot must use REMOTE_SIGNING")
+    if not issuer_did.startswith("did:"):
+        raise ValueError("Credential template snapshot is missing issuer_did")
     if not issuer_algorithm:
         raise ValueError("Credential template snapshot is missing issuer_algorithm")
     if issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
         raise ValueError("Credential template snapshot uses an unsupported issuer_algorithm")
-    if not issuer_key_id:
-        raise ValueError("Credential template snapshot is missing issuer_key_id")
 
     validity = snapshot.get("validity_rules") if isinstance(snapshot.get("validity_rules"), dict) else {}
     validity_days = int(validity.get("default_validity_days") or 365)
@@ -114,10 +96,8 @@ def credential_context_from_template_snapshot(snapshot: dict[str, Any]) -> Crede
         validity_days=max(1, validity_days),
         renewable=bool(validity.get("renewable", False)),
         renewal_window_days=max(1, renewal_window_days),
-        issuer_profile_id=issuer_profile_id,
-        issuer_mode=str(snapshot.get("issuer_mode") or "org_managed"),
+        issuer_did=issuer_did,
         issuer_algorithm=issuer_algorithm,
-        issuer_key_id=issuer_key_id,
     )
 
 
@@ -179,8 +159,10 @@ async def approve_application_for_issuance(
             tx.validity_days = credential_context.validity_days
             tx.renewable = credential_context.renewable
             tx.renewal_window_days = credential_context.renewal_window_days
-            tx.issuer_profile_id = credential_context.issuer_profile_id
-            tx.issuer_mode = credential_context.issuer_mode
+            tx.issuer_did_override = credential_context.issuer_did
+            tx.issuer_algorithm = credential_context.issuer_algorithm
+            tx.issuer_profile_id = None
+            tx.signing_service_id = None
             if credential_context.credential_vct:
                 tx.claims = {**tx.claims, "_vct": credential_context.credential_vct}
         if issuer_context_applier is not None:
@@ -225,8 +207,11 @@ async def approve_application_for_issuance(
             validity_days=context.validity_days,
             renewable=context.renewable,
             renewal_window_days=context.renewal_window_days,
-            issuer_profile_id=context.issuer_profile_id,
-            issuer_mode=context.issuer_mode,
+            issuer_profile_id=None,
+            issuer_mode="org_managed",
+            issuer_did_override=context.issuer_did,
+            issuer_algorithm=context.issuer_algorithm,
+            signing_service_id=None,
         )
         if issuer_context_applier is not None:
             await issuer_context_applier(tx)

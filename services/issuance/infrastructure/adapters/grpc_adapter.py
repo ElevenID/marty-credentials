@@ -18,9 +18,23 @@ from typing import Any
 from urllib.parse import quote
 
 import grpc
-
+from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.issuance_idempotency import (
+    canonical_issuance_request,
+    hash_idempotency_key,
+    issuance_request_hash,
+    normalize_idempotency_key,
+)
+from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
+from issuance.application.oid4vci_client_auth import (
+    ClientAuthenticationError,
+    authenticate_oid4vci_client,
+)
+from issuance.infrastructure.grpc_security import create_service_channel
 from marty_proto.v1 import (
     issuance_service_pb2 as pb2,
+)
+from marty_proto.v1 import (
     issuance_service_pb2_grpc,
 )
 
@@ -37,9 +51,12 @@ ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.co
 _MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
 _VDS_NC_PAYLOAD_FORMATS = {"vds_nc", "VDS_NC", "vdsnc"}
 _SD_JWT_PAYLOAD_FORMATS = {
-    "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
-    "SD_JWT_VC", "sd_jwt_vc",
-    "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt",
+    "w3c_vcdm_v2_sd_jwt",
+    "ietf_sd_jwt",
+    "SD_JWT_VC",
+    "sd_jwt_vc",
+    "vc+sd-jwt",
+    "dc+sd-jwt",
 }
 
 
@@ -47,7 +64,9 @@ def _org_issuer_url(org_id: str) -> str:
     return f"{ISSUER_BASE_URL}/org/{org_id}"
 
 
-def _credential_format_for_remote_context(payload_format: str | None, request_format: str | None = None) -> str:
+def _credential_format_for_remote_context(
+    payload_format: str | None, request_format: str | None = None
+) -> str:
     normalized_payload = (payload_format or "").strip().lower().replace("-", "_")
     normalized_request = (request_format or "").strip().lower().replace("-", "_")
     if normalized_payload in {"mso_mdoc", "mdoc"}:
@@ -90,23 +109,40 @@ async def _resolve_remote_signing_context_for_tx(
 
     context = await resolve_remote_issuer_context(
         tx.organization_id,
-        issuer_profile_id=getattr(tx, "issuer_profile_id", None),
+        issuer_did=getattr(tx, "issuer_did_override", None),
         issuer_mode=getattr(tx, "issuer_mode", "org_managed"),
         credential_format=credential_format,
         key_purpose=_key_purpose_for_credential_format(credential_format),
+        algorithm=getattr(tx, "issuer_algorithm", None),
     )
     if not context:
         raise RuntimeError("No active DID issuer profile is configured for this organization")
 
     issuer_did = context.get("issuer_did")
-    signing_service_id = context.get("signing_service_id")
-    if not issuer_did or not signing_service_id:
-        raise RuntimeError("Resolved DID issuer context is missing issuer_did or signing_service_id")
+    issuer_profile_id = context.get("issuer_profile_id") or (
+        context.get("issuer_profile") or {}
+    ).get("id")
+    algorithm = context.get("algorithm") or (
+        context.get("issuer_profile") or {}
+    ).get("algorithm")
+    if (
+        not issuer_profile_id
+        or not tx.issuer_did_override
+        or issuer_did != tx.issuer_did_override
+        or not tx.issuer_algorithm
+        or algorithm != tx.issuer_algorithm
+    ):
+        raise RuntimeError("Resolved issuer context does not match the requested DID and algorithm")
 
-    tx.issuer_did_override = issuer_did
-    tx.signing_service_id = signing_service_id
-    tx.issuer_profile_id = context.get("issuer_profile_id") or (context.get("issuer_profile") or {}).get("id") or getattr(tx, "issuer_profile_id", None)
-    tx.issuer_mode = context.get("issuer_mode") or (context.get("issuer_profile") or {}).get("issuer_mode") or getattr(tx, "issuer_mode", "org_managed")
+    # Preserve the resolved custody service only as internal audit/readiness
+    # state. Runtime signing addresses the issuer profile and asserts its DID.
+    tx.signing_service_id = context.get("signing_service_id")
+    tx.issuer_profile_id = issuer_profile_id
+    tx.issuer_mode = (
+        context.get("issuer_mode")
+        or (context.get("issuer_profile") or {}).get("issuer_mode")
+        or getattr(tx, "issuer_mode", "org_managed")
+    )
     return context
 
 
@@ -120,28 +156,33 @@ async def _create_remote_signed_sd_jwt_for_tx(
     credential_format: str,
     selective_disclosure_claims: list[str] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
-    """Create an SD-JWT credential signed by the org-scoped remote DID key."""
+    """Create an SD-JWT credential through the org-scoped issuer profile and DID."""
     from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
-    from issuance.infrastructure.api.signing_context import sign_payload_with_remote_service
+    from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_did
 
-    remote_context = await _resolve_remote_signing_context_for_tx(tx, credential_format=credential_format)
-    service = remote_context.get("service") if isinstance(remote_context.get("service"), dict) else {}
-    algorithm = str(service.get("algorithm") or remote_context.get("algorithm") or "ES256")
-    signing_key_reference = remote_context.get("signing_key_reference") if isinstance(remote_context, dict) else None
-    verification_method_id = remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
+    remote_context = await _resolve_remote_signing_context_for_tx(
+        tx, credential_format=credential_format
+    )
+    algorithm = str(tx.issuer_algorithm)
+    verification_method_id = (
+        remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
+    )
 
     async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
-        return await sign_payload_with_remote_service(
+        if algorithm_hint and algorithm_hint != algorithm:
+            raise RuntimeError("Credential builder requested a different issuer algorithm")
+        return await sign_payload_with_issuer_did(
             organization_id=tx.organization_id,
-            signing_service_id=tx.signing_service_id,
+            issuer_did=tx.issuer_did_override,
+            credential_format=credential_format,
+            key_purpose=_key_purpose_for_credential_format(credential_format),
             payload=payload,
-            algorithm=algorithm_hint or algorithm,
-            key_reference=signing_key_reference,
+            algorithm=algorithm,
+            expected_verification_method_id=verification_method_id,
         )
 
     credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
         issuer_did=tx.issuer_did_override,
-        signing_service_id=tx.signing_service_id,
         remote_sign=_remote_sign,
         subject_id=subject_id,
         holder_jwk=holder_jwk,
@@ -150,9 +191,9 @@ async def _create_remote_signed_sd_jwt_for_tx(
         expiration_seconds=31536000,
         selective_disclosure_claims=selective_disclosure_claims or [],
         algorithm=algorithm,
-        signing_key_reference=signing_key_reference,
         verification_method_id=verification_method_id,
         credential_format=credential_format,
+        issuer_certificate_chain=(remote_context.get("issuer_x5c")),
     )
     return credential, credential_id, remote_context
 
@@ -179,6 +220,68 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         # Active streaming subscribers: subscriber_id → asyncio.Queue
         self._stream_queues: dict[str, asyncio.Queue] = {}
 
+    @staticmethod
+    def _issuance_response_from_transaction(tx) -> pb2.IssuanceResponse:
+        """Reconstruct an offer only from the committed transaction snapshot."""
+
+        from issuance.application.rust_integration import oid4vci_create_credential_offer
+
+        credential_config_id = tx.credential_type or "default"
+        default_config_id = _config_id_for_format_variant(
+            credential_config_id,
+            tx.credential_payload_format,
+        )
+        offer_json = oid4vci_create_credential_offer(
+            issuer_url=_org_issuer_url(tx.organization_id),
+            credential_types=[default_config_id],
+            pre_authorized_code=tx.pre_auth_code,
+            user_pin_required=False,
+        )
+        offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json)}"
+
+        offer_uris: dict[str, str] = {}
+        offer_labels: dict[str, str] = {}
+        for wallet_config in tx.wallet_configs:
+            wallet_id = wallet_config.get("wallet_id", "")
+            if not wallet_id:
+                continue
+            scheme = wallet_config.get("deep_link_scheme", "openid-credential-offer://")
+            format_variant = wallet_config.get("format_variant")
+            wallet_config_id = _config_id_for_format_variant(
+                credential_config_id,
+                format_variant,
+            )
+            wallet_issuer_url = (
+                f"{ISSUER_BASE_URL}/org/{tx.organization_id}/credential-manager"
+                if format_variant == "credential-manager"
+                else f"{ISSUER_BASE_URL}/org/{tx.organization_id}/apple-wallet"
+                if format_variant == "apple-wallet"
+                else _org_issuer_url(tx.organization_id)
+            )
+            wallet_offer = oid4vci_create_credential_offer(
+                issuer_url=wallet_issuer_url,
+                credential_types=[wallet_config_id],
+                pre_authorized_code=tx.pre_auth_code,
+                user_pin_required=False,
+            )
+            encoded = quote(wallet_offer)
+            separator = "&" if "?" in scheme else "?"
+            offer_uris[wallet_id] = f"{scheme}{separator}credential_offer={encoded}"
+            if wallet_config.get("display_name"):
+                offer_labels[wallet_id] = wallet_config["display_name"]
+
+        return pb2.IssuanceResponse(
+            id=tx.id,
+            organization_id=tx.organization_id,
+            credential_template_id=tx.credential_template_id,
+            status=tx.status.value,
+            credential_offer_uri=offer_uri,
+            credential_offer_uris=offer_uris,
+            credential_offer_labels=offer_labels,
+            pre_auth_code=tx.pre_auth_code,
+            expires_at=tx.expires_at.isoformat(),
+        )
+
     # ------------------------------------------------------------------ #
     # InitiateIssuance
     # ------------------------------------------------------------------ #
@@ -186,19 +289,94 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def InitiateIssuance(self, request, context):
         """Initiate a credential offer (OID4VCI)."""
         try:
-            from issuance.domain.entities import IssuanceTransaction
-            from issuance.application.rust_integration import oid4vci_create_credential_offer
+            from issuance.domain.entities import (
+                IssuanceIdempotencyConflictError,
+                IssuanceTransaction,
+            )
+            from issuance.infrastructure.adapters.delivery_records import (
+                normalize_delivery_mode,
+            )
+            from issuance.infrastructure.api.routes import (
+                _credential_format_for_remote_context as http_credential_format,
+            )
+            from issuance.infrastructure.api.routes import apply_required_remote_issuer_context
 
             repo = self._get_repo()
+            try:
+                idempotency_key = normalize_idempotency_key(getattr(request, "idempotency_key", ""))
+                delivery_mode = normalize_delivery_mode(
+                    getattr(request, "delivery_mode", "") or "wallet_only"
+                )
+            except ValueError as exc:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details(str(exc))
+                return pb2.IssuanceResponse()
+
+            requested_issuer_did = str(getattr(request, "issuer_did", "") or "").strip()
+            if not requested_issuer_did:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("issuer_did is required")
+                return pb2.IssuanceResponse()
+
+            claims_json = str(getattr(request, "claims_json", "") or "").strip()
+            if claims_json:
+                if request.claims:
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details("claims and claims_json cannot both be supplied")
+                    return pb2.IssuanceResponse()
+                try:
+                    parsed_claims = json.loads(claims_json)
+                except (TypeError, ValueError) as exc:
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details(f"claims_json must be valid JSON: {exc}")
+                    return pb2.IssuanceResponse()
+                if not isinstance(parsed_claims, dict):
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details("claims_json must encode a JSON object")
+                    return pb2.IssuanceResponse()
+                request_claims = parsed_claims
+            else:
+                request_claims = dict(request.claims)
+            if any(
+                reserved in request_claims
+                for reserved in (
+                    "_application_id",
+                    "_credential_subject",
+                    "_credential_document",
+                )
+            ):
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("claims contain a reserved internal field")
+                return pb2.IssuanceResponse()
+
+            resolved_application = str(getattr(request, "application_id", "") or "").strip() or None
+            authorized_client_id = request.authorized_client_id or None
+            request_semantics = canonical_issuance_request(
+                organization_id=request.organization_id,
+                credential_template_id=request.credential_template_id or None,
+                application_id=resolved_application,
+                applicant_id=request.applicant_id or None,
+                subject_did=request.subject_did or None,
+                holder_did=request.holder_did or None,
+                issuer_did=requested_issuer_did,
+                authorized_client_id=authorized_client_id,
+                delivery_mode=delivery_mode,
+                claims=request_claims,
+            )
+            idempotency_key_hash = (
+                hash_idempotency_key(idempotency_key) if idempotency_key else None
+            )
+            idempotency_request_hash = (
+                issuance_request_hash(request_semantics) if idempotency_key else None
+            )
 
             # Validate organization exists via gRPC (best-effort)
             try:
-                import grpc.aio as grpc_aio
                 from marty_proto.v1 import organization_service_pb2 as org_pb2
                 from marty_proto.v1 import organization_service_pb2_grpc as org_grpc
 
                 org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-                async with grpc_aio.insecure_channel(org_grpc_target) as channel:
+                async with create_service_channel(org_grpc_target) as channel:
                     org_stub = org_grpc.OrganizationServiceStub(channel)
                     org_resp = await org_stub.GetOrganization(
                         org_pb2.GetOrganizationRequest(organization_id=request.organization_id)
@@ -216,6 +394,36 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             except Exception as e:
                 logger.warning(f"Could not validate org {request.organization_id}: {e}")
 
+            if authorized_client_id:
+                authorized_client = await repo.get_oid4vci_client(
+                    request.organization_id,
+                    authorized_client_id,
+                )
+                if (
+                    authorized_client is None
+                    or not authorized_client.active
+                    or authorized_client.token_endpoint_auth_method != "private_key_jwt"
+                ):
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details(
+                        "Authorized OID4VCI client is not active for this organization"
+                    )
+                    return pb2.IssuanceResponse()
+
+            if idempotency_key_hash and idempotency_request_hash:
+                try:
+                    recovered = await repo.recover_transaction_idempotently(
+                        organization_id=request.organization_id,
+                        idempotency_key_hash=idempotency_key_hash,
+                        idempotency_request_hash=idempotency_request_hash,
+                    )
+                except IssuanceIdempotencyConflictError as exc:
+                    context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                    context.set_details(str(exc))
+                    return pb2.IssuanceResponse()
+                if recovered is not None:
+                    return self._issuance_response_from_transaction(recovered)
+
             # Resolve credential type from template via HTTP
             credential_type = "org.iso.18013.5.1.mDL"
             credential_vct: str | None = None
@@ -223,6 +431,8 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             credential_payload_format = "w3c_vcdm_v2_sd_jwt"
             wallet_configs: list[dict] = []
             revocation_profile_id: str | None = None
+            template_issuer_did: str | None = None
+            template_issuer_algorithm: str | None = None
             validity_days = 365
             renewable = False
             renewal_window_days = 30
@@ -230,49 +440,69 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             if request.credential_template_id:
                 # Fetch template via gRPC (CredentialTemplateService.GetTemplate)
                 try:
-                    import grpc.aio as grpc_aio
                     from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
                     from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
 
                     ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
-                    async with grpc_aio.insecure_channel(ct_grpc_target) as channel:
+                    async with create_service_channel(ct_grpc_target) as channel:
                         ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
                         tmpl_resp = await ct_stub.GetTemplate(
                             ct_pb2.GetTemplateRequest(template_id=request.credential_template_id)
                         )
                     if not tmpl_resp.id:
                         context.set_code(grpc.StatusCode.NOT_FOUND)
-                        context.set_details(f"Credential template not found: {request.credential_template_id}")
+                        context.set_details(
+                            f"Credential template not found: {request.credential_template_id}"
+                        )
                         return pb2.IssuanceResponse()
 
                     credential_type = tmpl_resp.credential_type or credential_type
-                    raw_vct = tmpl_resp.vct or ""
-                    credential_vct = (
-                        raw_vct if raw_vct.startswith("http")
-                        else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                    credential_vct = resolve_credential_vct(
+                        tmpl_resp.vct,
+                        credential_type,
+                        ISSUER_BASE_URL,
                     )
                     zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
-                    credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-                    wallet_configs = json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
-                    revocation_profile_id = str(tmpl_resp.revocation_profile_id or "").strip() or None
+                    credential_payload_format = (
+                        tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+                    )
+                    wallet_configs = (
+                        json.loads(tmpl_resp.wallet_configs_json)
+                        if tmpl_resp.wallet_configs_json
+                        else []
+                    )
+                    revocation_profile_id = (
+                        str(tmpl_resp.revocation_profile_id or "").strip() or None
+                    )
+                    template_issuer_did = (
+                        str(getattr(tmpl_resp, "issuer_did", "") or "").strip() or None
+                    )
+                    template_issuer_algorithm = (
+                        str(getattr(tmpl_resp, "issuer_algorithm", "") or "").strip() or None
+                    )
                     validity_days = tmpl_resp.validity_rules.default_validity_days or 365
                     renewable = bool(tmpl_resp.validity_rules.renewable)
                     renewal_window_days = tmpl_resp.validity_rules.renewal_window_days or 30
                 except grpc.RpcError as e:
-                    if hasattr(e, 'code') and e.code() == grpc.StatusCode.NOT_FOUND:
+                    if hasattr(e, "code") and e.code() == grpc.StatusCode.NOT_FOUND:
                         context.set_code(grpc.StatusCode.NOT_FOUND)
-                        context.set_details(f"Credential template not found: {request.credential_template_id}")
+                        context.set_details(
+                            f"Credential template not found: {request.credential_template_id}"
+                        )
                         return pb2.IssuanceResponse()
                     logger.warning(f"gRPC template fetch failed, falling back to HTTP: {e}")
                     # HTTP fallback
                     import httpx
+
                     url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{request.credential_template_id}"
                     try:
                         async with httpx.AsyncClient(timeout=10.0) as client:
                             resp = await client.get(url)
                         if resp.status_code == 404:
                             context.set_code(grpc.StatusCode.NOT_FOUND)
-                            context.set_details(f"Credential template not found: {request.credential_template_id}")
+                            context.set_details(
+                                f"Credential template not found: {request.credential_template_id}"
+                            )
                             return pb2.IssuanceResponse()
                         if resp.status_code >= 400:
                             context.set_code(grpc.StatusCode.INTERNAL)
@@ -284,15 +514,23 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         context.set_details(f"Credential template service unavailable: {http_err}")
                         return pb2.IssuanceResponse()
                     credential_type = tmpl.get("credential_type") or credential_type
-                    raw_vct = tmpl.get("vct") or ""
-                    credential_vct = (
-                        raw_vct if raw_vct.startswith("http")
-                        else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                    credential_vct = resolve_credential_vct(
+                        tmpl.get("vct"),
+                        credential_type,
+                        ISSUER_BASE_URL,
                     )
                     zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
-                    credential_payload_format = tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
+                    credential_payload_format = (
+                        tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
+                    )
                     wallet_configs = tmpl.get("wallet_configs") or []
-                    revocation_profile_id = str(tmpl.get("revocation_profile_id") or "").strip() or None
+                    revocation_profile_id = (
+                        str(tmpl.get("revocation_profile_id") or "").strip() or None
+                    )
+                    template_issuer_did = str(tmpl.get("issuer_did") or "").strip() or None
+                    template_issuer_algorithm = (
+                        str(tmpl.get("issuer_algorithm") or "").strip() or None
+                    )
                     validity_rules = tmpl.get("validity_rules") or {}
                     ttl_seconds = int(validity_rules.get("ttl_seconds") or 0)
                     validity_days = int(validity_rules.get("default_validity_days") or 0) or (
@@ -304,25 +542,46 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         max(reissue_seconds // 86400, 1) if reissue_seconds else 30
                     )
 
+            if request.credential_template_id:
+                if not template_issuer_did:
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details("Credential template must define an issuer DID")
+                    return pb2.IssuanceResponse()
+                if requested_issuer_did != template_issuer_did:
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details("issuer_did must match the credential template issuer DID")
+                    return pb2.IssuanceResponse()
+                if template_issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details(
+                        "Credential template must define a supported issuer algorithm"
+                    )
+                    return pb2.IssuanceResponse()
+
             if not revocation_profile_id:
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details("Credential Template must reference an active Revocation Profile.")
+                context.set_details(
+                    "Credential Template must reference an active Revocation Profile."
+                )
                 return pb2.IssuanceResponse()
 
             try:
-                import grpc.aio as grpc_aio
                 from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
                 from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
 
                 rp_grpc_target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
-                async with grpc_aio.insecure_channel(rp_grpc_target) as channel:
-                    profile = await rp_grpc.RevocationProfileServiceStub(channel).GetRevocationProfile(
+                async with create_service_channel(rp_grpc_target) as channel:
+                    profile = await rp_grpc.RevocationProfileServiceStub(
+                        channel
+                    ).GetRevocationProfile(
                         rp_pb2.GetRevocationProfileRequest(profile_id=revocation_profile_id),
                         timeout=3.0,
                     )
             except grpc.RpcError as exc:
                 missing = exc.code() == grpc.StatusCode.NOT_FOUND
-                context.set_code(grpc.StatusCode.NOT_FOUND if missing else grpc.StatusCode.UNAVAILABLE)
+                context.set_code(
+                    grpc.StatusCode.NOT_FOUND if missing else grpc.StatusCode.UNAVAILABLE
+                )
                 context.set_details(
                     "Revocation Profile not found."
                     if missing
@@ -336,46 +595,63 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 return pb2.IssuanceResponse()
             if str(profile.status or "").strip().lower() != "active":
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details("Credential Template must reference an active Revocation Profile.")
+                context.set_details(
+                    "Credential Template must reference an active Revocation Profile."
+                )
                 return pb2.IssuanceResponse()
 
             if not credential_vct:
                 credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
 
-            merged_claims = {**dict(request.claims), "_vct": credential_vct}
+            merged_claims = {**request_claims, "_vct": credential_vct}
             # MIP §8.3 – if the caller deferred claims resolution (only sent
             # _application_id), resolve actual claim values from the application's
             # form_data stored in the issuance service.
-            _resolved_application = merged_claims.pop("_application_id", None)
-            if _resolved_application and (
+            if resolved_application and (
                 not merged_claims or list(merged_claims.keys()) == ["_vct"]
             ):
                 try:
-                    app = await repo.get_application(str(_resolved_application))
+                    app = await repo.get_application(str(resolved_application))
                     if app and app.form_data:
                         merged_claims = {**app.form_data, "_vct": credential_vct}
                         logger.info(
                             "[grpc-initiate] resolved claims from application %s: keys=%s",
-                            _resolved_application, list(app.form_data.keys()),
+                            resolved_application,
+                            list(app.form_data.keys()),
                         )
                     else:
                         logger.warning(
                             "[grpc-initiate] application %s not found or has empty form_data",
-                            _resolved_application,
+                            resolved_application,
                         )
                 except Exception as _app_err:
                     logger.warning(
                         "[grpc-initiate] could not resolve application %s: %s",
-                        _resolved_application, _app_err,
+                        resolved_application,
+                        _app_err,
                     )
             effective_template_id = request.credential_template_id or "default"
+
+            if idempotency_key and any(
+                str(wallet.get("format_variant") or "") == "didcomm_v2" for wallet in wallet_configs
+            ):
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("idempotent initiation does not support DIDComm push delivery")
+                return pb2.IssuanceResponse()
 
             tx = IssuanceTransaction(
                 organization_id=request.organization_id,
                 credential_template_id=effective_template_id,
                 applicant_id=request.applicant_id or None,
+                application_id=resolved_application,
                 subject_did=request.subject_did or None,
+                idempotency_key_hash=idempotency_key_hash,
+                idempotency_request_hash=idempotency_request_hash,
+                issuer_did_override=requested_issuer_did or None,
+                issuer_algorithm=template_issuer_algorithm,
                 claims=merged_claims,
+                oid4vci_client_id=authorized_client_id,
+                delivery_mode=delivery_mode,
                 credential_type=credential_type,
                 zk_predicate_claims=zk_predicate_claims,
                 credential_payload_format=credential_payload_format,
@@ -385,73 +661,27 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 renewable=renewable,
                 renewal_window_days=renewal_window_days,
             )
-            await repo.save_transaction(tx)
-
-            credential_config_id = credential_type or "default"
-            # credential_payload_format may be the enum value "MDOC", the alias
-            # "mso_mdoc", or the raw string "mdoc" depending on the code path that
-            # stored the template.  All three indicate an mso_mdoc offer.
-            _MDOC_PAYLOAD_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
-            default_fmt_variant = "mso_mdoc" if credential_payload_format in _MDOC_PAYLOAD_FORMATS else None
-            default_config_id = _config_id_for_format_variant(credential_config_id, default_fmt_variant)
-
-            offer_json_str = oid4vci_create_credential_offer(
-                issuer_url=_org_issuer_url(request.organization_id),
-                credential_types=[default_config_id],
-                pre_authorized_code=tx.pre_auth_code,
-                user_pin_required=False,
+            await apply_required_remote_issuer_context(
+                tx,
+                credential_format=http_credential_format(credential_payload_format),
             )
-            offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json_str)}"
+            try:
+                tx, created = await repo.reserve_transaction_idempotently(tx)
+            except IssuanceIdempotencyConflictError as exc:
+                context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                context.set_details(str(exc))
+                return pb2.IssuanceResponse()
 
-            # Per-wallet offer URIs
-            credential_offer_uris: dict[str, str] = {}
-            credential_offer_labels: dict[str, str] = {}
-            for wc in tx.wallet_configs:
-                wid = wc.get("wallet_id", "")
-                scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
-                fmt_variant = wc.get("format_variant")
-                if wid:
-                    wallet_config_id = _config_id_for_format_variant(credential_config_id, fmt_variant)
-                    wallet_issuer_url = (
-                        f"{ISSUER_BASE_URL}/org/{request.organization_id}/spruce"
-                        if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
-                        else f"{ISSUER_BASE_URL}/org/{request.organization_id}/credential-manager"
-                        if fmt_variant == "credential-manager"
-                        else f"{ISSUER_BASE_URL}/org/{request.organization_id}/apple-wallet"
-                        if fmt_variant == "apple-wallet"
-                        else _org_issuer_url(request.organization_id)
-                    )
-                    wallet_offer_json = oid4vci_create_credential_offer(
-                        issuer_url=wallet_issuer_url,
-                        credential_types=[wallet_config_id],
-                        pre_authorized_code=tx.pre_auth_code,
-                        user_pin_required=False,
-                    )
-                    encoded = quote(wallet_offer_json)
-                    sep = "&" if "?" in scheme else "?"
-                    credential_offer_uris[wid] = f"{scheme}{sep}credential_offer={encoded}"
-                    if wc.get("display_name"):
-                        credential_offer_labels[wid] = wc["display_name"]
+            response = self._issuance_response_from_transaction(tx)
 
-            response = pb2.IssuanceResponse(
-                id=tx.id,
-                organization_id=tx.organization_id,
-                credential_template_id=tx.credential_template_id,
-                status=tx.status.value,
-                credential_offer_uri=offer_uri,
-                credential_offer_uris=credential_offer_uris,
-                credential_offer_labels=credential_offer_labels,
-                pre_auth_code=tx.pre_auth_code,
-                expires_at=tx.expires_at.isoformat(),
-            )
-
-            await self._emit_credential_event(
-                "offer_created",
-                transaction_id=tx.id,
-                organization_id=tx.organization_id,
-                credential_template_id=tx.credential_template_id,
-                status=tx.status.value,
-            )
+            if created:
+                await self._emit_credential_event(
+                    "offer_created",
+                    transaction_id=tx.id,
+                    organization_id=tx.organization_id,
+                    credential_template_id=tx.credential_template_id,
+                    status=tx.status.value,
+                )
 
             return response
         except Exception as exc:
@@ -467,11 +697,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def ExchangeToken(self, request, context):
         """Exchange pre-authorized code or authorization code for access token."""
         try:
-            from issuance.domain.entities import IssuanceStatus
             from issuance.application.rust_integration import (
                 oid4vci_create_token_response,
                 oid4vci_exchange_auth_code_for_token,
             )
+            from issuance.domain.entities import IssuanceStatus
 
             repo = self._get_repo()
 
@@ -498,28 +728,62 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     context.set_details("Authorization code already used")
                     return pb2.TokenResponse()
 
-                request_payload = json.dumps({
-                    "grant_type": "authorization_code",
-                    "code": request.code,
-                    "redirect_uri": request.redirect_uri or None,
-                    "client_id": request.client_id or auth_session.client_id,
-                    "code_verifier": request.code_verifier or None,
-                })
-                session_payload = json.dumps({
-                    "code": auth_session.code,
-                    "client_id": auth_session.client_id,
-                    "redirect_uri": auth_session.redirect_uri,
-                    "code_challenge": auth_session.code_challenge,
-                    "code_challenge_method": auth_session.code_challenge_method,
-                    "issuer_state": auth_session.issuer_state,
-                    "credential_configuration_ids": auth_session.credential_configuration_ids,
-                    "created_at": int(auth_session.created_at.timestamp()),
-                    "expires_in": 600,
-                })
+                try:
+                    await authenticate_oid4vci_client(
+                        repo=repo,
+                        organization_id=auth_session.organization_id,
+                        expected_client_id=auth_session.client_id,
+                        client_id=getattr(request, "client_id", "") or None,
+                        client_assertion_type=(
+                            getattr(request, "client_assertion_type", "") or None
+                        ),
+                        client_assertion=(getattr(request, "client_assertion", "") or None),
+                        allowed_audiences=(
+                            [_org_issuer_url(auth_session.organization_id)]
+                            if auth_session.organization_id
+                            else []
+                        )
+                        + [f"{ISSUER_BASE_URL.rstrip('/')}/v1/issuance/token"],
+                        registration_required=False,
+                    )
+                except ClientAuthenticationError:
+                    logger.warning(
+                        "gRPC token client authentication rejected for org=%s client=%s",
+                        auth_session.organization_id,
+                        auth_session.client_id,
+                    )
+                    context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                    context.set_details("Client authentication failed")
+                    return pb2.TokenResponse()
+
+                request_payload = json.dumps(
+                    {
+                        "grant_type": "authorization_code",
+                        "code": request.code,
+                        "redirect_uri": request.redirect_uri or None,
+                        "client_id": request.client_id or auth_session.client_id,
+                        "code_verifier": request.code_verifier or None,
+                    }
+                )
+                session_payload = json.dumps(
+                    {
+                        "code": auth_session.code,
+                        "client_id": auth_session.client_id,
+                        "redirect_uri": auth_session.redirect_uri,
+                        "code_challenge": auth_session.code_challenge,
+                        "code_challenge_method": auth_session.code_challenge_method,
+                        "issuer_state": auth_session.issuer_state,
+                        "credential_configuration_ids": auth_session.credential_configuration_ids,
+                        "created_at": int(auth_session.created_at.timestamp()),
+                        "expires_in": 600,
+                    }
+                )
 
                 try:
                     token_resp = oid4vci_exchange_auth_code_for_token(
-                        request_payload, session_payload, 1800,
+                        request_payload,
+                        session_payload,
+                        1800,
                     )
                 except RuntimeError as exc:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -527,7 +791,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     return pb2.TokenResponse()
 
                 auth_session.mark_exchanged(access_token=token_resp["access_token"])
-                await repo.save_authorization_session(auth_session)
+                claimed_session = await repo.claim_authorization_session_for_token(auth_session)
+                if claimed_session is None:
+                    context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                    context.set_details("Authorization code already used")
+                    return pb2.TokenResponse()
 
                 return pb2.TokenResponse(
                     access_token=token_resp["access_token"],
@@ -567,12 +835,40 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details(f"Invalid transaction state: {tx.status.value}")
                 return pb2.TokenResponse()
 
+            try:
+                await authenticate_oid4vci_client(
+                    repo=repo,
+                    organization_id=tx.organization_id,
+                    expected_client_id=tx.oid4vci_client_id,
+                    client_id=getattr(request, "client_id", "") or None,
+                    client_assertion_type=(getattr(request, "client_assertion_type", "") or None),
+                    client_assertion=(getattr(request, "client_assertion", "") or None),
+                    allowed_audiences=[
+                        _org_issuer_url(tx.organization_id),
+                        f"{ISSUER_BASE_URL.rstrip('/')}/v1/issuance/token",
+                    ],
+                    registration_required=tx.oid4vci_client_id is not None,
+                )
+            except ClientAuthenticationError:
+                logger.warning(
+                    "gRPC token client authentication rejected for org=%s client=%s",
+                    tx.organization_id,
+                    tx.oid4vci_client_id,
+                )
+                context.set_code(grpc.StatusCode.UNAUTHENTICATED)
+                context.set_details("Client authentication failed")
+                return pb2.TokenResponse()
+
             token_resp = oid4vci_create_token_response(request.pre_authorized_code, 1800)
 
             tx.access_token = token_resp["access_token"]
             tx.nonce = None
             tx.status = IssuanceStatus.AUTHORIZED
-            await repo.save_transaction(tx)
+            claimed_tx = await repo.claim_transaction_for_token(tx)
+            if claimed_tx is None:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details("Pre-authorized code already used (single-use)")
+                return pb2.TokenResponse()
 
             return pb2.TokenResponse(
                 access_token=token_resp["access_token"],
@@ -592,12 +888,22 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def IssueCredential(self, request, context):
         """Issue a credential (requires valid access token and proof JWT)."""
         try:
-            from issuance.domain.entities import IssuanceStatus, IssuanceTransaction, EventType, IssuanceEvent
-            from issuance.domain.entities import CredentialStatus, DeliveryTarget, IssuedCredential
             from issuance.application.rust_integration import (
+                verify_key_attestation_bound_proof_jwt,
                 verify_proof_jwt,
             )
-            from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
+            from issuance.domain.entities import (
+                CredentialStatus,
+                DeliveryTarget,
+                EventType,
+                IssuanceEvent,
+                IssuanceStatus,
+                IssuanceTransaction,
+                IssuedCredential,
+            )
+            from issuance.infrastructure.adapters.delivery_records import (
+                record_post_issuance_deliveries,
+            )
 
             repo = self._get_repo()
 
@@ -609,7 +915,9 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             tx = await repo.get_by_access_token(request.access_token)
             auth_session = None
             if not tx:
-                auth_session = await repo.get_authorization_session_by_access_token(request.access_token)
+                auth_session = await repo.get_authorization_session_by_access_token(
+                    request.access_token
+                )
                 if not auth_session:
                     context.set_code(grpc.StatusCode.UNAUTHENTICATED)
                     context.set_details("Invalid access token")
@@ -655,9 +963,33 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details("Proof of possession is required (OID4VCI §7.2)")
                 return pb2.IssueCredentialResponse()
 
-            # Verify proof JWT
-            ok, holder_did, holder_jwk, verify_err = verify_proof_jwt(
-                proof_jwt, expected_nonce=tx.nonce or None
+            credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
+            requested_format = request.format or "vc+sd-jwt"
+            remote_credential_format = _credential_format_for_remote_context(
+                credential_payload_fmt,
+                requested_format,
+            )
+            try:
+                issuer_context = await _resolve_remote_signing_context_for_tx(
+                    tx,
+                    credential_format=remote_credential_format,
+                )
+            except Exception as resolution_error:  # noqa: BLE001
+                context.set_code(grpc.StatusCode.UNAVAILABLE)
+                context.set_details(
+                    f"DID-backed issuer policy resolution failed: {resolution_error}"
+                )
+                return pb2.IssueCredentialResponse()
+
+            # Apply exactly the same tenant/profile proof policy as the HTTP
+            # credential endpoint. No transport may bypass key attestation.
+            ok, holder_did, holder_jwk, verify_err = await verify_oid4vci_proof_with_issuer_policy(
+                proof_jwt,
+                issuer_context=issuer_context,
+                organization_id=tx.organization_id,
+                expected_nonce=tx.nonce or None,
+                proof_verifier=verify_proof_jwt,
+                bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
             )
             if not ok:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -666,37 +998,46 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             credential_type = tx.credential_type or "org.iso.18013.5.1.mDL"
             _INTERNAL_CLAIM_FIELDS = {
-                "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
-                "issuance_transaction_id", "issuance_fallback", "credential_type",
-                "credential_display_name", "rejection_reason", "review_notes",
-                "info_requests", "applicant_id", "_vct",
+                "credential_offer_uri",
+                "credential_offer_uris",
+                "offer_expires_at",
+                "issuance_transaction_id",
+                "issuance_fallback",
+                "credential_type",
+                "credential_display_name",
+                "rejection_reason",
+                "review_notes",
+                "info_requests",
+                "applicant_id",
+                "_vct",
             }
             clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
 
-            vct_for_signing = (
-                tx.claims.get("_vct")
-                or (f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-                    if credential_type and not credential_type.startswith("http")
-                    else credential_type)
+            vct_for_signing = tx.claims.get("_vct") or (
+                f"{ISSUER_BASE_URL}/credentials/{credential_type}"
+                if credential_type and not credential_type.startswith("http")
+                else credential_type
             )
 
-            credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-            fmt = request.format or "vc+sd-jwt"
+            fmt = requested_format
             _SD_JWT_PAYLOAD_FORMATS = {
-                "w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt",
-                "SD_JWT_VC", "sd_jwt_vc",
-                "vc+sd-jwt", "dc+sd-jwt",
+                "w3c_vcdm_v2_sd_jwt",
+                "ietf_sd_jwt",
+                "SD_JWT_VC",
+                "sd_jwt_vc",
+                "vc+sd-jwt",
+                "dc+sd-jwt",
             }
             if credential_payload_fmt == "mso_mdoc":
                 signing_format = "mso_mdoc"
             elif credential_payload_fmt in _SD_JWT_PAYLOAD_FORMATS:
                 signing_format = "vc+sd-jwt"
-            elif fmt == "spruce-vc+sd-jwt":
-                signing_format = "vc+sd-jwt"
             else:
                 signing_format = fmt
 
-            signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+            signing_credential_type = (
+                tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
+            )
             if signing_format != "vc+sd-jwt":
                 context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
                 context.set_details(
@@ -705,7 +1046,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 )
                 return pb2.IssueCredentialResponse()
 
-            remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt, fmt)
             try:
                 jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
                     tx,
@@ -717,7 +1057,12 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     selective_disclosure_claims=tx.selective_disclosure_claims or [],
                 )
             except Exception as signing_err:  # noqa: BLE001
-                logger.error("gRPC DID-backed signing failed for tx=%s org=%s: %s", tx.id, tx.organization_id, signing_err)
+                logger.error(
+                    "gRPC DID-backed signing failed for tx=%s org=%s: %s",
+                    tx.id,
+                    tx.organization_id,
+                    signing_err,
+                )
                 context.set_code(grpc.StatusCode.UNAVAILABLE)
                 context.set_details(f"DID-backed remote signing failed: {signing_err}")
                 return pb2.IssueCredentialResponse()
@@ -743,12 +1088,17 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     expires_at=expires_at,
                 )
                 await repo.save_credential(issued_credential)
-                await repo.save_event(IssuanceEvent(
-                    transaction_id=tx.id,
-                    application_id=tx.application_id,
-                    event_type=EventType.CREDENTIAL_ISSUED,
-                    metadata={"credential_id": credential_id, "credential_type": credential_type},
-                ))
+                await repo.save_event(
+                    IssuanceEvent(
+                        transaction_id=tx.id,
+                        application_id=tx.application_id,
+                        event_type=EventType.CREDENTIAL_ISSUED,
+                        metadata={
+                            "credential_id": credential_id,
+                            "credential_type": credential_type,
+                        },
+                    )
+                )
                 await record_post_issuance_deliveries(
                     repo,
                     tx,
@@ -761,8 +1111,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 )
 
             import uuid as _uuid
+
             response = pb2.IssueCredentialResponse(
-                credentials=[pb2.CredentialEntry(format=response_format, credential=jwt_credential)],
+                credentials=[
+                    pb2.CredentialEntry(format=response_format, credential=jwt_credential)
+                ],
                 notification_id=str(_uuid.uuid4()),
             )
 
@@ -781,205 +1134,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))
             return pb2.IssueCredentialResponse()
-
-    # ------------------------------------------------------------------ #
-    # DidcommDeliver — DIDComm v2 push delivery
-    # ------------------------------------------------------------------ #
-
-    async def DidcommDeliver(self, request, context):
-        """Deliver a credential to a holder via DIDComm v2 push.
-
-        Signs the credential, wraps it in a DIDComm v2 issue-credential/3.0
-        message, resolves the holder's DID Document, and POSTs the message
-        to the holder's DIDComm service endpoint.
-        """
-        try:
-            import hashlib
-            import httpx
-            from issuance.domain.entities import (
-                IssuanceStatus, IssuanceEvent, EventType,
-                IssuedCredential, CredentialStatus,
-                DeliveryTarget,
-            )
-            from issuance.application.rust_integration import (
-                didcomm_resolve_did,
-                didcomm_extract_endpoint,
-                didcomm_pack_credential,
-            )
-            from issuance.infrastructure.adapters.delivery_records import record_post_issuance_deliveries
-            from datetime import timedelta
-
-            repo = self._get_repo()
-
-            if not request.transaction_id:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("transaction_id is required")
-                return pb2.DidcommDeliverResponse()
-
-            if not request.holder_did:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("holder_did is required")
-                return pb2.DidcommDeliverResponse()
-
-            tx = await repo.get_transaction(request.transaction_id)
-            if not tx:
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details("Transaction not found")
-                return pb2.DidcommDeliverResponse()
-
-            if tx.status == IssuanceStatus.ISSUED:
-                context.set_code(grpc.StatusCode.ALREADY_EXISTS)
-                context.set_details("Credential already issued")
-                return pb2.DidcommDeliverResponse()
-
-            if tx.status not in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(f"Transaction in {tx.status.value} state")
-                return pb2.DidcommDeliverResponse()
-
-            credential_type = tx.credential_type or "VerifiableCredential"
-            _INTERNAL_CLAIM_FIELDS = {
-                "credential_offer_uri", "credential_offer_uris", "offer_expires_at",
-                "issuance_transaction_id", "issuance_fallback", "credential_type",
-                "credential_display_name", "rejection_reason", "review_notes",
-                "info_requests", "applicant_id", "_vct",
-            }
-            clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
-
-            ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "http://localhost:8080")
-            credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-            if credential_payload_fmt == "mso_mdoc":
-                signing_format = "mso_mdoc"
-            elif credential_payload_fmt in ("w3c_vcdm_v2_sd_jwt", "ietf_sd_jwt"):
-                signing_format = "vc+sd-jwt"
-            else:
-                signing_format = "vc+sd-jwt"
-
-            vct_for_signing = (
-                tx.claims.get("_vct")
-                or (f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-                    if credential_type and not credential_type.startswith("http")
-                    else credential_type)
-            )
-            signing_credential_type = tx.credential_type if signing_format == "mso_mdoc" else vct_for_signing
-
-            if signing_format != "vc+sd-jwt":
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(
-                    "gRPC DIDComm delivery requires DID-backed remote signing; "
-                    f"format {signing_format!r} is not yet supported on this adapter"
-                )
-                return pb2.DidcommDeliverResponse()
-
-            remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt)
-            try:
-                jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
-                    tx,
-                    subject_id=request.holder_did,
-                    credential_type=signing_credential_type,
-                    claims_json=json.dumps(clean_claims),
-                    credential_format=remote_credential_format,
-                    selective_disclosure_claims=tx.selective_disclosure_claims or [],
-                )
-                await repo.save_transaction(tx)
-            except Exception as signing_err:  # noqa: BLE001
-                logger.error("gRPC DIDComm DID-backed signing failed for tx=%s org=%s: %s", tx.id, tx.organization_id, signing_err)
-                context.set_code(grpc.StatusCode.UNAVAILABLE)
-                context.set_details(f"DID-backed remote signing failed: {signing_err}")
-                return pb2.DidcommDeliverResponse()
-
-            didcomm_message_json = didcomm_pack_credential(
-                credential=jwt_credential,
-                credential_format=credential_payload_fmt,
-                issuer_did=tx.issuer_did_override,
-                holder_did=request.holder_did,
-                credential_id=credential_id,
-            )
-            didcomm_msg = json.loads(didcomm_message_json)
-            didcomm_message_id = didcomm_msg.get("id", "")
-
-            did_doc = didcomm_resolve_did(
-                request.holder_did,
-                request.universal_resolver_url or None,
-            )
-            service_endpoint = didcomm_extract_endpoint(did_doc)
-            if not service_endpoint:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details(f"Holder DID {request.holder_did} has no DIDComm service endpoint")
-                return pb2.DidcommDeliverResponse()
-
-            delivery_status = "delivered"
-            delivery_error = ""
-            try:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(
-                        service_endpoint,
-                        content=didcomm_message_json,
-                        headers={"Content-Type": "application/didcomm-plain+json"},
-                    )
-                    if resp.status_code >= 400:
-                        delivery_status = "delivery_failed"
-                        delivery_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-            except Exception as e:
-                delivery_status = "delivery_failed"
-                delivery_error = str(e)
-
-            if delivery_status == "delivered" and tx.status != IssuanceStatus.ISSUED:
-                tx.nonce = None
-                tx.complete()
-                await repo.save_transaction(tx)
-                expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
-                issued_credential = IssuedCredential(
-                    id=credential_id,
-                    transaction_id=tx.id,
-                    organization_id=tx.organization_id,
-                    credential_template_id=tx.credential_template_id,
-                    applicant_id=tx.applicant_id,
-                    subject_did=request.holder_did,
-                    credential_jwt=jwt_credential,
-                    credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
-                    status=CredentialStatus.ACTIVE,
-                    issued_at=tx.issued_at or datetime.now(timezone.utc),
-                    expires_at=expires_at,
-                )
-                await repo.save_credential(issued_credential)
-                await repo.save_event(IssuanceEvent(
-                    transaction_id=tx.id,
-                    application_id=tx.application_id,
-                    event_type=EventType.CREDENTIAL_ISSUED,
-                    metadata={
-                        "credential_id": credential_id,
-                        "credential_type": credential_type,
-                        "delivery_protocol": "didcomm_v2",
-                        "service_endpoint": service_endpoint,
-                    },
-                ))
-                await record_post_issuance_deliveries(
-                    repo,
-                    tx,
-                    issued_credential,
-                    delivered_target=DeliveryTarget.DIDCOMM_V2,
-                    delivery_metadata={
-                        "protocol": "didcomm_v2",
-                        "service_endpoint": service_endpoint,
-                        "didcomm_message_id": didcomm_message_id,
-                    },
-                )
-
-            return pb2.DidcommDeliverResponse(
-                transaction_id=tx.id,
-                credential_id=credential_id,
-                holder_did=request.holder_did,
-                service_endpoint=service_endpoint,
-                didcomm_message_id=didcomm_message_id,
-                status=delivery_status,
-                error=delivery_error,
-            )
-        except Exception as exc:
-            logger.exception("DidcommDeliver failed")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(exc))
-            return pb2.DidcommDeliverResponse()
 
     # ------------------------------------------------------------------ #
     # GetOffer
@@ -1034,7 +1188,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             # Apply pagination
             offset = request.offset or 0
             limit = request.limit or 100
-            txs = txs[offset:offset + limit]
+            txs = txs[offset : offset + limit]
 
             return pb2.ListTransactionsResponse(
                 transactions=[_tx_to_pb(t) for t in txs],
@@ -1120,13 +1274,14 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         status_list_index = _revocation_index_from_credential(cred)
         try:
             if not revocation_profile_id or status_list_index is None:
-                raise RuntimeError("credential has no Revocation Profile and allocated status-list entry")
-            import grpc.aio as grpc_aio
+                raise RuntimeError(
+                    "credential has no Revocation Profile and allocated status-list entry"
+                )
             from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
             from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
 
             rp_grpc_target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
-            async with grpc_aio.insecure_channel(rp_grpc_target) as channel:
+            async with create_service_channel(rp_grpc_target) as channel:
                 rp_stub = rp_grpc.RevocationProfileServiceStub(channel)
                 resp = await rp_stub.ProcessRevocation(
                     rp_pb2.ProcessRevocationRequest(
@@ -1144,10 +1299,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         except Exception as e:
             logger.warning(f"RevocationProfile gRPC failed for {action}, falling back to HTTP: {e}")
             if not revocation_profile_id or status_list_index is None:
-                logger.warning("Skipping RevocationProfile HTTP fallback because credential has no bound profile and status-list entry")
+                logger.warning(
+                    "Skipping RevocationProfile HTTP fallback because credential has no bound profile and status-list entry"
+                )
                 status_list_index = -1
             try:
                 import httpx
+
                 if status_list_index >= 0:
                     async with httpx.AsyncClient(timeout=10.0) as client:
                         await client.post(
@@ -1172,7 +1330,9 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             event_type_map.get(action, action),
             credential_id=credential_id,
             organization_id=cred.organization_id if hasattr(cred, "organization_id") else "",
-            credential_template_id=cred.credential_template_id if hasattr(cred, "credential_template_id") else "",
+            credential_template_id=cred.credential_template_id
+            if hasattr(cred, "credential_template_id")
+            else "",
             status=cred.status.value,
         )
 
@@ -1185,7 +1345,9 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
     async def RevokeCredential(self, request, context):
         try:
-            return await self._credential_lifecycle(request.credential_id, "revoke", request.reason, context)
+            return await self._credential_lifecycle(
+                request.credential_id, "revoke", request.reason, context
+            )
         except Exception as exc:
             logger.exception("RevokeCredential failed")
             context.set_code(grpc.StatusCode.INTERNAL)
@@ -1194,7 +1356,9 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
     async def SuspendCredential(self, request, context):
         try:
-            return await self._credential_lifecycle(request.credential_id, "suspend", request.reason, context)
+            return await self._credential_lifecycle(
+                request.credential_id, "suspend", request.reason, context
+            )
         except Exception as exc:
             logger.exception("SuspendCredential failed")
             context.set_code(grpc.StatusCode.INTERNAL)
@@ -1203,7 +1367,9 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
     async def ReinstateCredential(self, request, context):
         try:
-            return await self._credential_lifecycle(request.credential_id, "reinstate", request.reason, context)
+            return await self._credential_lifecycle(
+                request.credential_id, "reinstate", request.reason, context
+            )
         except Exception as exc:
             logger.exception("ReinstateCredential failed")
             context.set_code(grpc.StatusCode.INTERNAL)
@@ -1281,7 +1447,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     # Apply filters
                     if request.organization_id and event.organization_id != request.organization_id:
                         continue
-                    if request.credential_template_id and event.credential_template_id != request.credential_template_id:
+                    if (
+                        request.credential_template_id
+                        and event.credential_template_id != request.credential_template_id
+                    ):
                         continue
                     if request.event_types and event.event_type not in list(request.event_types):
                         continue
@@ -1302,16 +1471,36 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+
 def _config_id_for_format_variant(base: str, variant: str | None) -> str:
     """Return the credential_configuration_id for the given base type and format variant."""
+    normalized = (variant or "").strip().lower().replace("-", "_")
     if base == "default":
-        return base
-    if variant == "spruce-vc+sd-jwt":
-        return f"{base}#spruce-sd-jwt"
-    if variant == "mso_mdoc":
+        if normalized in {"mso_mdoc", "mdoc"}:
+            return "default#mdoc"
+        if normalized in {"json_ld", "ldp_vc", "w3c_vcdm_v2_di"}:
+            return "default#ldp-vc"
+        if normalized in {
+            "jwt_vc",
+            "jwt_vc_json",
+            "w3c_vcdm_v2_jwt",
+            "w3c_vcdm_v2_jwt_vc",
+        }:
+            return "default"
+        return "default#credential-manager"
+    if normalized in {"mso_mdoc", "mdoc"}:
         return f"{base}#mdoc"
-    if variant == "credential-manager":
+    if normalized in {"json_ld", "ldp_vc", "w3c_vcdm_v2_di"}:
+        return f"{base}#ldp-vc"
+    if normalized in {
+        "jwt_vc",
+        "jwt_vc_json",
+        "w3c_vcdm_v2_jwt",
+        "w3c_vcdm_v2_jwt_vc",
+    }:
+        return base
+    if normalized == "credential_manager":
         return f"{base}#credential-manager"
-    if variant == "apple-wallet":
+    if normalized == "apple_wallet":
         return f"{base}#apple-wallet"
     return f"{base}#sd-jwt"

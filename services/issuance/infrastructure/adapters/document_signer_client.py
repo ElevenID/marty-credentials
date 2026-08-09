@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Tuple
+
+from issuance.infrastructure.grpc_security import create_service_channel
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ async def sign_credential_via_document_signer(
     claims_json: str,
     selective_disclosure_claims: list[str] | None = None,
     organization_id: str | None = None,
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """Sign a credential via the external DocumentSigner gRPC service.
 
     Uses CreateCredentialOffer + IssueSdJwtCredential flow to produce
@@ -44,11 +45,10 @@ async def sign_credential_via_document_signer(
     Raises:
         RuntimeError: If signing fails or DocumentSigner returns an error.
     """
-    import grpc.aio as grpc_aio
     from marty_proto.v1 import document_signer_pb2 as ds_pb2
     from marty_proto.v1 import document_signer_pb2_grpc as ds_grpc
 
-    async with grpc_aio.insecure_channel(DOCUMENT_SIGNER_GRPC_TARGET) as channel:
+    async with create_service_channel(DOCUMENT_SIGNER_GRPC_TARGET) as channel:
         stub = ds_grpc.DocumentSignerStub(channel)
 
         # Step 1: Create a credential offer (registers claims + gets pre-auth code)

@@ -1,5 +1,5 @@
 # Public issuance service image. Build context: marty-credentials repository root.
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 
 ARG MARTY_RS_SHA256
 ARG MARTY_MSF_SHA256

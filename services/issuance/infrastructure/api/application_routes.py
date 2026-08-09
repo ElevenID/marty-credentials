@@ -14,10 +14,6 @@ from fastapi import Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
-CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
-    "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://credential-template-service:8003"
-)
-
 from issuance.application.application_approval import (
     CredentialContext,
     approve_application_for_issuance,
@@ -26,6 +22,7 @@ from issuance.application.canvas_issuance_guard import (
     CanvasIssuanceGuardError,
     canvas_approval_credential_context,
 )
+from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.evidence_reconciliation import (
     build_canvas_evidence_reconciliation_report,
     reconcile_canvas_evidence_transitions,
@@ -51,6 +48,7 @@ from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.adapters.delivery_records import (
     delivery_mode_from_integration_context,
 )
+from issuance.infrastructure.grpc_security import create_service_channel
 from issuance.infrastructure.api.routes import (
     ApplicationApproval,
     ApplicationCreate,
@@ -70,6 +68,128 @@ from issuance.infrastructure.api.routes import (
 
 logger = logging.getLogger(__name__)
 _INTERNAL_REVIEWER_ID = "issuance-management-api"
+
+
+class _CredentialTemplateLookupUnavailable(RuntimeError):
+    """The credential-template service could not answer a validation lookup."""
+
+
+async def _fetch_credential_template_via_grpc(
+    template_id: str,
+    target: str,
+) -> dict[str, Any] | None:
+    """Resolve a template through the stack's internal service contract."""
+
+    import grpc
+    from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+    from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
+    try:
+        async with create_service_channel(target) as channel:
+            response = await ct_grpc.CredentialTemplateServiceStub(channel).GetTemplate(
+                ct_pb2.GetTemplateRequest(template_id=template_id)
+            )
+    except grpc.RpcError as exc:
+        if exc.code() == grpc.StatusCode.NOT_FOUND:
+            return None
+        raise
+
+    if not response.id:
+        return None
+    return {
+        "id": response.id,
+        "organization_id": response.organization_id,
+        "status": response.status,
+        "credential_type": response.credential_type,
+        "vct": response.vct,
+        "credential_payload_format": response.credential_payload_format,
+        "revocation_profile_id": response.revocation_profile_id,
+        "issuer_did": getattr(response, "issuer_did", ""),
+        "issuer_algorithm": response.issuer_algorithm,
+        "wallet_configs": (
+            json.loads(response.wallet_configs_json)
+            if response.wallet_configs_json
+            else []
+        ),
+        "selective_disclosure_fields": list(response.selective_disclosure_fields),
+        "zk_predicate_claims": list(response.zk_predicate_claims),
+        "validity_rules": {
+            "default_validity_days": response.validity_rules.default_validity_days,
+            "renewable": response.validity_rules.renewable,
+            "renewal_window_days": response.validity_rules.renewal_window_days,
+        },
+        "claims": [{"name": claim.name} for claim in response.claims],
+    }
+
+
+def _credential_context_from_live_template(
+    template: dict[str, Any],
+    *,
+    organization_id: str,
+) -> CredentialContext:
+    """Validate the tenant-owned DID-first template used for issuance."""
+
+    if str(template.get("organization_id") or "").strip() != organization_id:
+        raise ValueError("Credential Template is not owned by this organization")
+    if str(template.get("status") or "").strip().upper() != "ACTIVE":
+        raise ValueError("Credential Template must be active")
+    credential_type = str(template.get("credential_type") or "").strip()
+    credential_format = str(template.get("credential_payload_format") or "").strip()
+    issuer_did = str(template.get("issuer_did") or "").strip()
+    issuer_algorithm = str(template.get("issuer_algorithm") or "").strip()
+    if not credential_type:
+        raise ValueError("Credential Template must define a credential type")
+    if not credential_format:
+        raise ValueError("Credential Template must define a credential payload format")
+    if not issuer_did.startswith("did:"):
+        raise ValueError("Credential Template must define an issuer DID")
+    if issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
+        raise ValueError("Credential Template must define a supported issuer algorithm")
+    validity = template.get("validity_rules")
+    validity = validity if isinstance(validity, dict) else {}
+    return CredentialContext(
+        credential_type=credential_type,
+        credential_vct=resolve_credential_vct(
+            template.get("vct"), credential_type, ISSUER_BASE_URL
+        ),
+        credential_payload_format=credential_format,
+        revocation_profile_id=str(
+            template.get("revocation_profile_id") or ""
+        ).strip()
+        or None,
+        wallet_configs=tuple(
+            dict(item)
+            for item in (template.get("wallet_configs") or [])
+            if isinstance(item, dict)
+        ),
+        selective_disclosure_claims=tuple(
+            str(item)
+            for item in (template.get("selective_disclosure_fields") or [])
+            if str(item)
+        ),
+        zk_predicate_claims=tuple(
+            str(item)
+            for item in (template.get("zk_predicate_claims") or [])
+            if str(item)
+        ),
+        validity_days=max(1, int(validity.get("default_validity_days") or 365)),
+        renewable=bool(validity.get("renewable", False)),
+        renewal_window_days=max(
+            1, int(validity.get("renewal_window_days") or 30)
+        ),
+        issuer_did=issuer_did,
+        issuer_algorithm=issuer_algorithm,
+    )
+
+
+async def _fetch_credential_template(template_id: str) -> dict[str, Any] | None:
+    """Fetch a template through the authenticated internal gRPC contract."""
+
+    grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003").strip()
+    try:
+        return await _fetch_credential_template_via_grpc(template_id, grpc_target)
+    except Exception as exc:
+        raise _CredentialTemplateLookupUnavailable from exc
 
 
 def _trusted_application_organization_id(request: Request) -> str:
@@ -297,17 +417,12 @@ async def _application_template_validation_errors(
         add("credential_template", "credential_template_id", "REQUIRED", "Select a Credential Template.")
         credential_template = None
     else:
-        credential_template = None
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
-                )
-            if response.status_code == 200:
-                credential_template = response.json()
-            else:
+            credential_template = await _fetch_credential_template(template.credential_template_id)
+            if credential_template is None:
                 add("credential_template", "credential_template_id", "NOT_FOUND", "Credential Template was not found.")
-        except Exception:
+        except _CredentialTemplateLookupUnavailable:
+            credential_template = None
             add("credential_template", "credential_template_id", "UNAVAILABLE", "Credential Template validation is unavailable.")
 
     if credential_template:
@@ -1016,28 +1131,24 @@ async def approve_application(
         issuer_context_applier = apply_required_remote_issuer_context
         credential_type = credential_context.credential_type
     else:
-        # Preserve the historical non-Canvas approval contract.
-        credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
-        credential_vct: str | None = None
         try:
-            ct_url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template.credential_template_id}"
-            async with httpx.AsyncClient(timeout=10.0) as _client:
-                _resp = await _client.get(ct_url)
-            if _resp.status_code < 400:
-                _tmpl = _resp.json()
-                credential_type = _tmpl.get("credential_type") or credential_type
-                raw_vct = _tmpl.get("vct") or ""
-                credential_vct = (
-                    raw_vct if raw_vct.startswith("http")
-                    else f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-                )
-        except Exception:
-            pass
-        credential_context = CredentialContext(
-            credential_type=credential_type,
-            credential_vct=credential_vct,
-        )
-        issuer_context_applier = apply_remote_issuer_context
+            credential_template = await _fetch_credential_template(template.credential_template_id)
+        except _CredentialTemplateLookupUnavailable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Credential Template validation is unavailable.",
+            ) from exc
+        if credential_template is None:
+            raise HTTPException(status_code=422, detail="Credential Template not found.")
+        try:
+            credential_context = _credential_context_from_live_template(
+                credential_template,
+                organization_id=app.organization_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        credential_type = credential_context.credential_type
+        issuer_context_applier = apply_required_remote_issuer_context
 
     logger.info(
         "[approve] app=%s template=%s cred_type=%s form_data_keys=%s",
@@ -1189,11 +1300,9 @@ def _build_wallet_offer_uris(
 
     Mirrors the logic in routes.initiate_issuance so that GET endpoints return
     the same correctly-keyed deep-link URIs as the POST that created the offer.
-    SpruceKit (mso_mdoc / spruce-vc+sd-jwt) gets the /spruce issuer URL so its
-    ProfilesCredentialConfiguration enum can parse the metadata without error.
     """
     from issuance.application.rust_integration import oid4vci_create_credential_offer
-    from issuance.infrastructure.api.routes import org_issuer_url, org_issuer_url_spruce
+    from issuance.infrastructure.api.routes import org_issuer_url
     uris: dict[str, str] = {}
     for wc in wallet_configs:
         wid = wc.get("wallet_id", "")
@@ -1202,18 +1311,11 @@ def _build_wallet_offer_uris(
         if not wid:
             continue
         # Select credential_configuration_id suffix for this format variant
-        if fmt_variant == "spruce-vc+sd-jwt":
-            config_id = f"{credential_type}#spruce-sd-jwt"
-        elif fmt_variant == "mso_mdoc":
+        if fmt_variant == "mso_mdoc":
             config_id = f"{credential_type}#mdoc"
         else:
             config_id = credential_type
-        # SpruceKit requires the /spruce issuer URL to avoid metadata parse errors
-        issuer_url = (
-            org_issuer_url_spruce(org_id)
-            if fmt_variant in ("spruce-vc+sd-jwt", "mso_mdoc")
-            else org_issuer_url(org_id)
-        )
+        issuer_url = org_issuer_url(org_id)
         offer_json = oid4vci_create_credential_offer(
             issuer_url=issuer_url,
             credential_types=[config_id],
@@ -1228,23 +1330,21 @@ def _build_wallet_offer_uris(
 async def _fetch_wallets_for_template(credential_template_id: str | None) -> list[IssuanceOfferWallet]:
     """Fetch wallet registry entries for a credential template.
 
-    Uses gRPC to CredentialTemplateService (ListWallets / GetWallet) with
-    HTTP fallback when the gRPC target is unreachable.
+    Uses the authenticated CredentialTemplateService gRPC contract.
     """
     if not credential_template_id:
         return []
 
     # --- helper: try gRPC first -----------------------------------------------
-    async def _fetch_via_grpc() -> list[IssuanceOfferWallet] | None:
-        """Return wallets via gRPC, or None on failure (triggers HTTP fallback)."""
+    async def _fetch_via_grpc() -> list[IssuanceOfferWallet]:
+        """Return wallets via gRPC, or an empty list when unavailable."""
         try:
             import grpc as _grpc
-            import grpc.aio as grpc_aio
             from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
             from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
 
             ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
-            async with grpc_aio.insecure_channel(ct_grpc_target) as channel:
+            async with create_service_channel(ct_grpc_target) as channel:
                 ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
 
                 # 1. Get template to check for supported_wallet_ids via wallet_configs_json
@@ -1293,59 +1393,11 @@ async def _fetch_wallets_for_template(credential_template_id: str | None) -> lis
                     except _grpc.RpcError:
                         continue
                 return wallets
-        except Exception as e:
-            logger.warning(f"gRPC wallet fetch failed, falling back to HTTP: {e}")
-            return None
+        except Exception as exc:
+            logger.warning("Authenticated gRPC wallet fetch failed: %s", exc)
+            return []
 
-    # --- attempt gRPC ----------------------------------------------------------
-    result = await _fetch_via_grpc()
-    if result is not None:
-        return result
-
-    # --- HTTP fallback ---------------------------------------------------------
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            # 1. Get template to find supported_wallet_ids
-            tmpl_resp = await client.get(
-                f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{credential_template_id}"
-            )
-            if tmpl_resp.status_code != 200:
-                return []
-            wallet_ids: list[str] = tmpl_resp.json().get("supported_wallet_ids", [])
-            if not wallet_ids:
-                # fall back: return all wallets from registry
-                registry_resp = await client.get(
-                    f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/wallet-registry?active_only=true"
-                )
-                if registry_resp.status_code != 200:
-                    return []
-                return [
-                    IssuanceOfferWallet(
-                        id=w["id"],
-                        name=w["name"],
-                        logo_url=w.get("logo_url"),
-                        deep_link_url="",
-                        platforms=w.get("platforms", []),
-                    )
-                    for w in registry_resp.json()
-                ]
-            # 2. Fetch each wallet entry
-            wallets: list[IssuanceOfferWallet] = []
-            for wid in wallet_ids:
-                wr = await client.get(f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/wallet-registry/{wid}")
-                if wr.status_code == 200:
-                    w = wr.json()
-                    wallets.append(IssuanceOfferWallet(
-                        id=w["id"],
-                        name=w["name"],
-                        logo_url=w.get("logo_url"),
-                        deep_link_url="",
-                        platforms=w.get("platforms", []),
-                    ))
-            return wallets
-    except Exception as e:
-        logger.warning(f"Could not fetch wallets for template {credential_template_id}: {e}")
-        return []
+    return await _fetch_via_grpc()
 
 
 async def _get_or_refresh_transaction(
@@ -1394,28 +1446,25 @@ async def _get_or_refresh_transaction(
 
     credential_template_id = template.credential_template_id if template else None
     revocation_profile_id: str | None = None
+    credential_context: CredentialContext | None = None
     if credential_template_id:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{credential_template_id}"
-                )
-        except httpx.HTTPError as exc:
+            credential_template = await _fetch_credential_template(credential_template_id)
+        except _CredentialTemplateLookupUnavailable as exc:
             raise HTTPException(
                 status_code=503,
                 detail="Credential Template validation is unavailable.",
             ) from exc
-        if response.status_code == 404:
+        if credential_template is None:
             raise HTTPException(status_code=422, detail="Credential Template not found.")
-        if response.status_code >= 400:
-            raise HTTPException(
-                status_code=503,
-                detail="Credential Template validation is unavailable.",
+        try:
+            credential_context = _credential_context_from_live_template(
+                credential_template,
+                organization_id=app.organization_id,
             )
-        credential_template = response.json()
-        revocation_profile_id = str(
-            credential_template.get("revocation_profile_id") or ""
-        ).strip() or None
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        revocation_profile_id = credential_context.revocation_profile_id
         await _require_active_revocation_profile_binding(
             organization_id=app.organization_id,
             revocation_profile_id=revocation_profile_id,
@@ -1426,13 +1475,16 @@ async def _get_or_refresh_transaction(
         tx = await repo.get_transaction(app.issuance_transaction_id)
 
     if tx and tx.status == IssuanceStatus.PENDING and not tx.is_expired:
-        delivery_before = tx.delivery_mode
         tx.delivery_mode = delivery_mode_from_integration_context(app.integration_context)
         tx.revocation_profile_id = revocation_profile_id
-        before = (tx.issuer_did_override, tx.signing_service_id)
-        await apply_remote_issuer_context(tx)
-        if before != (tx.issuer_did_override, tx.signing_service_id) or delivery_before != tx.delivery_mode:
-            await repo.save_transaction(tx)
+        if credential_context is None:
+            raise HTTPException(status_code=422, detail="Credential Template is required.")
+        tx.issuer_did_override = credential_context.issuer_did
+        tx.issuer_algorithm = credential_context.issuer_algorithm
+        tx.issuer_profile_id = None
+        tx.signing_service_id = None
+        await apply_required_remote_issuer_context(tx)
+        await repo.save_transaction(tx)
         return tx
 
     # Create a fresh transaction
@@ -1445,8 +1497,10 @@ async def _get_or_refresh_transaction(
         delivery_mode=delivery_mode_from_integration_context(app.integration_context),
         claims=app.form_data,
         revocation_profile_id=revocation_profile_id,
+        issuer_did_override=(credential_context.issuer_did if credential_context else None),
+        issuer_algorithm=(credential_context.issuer_algorithm if credential_context else None),
     )
-    await apply_remote_issuer_context(tx)
+    await apply_required_remote_issuer_context(tx)
     await repo.save_transaction(tx)
     app.issuance_transaction_id = tx.id
     await repo.save_application(app)

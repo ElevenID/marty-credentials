@@ -3,11 +3,11 @@ from __future__ import annotations
 import ast
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "python"))
@@ -52,6 +52,9 @@ def test_native_extension_uses_marty_core_package_name(monkeypatch) -> None:
 
     extension = SimpleNamespace()
     package = SimpleNamespace(_marty_rs=extension)
+    # Mask an installed top-level wheel so this test deterministically
+    # exercises the nested-package compatibility path in every CI matrix job.
+    monkeypatch.setitem(sys.modules, "_marty_rs", None)
     monkeypatch.setitem(sys.modules, "marty_rs", package)
 
     assert rust_integration.get_marty_rs() is extension
@@ -76,9 +79,60 @@ def test_native_extension_capability_contract_rejects_incomplete_module(monkeypa
         rust_integration.validate_marty_rs_capabilities()
 
 
+def test_native_extension_capability_contract_requires_remote_mdoc_split_signing(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    incomplete_module = SimpleNamespace(
+        **{
+            capability: (lambda: None)
+            for capability in rust_integration.REQUIRED_MARTY_RS_CAPABILITIES
+            if capability != "oid4vci_prepare_mdoc"
+        }
+    )
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: incomplete_module)
+
+    with pytest.raises(RuntimeError, match="oid4vci_prepare_mdoc"):
+        rust_integration.validate_marty_rs_capabilities()
+
+
+def test_key_attestation_binding_passes_only_the_exact_validated_token(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    captured: tuple[object, ...] | None = None
+
+    class Extension:
+        def oid4vci_verify_key_attestation_bound_proof_jwt(self, *args):
+            nonlocal captured
+            captured = args
+            return "", "nonce-1", '{"kty":"EC","crv":"P-256","x":"x","y":"y"}'
+
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
+
+    result = rust_integration.verify_key_attestation_bound_proof_jwt(
+        "proof.jwt.value",
+        "validated.attestation.value",
+        "nonce-1",
+        "https://issuer.example/org/org-a",
+    )
+
+    assert result == (
+        True,
+        "",
+        {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+        None,
+    )
+    assert captured == (
+        "proof.jwt.value",
+        "validated.attestation.value",
+        "nonce-1",
+        "https://issuer.example/org/org-a",
+    )
+
+
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
     dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
+    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
 
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
@@ -86,3 +140,13 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert "COPY marty-core/" not in dockerfile
     assert dependencies["marty-rs"]["repository"] == "ElevenID/marty-core"
     assert dependencies["marty-rs"]["asset"].startswith("marty_rs-")
+    core_release = dependencies["marty-rs"]
+    assert core_release["tag"] == f"v{core_release['version']}"
+    assert core_release["asset"].startswith(f"marty_rs-{core_release['version']}-")
+    assert len(core_release["commit"]) == 40
+    assert len(core_release["sha256"]) == 64
+    core_revisions = {
+        cargo["workspace"]["dependencies"][package]["rev"]
+        for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
+    }
+    assert core_revisions == {core_release["commit"]}

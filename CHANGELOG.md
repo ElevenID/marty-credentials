@@ -5,6 +5,539 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.49] - 2026-08-09
+
+### Changed
+
+- Project authenticated mdoc issuer, digest, algorithm, document-type, and
+  validity evidence from the released Marty Core 0.1.35 verification result.
+- Accept trusted roots and exact document-signer certificate pins as separate
+  inputs so callers cannot accidentally treat a pinned leaf as a generic CA.
+
+### Security
+
+- Fail closed on invalid trust configuration, certificate profile, protected
+  algorithm, document type, validity window, or disclosure digest evidence.
+- Report revocation as unchecked/unknown instead of inventing non-revocation
+  evidence, and expose only a stable SHA-256 certificate identity.
+
+## [0.1.48] - 2026-08-09
+
+### Changed
+
+- Add a tenant-scoped `Idempotency-Key` contract to HTTP and gRPC issuance
+  initiation and preserve nested request semantics across both transports.
+- Reserve issuance transactions atomically in PostgreSQL and recover the
+  original transaction and pre-authorized code for identical retries.
+
+### Security
+
+- Reject conflicting reuse of an idempotency key and reject idempotent DIDComm
+  push initiation until that side effect has a durable replay-safe contract.
+- Exercise concurrent reservation, committed-offer recovery, and changed-
+  semantics rejection through the production repository against PostgreSQL.
+
+## [0.1.47] - 2026-08-07
+
+### Changed
+
+- Pin the Rust source dependencies and production Python wheel to the released
+  Marty Core 0.1.34 commit.
+- Refresh the immutable Marty Common bootstrap artifact from 0.2.0 to 0.2.6.
+- Correct the issuance-service documentation to describe the supported
+  X25519, ECDH-ES+A256KW, and A256CBC-HS512 DIDComm Messaging 2.1 profile.
+
+### Security
+
+- Require the exact released Marty Core DIDComm wheel and SHA-256 digest when
+  building credential-service images, replacing the older envelope runtime.
+
+## [0.1.46] - 2026-08-06
+
+### Changed
+
+- Allow deployments to add an operator-controlled private CA to normal Web
+  PKI validation for outbound DIDComm delivery.
+- Separate private-address authorization from transport selection so isolated
+  interoperability agents can be reached without enabling plaintext delivery.
+
+### Security
+
+- Require HTTPS and hostname verification for every DIDComm delivery,
+  including explicitly authorized private-address agents.
+- Fail closed when a configured DIDComm trust bundle cannot be loaded, without
+  exposing its filesystem path through the public API.
+
+## [0.1.45] - 2026-08-06
+
+### Changed
+
+- Resolve issuance identity from the public organization and issuer DID, while
+  keeping issuer-profile, key, custody, and signing-service routing internal.
+- Align the generated credential-template package with the DID-first public
+  contract and include package contract tests in CI and stable releases.
+- Route DIDComm credential delivery through deployment-managed resolution and
+  require encrypted delivery to a publicly routable HTTPS endpoint by default.
+
+### Security
+
+- Reject unknown, inactive, ambiguous, incompatible, or cross-organization
+  issuer-DID mappings instead of accepting caller-selected custody metadata.
+- Bind key-attestation algorithms to the configured issuer-profile policy and
+  the attestation certificate key type.
+- Remove unauthenticated and plaintext DIDComm state-mutation paths, and reject
+  caller-controlled resolver selection.
+
+## [0.1.44] - 2026-08-02
+
+### Changed
+
+- Route every issuance service gRPC client through one authenticated,
+  TLS-capable channel factory, including all unary and streaming RPC shapes.
+- Use the credential-template service's authenticated gRPC read contract for
+  issuance validation and wallet discovery instead of private HTTP fallbacks.
+- Require non-Canvas approvals to resolve an actual credential template and
+  credential type instead of fabricating an mDL default.
+
+### Security
+
+- Require a non-placeholder service token of at least 32 characters for the
+  issuance gRPC server and clients outside development and test environments.
+- Load the token from a mounted secret file or environment value, reject
+  ambiguous configuration, and preserve RPC cardinality on authentication
+  failures.
+- Keep signing issuer-profile mediated: public requests continue to select an
+  organization and issuer DID, never a KMS, key, signing service, or profile ID.
+
+## [0.1.43] - 2026-08-02
+
+### Changed
+
+- Resolve Canvas LTI and issuer-readiness signing exclusively from the
+  organization-scoped issuer DID, credential format, key purpose, and
+  algorithm. Issuer-profile IDs and KMS routing remain private gateway state.
+- Publish active and rotating Canvas RSA assertion keys from the resolved DID
+  document instead of environment-selected JWK configuration.
+
+### Security
+
+- Remove the production local-private-JWK Canvas signer and the internal
+  profile-ID signing helper. All production Canvas signatures now use the
+  DID-resolved issuer profile and its managed custody service.
+- Reject private JWK material, cross-DID verification methods, and mismatched
+  signing results on the Canvas DID-mediated path.
+
+## [0.1.42] - 2026-08-02
+
+### Fixed
+
+- Emit the current EUDI OpenID4VCI profile metadata shape required by the
+  official wallet parser, including `key_attestations_required` for every JWT
+  proof configuration and an empty object when no additional wallet-key
+  constraints are imposed.
+- Consume marty-core 0.1.32 so current ETSI key-attestation-bound proofs use
+  canonical `kid: "0"` to select only the first key in the already
+  issuer-profile-validated attestation.
+
+### Security
+
+- Keep key-attestation trust tenant- and issuer-profile-bound; the public
+  issuance request still contains only the organization and issuer DID and
+  never accepts a KMS, service, key-reference, or issuer-profile selector.
+- Remove the obsolete named-key and `did:key` compatibility interpretation
+  from the key-attestation-bound proof path.
+
+## [0.1.41] - 2026-08-01
+
+### Changed
+
+- Publish OID4VCI Final `ldp_vc` configurations for W3C VCDM v2 Data
+  Integrity templates and select them in generated credential offers.
+- Restrict credential requests to the exact configurations granted for the
+  transaction or authorization session, preventing template/format substitution.
+- Remove draft request members, draft-era metadata aliases, and invented
+  per-organization format fallbacks.
+
+## [0.1.40] - 2026-08-01
+
+### Changed
+
+- Remove the obsolete Spruce-specific OID4VCI metadata, authorization-server,
+  credential-configuration, proof-audience, and signing aliases.
+- Retain SpruceKit interoperability through the current standard `dc+sd-jwt`
+  and `mso_mdoc` profiles.
+
+## [0.1.39] - 2026-08-01
+
+### Changed
+
+- Enforce the OpenID4VCI 1.0 Final credential request and response shapes:
+  callers select exactly one credential configuration or credential identifier,
+  and issued credentials are returned only through the `credentials` array.
+- Resolve issuer signing exclusively from the public issuer DID; callers can no
+  longer provide an issuer-profile selector or consume the old `mdoc_x5c` alias.
+- Preserve profile-mediated KMS signing while removing pre-1.0 public aliases.
+
+## [0.1.38] - 2026-08-01
+
+### Fixed
+
+- Consume marty-core 0.1.31 so OID4VCI key-attestation-bound proofs accept the
+  Final-spec embedded `jwk` form only when it matches a public key in the exact
+  issuer-profile-validated attestation.
+- Remove reliance on Marty's pre-1.0 numeric `kid`-as-array-index convention;
+  only standards-defined `jwk` and `kid` key identification remain.
+- Keep imported official compliance suites, fixtures, certificates,
+  assertions, expected results, selections, and exclusions unchanged.
+
+## [0.1.37] - 2026-08-01
+
+### Fixed
+
+- Resolve each OID4VCI credential configuration's proof and key-attestation
+  policy through the credential template's public `issuer_did`. Organization
+  metadata now remains available when a tenant owns multiple active issuer
+  identities, without accepting an issuer-profile or KMS selector from the
+  public boundary.
+
+## [0.1.36] - 2026-08-01
+
+### Security
+
+- Enforce tenant-bound issuer-profile policy for OID4VCI key-attestation
+  proofs on both HTTP and gRPC issuance paths. Wallet-provider certificate,
+  signature, freshness, nonce, assurance, and status checks complete before
+  nonce consumption, and marty-core binds the proof to the exact validated
+  attestation and selected public key.
+- Validate IETF Token Status List JWTs through profile-owned HTTPS origin,
+  trust-root, algorithm, freshness, response-size, decompression-size, and
+  private-network policies. Only a cryptographically verified `VALID` entry
+  is accepted.
+
+### Changed
+
+- Publish `key_attestations_required` only when the resolved organization and
+  issuer profile actually require it, and consume the immutable marty-core
+  0.1.30 release artifacts and source revision.
+- Preserve imported official compliance suites, fixtures, certificates,
+  assertions, selections, exclusions, and expected results byte-for-byte;
+  this change affects only ElevenID product code and owned tests.
+
+## [0.1.35] - 2026-08-01
+
+### Security
+
+- Verify credential proof structure, claims, holder key, and cryptographic
+  signature before atomically consuming the issuance nonce. Invalid proof
+  bytes can no longer burn a valid nonce, while replayed or concurrently
+  duplicated valid proofs still fail closed.
+- Consume marty-core 0.1.29 so OID4VCI JWT proofs require the final-spec
+  `typ`, `aud`, and `iat` claims, a verified signature, and a cryptographically
+  bound holder identity. Unresolvable key references, conflicting `kid`/`jwk`
+  headers, tampered signatures, and mismatched self-certifying DIDs are
+  rejected.
+
+### Changed
+
+- Keep the Rust git revision and signed GitHub release wheel input on the same
+  immutable marty-core 0.1.29 commit. Imported official compliance suites,
+  fixtures, assertions, selections, and expected results remain unchanged.
+
+## [0.1.34] - 2026-08-01
+
+### Security
+
+- Add service-key-authenticated, owner-only lookups for issuance transactions,
+  issued credentials, and application templates so the gateway can establish
+  tenant ownership before authorizing identifier-based management operations.
+- Keep public management routes tenant-scoped and return no credential,
+  transaction, template, or custody details from the internal lookup surface.
+- Make Rust, license, Bandit, and Python dependency audits release-blocking;
+  retain only the documented unfixed RSA advisory exception and explicitly
+  review the permissive transitive license families used by the dependency
+  graph.
+
+## [0.1.33] - 2026-08-01
+
+### Fixed
+
+- Resolve application-template credential dependencies through the stack's
+  internal gRPC contract before using the HTTP compatibility path, so
+  activation observes the same tenant-scoped active template as issuance.
+- Distinguish a missing credential template from an unavailable dependency
+  instead of reporting every internal service error as `NOT_FOUND`.
+
+## [0.1.32] - 2026-08-01
+
+### Security
+
+- Bind issued-credential management and lifecycle operations to the authenticated
+  organization and return non-enumerating not-found responses for cross-tenant
+  identifier substitution.
+- Keep delivery routing, pre-authorized-code state, issuer-profile identifiers,
+  signing-service references, and custody coordinates out of public responses.
+
+### Changed
+
+- Align issuance transaction, renewal, status, and issued-credential response
+  shapes with the strict Marty-Protocol contracts while retaining the existing
+  Canvas and DIDComm delivery behavior behind trusted internal boundaries.
+
+## [0.1.31] - 2026-07-29
+
+### Security
+
+- Require authenticated, tenant-bound Canvas mirror provenance lookups.
+- Reject cross-organization delivery, external credential, and canonical
+  credential identifier substitution without revealing record existence.
+- Publish only the issuer DID and public credential-issuer URL; internal issuer
+  profile, signing-service, key, mode, and KMS selectors remain private.
+
+## [0.1.30] - 2026-07-29
+
+### Fixed
+
+- Consume marty-core 0.1.27 so standards-valid VCDM v2 credentials containing
+  `relatedResource` pass JSON-LD expansion and continue through the existing
+  issuer-profile-mediated Data Integrity signing path.
+
+## [0.1.29] - 2026-07-28
+
+### Security
+
+- Require every retained legacy issuer-profile assertion to accompany an
+  issuer DID and reject it unless DID-first resolution selects the exact same
+  active, organization-owned profile.
+
+### Fixed
+
+- Consume marty-core 0.1.26 for strict separation between PKIX root trust and
+  exact pinned document-signer trust in ISO 18013-5 verification.
+- Align the workspace-level isomdl patch with the reviewed maintained-fork
+  revision used by marty-core so release builds cannot silently select an
+  older mdoc implementation.
+
+## [0.1.28] - 2026-07-28
+
+### Fixed
+
+- Consume marty-core 0.1.25 so mdoc credentials emit ISO 18013-5
+  `x5chain` certificate material in the COSE unprotected header.
+
+## [0.1.27] - 2026-07-28
+
+### Fixed
+
+- Accept standards-conforming `private_key_jwt` token requests that identify
+  the registered client through the signed `iss` and `sub` claims without a
+  redundant `client_id` form field.
+
+### Security
+
+- Continue to resolve the client from the tenant-bound issuance transaction,
+  verify the assertion only against that registration's public keys, and
+  reject any supplied `client_id` that disagrees with the bound client.
+
+## [0.1.26] - 2026-07-28
+
+### Fixed
+
+- Build source crates and service images from one immutable Marty Core release
+  instead of allowing Cargo and container wheel inputs to drift.
+- Verify W3C Data Integrity credentials whose tenant-scoped `did:web`
+  verification method was resolved and authorized by the product DID
+  resolver, while retaining offline `did:key` support.
+
+### Security
+
+- Keep DID authorization and tenant isolation in the product service and pass
+  only exact public verification material to the cryptographic verifier.
+- Add a release-input coherence contract that fails when Cargo revisions,
+  wheel metadata, version, commit, or digest disagree.
+
+## [0.1.25] - 2026-07-28
+
+### Fixed
+
+- Consume the corrected Marty Core Data Integrity signing implementation so
+  standards-conforming credentials with past or future validity periods can
+  be issued through the DID-mediated issuer profile.
+- Preserve normal verifier rejection of expired and premature credentials
+  while continuing to reject malformed dates, reversed periods, tampering,
+  and invalid remote signatures.
+
+## [0.1.24] - 2026-07-28
+
+### Fixed
+
+- Preserve the credential template's resolved `issuer_did` across the internal
+  gRPC boundary so DID-first issuance does not misclassify a current template
+  as legacy.
+- Add a generated-contract regression for the DID field numbers and prevent
+  public template messages from reintroducing issuer-profile, key, or KMS
+  routing selectors.
+
+## [0.1.23] - 2026-07-28
+
+### Fixed
+
+- Build the issuance and verification service images against the released
+  `marty-core` Python binding that provides the native W3C VC Data Model v2
+  Data Integrity prepare/complete operations required by the production
+  capability gate.
+- Keep the core binding as an immutable, checksum-verified release dependency
+  so service images cannot silently fall back to an older extension.
+
+## [0.1.22] - 2026-07-28
+
+### Added
+
+- Issue native W3C VC Data Model v2 credentials with
+  `eddsa-rdfc-2022` Data Integrity proofs while preserving the complete
+  unsigned credential document.
+- Accept complete-document issuance through the public DID-first request
+  boundary without exposing issuer-profile, signing-service, key-reference,
+  or KMS selectors.
+
+### Security
+
+- Validate VCDM structure in the production issuance domain rather than a
+  conformance adapter, including contexts, types, subjects, validity,
+  typed resources, language values, and issuer-DID consistency.
+- Verify allowlisted HTTPS `relatedResource` digests with redirects disabled,
+  bounded responses, and timeouts before creating an issuance transaction.
+- Keep signing mediated by the single active compatible issuer profile
+  resolved from the organization and public issuer DID.
+
+## [0.1.21] - 2026-07-27
+
+### Security
+
+- Add tenant-owned OID4VCI wallet-client registrations containing public
+  P-256 ES256 JWKs only and bind issued offers to the registered client.
+- Enforce the same RFC 7523 `private_key_jwt` identity, signature, audience,
+  timing, and one-time `jti` checks over REST and gRPC.
+- Atomically consume authorization and pre-authorization codes so concurrent
+  redemption has exactly one winner.
+- Bind organization-specific PAR endpoints to their tenant and advertise
+  tenant-only authentication methods only in tenant-scoped metadata.
+- Keep wallet private keys outside Marty and preserve issuer signing through
+  DID-resolved issuer profiles and their configured managed custody.
+
+### Fixed
+
+- Declare `googleapis-common-protos` as a Python runtime dependency for the
+  generated HTTP-annotated protobuf package.
+
+## [0.1.20] - 2026-07-26
+
+### Bug Fixes
+
+- Bind the cryptographically verified OID4VCI proof public key into the mdoc
+  MSO so wallets can produce verifiable holder `DeviceAuthentication`.
+- Reject mdoc issuance when the proof supplies no verified public key, and
+  discard private JWK parameters before crossing the Rust binding boundary.
+- Preserve issuer authentication signing through the selected issuer profile,
+  issuer DID, and DID verification method; runtime callers do not select or
+  invoke KMS keys.
+
+## [0.1.19] - 2026-07-26
+
+### Bug Fixes
+
+- Verify the complete ISO mdoc `issuerAuth` COSE signature and its public
+  certificate chain instead of relying on a lossy compatibility projection.
+- Preserve signing through the issuer profile and its DID verification method;
+  verification does not select or call the profile's KMS-backed key.
+- Keep holder `DeviceAuthentication` verification separate from issuer
+  authentication.
+
+## [0.1.18] - 2026-07-26
+
+### Bug Fixes
+
+- Consume marty-core v0.1.18 so issuer-profile mdoc issuance embeds
+  `issuerAuth` as the COSE_Sign1 array accepted by EUDI/Multipaz wallets.
+- Keep runtime signing scoped to the issuer profile, its issuer DID, and its
+  DID verification method; KMS routing remains internal to profile custody.
+
+## [0.1.17] - 2026-07-25
+
+### Fixed
+
+- Consume marty-core v0.1.17 so issuer-profile mdoc issuance encodes the
+  standards-defined `MobileSecurityObjectBytes` payload.
+- Preserve signing through the issuer profile and its DID verification method;
+  callers neither select nor access the profile's KMS-backed key.
+
+## [0.1.16] - 2026-07-25
+
+### Security
+
+- Verify mdoc issuer certificate chains against configured trust anchors and
+  fail closed when no issuer trust can be established.
+- Verify holder `DeviceAuthentication` against the verifier-owned OpenID4VP
+  session transcript.
+- Preserve the issuer-profile and DID signing boundary: callers never select
+  or receive the profile's underlying KMS key.
+
+## [0.1.15] - 2026-07-24
+
+### Fixed
+
+- Preserve the transaction's deterministic mdoc credential identifier through
+  issuer-profile signing and native COSE assembly.
+- Keep application signing scoped to an issuer profile, its DID, and its
+  published verification method; KMS remains private key custody behind the
+  profile boundary.
+
+## [0.1.12] - 2026-07-22
+
+### Fixed
+
+- Advertise the Credential Issuer's authorization server explicitly for EUDI
+  reference-wallet discovery.
+- Omit an optional VC-JWT `sub` claim when an explicitly supplied VCDM
+  credential subject does not identify the OID4VCI proof holder, avoiding a
+  contradictory subject binding while preserving normal holder-bound output.
+
+Version 0.1.11 was not published because its immutable tag correctly failed
+the release-source version check. The tag was retained rather than rewritten.
+
+## [0.1.10] - 2026-07-22
+
+### Security
+
+- Route production Canvas LTI tool JWT signing through its issuer profile and DID verification method.
+- Remove the application-level signing helper that accepted raw KMS service IDs and provider key references.
+
+## [0.1.9] - 2026-07-22
+
+### Security
+
+- Route credential, mdoc, DIDComm, and Canvas issuer-readiness signatures through the selected issuer profile and DID.
+- Prevent issuance requests and headers from selecting a raw KMS service or key; issuer profiles retain the internal KMS binding.
+
+### Changed
+
+- Bind template-driven issuance to the template's issuer profile and validate the expected issuer DID and verification method on every signature response.
+
+## [0.1.7] - 2026-07-20
+
+### Added
+
+- Preserve W3C VC Data Model v2 credential subject objects and subject sets
+  through the production JWT-VC issuance and remote-signing path.
+
+### Security
+
+- Publish stable source artifacts and digest-pinned service images through one
+  fail-closed immutable draft, with a complete signed checksum manifest.
+- Publish the optional PyPI source distribution only from that attested,
+  immutable release and remove obsolete mutable RC and artifact-cleanup paths.
+
 ## [unreleased] - 2026-07-17
 
 ## [unreleased] - 2026-07-17

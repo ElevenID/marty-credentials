@@ -37,9 +37,11 @@ from issuance.domain.entities import (
     EvidencePolicyReview,
     EvidencePolicyReviewStatus,
     IssuanceEvent,
+    IssuanceIdempotencyConflictError,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
+    Oid4vciRegisteredClient,
     OrganizationIntegrationSecret,
     issuance_save_predecessors,
 )
@@ -66,14 +68,20 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             target_priority.get(record.delivery_target.value, 99),
             record.delivery_target.value,
         )
-    
+
     def __init__(self):
         self._transactions: dict[str, IssuanceTransaction] = {}
         self._transaction_locks: dict[str, asyncio.Lock] = {}
+        self._idempotency_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._idempotent_transactions: dict[tuple[str, str], str] = {}
         self._credentials: dict[str, IssuedCredential] = {}
         self._applications: dict[str, Application] = {}
         self._application_templates: dict[str, ApplicationTemplate] = {}
         self._authorization_sessions: dict[str, AuthorizationSession] = {}
+        self._authorization_session_locks: dict[str, asyncio.Lock] = {}
+        self._oid4vci_clients: dict[tuple[str, str], Oid4vciRegisteredClient] = {}
+        self._oid4vci_client_assertions: dict[tuple[str, str, str], datetime] = {}
+        self._oid4vci_client_assertion_lock = asyncio.Lock()
         self._canvas_event_receipts: dict[tuple[str | None, str], CanvasEventReceipt] = {}
         self._canvas_lti_launch_states: dict[str, CanvasLtiLaunchState] = {}
         self._canvas_platforms: dict[str, CanvasPlatform] = {}
@@ -96,7 +104,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._application_issuance_locks: dict[str, asyncio.Lock] = {}
         self._approval_policy_sets: dict[tuple[str, str], ApprovalPolicySet] = {}
         self._events: list[IssuanceEvent] = []
-    
+
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
         lock = self._transaction_locks.setdefault(tx.id, asyncio.Lock())
         async with lock:
@@ -106,6 +114,74 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                     f"Stale issuance transaction transition {stored.status.value}->{tx.status.value}"
                 )
             self._transactions[tx.id] = copy.deepcopy(tx)
+
+    async def reserve_transaction_idempotently(
+        self,
+        tx: IssuanceTransaction,
+    ) -> tuple[IssuanceTransaction, bool]:
+        if not tx.idempotency_key_hash:
+            if tx.idempotency_request_hash:
+                raise ValueError("idempotency request hash requires an idempotency key")
+            await self.save_transaction(tx)
+            return copy.deepcopy(tx), True
+        if not tx.idempotency_request_hash:
+            raise ValueError("idempotency key requires an idempotency request hash")
+
+        logical_key = (tx.organization_id, tx.idempotency_key_hash)
+        lock = self._idempotency_locks.setdefault(logical_key, asyncio.Lock())
+        async with lock:
+            existing_id = self._idempotent_transactions.get(logical_key)
+            if existing_id is not None:
+                existing = self._transactions[existing_id]
+                if existing.idempotency_request_hash != tx.idempotency_request_hash:
+                    raise IssuanceIdempotencyConflictError(
+                        "idempotency key was already used for a different issuance request"
+                    )
+                return copy.deepcopy(existing), False
+
+            await self.save_transaction(tx)
+            self._idempotent_transactions[logical_key] = tx.id
+            return copy.deepcopy(tx), True
+
+    async def recover_transaction_idempotently(
+        self,
+        *,
+        organization_id: str,
+        idempotency_key_hash: str,
+        idempotency_request_hash: str,
+    ) -> IssuanceTransaction | None:
+        logical_key = (organization_id, idempotency_key_hash)
+        lock = self._idempotency_locks.setdefault(logical_key, asyncio.Lock())
+        async with lock:
+            existing_id = self._idempotent_transactions.get(logical_key)
+            if existing_id is None:
+                return None
+            existing = self._transactions[existing_id]
+            if existing.idempotency_request_hash != idempotency_request_hash:
+                raise IssuanceIdempotencyConflictError(
+                    "idempotency key was already used for a different issuance request"
+                )
+            return copy.deepcopy(existing)
+
+    async def claim_transaction_for_token(
+        self,
+        prepared_transaction: IssuanceTransaction,
+    ) -> IssuanceTransaction | None:
+        transaction_id = prepared_transaction.id
+        lock = self._transaction_locks.setdefault(transaction_id, asyncio.Lock())
+        async with lock:
+            stored = self._transactions.get(transaction_id)
+            if (
+                stored is None
+                or stored.status != IssuanceStatus.PENDING
+                or stored.pre_auth_code != prepared_transaction.pre_auth_code
+            ):
+                return None
+            claimed = copy.deepcopy(prepared_transaction)
+            claimed.status = IssuanceStatus.AUTHORIZED
+            claimed.nonce = None
+            self._transactions[transaction_id] = copy.deepcopy(claimed)
+            return claimed
 
     async def claim_transaction_for_signing(
         self,
@@ -153,7 +229,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 candidate = None
                 if app is not None and self._canvas_context(app) is not None:
                     if app.organization_id != credential.organization_id:
-                        raise ValueError("Canvas credential organization does not match application")
+                        raise ValueError(
+                            "Canvas credential organization does not match application"
+                        )
                     if app.credential_id not in (None, credential.id):
                         raise ValueError("Canvas application already has a different credential")
                     candidate_id = str(
@@ -166,9 +244,13 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                                 candidate.organization_id != app.organization_id
                                 or candidate.application_id != app.id
                             ):
-                                raise ValueError("Canvas award candidate does not match application")
+                                raise ValueError(
+                                    "Canvas award candidate does not match application"
+                                )
                             if candidate.claimed_credential_id not in (None, credential.id):
-                                raise ValueError("Canvas award candidate already has a different credential")
+                                raise ValueError(
+                                    "Canvas award candidate already has a different credential"
+                                )
 
                 finalized = copy.deepcopy(tx)
                 finalized.status = IssuanceStatus.ISSUED
@@ -183,42 +265,85 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                         candidate.state = CanvasAwardCandidateState.CLAIMED
                         candidate.claimed_credential_id = credential.id
                         candidate.updated_at = credential.issued_at
-    
+
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
         tx = self._transactions.get(tx_id)
         return copy.deepcopy(tx) if tx is not None else None
-    
+
     async def get_by_pre_auth_code(self, code: str) -> IssuanceTransaction | None:
         for tx in self._transactions.values():
             if tx.pre_auth_code == code:
                 return copy.deepcopy(tx)
         return None
-    
+
     async def get_by_access_token(self, token: str) -> IssuanceTransaction | None:
         import hmac as _hmac
+
         for tx in self._transactions.values():
             if tx.access_token and _hmac.compare_digest(tx.access_token, token):
                 return copy.deepcopy(tx)
         return None
-    
+
     async def list_transactions(self, org_id: str) -> list[IssuanceTransaction]:
-        return [copy.deepcopy(tx) for tx in self._transactions.values() if tx.organization_id == org_id]
-    
+        return [
+            copy.deepcopy(tx) for tx in self._transactions.values() if tx.organization_id == org_id
+        ]
+
+    async def save_oid4vci_client(self, client: Oid4vciRegisteredClient) -> None:
+        key = (client.organization_id, client.client_id)
+        existing = self._oid4vci_clients.get(key)
+        stored = copy.deepcopy(client)
+        if existing is not None:
+            stored.created_at = existing.created_at
+        stored.updated_at = datetime.now(UTC)
+        self._oid4vci_clients[key] = stored
+
+    async def get_oid4vci_client(
+        self,
+        organization_id: str,
+        client_id: str,
+    ) -> Oid4vciRegisteredClient | None:
+        client = self._oid4vci_clients.get((organization_id, client_id))
+        return copy.deepcopy(client) if client is not None else None
+
+    async def claim_oid4vci_client_assertion(
+        self,
+        *,
+        organization_id: str,
+        client_id: str,
+        jti: str,
+        expires_at: datetime,
+    ) -> bool:
+        key = (organization_id, client_id, jti)
+        async with self._oid4vci_client_assertion_lock:
+            now = datetime.now(UTC)
+            self._oid4vci_client_assertions = {
+                assertion_key: expiry
+                for assertion_key, expiry in self._oid4vci_client_assertions.items()
+                if expiry > now
+            }
+            if key in self._oid4vci_client_assertions:
+                return False
+            self._oid4vci_client_assertions[key] = expires_at
+            return True
+
     async def save_credential(self, cred: IssuedCredential) -> None:
         self._credentials[cred.id] = cred
-    
+
     async def get_credential(self, cred_id: str) -> IssuedCredential | None:
         return self._credentials.get(cred_id)
 
-    async def get_credential_by_transaction_id(self, transaction_id: str) -> IssuedCredential | None:
+    async def get_credential_by_transaction_id(
+        self, transaction_id: str
+    ) -> IssuedCredential | None:
         for cred in self._credentials.values():
             if cred.transaction_id == transaction_id:
                 return cred
         return None
-    
+
     async def list_credentials(self, applicant_id: str) -> list[IssuedCredential]:
         return [c for c in self._credentials.values() if c.applicant_id == applicant_id]
-    
+
     async def list_credentials_by_org(self, org_id: str) -> list[IssuedCredential]:
         return [c for c in self._credentials.values() if c.organization_id == org_id]
 
@@ -251,9 +376,15 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             return record
         return None
 
-    async def list_delivery_records_for_credential(self, credential_id: str) -> list[CredentialDeliveryRecord]:
+    async def list_delivery_records_for_credential(
+        self, credential_id: str
+    ) -> list[CredentialDeliveryRecord]:
         return sorted(
-            [record for record in self._delivery_records.values() if record.credential_id == credential_id],
+            [
+                record
+                for record in self._delivery_records.values()
+                if record.credential_id == credential_id
+            ],
             key=self._delivery_record_sort_key,
         )
 
@@ -457,27 +588,30 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         policy_set_id: str,
     ) -> ApprovalPolicySet | None:
         return self._approval_policy_sets.get((organization_id, policy_set_id))
-    
+
     async def save_application_template(self, template: ApplicationTemplate) -> None:
         from datetime import datetime
+
         template.updated_at = datetime.now(UTC)
         self._application_templates[template.id] = template
-    
+
     async def get_application_template(self, template_id: str) -> ApplicationTemplate | None:
         return self._application_templates.get(template_id)
-    
+
     async def list_application_templates(self, org_id: str) -> list[ApplicationTemplate]:
         return [t for t in self._application_templates.values() if t.organization_id == org_id]
 
     async def delete_application_template(self, template_id: str) -> bool:
         return self._application_templates.pop(template_id, None) is not None
-    
+
     async def save_application(self, app: Application) -> None:
         self._applications[app.id] = app
 
     @staticmethod
     def _canvas_context(app: Application) -> dict[str, Any] | None:
-        integration_context = app.integration_context if isinstance(app.integration_context, dict) else {}
+        integration_context = (
+            app.integration_context if isinstance(app.integration_context, dict) else {}
+        )
         canvas = integration_context.get("canvas")
         if not isinstance(canvas, dict):
             return None
@@ -539,10 +673,14 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 app.updated_at = reviewed_at
                 canvas = self._canvas_context(app) or {}
                 candidate_id = str(canvas.get("canvas_award_candidate_id") or "").strip()
-                candidate = self._canvas_award_candidates.get(candidate_id) if candidate_id else None
+                candidate = (
+                    self._canvas_award_candidates.get(candidate_id) if candidate_id else None
+                )
                 if candidate is not None and candidate.application_id == app.id:
                     if candidate.claimed_credential_id not in (None, issued.id):
-                        raise ValueError("Canvas award candidate already has a different credential")
+                        raise ValueError(
+                            "Canvas award candidate already has a different credential"
+                        )
                     candidate.state = CanvasAwardCandidateState.CLAIMED
                     candidate.claimed_credential_id = issued.id
                     candidate.updated_at = reviewed_at
@@ -551,14 +689,12 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             current_is_active = bool(
                 current_tx is not None
                 and (
-                    current_tx.status in {
+                    current_tx.status
+                    in {
                         IssuanceStatus.AUTHORIZED,
                         IssuanceStatus.SIGNING,
                     }
-                    or (
-                        current_tx.status == IssuanceStatus.PENDING
-                        and not current_tx.is_expired
-                    )
+                    or (current_tx.status == IssuanceStatus.PENDING and not current_tx.is_expired)
                 )
             )
             if current_is_active:
@@ -600,10 +736,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             )
             app.updated_at = datetime.now(UTC)
             return copy.deepcopy(app)
-    
+
     async def get_application(self, app_id: str) -> Application | None:
         return self._applications.get(app_id)
-    
+
     async def list_applications(
         self,
         org_id: str | None = None,
@@ -611,30 +747,30 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         template_id: str | None = None,
     ) -> list[Application]:
         apps = list(self._applications.values())
-        
+
         if org_id:
             apps = [a for a in apps if a.organization_id == org_id]
         if status:
             apps = [a for a in apps if a.status == status]
         if template_id:
             apps = [a for a in apps if a.application_template_id == template_id]
-        
+
         return apps
 
     # Lifecycle event methods
     async def save_event(self, event: IssuanceEvent) -> None:
         self._events.append(event)
 
-    async def list_events_for_application(
-        self, application_id: str
-    ) -> list[IssuanceEvent]:
+    async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         return sorted(
             [e for e in self._events if e.application_id == application_id],
             key=lambda e: e.created_at,
         )
 
     async def save_canvas_event_receipt(self, receipt: CanvasEventReceipt) -> None:
-        self._canvas_event_receipts[(receipt.canvas_account_id, receipt.provider_event_id)] = receipt
+        self._canvas_event_receipts[(receipt.canvas_account_id, receipt.provider_event_id)] = (
+            receipt
+        )
 
     async def get_canvas_event_receipt(
         self,
@@ -658,9 +794,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         receipts = list(self._canvas_event_receipts.values())
         if organization_id is not None:
             receipts = [
-                receipt
-                for receipt in receipts
-                if receipt.organization_id == organization_id
+                receipt for receipt in receipts if receipt.organization_id == organization_id
             ]
         if status is not None:
             receipts = [receipt for receipt in receipts if receipt.status == status]
@@ -887,7 +1021,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         authorization_id: str,
     ) -> CanvasOAuthAuthorization | None:
         for authorization in self._canvas_oauth_authorizations.values():
-            if authorization.id == authorization_id and authorization.organization_id == organization_id:
+            if (
+                authorization.id == authorization_id
+                and authorization.organization_id == organization_id
+            ):
                 return authorization
         return None
 
@@ -1281,10 +1418,16 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         target.last_enqueued_at = datetime.now(UTC)
         return job
 
-    async def enqueue_due_canvas_sync_jobs(self, *, limit: int = 100) -> list[CanvasEvidenceSyncJob]:
+    async def enqueue_due_canvas_sync_jobs(
+        self, *, limit: int = 100
+    ) -> list[CanvasEvidenceSyncJob]:
         now = datetime.now(UTC)
         due = sorted(
-            [target for target in self._canvas_sync_targets.values() if target.enabled and target.next_run_at <= now],
+            [
+                target
+                for target in self._canvas_sync_targets.values()
+                if target.enabled and target.next_run_at <= now
+            ],
             key=lambda target: target.next_run_at,
         )[:limit]
         jobs: list[CanvasEvidenceSyncJob] = []
@@ -1335,7 +1478,8 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             [
                 job
                 for job in self._canvas_sync_jobs.values()
-                if job.status in {CanvasEvidenceSyncJobStatus.QUEUED, CanvasEvidenceSyncJobStatus.RETRY}
+                if job.status
+                in {CanvasEvidenceSyncJobStatus.QUEUED, CanvasEvidenceSyncJobStatus.RETRY}
                 and job.available_at <= now
                 and job.attempt_count < job.max_attempts
             ],
@@ -1448,7 +1592,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         status: CanvasEvidenceSyncJobStatus | None = None,
         limit: int = 100,
     ) -> list[CanvasEvidenceSyncJob]:
-        jobs = [job for job in self._canvas_sync_jobs.values() if job.organization_id == organization_id]
+        jobs = [
+            job for job in self._canvas_sync_jobs.values() if job.organization_id == organization_id
+        ]
         if target_id is not None:
             jobs = [job for job in jobs if job.target_id == target_id]
         if status is not None:
@@ -1582,7 +1728,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         if state is not None:
             candidates = [candidate for candidate in candidates if candidate.state == state]
         if binding_id is not None:
-            candidates = [candidate for candidate in candidates if candidate.binding_id == binding_id]
+            candidates = [
+                candidate for candidate in candidates if candidate.binding_id == binding_id
+            ]
         return sorted(candidates, key=lambda candidate: candidate.updated_at, reverse=True)[:limit]
 
     async def save_canvas_candidate_observation(
@@ -1827,7 +1975,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             key=lambda secret: secret.created_at,
         )
 
-    async def get_integration_secret_value(self, organization_id: str, secret_id: str) -> str | None:
+    async def get_integration_secret_value(
+        self, organization_id: str, secret_id: str
+    ) -> str | None:
         secret = self._integration_secrets.get(secret_id)
         if secret is None or secret.organization_id != organization_id or not secret.enabled:
             return None
@@ -1865,66 +2015,137 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 seen.add(tx.credential_type)
         return [(ct, []) for ct in sorted(seen)]
 
-    async def get_credential_display_metadata_for_org(self, org_id: str) -> dict[str, dict[str, object]]:
-        return {
-            credential_type: {
+    async def get_credential_display_metadata_for_org(
+        self, org_id: str
+    ) -> dict[str, dict[str, object]]:
+        metadata: dict[str, dict[str, object]] = {}
+        for credential_type, _formats in await self.get_credential_type_formats_for_org(org_id):
+            issuer_did = next(
+                (
+                    tx.issuer_did_override
+                    for tx in self._transactions.values()
+                    if tx.organization_id == org_id
+                    and tx.credential_type == credential_type
+                    and tx.issuer_did_override
+                ),
+                None,
+            )
+            issuer_algorithm = next(
+                (
+                    tx.issuer_algorithm
+                    for tx in self._transactions.values()
+                    if tx.organization_id == org_id
+                    and tx.credential_type == credential_type
+                    and tx.issuer_algorithm
+                ),
+                None,
+            )
+            metadata[credential_type] = {
                 "name": credential_type,
                 "description": None,
                 "claims": [],
                 "display_style": {},
+                "issuer_did": issuer_did,
+                "issuer_algorithm": issuer_algorithm,
             }
-            for credential_type, _formats in await self.get_credential_type_formats_for_org(org_id)
-        }
+        return metadata
 
     async def save_authorization_session(self, auth_session: AuthorizationSession) -> None:
-        self._authorization_sessions[auth_session.id] = auth_session
+        self._authorization_sessions[auth_session.id] = copy.deepcopy(auth_session)
+
+    async def claim_authorization_session_for_token(
+        self,
+        prepared_session: AuthorizationSession,
+    ) -> AuthorizationSession | None:
+        lock = self._authorization_session_locks.setdefault(
+            prepared_session.id,
+            asyncio.Lock(),
+        )
+        async with lock:
+            stored = self._authorization_sessions.get(prepared_session.id)
+            if (
+                stored is None
+                or stored.code != prepared_session.code
+                or stored.status != "pending"
+                or stored.is_expired
+            ):
+                return None
+            claimed = copy.deepcopy(prepared_session)
+            claimed.status = "exchanged"
+            self._authorization_sessions[claimed.id] = copy.deepcopy(claimed)
+            return claimed
 
     async def get_authorization_session_by_code(self, code: str) -> AuthorizationSession | None:
         for auth_session in self._authorization_sessions.values():
             if auth_session.code == code:
-                return auth_session
+                return copy.deepcopy(auth_session)
         return None
 
-    async def get_authorization_session_by_access_token(self, token: str) -> AuthorizationSession | None:
+    async def get_authorization_session_by_access_token(
+        self, token: str
+    ) -> AuthorizationSession | None:
         import hmac as _hmac
 
         for auth_session in self._authorization_sessions.values():
             if auth_session.access_token and _hmac.compare_digest(auth_session.access_token, token):
-                return auth_session
+                return copy.deepcopy(auth_session)
         return None
 
     async def get_retention_summary(self, org_id: str, retention_days: int) -> dict[str, object]:
         cutoff_at = datetime.now(UTC) - timedelta(days=retention_days)
-        expired_transactions = [tx for tx in self._transactions.values() if tx.organization_id == org_id and tx.created_at < cutoff_at]
-        expired_applications = [app for app in self._applications.values() if app.organization_id == org_id and app.created_at < cutoff_at]
-        expired_auth_sessions = [session for session in self._authorization_sessions.values() if session.organization_id == org_id and session.created_at < cutoff_at]
-        expired_events = [event for event in self._events if self._event_belongs_to_org(event, org_id) and event.created_at < cutoff_at]
+        expired_transactions = [
+            tx
+            for tx in self._transactions.values()
+            if tx.organization_id == org_id and tx.created_at < cutoff_at
+        ]
+        expired_applications = [
+            app
+            for app in self._applications.values()
+            if app.organization_id == org_id and app.created_at < cutoff_at
+        ]
+        expired_auth_sessions = [
+            session
+            for session in self._authorization_sessions.values()
+            if session.organization_id == org_id and session.created_at < cutoff_at
+        ]
+        expired_events = [
+            event
+            for event in self._events
+            if self._event_belongs_to_org(event, org_id) and event.created_at < cutoff_at
+        ]
         expired_credentials = [
-            credential for credential in self._credentials.values()
-            if credential.organization_id == org_id and credential.transaction_id in {tx.id for tx in expired_transactions}
+            credential
+            for credential in self._credentials.values()
+            if credential.organization_id == org_id
+            and credential.transaction_id in {tx.id for tx in expired_transactions}
         ]
 
         retained_candidates = [
-            tx.created_at for tx in self._transactions.values()
+            tx.created_at
+            for tx in self._transactions.values()
             if tx.organization_id == org_id and tx.created_at >= cutoff_at
         ]
         retained_candidates.extend(
-            app.created_at for app in self._applications.values()
+            app.created_at
+            for app in self._applications.values()
             if app.organization_id == org_id and app.created_at >= cutoff_at
         )
         retained_candidates.extend(
-            session.created_at for session in self._authorization_sessions.values()
+            session.created_at
+            for session in self._authorization_sessions.values()
             if session.organization_id == org_id and session.created_at >= cutoff_at
         )
         retained_candidates.extend(
-            event.created_at for event in self._events
+            event.created_at
+            for event in self._events
             if self._event_belongs_to_org(event, org_id) and event.created_at >= cutoff_at
         )
 
         oldest_retained_record_at = min(retained_candidates) if retained_candidates else None
         next_expiry_at = (
             oldest_retained_record_at + timedelta(days=retention_days)
-            if oldest_retained_record_at else None
+            if oldest_retained_record_at
+            else None
         )
 
         eligible_for_purge = {
@@ -1940,7 +2161,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             "organization_id": org_id,
             "retention_days": retention_days,
             "cutoff_at": cutoff_at.isoformat(),
-            "oldest_retained_record_at": oldest_retained_record_at.isoformat() if oldest_retained_record_at else None,
+            "oldest_retained_record_at": oldest_retained_record_at.isoformat()
+            if oldest_retained_record_at
+            else None,
             "next_expiry_at": next_expiry_at.isoformat() if next_expiry_at else None,
             "eligible_for_purge": eligible_for_purge,
             "tracked_scope": [
@@ -1957,32 +2180,42 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         summary = await self.get_retention_summary(org_id, retention_days)
         cutoff_at = datetime.fromisoformat(str(summary["cutoff_at"]))
         expired_transaction_ids = {
-            tx.id for tx in self._transactions.values()
+            tx.id
+            for tx in self._transactions.values()
             if tx.organization_id == org_id and tx.created_at < cutoff_at
         }
         expired_credential_ids = {
-            credential.id for credential in self._credentials.values()
-            if credential.organization_id == org_id and credential.transaction_id in expired_transaction_ids
+            credential.id
+            for credential in self._credentials.values()
+            if credential.organization_id == org_id
+            and credential.transaction_id in expired_transaction_ids
         }
 
         self._events = [
-            event for event in self._events
+            event
+            for event in self._events
             if not (self._event_belongs_to_org(event, org_id) and event.created_at < cutoff_at)
         ]
         self._authorization_sessions = {
-            key: value for key, value in self._authorization_sessions.items()
+            key: value
+            for key, value in self._authorization_sessions.items()
             if not (value.organization_id == org_id and value.created_at < cutoff_at)
         }
         self._applications = {
-            key: value for key, value in self._applications.items()
+            key: value
+            for key, value in self._applications.items()
             if not (value.organization_id == org_id and value.created_at < cutoff_at)
         }
         self._credentials = {
-            key: value for key, value in self._credentials.items()
-            if not (value.organization_id == org_id and value.transaction_id in expired_transaction_ids)
+            key: value
+            for key, value in self._credentials.items()
+            if not (
+                value.organization_id == org_id and value.transaction_id in expired_transaction_ids
+            )
         }
         self._delivery_records = {
-            key: value for key, value in self._delivery_records.items()
+            key: value
+            for key, value in self._delivery_records.items()
             if not (
                 value.organization_id == org_id
                 and (
@@ -1992,11 +2225,13 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             )
         }
         self._evidence_facts = {
-            key: value for key, value in self._evidence_facts.items()
+            key: value
+            for key, value in self._evidence_facts.items()
             if value.organization_id != org_id or value.application_id in self._applications
         }
         self._transactions = {
-            key: value for key, value in self._transactions.items()
+            key: value
+            for key, value in self._transactions.items()
             if not (value.organization_id == org_id and value.created_at < cutoff_at)
         }
 

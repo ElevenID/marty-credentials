@@ -3,29 +3,30 @@ resolver = "2"
 members = ["rust/marty-rs"]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.49"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-rust-version = "1.87"
+rust-version = "1.95"
 repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "561678d428bddc6f9b86a91aa7b8866d98579d45", features = ["sod-builder"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "561678d428bddc6f9b86a91aa7b8866d98579d45", default-features = false }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a", features = ["sod-builder"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a", default-features = false }
 
 # PEM encoding
-pem-rfc7468 = { version = "0.7", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "561678d428bddc6f9b86a91aa7b8866d98579d45" }
+pem-rfc7468 = { version = "1.0", features = ["alloc"] }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
 
 # SSI ecosystem
-ssi = { version = "0.16.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1", "rsa"] }
+ssi-crypto = { version = "0.2.1", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1"] }
+ssi-jwk = { version = "0.4.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1"] }
 ssi-status = { version = "0.8.1", default-features = false }
 isomdl = { version = "0.2" }
-coset = { version = "0.3" }
+coset = { version = "0.4" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # SD-JWT
@@ -43,7 +44,7 @@ ciborium = { version = "0.2" }
 bs58 = { version = "0.5" }
 base64 = { version = "0.22" }
 rsa = { version = "0.9" }
-rand = { version = "0.8" }
+rand = { version = "0.10" }
 
 # Async
 tokio = { version = "1.42", features = ["rt", "rt-multi-thread", "sync", "macros"] }
@@ -63,3 +64,10 @@ tracing-error = { version = "0.2" }
 lto = true
 codegen-units = 1
 strip = true
+
+[patch.crates-io]
+# Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
+ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
+# Maintained ElevenID security/interoperability fork. The exact revision is
+# reviewed and synchronized from upstream through pull requests.
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "7a443cf6c37c8d7f11e9a767c1002684842ab5d0" }

@@ -1,0 +1,50 @@
+version: 1
+dependencies:
+  - package: ssi subcrates
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/spruceid/ssi
+    current: ssi-claims-0.7/ssi-jwk-0.4
+    target: upstream-ssi-jwt-release-without-serde-with-2
+    status: temporary-exception
+    decision: replace
+    advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2021-0127]
+    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
+    review-after: 2026-08-17
+    rationale: The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; ssi-jwt is temporarily patched by exact revision pending spruceid/ssi#706.
+  - package: isomdl
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/spruceid/isomdl
+    current: "ElevenID/isomdl-elevenid@7a443cf6c37c8d7f11e9a767c1002684842ab5d0"
+    target: current-upstream-plus-reviewed-elevenid-patches
+    status: maintained
+    decision: fork
+    advisories: [GHSA-9c48-w39g-hm26, GHSA-4grx-2x9w-596c, GHSA-c38w-74pg-36hr, RUSTSEC-2023-0071]
+    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
+    review-after: 2026-10-28
+    rationale: mdoc issuance and verification remain supported. The exact-revision ElevenID fork removes ssi-jwk 0.2.1 and rsa 0.6.1, accepts standards-valid empty issuerSigned nameSpaces without weakening non-empty validation, and verifies DeviceAuthentication against the exact verifier-owned CBOR session transcript bytes. It preserves SpruceID history and licensing and opens review-only upstream synchronization pull requests monthly. Equivalent upstream behavior may replace a downstream patch only after the full mdoc interoperability and security suites pass.
+  - package: pyo3
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/PyO3/pyo3
+    current: "0.29.0"
+    target: "0.29.x"
+    status: maintained
+    decision: retain
+    advisories: []
+    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
+    review-after: 2026-10-18
+    rationale: The binding migration is complete and the obsolete cargo-deny exception has been removed.
+  - package: rsa
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/RustCrypto/RSA
+    current: "0.9.10"
+    target: patched-upstream-release
+    status: watch
+    decision: retain
+    advisories: [RUSTSEC-2023-0071]
+    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
+    review-after: 2026-10-18
+    rationale: RSA is retained compatibility functionality for passport, certificate, CMS/CRL, RSA-JWT, and legacy badge profiles through Marty crypto adapters; no patched RustCrypto release exists.

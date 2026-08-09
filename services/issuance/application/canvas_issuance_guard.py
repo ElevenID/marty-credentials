@@ -143,20 +143,9 @@ def _credential_context_from_current_snapshot(
         context = credential_context_from_template_snapshot(dict(snapshot))
     except (TypeError, ValueError):
         _deny("canvas_credential_template_snapshot_invalid")
-    signing = (
-        snapshot.get("remote_signing_config")
-        if isinstance(snapshot.get("remote_signing_config"), dict)
-        else {}
-    )
-    issuer_did = _text(snapshot.get("issuer_did"))
-    verification_method_id = _text(signing.get("verification_method_id"))
     if (
-        not issuer_did.startswith("did:")
-        or not _text(signing.get("signing_service_id"))
-        or not _text(signing.get("signing_key_reference"))
-        or not verification_method_id.startswith(issuer_did + "#")
-        or _text(signing.get("key_purpose") or "vc_jwt_issuer")
-        != "vc_jwt_issuer"
+        not _text(context.issuer_did).startswith("did:")
+        or context.issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}
     ):
         _deny("canvas_credential_template_snapshot_invalid")
     return context
@@ -265,14 +254,12 @@ def _binding_and_transaction_context_match(
     except CanvasIssuanceGuardError:
         return False
 
-    snapshot = binding.credential_template_snapshot
-
     if (
         tx.credential_type != expected.credential_type
         or tx.credential_payload_format != expected.credential_payload_format
         or tx.revocation_profile_id != expected.revocation_profile_id
-        or tx.issuer_profile_id != expected.issuer_profile_id
-        or tx.issuer_mode != expected.issuer_mode
+        or tx.issuer_did_override != expected.issuer_did
+        or tx.issuer_algorithm != expected.issuer_algorithm
         or tx.validity_days != expected.validity_days
         or tx.renewable != expected.renewable
         or tx.renewal_window_days != expected.renewal_window_days
@@ -285,17 +272,7 @@ def _binding_and_transaction_context_match(
     ):
         return False
 
-    signing = (
-        snapshot.get("remote_signing_config")
-        if isinstance(snapshot.get("remote_signing_config"), dict)
-        else {}
-    )
-    return bool(
-        _text(signing.get("signing_service_id"))
-        and tx.signing_service_id == _text(signing.get("signing_service_id"))
-        and _text(snapshot.get("issuer_did"))
-        and tx.issuer_did_override == _text(snapshot.get("issuer_did"))
-    )
+    return bool(tx.issuer_profile_id and tx.signing_service_id)
 
 
 def _resolved_issuer_context_matches(
@@ -305,11 +282,6 @@ def _resolved_issuer_context_matches(
     if not isinstance(resolved, Mapping):
         return False
     snapshot = binding.credential_template_snapshot
-    expected_signing = (
-        snapshot.get("remote_signing_config")
-        if isinstance(snapshot.get("remote_signing_config"), dict)
-        else {}
-    )
     profile = (
         resolved.get("issuer_profile")
         if isinstance(resolved.get("issuer_profile"), Mapping)
@@ -324,11 +296,7 @@ def _resolved_issuer_context_matches(
     def first(*values: Any) -> str:
         return next((_text(value) for value in values if _text(value)), "")
 
-    expected_algorithm = first(
-        snapshot.get("issuer_algorithm"),
-        snapshot.get("signing_algorithm"),
-        expected_signing.get("algorithm"),
-    )
+    expected_algorithm = first(snapshot.get("issuer_algorithm"))
     actual_algorithm = first(
         resolved.get("algorithm"),
         profile.get("algorithm"),
@@ -345,31 +313,20 @@ def _resolved_issuer_context_matches(
         else expected_algorithm in service_algorithms
     )
     return bool(
-        first(resolved.get("issuer_profile_id"), profile.get("id"))
-        == _text(snapshot.get("issuer_profile_id"))
-        and _text(profile.get("status")).lower() == "active"
+        _text(profile.get("status")).lower() == "active"
+        and first(resolved.get("organization_id"), profile.get("organization_id"))
+        == _text(snapshot.get("organization_id"))
         and first(resolved.get("issuer_did"), profile.get("issuer_did"))
         == _text(snapshot.get("issuer_did"))
-        and first(
-            resolved.get("signing_service_id"),
-            profile.get("signing_service_id"),
-            service.get("id"),
-        )
-        == _text(expected_signing.get("signing_service_id"))
-        and first(
-            resolved.get("signing_key_reference"),
-            profile.get("signing_key_reference"),
-            service.get("key_reference"),
-        )
-        == _text(expected_signing.get("signing_key_reference"))
         and first(
             resolved.get("verification_method_id"),
             profile.get("verification_method_id"),
         )
-        == _text(expected_signing.get("verification_method_id"))
+        .startswith(_text(snapshot.get("issuer_did")) + "#")
         and first(resolved.get("key_purpose"), profile.get("key_purpose"))
-        == _text(expected_signing.get("key_purpose") or "vc_jwt_issuer")
+        == "vc_jwt_issuer"
         and algorithm_matches
+        and isinstance(resolved.get("public_jwk"), Mapping)
     )
 
 

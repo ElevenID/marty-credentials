@@ -15,13 +15,10 @@ from fastapi import HTTPException
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
 _PYTHON = os.path.join(_REPO_ROOT, "python")
-_MARTY_COMMON_PACKAGES = os.path.join(os.path.dirname(_REPO_ROOT), "marty-ui", "packages")
 
 for _path in (_SERVICES, _PYTHON):
     if _path not in sys.path:
         sys.path.insert(0, _path)
-if os.path.isdir(_MARTY_COMMON_PACKAGES) and _MARTY_COMMON_PACKAGES not in sys.path:
-    sys.path.insert(0, _MARTY_COMMON_PACKAGES)
 
 from issuance.infrastructure.adapters.canvas_credentials_adapter import (
     CanvasAgsScoreEvent,

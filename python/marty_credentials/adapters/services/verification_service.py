@@ -566,18 +566,20 @@ class VerificationService(ICredentialVerifier):
             
             # Verify mDoc signature with trusted certificates
             signature_valid = False
+            issuer_verified = False
             signature_error = None
             try:
-                trusted_certs = _load_trusted_certs()
+                trusted_certs = trusted_issuer_keys or _load_trusted_certs()
                 if not trusted_certs:
                     signature_error = "No trusted mDoc issuer certificates configured"
                 elif hasattr(_marty_rs, 'verify_mdoc_signature'):
                     verification_result = _marty_rs.verify_mdoc_signature(
-                        mdoc_bytes=mdoc_bytes,  # Fixed: was presentation_bytes (undefined)
-                        trusted_certs=trusted_certs
+                        mdoc_bytes=mdoc_bytes,
+                        trusted_issuer_certs_pem=trusted_certs,
                     )
-                    signature_valid = verification_result.valid
-                    if not signature_valid:  # Fixed: was checking signature_error instead
+                    signature_valid = verification_result.signature_valid
+                    issuer_verified = verification_result.issuer_verified
+                    if not signature_valid or not issuer_verified:
                         signature_error = verification_result.error
                 else:
                     signature_error = "Native mDoc signature verification is unavailable"
@@ -585,12 +587,18 @@ class VerificationService(ICredentialVerifier):
                 signature_error = str(e)
                 logger.warning(f"mDoc signature verification failed: {e}")
             
-            is_valid = len(mdl_claims) > 0 and not is_expired and signature_valid
+            is_valid = (
+                len(mdl_claims) > 0
+                and not is_expired
+                and signature_valid
+                and issuer_verified
+            )
             
             result = VerificationResult.SUCCESS if is_valid else VerificationResult.FAILED
             
             details = {
                 "signature_valid": signature_valid,
+                "issuer_verified": issuer_verified,
                 "signature_error": signature_error,
                 "expired": is_expired,
                 "valid_from": valid_from,

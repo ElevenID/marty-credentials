@@ -36,20 +36,8 @@ def _snapshot() -> dict:
         "credential_type": "OpenBadgeCredential",
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "revocation_profile_id": "status-profile-1",
-        "issuer_profile_id": "issuer-profile-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
-        "issuer_key_id": "badge-key-1",
         "issuer_algorithm": "ES256",
-        "key_access_mode": "REMOTE_SIGNING",
-        "remote_signing_config": {
-            "provider": "managed-signing-service",
-            "signing_service_id": "kms-service-1",
-            "signing_key_reference": "badge-key-1",
-            "verification_method_id": (
-                "did:web:issuer.example:orgs:org-1#badge-key-1"
-            ),
-            "key_purpose": "vc_jwt_issuer",
-        },
     }
 
 
@@ -57,6 +45,7 @@ def _resolved_context(*, key_reference: str = "badge-key-1") -> dict:
     issuer_did = "did:web:issuer.example:orgs:org-1"
     verification_method_id = f"{issuer_did}#badge-key-1"
     return {
+        "organization_id": "org-1",
         "issuer_profile_id": "issuer-profile-1",
         "issuer_did": issuer_did,
         "signing_service_id": "kms-service-1",
@@ -64,9 +53,11 @@ def _resolved_context(*, key_reference: str = "badge-key-1") -> dict:
         "verification_method_id": verification_method_id,
         "key_purpose": "vc_jwt_issuer",
         "algorithm": "ES256",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
         "issuer_profile": {
             "id": "issuer-profile-1",
             "status": "active",
+            "organization_id": "org-1",
             "issuer_did": issuer_did,
             "signing_service_id": "kms-service-1",
             "signing_key_reference": key_reference,
@@ -172,6 +163,7 @@ async def _ready_case(
         revocation_profile_id="status-profile-1",
         issuer_profile_id="issuer-profile-1",
         issuer_did_override="did:web:issuer.example:orgs:org-1",
+        issuer_algorithm="ES256",
         signing_service_id="kms-service-1",
     )
     fact = EvidenceFact(
@@ -432,20 +424,19 @@ async def test_canvas_guard_requires_current_policy_permit(
 
 
 @pytest.mark.asyncio
-async def test_canvas_guard_rejects_resolved_kms_key_drift(
+async def test_canvas_guard_allows_private_kms_key_rotation_behind_same_did(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo, tx, _platform, _binding, _fact = await _ready_case(monkeypatch)
 
-    with pytest.raises(CanvasIssuanceGuardError) as exc_info:
-        await require_canvas_issuance_ready(
-            repo=repo,
-            tx=tx,
-            now=NOW,
-            resolved_issuer_context=_resolved_context(key_reference="rotated-without-readiness"),
-        )
-
-    assert exc_info.value.code == "canvas_resolved_issuer_context_mismatch"
+    assert await require_canvas_issuance_ready(
+        repo=repo,
+        tx=tx,
+        now=NOW,
+        resolved_issuer_context=_resolved_context(
+            key_reference="rotated-behind-the-same-did"
+        ),
+    ) is True
 
 
 @pytest.mark.asyncio
@@ -528,7 +519,9 @@ async def test_manual_canvas_approval_uses_persisted_snapshot_and_required_kms(
 
     async def apply_required(tx):
         required_calls.append(tx.id)
-        tx.issuer_did_override = "did:web:issuer.example:orgs:org-1"
+        assert tx.issuer_did_override == "did:web:issuer.example:orgs:org-1"
+        assert tx.issuer_algorithm == "ES256"
+        tx.issuer_profile_id = "resolved-profile-1"
         tx.signing_service_id = "kms-service-1"
         return {"signing_key_reference": "badge-key-1"}
 
@@ -559,7 +552,7 @@ async def test_manual_canvas_approval_uses_persisted_snapshot_and_required_kms(
     assert tx.credential_type == "OpenBadgeCredential"
     assert tx.credential_payload_format == "w3c_vcdm_v2_sd_jwt"
     assert tx.revocation_profile_id == "status-profile-1"
-    assert tx.issuer_profile_id == "issuer-profile-1"
+    assert tx.issuer_profile_id == "resolved-profile-1"
     assert tx.issuer_did_override == "did:web:issuer.example:orgs:org-1"
     assert tx.signing_service_id == "kms-service-1"
 
@@ -608,7 +601,7 @@ async def test_manual_canvas_approval_fails_closed_on_stale_readiness(
 
 
 @pytest.mark.asyncio
-async def test_manual_non_canvas_approval_keeps_live_template_path(
+async def test_manual_non_canvas_approval_uses_live_did_first_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from issuance.infrastructure.api import application_routes, routes
@@ -631,41 +624,32 @@ async def test_manual_non_canvas_approval_keeps_live_template_path(
     await repo.save_application_template(template)
     await repo.save_application(app)
 
-    class Response:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "credential_type": "EmployeeCredential",
-                "vct": "https://issuer.example/credentials/employee",
-            }
-
-    class Client:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *_args):
-            return None
-
-        async def get(self, _url):
-            return Response()
+    async def fetch_template(_template_id: str):
+        return {
+            "organization_id": "org-1",
+            "status": "ACTIVE",
+            "credential_type": "EmployeeCredential",
+            "vct": "https://issuer.example/credentials/employee",
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "issuer_did": "did:web:issuer.example:orgs:org-1",
+            "issuer_algorithm": "ES256",
+        }
 
     ordinary_calls: list[str] = []
 
     async def apply_ordinary(tx):
         ordinary_calls.append(tx.id)
+        assert tx.issuer_did_override == "did:web:issuer.example:orgs:org-1"
+        assert tx.issuer_algorithm == "ES256"
+        tx.issuer_profile_id = "resolved-profile-1"
+        tx.signing_service_id = "kms-service-1"
         return None
 
-    async def reject_required(_tx):
-        pytest.fail("non-Canvas approval must not use the Canvas KMS contract")
-
-    monkeypatch.setattr(application_routes.httpx, "AsyncClient", lambda **_kwargs: Client())
-    monkeypatch.setattr(application_routes, "apply_remote_issuer_context", apply_ordinary)
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
     monkeypatch.setattr(
         application_routes,
         "apply_required_remote_issuer_context",
-        reject_required,
+        apply_ordinary,
     )
 
     response = await application_routes.approve_application(
@@ -679,4 +663,5 @@ async def test_manual_non_canvas_approval_keeps_live_template_path(
     assert tx is not None
     assert ordinary_calls == [tx.id]
     assert tx.credential_type == "EmployeeCredential"
+    assert tx.issuer_profile_id == "resolved-profile-1"
     assert tx.claims["_vct"] == "https://issuer.example/credentials/employee"

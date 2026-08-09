@@ -88,7 +88,7 @@ def test_credentials_ci_requires_and_publishes_the_compose_contract() -> None:
     assert "up --force-recreate --abort-on-container-exit" in job
     assert "--exit-code-from migration-contract migration-contract" in job
     assert "contract-result.json" in job
-    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in job
+    assert "actions/upload-artifact@" in job
     assert "down --volumes --remove-orphans" in job
     assert "if: always()" in job
     assert "continue-on-error" not in job

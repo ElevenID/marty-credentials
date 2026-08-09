@@ -43,6 +43,10 @@ class _CredentialTemplateResponse:
         return {
             "organization_id": "org-123",
             "status": "active",
+            "credential_type": "MembershipCredential",
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "issuer_did": "did:web:issuer.example:orgs:org-123",
+            "issuer_algorithm": "ES256",
             "claims": [{"name": "email"}],
             "revocation_profile_id": self._revocation_profile_id,
         }
@@ -60,6 +64,21 @@ class _CredentialTemplateClient:
 
     async def get(self, _url):
         return self._response
+
+
+class _UnexpectedCredentialTemplateClient:
+    async def __aenter__(self):
+        raise AssertionError("HTTP fallback must not run after a successful gRPC lookup")
+
+    async def __aexit__(self, *_args):
+        return None
+
+
+def _credential_template_fetcher(revocation_profile_id: str | None):
+    async def fetch(_template_id: str):
+        return _CredentialTemplateResponse(revocation_profile_id).json()
+
+    return fetch
 
 
 def _create_request(**overrides) -> ApplicationTemplateCreate:
@@ -186,9 +205,9 @@ async def test_validate_rejects_active_credential_template_without_revocation_pr
     repo = InMemoryIssuanceRepository()
     created = await application_routes.create_application_template(_create_request(), repo=repo)
     monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: _CredentialTemplateClient(None),
+        application_routes,
+        "_fetch_credential_template",
+        _credential_template_fetcher(None),
     )
 
     result = await application_routes.validate_application_template(created.id, repo=repo)
@@ -198,6 +217,58 @@ async def test_validate_rejects_active_credential_template_without_revocation_pr
         error["code"] == "REVOCATION_PROFILE_REQUIRED"
         for error in result["errors"]
     )
+
+
+async def test_validate_uses_internal_grpc_template_contract_first(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    created = await application_routes.create_application_template(_create_request(), repo=repo)
+
+    async def fetch_via_grpc(template_id: str, target: str):
+        assert template_id == "credential-template-1"
+        assert target == "credential-template:9003"
+        return {
+            "id": template_id,
+            "organization_id": "org-123",
+            "status": "ACTIVE",
+            "claims": [{"name": "email"}],
+            "revocation_profile_id": "revocation-profile-1",
+        }
+
+    monkeypatch.setenv("CT_GRPC_TARGET", "credential-template:9003")
+    monkeypatch.setattr(
+        application_routes,
+        "_fetch_credential_template_via_grpc",
+        fetch_via_grpc,
+    )
+    monkeypatch.setattr(
+        application_routes.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _UnexpectedCredentialTemplateClient(),
+    )
+
+    result = await application_routes.validate_application_template(created.id, repo=repo)
+
+    assert result == {"valid": True, "errors": []}
+
+
+async def test_validate_reports_dependency_unavailable_instead_of_not_found(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    created = await application_routes.create_application_template(_create_request(), repo=repo)
+
+    async def unavailable_grpc(_template_id: str, target: str):
+        assert target == "credential-template:9003"
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(
+        application_routes,
+        "_fetch_credential_template_via_grpc",
+        unavailable_grpc,
+    )
+
+    result = await application_routes.validate_application_template(created.id, repo=repo)
+
+    assert any(error["code"] == "UNAVAILABLE" for error in result["errors"])
+    assert not any(error["code"] == "NOT_FOUND" for error in result["errors"])
 
 
 async def test_validate_covers_evidence_claim_checks_and_configuration(monkeypatch) -> None:
@@ -217,9 +288,9 @@ async def test_validate_covers_evidence_claim_checks_and_configuration(monkeypat
     template.ui_config = []
     await repo.save_application_template(template)
     monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: _CredentialTemplateClient("revocation-profile-1"),
+        application_routes,
+        "_fetch_credential_template",
+        _credential_template_fetcher("revocation-profile-1"),
     )
 
     result = await application_routes.validate_application_template(created.id, repo=repo)
@@ -238,9 +309,9 @@ async def test_rules_based_activation_requires_active_approval_policy_set(monkey
         repo=repo,
     )
     monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: _CredentialTemplateClient("revocation-profile-1"),
+        application_routes,
+        "_fetch_credential_template",
+        _credential_template_fetcher("revocation-profile-1"),
     )
 
     missing = await application_routes.validate_application_template(created.id, repo=repo)
@@ -275,9 +346,9 @@ async def test_validate_accepts_supported_system_claim_sources(monkeypatch) -> N
         repo=repo,
     )
     monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: _CredentialTemplateClient("revocation-profile-1"),
+        application_routes,
+        "_fetch_credential_template",
+        _credential_template_fetcher("revocation-profile-1"),
     )
 
     result = await application_routes.validate_application_template(created.id, repo=repo)
@@ -303,20 +374,28 @@ async def test_claim_transaction_inherits_and_validates_revocation_profile(monke
     async def validate_binding(**kwargs):
         validated.append(kwargs)
 
-    async def apply_issuer_context(_transaction):
+    async def apply_issuer_context(transaction):
+        transaction.issuer_profile_id = "resolved-profile-1"
+        transaction.signing_service_id = "resolved-service-1"
         return None
 
     monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: _CredentialTemplateClient("revocation-profile-1"),
+        application_routes,
+        "_fetch_credential_template",
+        _credential_template_fetcher("revocation-profile-1"),
     )
     monkeypatch.setattr(application_routes, "_require_active_revocation_profile_binding", validate_binding)
-    monkeypatch.setattr(application_routes, "apply_remote_issuer_context", apply_issuer_context)
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
 
     transaction = await application_routes._get_or_refresh_transaction(app, repo, template)
 
     assert transaction.revocation_profile_id == "revocation-profile-1"
+    assert transaction.issuer_did_override == "did:web:issuer.example:orgs:org-123"
+    assert transaction.issuer_algorithm == "ES256"
     assert validated == [{
         "organization_id": "org-123",
         "revocation_profile_id": "revocation-profile-1",

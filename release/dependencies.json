@@ -1,11 +1,12 @@
 {
   "schema": "marty.release-dependencies/v1",
   "marty-rs": {
-    "version": "0.1.2",
+    "version": "0.1.35",
     "repository": "ElevenID/marty-core",
-    "tag": "v0.1.2",
-    "asset": "marty_rs-0.1.2-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    "sha256": "f41b61dbdd9a76bd716f3854c4f9ed870f04979709178a40f595c7a6a68d10ba"
+    "tag": "v0.1.35",
+    "commit": "5d8e98ac90100139e48aa2cb436158f07d79bc2a",
+    "asset": "marty_rs-0.1.35-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "97dfc63c29d54fbdc4cdf3d9de20a4c0c294b81f9da6c224f7a2054c010035d3"
   },
   "marty-msf": {
     "version": "1.0.0",
@@ -15,10 +16,10 @@
     "sha256": "8c6c0f8de961380ee0546787a498fd34a866746c8687e313f75281995bd6146d"
   },
   "marty-common": {
-    "version": "0.2.0",
+    "version": "0.2.6",
     "repository": "ElevenID/Marty",
-    "tag": "marty-common-v0.2.0",
-    "asset": "marty_common-0.2.0-py3-none-any.whl",
-    "sha256": "123452b401144ff2c7b13c4c8f2eea1370a34a60c259e49795d5dfe295747a2f"
+    "tag": "marty-common-v0.2.6",
+    "asset": "marty_common-0.2.6-py3-none-any.whl",
+    "sha256": "82236ca999fb0d28eec7a5709667c5e3b2f32abd57e518c1b1e2e9e5d0ac2f1a"
   }
 }

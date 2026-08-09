@@ -7,19 +7,11 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Tuple
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from issuance.infrastructure.models import issuer_signing_keys_table
-from status_list.infrastructure.security.encryption import SymmetricEncryption
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
-
-_issuer_key_session_factory: async_sessionmaker[AsyncSession] | None = None
-_issuer_key_encryption: SymmetricEncryption | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +48,7 @@ def _did_key_from_ed25519(public_key: bytes) -> str:
 
 def base64url_encode(data: bytes) -> str:
     """Encode bytes as base64url without padding."""
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode('ascii')
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
 def base64url_decode(data: str) -> bytes:
@@ -68,112 +60,6 @@ def base64url_decode(data: str) -> bytes:
 # base64url_decode removed — PKCE verification now delegated to Rust.
 
 
-# ---------------------------------------------------------------------------
-# Issuer key management
-# ---------------------------------------------------------------------------
-
-# In-process cache so every credential for the same org has the same issuer DID.
-# In production this should be backed by the database / a KMS.
-_org_keys: dict = {}
-
-
-def configure_issuer_key_store(
-    session_factory: async_sessionmaker[AsyncSession] | None,
-) -> None:
-    """Configure database-backed encrypted issuer key persistence."""
-    global _issuer_key_session_factory
-    _issuer_key_session_factory = session_factory
-    if session_factory is not None:
-        logger.info("Configured database-backed issuer key store")
-
-
-def _persistent_key_store_available() -> bool:
-    """Return True when encrypted database-backed key storage is configured."""
-    return _issuer_key_session_factory is not None and bool(os.environ.get("ISSUER_KEY_MASTER_KEY"))
-
-
-def _get_issuer_key_encryption() -> SymmetricEncryption:
-    """Return the encryption service for persisted issuer keys."""
-    global _issuer_key_encryption
-    if _issuer_key_encryption is None:
-        _issuer_key_encryption = SymmetricEncryption.from_env("ISSUER_KEY_MASTER_KEY")
-    return _issuer_key_encryption
-
-
-async def _load_persisted_issuer_key(organization_id: str) -> dict | None:
-    """Load and decrypt issuer key material from PostgreSQL."""
-    if not _persistent_key_store_available() or _issuer_key_session_factory is None:
-        return None
-
-    encryption = _get_issuer_key_encryption()
-    async with _issuer_key_session_factory() as session:
-        stmt = select(issuer_signing_keys_table).where(
-            issuer_signing_keys_table.c.organization_id == organization_id
-        )
-        result = await session.execute(stmt)
-        row = result.mappings().first()
-
-    if row is None:
-        return None
-
-    jwk_json = encryption.decrypt(row["encrypted_jwk_json"])
-    jwk = json.loads(jwk_json)
-    public_key = base64url_decode(jwk["x"])
-    private_key = base64url_decode(jwk["d"])
-    key_info = {
-        "did": row["issuer_did"],
-        "private_key": private_key,
-        "public_key": public_key,
-        "jwk_json": jwk_json,
-    }
-    _org_keys[organization_id] = key_info
-    logger.info("Loaded issuer signing key from database for org %r", organization_id)
-    return key_info
-
-
-async def _save_persisted_issuer_key(organization_id: str, key_info: dict) -> None:
-    """Encrypt and persist issuer key material to PostgreSQL."""
-    if not _persistent_key_store_available() or _issuer_key_session_factory is None:
-        return
-
-    encryption = _get_issuer_key_encryption()
-    encrypted_jwk_json = encryption.encrypt(key_info["jwk_json"])
-    now = datetime.now(timezone.utc)
-
-    async with _issuer_key_session_factory() as session:
-        stmt = select(issuer_signing_keys_table).where(
-            issuer_signing_keys_table.c.organization_id == organization_id
-        )
-        result = await session.execute(stmt)
-        existing = result.mappings().first()
-
-        payload = {
-            "organization_id": organization_id,
-            "issuer_did": key_info["did"],
-            "key_algorithm": "Ed25519",
-            "encrypted_jwk_json": encrypted_jwk_json,
-            "public_key_b64": base64url_encode(key_info["public_key"]),
-            "updated_at": now,
-        }
-
-        if existing:
-            update_stmt = (
-                issuer_signing_keys_table.update()
-                .where(issuer_signing_keys_table.c.organization_id == organization_id)
-                .values(**payload)
-            )
-            await session.execute(update_stmt)
-        else:
-            payload["id"] = str(uuid.uuid4())
-            payload["created_at"] = now
-            insert_stmt = issuer_signing_keys_table.insert().values(**payload)
-            await session.execute(insert_stmt)
-
-        await session.commit()
-
-    logger.info("Persisted encrypted issuer signing key for org %r", organization_id)
-
-
 def get_marty_rs():
     """Import Rust bindings for credential operations.
 
@@ -181,12 +67,16 @@ def get_marty_rs():
         ImportError: If marty-rs bindings are not available.
     """
     try:
-        from marty_rs import _marty_rs
+        # Current maturin release wheels expose the extension at the top level.
+        # Prefer it so an older separately installed ``marty_rs`` compatibility
+        # package cannot shadow the extension built with this service release.
+        import _marty_rs
 
         return _marty_rs
     except ImportError as e:
         try:
-            import _marty_rs
+            # Legacy wheels packaged the same extension as a nested module.
+            from marty_rs import _marty_rs
 
             return _marty_rs
         except ImportError:
@@ -201,6 +91,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
     {
         "canvas_normalize_base_url",
         "canvas_probe_lti_platform",
+        "complete_vcdm_data_integrity_credential",
         "didcomm_decrypt",
         "didcomm_encrypt",
         "didcomm_extract_endpoint",
@@ -208,13 +99,19 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "didcomm_resolve_did",
         "didcomm_unpack_message",
         "lti_verify_launch_jwt",
+        # mDoc issuance never loads an issuer private key into this service.
+        # It requires the authoritative marty-core prepare/sign/assemble split
+        # so the KMS signs the exact COSE payload remotely.
+        "oid4vci_prepare_mdoc",
+        "oid4vci_assemble_mdoc",
         "oid4vci_create_authorization_response",
         "oid4vci_create_credential_offer",
         "oid4vci_create_token_response",
         "oid4vci_exchange_auth_code_for_token",
-        "oid4vci_sign_credential",
         "oid4vci_verify_pkce_s256",
         "oid4vci_verify_proof_jwt",
+        "oid4vci_verify_key_attestation_bound_proof_jwt",
+        "prepare_vcdm_data_integrity_credential",
     }
 )
 
@@ -229,127 +126,8 @@ def validate_marty_rs_capabilities() -> None:
     )
     if missing:
         raise RuntimeError(
-            "marty-rs native extension is missing required capabilities: "
-            + ", ".join(missing)
+            "marty-rs native extension is missing required capabilities: " + ", ".join(missing)
         )
-
-
-async def get_or_generate_issuer_key(organization_id: str = "default") -> dict:
-    """Return the KMS-backed issuer signing key for an organization.
-
-    Loads from database-backed encrypted storage (requires ``ISSUER_KEY_MASTER_KEY``
-    and a configured session factory). Raises ``RuntimeError`` when no persisted
-    key is found — ephemeral software key generation is not supported.
-
-    Returns:
-        dict with 'did' (did:key:z6Mk...), 'private_key' (bytes), 'public_key' (bytes)
-    """
-    global _org_keys
-    if organization_id in _org_keys:
-        return _org_keys[organization_id]
-
-    persisted_key = await _load_persisted_issuer_key(organization_id)
-    if persisted_key is not None:
-        return persisted_key
-
-    raise RuntimeError(
-        f"No signing key found for organization {organization_id!r}. "
-        "Provision a KMS-backed key via the signing-keys service before issuing credentials."
-    )
-
-
-def _fix_mdoc_issuer_auth(credential_b64: str) -> str:
-    """Fix mso_mdoc issuerAuth CBOR encoding.
-
-    The Rust engine wraps the COSE_Sign1 issuerAuth as a CBOR byte string,
-    but ISO 18013-5 requires the COSE_Sign1 array to be embedded directly
-    in the IssuerSigned map (not wrapped in bstr). This function decodes
-    the byte string and re-embeds the COSE_Sign1 structure.
-    """
-    import cbor2
-
-    # base64url-decode (add padding)
-    padding = 4 - len(credential_b64) % 4
-    if padding < 4:
-        credential_b64 += "=" * padding
-    raw = base64.urlsafe_b64decode(credential_b64)
-
-    issuer_signed = cbor2.loads(raw)
-    auth = issuer_signed.get("issuerAuth")
-    if isinstance(auth, bytes):
-        decoded = cbor2.loads(auth)
-        # Strip COSE tag 18 if present — Walt.id expects the raw array
-        if isinstance(decoded, cbor2.CBORTag) and decoded.tag == 18:
-            issuer_signed["issuerAuth"] = decoded.value
-        else:
-            issuer_signed["issuerAuth"] = decoded
-
-        fixed = cbor2.dumps(issuer_signed)
-        return base64.urlsafe_b64encode(fixed).rstrip(b"=").decode()
-
-    return credential_b64
-
-
-def create_verifiable_credential_wrapper(
-    issuer_did: str,
-    issuer_jwk_json: str,
-    subject_id: str,
-    credential_type: str,
-    claims_json: str,
-    expiration_seconds: int = 31536000,
-    organization_id: str | None = None,
-    format: str = "jwt_vc_json",
-    selective_disclosure_claims: list[str] | None = None,
-    zk_predicate_claims: list[str] | None = None,
-    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt",
-) -> Tuple[str, str]:
-    """Create a signed verifiable credential using the Rust OID4VCI engine.
-
-    Uses the supplied issuer JWK when present, otherwise falls back to the
-    in-process cache. Delegates format-aware signing entirely to the Rust
-    marty-oid4vci engine. Supports jwt_vc_json, vc+sd-jwt, mso_mdoc,
-    vds_nc, and zk_mdoc formats.
-    """
-    signing_jwk_json = issuer_jwk_json.strip() if issuer_jwk_json else ""
-    if signing_jwk_json in ("", "{}"):
-        issuer_key = next(
-            (k for k in _org_keys.values() if k["did"] == issuer_did), None
-        )
-        if issuer_key is None:
-            if not organization_id:
-                raise RuntimeError(
-                    "organization_id is required to look up the issuer key. "
-                    "Pass the caller's organization_id explicitly."
-                )
-            raise RuntimeError(
-                f"No signing key cached for issuer DID {issuer_did!r}. "
-                "Call await get_or_generate_issuer_key(org_id) before issuing a credential."
-            )
-        signing_jwk_json = issuer_key["jwk_json"]
-
-    marty_rs = get_marty_rs()
-    result = marty_rs.oid4vci_sign_credential(
-        issuer_did,
-        signing_jwk_json,
-        subject_id or None,
-        credential_type,
-        claims_json,
-        expiration_seconds,
-        format,
-        selective_disclosure_claims or [],
-        zk_predicate_claims or [],
-        credential_payload_format,
-    )
-
-    # Fix mso_mdoc CBOR encoding: the Rust engine wraps issuerAuth as a CBOR
-    # byte string, but ISO 18013-5 / Walt.id expect the COSE_Sign1 array
-    # to be embedded directly (not wrapped in bstr).
-    if credential_payload_format.lower() in ("mso_mdoc", "mdoc"):
-        credential_str, credential_id = result
-        credential_str = _fix_mdoc_issuer_auth(credential_str)
-        return (credential_str, credential_id)
-
-    return result
 
 
 def _json_dumps_compact(value: Any) -> str:
@@ -365,29 +143,9 @@ def _env_truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _remote_issuer_kid(
-    issuer_did: str,
-    signing_service_id: str,
-    signing_key_reference: str | None = None,
-) -> str:
-    if issuer_did.startswith("did:web:"):
-        fragment = signing_key_reference or f"{signing_service_id}-vm"
-    elif signing_key_reference:
-        fragment = signing_key_reference
-    elif issuer_did.startswith("did:jwk:"):
-        fragment = "0"
-    elif issuer_did.startswith("did:key:"):
-        fragment = issuer_did.rsplit(":", 1)[-1]
-    else:
-        fragment = f"{signing_service_id}-vm"
-    safe_fragment = "".join(ch if ch.isalnum() or ch in "._-" else "-" for ch in fragment)
-    return f"{issuer_did}#{safe_fragment or 'key-1'}"
-
-
 async def create_sd_jwt_vc_with_remote_signing(
     *,
     issuer_did: str,
-    signing_service_id: str,
     remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
     subject_id: str | None,
     holder_jwk: dict[str, Any] | None = None,
@@ -396,23 +154,28 @@ async def create_sd_jwt_vc_with_remote_signing(
     expiration_seconds: int = 31536000,
     selective_disclosure_claims: list[str] | None = None,
     algorithm: str | None = None,
-    signing_key_reference: str | None = None,
-    verification_method_id: str | None = None,
+    verification_method_id: str,
     credential_format: str | None = None,
     credential_id: str | None = None,
-) -> Tuple[str, str]:
-    """Create an SD-JWT VC whose signature is produced by a remote KMS.
+    issuer_certificate_chain: list[str] | None = None,
+) -> tuple[str, str]:
+    """Create an SD-JWT VC using the selected issuer profile's DID signer.
 
     Args:
-        credential_format: OID4VCI format string (e.g. ``"spruce-vc+sd-jwt"``)
-            used in the credential response metadata.  The JWT ``typ`` header
-            is always ``"vc+sd-jwt"`` per RFC 9596 §3.2.1 regardless of this value.
+        credential_format: OID4VCI format string (for example, ``"dc+sd-jwt"``)
+        used in the credential response metadata and JWT ``typ`` header.
     """
     claims = json.loads(claims_json or "{}")
     if not isinstance(claims, dict):
         raise RuntimeError("claims_json must encode an object")
+    if not isinstance(verification_method_id, str) or not verification_method_id.startswith(
+        f"{issuer_did}#"
+    ):
+        raise RuntimeError(
+            "verification_method_id must identify a key controlled by the issuer DID"
+        )
 
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
     credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
     sd_claims = set(selective_disclosure_claims or [])
 
@@ -442,7 +205,9 @@ async def create_sd_jwt_vc_with_remote_signing(
         if key in sd_claims:
             disclosure = [base64url_encode(secrets.token_bytes(16)), key, value]
             disclosure_b64 = base64url_encode(_json_dumps_compact(disclosure).encode("utf-8"))
-            sd_hashes.append(base64url_encode(hashlib.sha256(disclosure_b64.encode("ascii")).digest()))
+            sd_hashes.append(
+                base64url_encode(hashlib.sha256(disclosure_b64.encode("ascii")).digest())
+            )
             disclosures.append(disclosure_b64)
         else:
             payload[key] = value
@@ -452,14 +217,18 @@ async def create_sd_jwt_vc_with_remote_signing(
         # Sort the _sd digests for deterministic output, matching sd-jwt-rs issuer behavior.
         payload["_sd"] = sorted(sd_hashes)
 
-    # RFC 9596 §3.2.1: the JWT typ header MUST be "vc+sd-jwt" for SD-JWT VCs.
-    # The credential_format (e.g. "spruce-vc+sd-jwt", "dc+sd-jwt") is the OID4VCI
-    # format identifier used in metadata/responses, NOT the JWT typ header.
+    # SD-JWT VC format identifiers must remain consistent with the OID4VCI
+    # credential configuration selected by the wallet. The Final OID4VCI
+    # profile exercised by the official suite requires ``dc+sd-jwt``.
     header = {
         "alg": algorithm or "ES256",
-        "typ": "vc+sd-jwt",
-        "kid": verification_method_id or _remote_issuer_kid(issuer_did, signing_service_id, signing_key_reference),
+        "typ": "dc+sd-jwt" if credential_format == "dc+sd-jwt" else "vc+sd-jwt",
+        "kid": verification_method_id,
     }
+    if issuer_certificate_chain:
+        if not all(isinstance(item, str) and item.strip() for item in issuer_certificate_chain):
+            raise RuntimeError("issuer profile certificate chain contains an invalid x5c entry")
+        header["x5c"] = list(issuer_certificate_chain)
     encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
     encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
     signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
@@ -468,10 +237,14 @@ async def create_sd_jwt_vc_with_remote_signing(
     response_algorithm = sign_result.get("algorithm")
     signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
     if not isinstance(signature_b64, str) or not signature_b64:
-        raise RuntimeError("Remote signing service returned no usable JWS signature")
+        raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
 
     if response_algorithm and response_algorithm != header["alg"]:
-        logger.debug("Remote signer returned algorithm %s for requested %s", response_algorithm, header["alg"])
+        logger.debug(
+            "Remote signer returned algorithm %s for requested %s",
+            response_algorithm,
+            header["alg"],
+        )
 
     jwt = f"{encoded_header}.{encoded_payload}.{signature_b64}"
     # SD-JWT compact serialization: jwt~disc1~disc2~  (trailing ~ with no KB JWT)
@@ -481,9 +254,426 @@ async def create_sd_jwt_vc_with_remote_signing(
     return f"{'~'.join(jwt_parts)}~", credential_id
 
 
+async def create_jwt_vc_with_remote_signing(
+    *,
+    issuer_did: str,
+    remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
+    subject_id: str | None,
+    credential_type: str,
+    claims_json: str,
+    credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
+    expiration_seconds: int = 31536000,
+    algorithm: str | None = None,
+    verification_method_id: str,
+    credential_id: str | None = None,
+) -> tuple[str, str]:
+    """Create a VCDM v2 JWT VC using the selected issuer profile's DID signer.
+
+    This is intentionally parallel to ``create_sd_jwt_vc_with_remote_signing``:
+    the issuer private key never enters the service process.  ``vc+jwt`` is a
+    JWS representation, not a COSE/VDS format, so the existing remote JWS
+    signature contract is sufficient.
+    """
+    claims = json.loads(claims_json or "{}")
+    if not isinstance(claims, dict):
+        raise RuntimeError("claims_json must encode an object")
+    if not isinstance(verification_method_id, str) or not verification_method_id.startswith(
+        f"{issuer_did}#"
+    ):
+        raise RuntimeError(
+            "verification_method_id must identify a key controlled by the issuer DID"
+        )
+
+    now = int(datetime.now(UTC).timestamp())
+    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
+    credential_status = claims.pop("credentialStatus", None)
+    if credential_subject is None:
+        subject: dict[str, Any] | list[dict[str, Any]] = dict(claims)
+        if subject_id:
+            subject.setdefault("id", subject_id)
+    else:
+        if claims:
+            raise RuntimeError("explicit credential_subject cannot be combined with subject claims")
+        if isinstance(credential_subject, dict):
+            if not credential_subject:
+                raise RuntimeError("credential_subject must contain at least one claim")
+            subject = dict(credential_subject)
+        elif (
+            isinstance(credential_subject, list)
+            and credential_subject
+            and all(isinstance(item, dict) and item for item in credential_subject)
+        ):
+            subject = [dict(item) for item in credential_subject]
+        else:
+            raise RuntimeError(
+                "credential_subject must be a non-empty object or list of non-empty objects"
+            )
+
+    vc: dict[str, Any] = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential", credential_type],
+        # ``iss`` is required by JWT, but VCDM consumers process this nested
+        # object and require its own issuer identifier and validity period.
+        "issuer": issuer_did,
+        "validFrom": datetime.fromtimestamp(now, UTC).isoformat().replace("+00:00", "Z"),
+        "validUntil": datetime.fromtimestamp(
+            now + int(expiration_seconds or 31536000), UTC
+        )
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "credentialSubject": subject,
+    }
+    if isinstance(credential_status, dict):
+        vc["credentialStatus"] = credential_status
+
+    payload: dict[str, Any] = {
+        "iss": issuer_did,
+        "iat": now,
+        "nbf": now,
+        "exp": now + int(expiration_seconds or 31536000),
+        "jti": credential_id,
+        "vc": vc,
+    }
+    # The holder that proves possession at the OID4VCI endpoint is not always
+    # the semantic subject named by an explicitly supplied VCDM credential.
+    # JWT ``sub`` is optional, but when present the VCDM verifier requires it
+    # to identify one of the credentialSubject objects.  Preserve ``sub`` for
+    # the ordinary holder-bound path and for explicit subjects that actually
+    # name the holder; otherwise omit it instead of issuing a contradictory
+    # credential.  The issuer identity remains the selected profile's DID and
+    # signing remains internal to that profile's custody backend.
+    subject_values = subject if isinstance(subject, list) else [subject]
+    subject_identifies_holder = any(
+        isinstance(item, dict) and item.get("id") == subject_id for item in subject_values
+    )
+    if subject_id and subject_identifies_holder:
+        payload["sub"] = subject_id
+
+    header = {
+        "alg": algorithm or "ES256",
+        "typ": "vc+jwt",
+        "kid": verification_method_id,
+    }
+    encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
+    encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
+    sign_result = await remote_sign(
+        f"{encoded_header}.{encoded_payload}".encode("ascii"), algorithm
+    )
+    signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
+    if not isinstance(signature_b64, str) or not signature_b64:
+        raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
+    return f"{encoded_header}.{encoded_payload}.{signature_b64}", credential_id
+
+
+_PRIVATE_JWK_MEMBERS = frozenset(
+    {
+        "d",
+        "p",
+        "q",
+        "dp",
+        "dq",
+        "qi",
+        "oth",
+        "k",
+    }
+)
+_VCDM_CONTEXT = "https://www.w3.org/ns/credentials/v2"
+_VCDM_PROTECTED_TERMS = frozenset(
+    {
+        "@context",
+        "credentialSchema",
+        "credentialStatus",
+        "credentialSubject",
+        "description",
+        "digestMultibase",
+        "digestSRI",
+        "evidence",
+        "id",
+        "issuer",
+        "name",
+        "proof",
+        "refreshService",
+        "relatedResource",
+        "termsOfUse",
+        "type",
+        "validFrom",
+        "validUntil",
+    }
+)
+
+
+def _json_ld_term_name(value: str) -> str:
+    """Return a stable, collision-resistant IRI for a product claim term."""
+    return f"https://credentials.marty.dev/claims/{base64url_encode(value.encode('utf-8'))}"
+
+
+def _collect_json_ld_terms(value: Any, terms: set[str]) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if (
+                isinstance(key, str)
+                and key
+                and not key.startswith("@")
+                and key not in _VCDM_PROTECTED_TERMS
+            ):
+                terms.add(key)
+            _collect_json_ld_terms(child, terms)
+    elif isinstance(value, list):
+        for child in value:
+            _collect_json_ld_terms(child, terms)
+
+
+def _data_integrity_context(
+    subject: dict[str, Any] | list[dict[str, Any]],
+    credential_type: str,
+) -> list[Any]:
+    """Build deterministic JSON-LD semantics for template-defined product claims."""
+    terms: set[str] = set()
+    _collect_json_ld_terms(subject, terms)
+    if ":" not in credential_type and credential_type != "VerifiableCredential":
+        terms.add(credential_type)
+    if not terms:
+        return [_VCDM_CONTEXT]
+    return [
+        _VCDM_CONTEXT,
+        {term: _json_ld_term_name(term) for term in sorted(terms)},
+    ]
+
+
+def _public_ed25519_jwk(
+    public_jwk: dict[str, Any],
+    verification_method_id: str,
+) -> dict[str, Any]:
+    if not isinstance(public_jwk, dict):
+        raise RuntimeError("issuer DID resolution returned no public JWK")
+    private_members = sorted(_PRIVATE_JWK_MEMBERS.intersection(public_jwk))
+    if private_members:
+        raise RuntimeError(
+            "issuer DID resolution exposed prohibited private JWK members: "
+            + ", ".join(private_members)
+        )
+    if (
+        public_jwk.get("kty") != "OKP"
+        or public_jwk.get("crv") != "Ed25519"
+        or not isinstance(public_jwk.get("x"), str)
+        or not public_jwk["x"]
+    ):
+        raise RuntimeError("eddsa-rdfc-2022 requires an Ed25519 public JWK from the issuer profile")
+    kid = public_jwk.get("kid")
+    if kid is not None and kid != verification_method_id:
+        raise RuntimeError("issuer public JWK kid does not match the DID verification method")
+    return dict(public_jwk)
+
+
+async def create_vcdm_data_integrity_with_remote_signing(
+    *,
+    issuer_did: str,
+    remote_sign: Callable[[bytes, str | None], Awaitable[dict[str, Any]]],
+    subject_id: str | None,
+    credential_type: str,
+    claims_json: str,
+    public_jwk: dict[str, Any],
+    credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
+    credential_document: dict[str, Any] | None = None,
+    expiration_seconds: int = 31536000,
+    verification_method_id: str,
+    credential_id: str | None = None,
+) -> tuple[str, str]:
+    """Create a native VCDM v2 Data Integrity credential via issuer-DID signing.
+
+    Marty-core owns JSON-LD canonicalization and final proof verification. This
+    service supplies only public DID material to that engine and sends the
+    resulting canonical bytes through the organization-scoped DID signer.
+    """
+    if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
+        raise RuntimeError("issuer_did must be a DID")
+    if not isinstance(verification_method_id, str) or not verification_method_id.startswith(
+        f"{issuer_did}#"
+    ):
+        raise RuntimeError(
+            "verification_method_id must identify a key controlled by the issuer DID"
+        )
+    resolved_public_jwk = _public_ed25519_jwk(public_jwk, verification_method_id)
+    claims = json.loads(claims_json or "{}")
+    if not isinstance(claims, dict):
+        raise RuntimeError("claims_json must encode an object")
+
+    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
+    credential_status = claims.pop("credentialStatus", None)
+    if credential_document is not None:
+        if credential_subject is not None or claims:
+            raise RuntimeError(
+                "credential_document cannot be combined with subject claims"
+            )
+        # JSON round-tripping gives the signing engine a private, JSON-only
+        # document snapshot and prevents caller mutation during async signing.
+        credential = json.loads(_json_dumps_compact(credential_document))
+        if not isinstance(credential, dict) or not credential:
+            raise RuntimeError("credential_document must be a non-empty object")
+        if "proof" in credential:
+            raise RuntimeError("credential_document must be unsigned")
+        context = credential.get("@context")
+        if (
+            not isinstance(context, list)
+            or not context
+            or context[0] != _VCDM_CONTEXT
+        ):
+            raise RuntimeError(
+                "credential_document must use the VCDM v2 base context first"
+            )
+        credential_types = credential.get("type")
+        credential_types = (
+            credential_types
+            if isinstance(credential_types, list)
+            else [credential_types]
+        )
+        if "VerifiableCredential" not in credential_types:
+            raise RuntimeError(
+                "credential_document type must include VerifiableCredential"
+            )
+        subject = credential.get("credentialSubject")
+        subject_values = subject if isinstance(subject, list) else [subject]
+        if not subject_values or not all(
+            isinstance(item, dict) and item for item in subject_values
+        ):
+            raise RuntimeError(
+                "credential_document must contain a non-empty credentialSubject"
+            )
+        document_issuer = credential.get("issuer")
+        document_issuer_id = (
+            document_issuer.get("id")
+            if isinstance(document_issuer, dict)
+            else document_issuer
+        )
+        if document_issuer_id is None:
+            credential["issuer"] = issuer_did
+        elif document_issuer_id != issuer_did:
+            raise RuntimeError(
+                "credential_document issuer does not match the resolved issuer DID"
+            )
+        document_id = credential.get("id")
+        if document_id is None:
+            credential["id"] = credential_id
+        elif document_id != credential_id:
+            raise RuntimeError(
+                "credential_document id does not match the reserved credential ID"
+            )
+        now = datetime.now(UTC)
+        credential.setdefault("validFrom", now.isoformat().replace("+00:00", "Z"))
+        credential.setdefault(
+            "validUntil",
+            datetime.fromtimestamp(
+                now.timestamp() + int(expiration_seconds or 31536000),
+                UTC,
+            )
+            .isoformat()
+            .replace("+00:00", "Z"),
+        )
+        if credential_status is not None:
+            if not isinstance(credential_status, (dict, list)):
+                raise RuntimeError("credentialStatus must be an object or list")
+            credential["credentialStatus"] = credential_status
+    elif credential_subject is None:
+        subject: dict[str, Any] | list[dict[str, Any]] = dict(claims)
+        if subject_id:
+            subject.setdefault("id", subject_id)
+    else:
+        if claims:
+            raise RuntimeError("explicit credential_subject cannot be combined with subject claims")
+        if isinstance(credential_subject, dict) and credential_subject:
+            subject = dict(credential_subject)
+        elif (
+            isinstance(credential_subject, list)
+            and credential_subject
+            and all(isinstance(item, dict) and item for item in credential_subject)
+        ):
+            subject = [dict(item) for item in credential_subject]
+        else:
+            raise RuntimeError(
+                "credential_subject must be a non-empty object or list of non-empty objects"
+            )
+
+    if credential_document is None:
+        now = datetime.now(UTC)
+        types = ["VerifiableCredential"]
+        if credential_type and credential_type != "VerifiableCredential":
+            types.append(credential_type)
+        credential = {
+            "@context": _data_integrity_context(subject, credential_type),
+            "id": credential_id,
+            "type": types,
+            "issuer": issuer_did,
+            "validFrom": now.isoformat().replace("+00:00", "Z"),
+            "validUntil": datetime.fromtimestamp(
+                now.timestamp() + int(expiration_seconds or 31536000),
+                UTC,
+            )
+            .isoformat()
+            .replace("+00:00", "Z"),
+            "credentialSubject": subject,
+        }
+        if credential_status is not None:
+            if not isinstance(credential_status, (dict, list)):
+                raise RuntimeError("credentialStatus must be an object or list")
+            credential["credentialStatus"] = credential_status
+
+    binding = get_marty_rs()
+    prepared_json = binding.prepare_vcdm_data_integrity_credential(
+        _json_dumps_compact(
+            {
+                "credential": credential,
+                "issuer_did": issuer_did,
+                "verification_method_id": verification_method_id,
+                "public_jwk": resolved_public_jwk,
+            }
+        )
+    )
+    prepared = json.loads(prepared_json)
+    if not isinstance(prepared, dict) or prepared.get("algorithm") != "EdDSA":
+        raise RuntimeError("Marty Data Integrity engine returned an invalid signing request")
+    signing_input_b64 = prepared.get("signing_input_b64")
+    if not isinstance(signing_input_b64, str) or not signing_input_b64:
+        raise RuntimeError("Marty Data Integrity engine returned no canonical signing input")
+
+    sign_result = await remote_sign(base64url_decode(signing_input_b64), "EdDSA")
+    response_algorithm = sign_result.get("algorithm")
+    if response_algorithm and response_algorithm != "EdDSA":
+        raise RuntimeError("issuer-DID signer returned a different signing algorithm")
+    signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
+    if not isinstance(signature_b64, str) or not signature_b64:
+        raise RuntimeError("issuer-DID signer returned no usable EdDSA signature")
+
+    completed_json = binding.complete_vcdm_data_integrity_credential(
+        _json_dumps_compact(
+            {
+                "prepared": prepared,
+                "signature_b64": signature_b64,
+            }
+        )
+    )
+    completed = json.loads(completed_json)
+    completed_issuer = completed.get("issuer") if isinstance(completed, dict) else None
+    completed_issuer_id = (
+        completed_issuer.get("id")
+        if isinstance(completed_issuer, dict)
+        else completed_issuer
+    )
+    if (
+        not isinstance(completed, dict)
+        or completed.get("id") != credential_id
+        or completed_issuer_id != issuer_did
+        or not isinstance(completed.get("proof"), dict)
+        or completed["proof"].get("cryptosuite") != "eddsa-rdfc-2022"
+        or completed["proof"].get("verificationMethod") != verification_method_id
+    ):
+        raise RuntimeError("completed Data Integrity credential changed its signed identity")
+    return _json_dumps_compact(completed), credential_id
+
+
 # ---------------------------------------------------------------------------
 # OID4VCI Protocol Wrappers  (delegate to Rust — never reimplement in Python)
 # ---------------------------------------------------------------------------
+
 
 def oid4vci_create_credential_offer(
     issuer_url: str,
@@ -494,7 +684,10 @@ def oid4vci_create_credential_offer(
     """Create a credential offer JSON string via Rust engine."""
     marty_rs = get_marty_rs()
     return marty_rs.oid4vci_create_credential_offer(
-        issuer_url, credential_types, pre_authorized_code, user_pin_required,
+        issuer_url,
+        credential_types,
+        pre_authorized_code,
+        user_pin_required,
     )
 
 
@@ -507,9 +700,11 @@ def oid4vci_create_token_response(
     Returns parsed dict with access_token, c_nonce, etc.
     """
     import json as _json
+
     marty_rs = get_marty_rs()
     resp_json = marty_rs.oid4vci_create_token_response(
-        pre_authorized_code, token_lifetime_secs,
+        pre_authorized_code,
+        token_lifetime_secs,
     )
     return _json.loads(resp_json)
 
@@ -523,9 +718,11 @@ def oid4vci_create_authorization_response(
     Returns (authorization_response_dict, authorization_session_dict).
     """
     import json as _json
+
     marty_rs = get_marty_rs()
     resp_json, sess_json = marty_rs.oid4vci_create_authorization_response(
-        request_json, session_lifetime_secs,
+        request_json,
+        session_lifetime_secs,
     )
     return _json.loads(resp_json), _json.loads(sess_json)
 
@@ -540,9 +737,12 @@ def oid4vci_exchange_auth_code_for_token(
     Returns parsed TokenResponse dict.
     """
     import json as _json
+
     marty_rs = get_marty_rs()
     resp_json = marty_rs.oid4vci_exchange_auth_code_for_token(
-        request_json, session_json, token_lifetime_secs,
+        request_json,
+        session_json,
+        token_lifetime_secs,
     )
     return _json.loads(resp_json)
 
@@ -620,7 +820,9 @@ def verify_proof_jwt(
     try:
         marty_rs = get_marty_rs()
         holder_did, _nonce, holder_jwk_json = marty_rs.oid4vci_verify_proof_jwt(
-            proof_jwt, expected_nonce, issuer_url,
+            proof_jwt,
+            expected_nonce,
+            issuer_url,
         )
         holder_jwk = json.loads(holder_jwk_json) if holder_jwk_json else None
         return True, holder_did, holder_jwk, None
@@ -630,25 +832,57 @@ def verify_proof_jwt(
         return False, "", None, f"proof JWT error: {e}"
 
 
-# ---------------------------------------------------------------------------
-# NOTE: All verifiable credential creation is handled by create_verifiable_credential_wrapper
-# above, which delegates entirely to the Rust marty-oid4vci engine via oid4vci_sign_credential.
-# Do NOT reimplement credential signing in Python — use create_verifiable_credential_wrapper.
-# ---------------------------------------------------------------------------
+def verify_key_attestation_bound_proof_jwt(
+    proof_jwt: str,
+    validated_key_attestation_jwt: str,
+    expected_nonce: str | None,
+    issuer_url: str | None = None,
+) -> tuple[bool, str, dict[str, Any] | None, str | None]:
+    """Verify a proof against the exact product-validated key attestation.
+
+    Certificate, assurance, status, and tenant policy are validated by the
+    issuance application before this call.  Marty Core independently parses
+    the same compact attestation, selects the numeric ``kid`` entry, and
+    cryptographically binds the proof signature to that attested public key.
+    """
+    try:
+        marty_rs = get_marty_rs()
+        holder_did, _nonce, holder_jwk_json = (
+            marty_rs.oid4vci_verify_key_attestation_bound_proof_jwt(
+                proof_jwt,
+                validated_key_attestation_jwt,
+                expected_nonce,
+                issuer_url,
+            )
+        )
+        holder_jwk = json.loads(holder_jwk_json) if holder_jwk_json else None
+        return True, holder_did, holder_jwk, None
+    except RuntimeError as e:
+        return False, "", None, str(e)
+    except Exception as e:
+        return False, "", None, f"key-attestation-bound proof JWT error: {e}"
+
 
 
 # ---------------------------------------------------------------------------
 # DIDComm v2 Protocol Wrappers (delegate to Rust marty-didcomm crate)
 # ---------------------------------------------------------------------------
 
-def didcomm_resolve_did(did: str, universal_resolver_url: str | None = None) -> dict:
+
+def didcomm_resolve_did(did: str) -> dict:
     """Resolve a DID to its DID Document via Rust.
 
     Supports did:key, did:web, did:peer, did:jwk natively.
-    Falls back to the Universal Resolver for unknown methods.
+    Falls back to the deployment-managed Universal Resolver for unknown methods.
+    Resolver infrastructure is configuration, never caller-controlled protocol input.
     """
     marty_rs = get_marty_rs()
-    doc_json = marty_rs.didcomm_resolve_did(did, universal_resolver_url)
+    resolver_url = (
+        os.environ.get("DIDCOMM_UNIVERSAL_RESOLVER_URL", "").strip()
+        or os.environ.get("UNIVERSAL_RESOLVER_URL", "").strip()
+        or None
+    )
+    doc_json = marty_rs.didcomm_resolve_did(did, resolver_url)
     return json.loads(doc_json)
 
 
@@ -675,8 +909,12 @@ def didcomm_pack_credential(
     """
     marty_rs = get_marty_rs()
     return marty_rs.didcomm_pack_credential(
-        credential, credential_format, issuer_did, holder_did,
-        thread_id, credential_id,
+        credential,
+        credential_format,
+        issuer_did,
+        holder_did,
+        thread_id,
+        credential_id,
     )
 
 
@@ -689,8 +927,9 @@ def didcomm_unpack_message(message_json: str) -> dict:
 def didcomm_encrypt(plaintext_json: str, recipient_did_document: dict) -> str:
     """Encrypt a DIDComm v2 plaintext message for a recipient (anoncrypt).
 
-    Uses ECDH-ES+A256KW key agreement with AES-256-GCM content encryption.
-    The recipient's X25519 key agreement key is extracted from their DID Document.
+    Uses the X25519 DIDComm Messaging 2.1 credential-delivery profile with
+    ECDH-ES+A256KW key wrapping and required A256CBC-HS512 content encryption.
+    The recipient key is extracted from their DID Document.
 
     Returns JWE JSON Serialization string.
     """
@@ -709,65 +948,63 @@ def didcomm_decrypt(jwe_json: str, recipient_x25519_private_key: bytes) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# mDoc BYOK (Bring Your Own Key) — prepare → external sign → assemble
+# mDoc issuer-profile signing is implemented by the authoritative marty-core binding.
 # ---------------------------------------------------------------------------
 
-async def create_mdoc_credential_byok(
+
+async def create_mdoc_credential_with_issuer_profile_signing(
+    *,
+    issuer_did: str,
+    algorithm: str,
     doc_type: str,
-    namespaces: dict,
-    validity: dict,
-    kms_sign_fn,
-    device_key_der: bytes | None = None,
-    issuer_certificate_chain_pem: str | None = None,
-    digest_algorithm: str | None = None,
-) -> bytes:
-    """Create an mDoc credential using remote/HSM signing (BYOK pattern).
+    namespace: str,
+    claims_json: str,
+    expiration_seconds: int,
+    credential_id: str,
+    holder_jwk: dict[str, Any],
+    certificate_chain: list[str] | None,
+    profile_sign: Callable[[bytes, str | None], Awaitable[bytes]],
+) -> tuple[str, str]:
+    """Issue an mDoc through the authoritative issuer-profile split API.
 
-    Follows the prepare → external sign → assemble pattern:
-    1. Rust prepares the mDoc and returns the to-be-signed (TBS) bytes
-    2. The caller-supplied ``kms_sign_fn`` signs the TBS bytes externally
-    3. Rust completes the mDoc with the external signature
-
-    Args:
-        doc_type: mDoc document type (e.g. ``org.iso.18013.5.1.mDL``)
-        namespaces: Dict of namespace → {claim_name: claim_value}
-        validity: Dict with ``signed``, ``valid_from``, ``valid_until`` ISO timestamps
-        kms_sign_fn: Async callable ``(bytes) -> bytes`` that returns a DER-encoded
-            ECDSA signature from the remote KMS/HSM.
-        device_key_der: Optional DER-encoded device public key
-        issuer_certificate_chain_pem: Reserved for future X.509 chain injection
-            (requires Rust-side support in the COSE_Sign1 unprotected header).
-        digest_algorithm: Hash algorithm for MSO digests (default: SHA-256)
-
-    Returns:
-        CBOR-encoded mDoc credential bytes (DeviceResponse format)
+    The PyO3 object preserves the protected COSE header, MSO and issuer-signed
+    items between preparation and assembly. The issuer profile signs the exact
+    Sig_structure as its DID; KMS remains an implementation detail of profile
+    key custody. The holder's proof public key is bound into the MSO for later
+    DeviceAuthentication verification; no holder private material is retained.
+    Python never synthesizes the final credential state.
     """
+    try:
+        claims = json.loads(claims_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("mDoc claims must be a JSON object") from exc
+    if not isinstance(claims, dict):
+        raise ValueError("mDoc claims must be a JSON object")
+    # Certificate material is issuer-controlled. Never allow a request claim
+    # to select the COSE x5chain used to authenticate an mdoc issuer.
+    claims.pop("_mdoc_x5c", None)
+    if certificate_chain:
+        claims["_mdoc_x5c"] = certificate_chain
+
     marty_rs = get_marty_rs()
-
-    # Step 1: Prepare — Rust builds the unsigned mDoc and returns TBS data
-    prepared = marty_rs.prepare_mdoc_for_hsm(
+    prepared = marty_rs.oid4vci_prepare_mdoc(
+        issuer_did,
+        algorithm,
         doc_type,
-        namespaces,
-        validity,
-        device_key_der,
-        digest_algorithm,
+        namespace,
+        json.dumps(claims),
+        expiration_seconds,
+        credential_id,
+        json.dumps(
+            {
+                key: value
+                for key, value in holder_jwk.items()
+                if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+            }
+        ),
     )
-
-    tbs_data = prepared.get_tbs_data()
-    logger.info(
-        "Prepared mDoc for HSM signing (doc_type=%s, tbs_size=%d)",
-        doc_type, len(tbs_data),
-    )
-
-    # Step 2: Sign — external KMS/HSM signs the TBS bytes
-    signature_der = await kms_sign_fn(tbs_data)
-
-    # Step 3: Assemble — Rust completes the mDoc with the external signature
-    cbor_bytes = marty_rs.complete_mdoc_with_signature(prepared, signature_der)
-
-    logger.info(
-        "Completed mDoc BYOK issuance (doc_type=%s, cbor_size=%d)",
-        doc_type, len(cbor_bytes),
-    )
-
-    return bytes(cbor_bytes)
+    signature = await profile_sign(bytes(prepared.tbs_data), algorithm)
+    credential, credential_id = marty_rs.oid4vci_assemble_mdoc(prepared, signature)
+    if not isinstance(credential, str) or not credential:
+        raise RuntimeError("marty-rs returned an empty issuer-profile-signed mDoc")
+    return credential, credential_id

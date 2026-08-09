@@ -251,31 +251,18 @@ def _remote_format(payload_format: str) -> str:
 
 @dataclass(frozen=True)
 class _ExpectedIssuer:
-    profile_id: str
     issuer_did: str
-    signing_service_id: str
-    signing_key_reference: str
-    verification_method_id: str
     algorithm: str
     key_purpose: str
     credential_format: str
 
 
 def _expected_issuer(template: Mapping[str, Any]) -> _ExpectedIssuer:
-    remote = _mapping(template.get("remote_signing_config"))
     payload_format = _payload_format(template)
     return _ExpectedIssuer(
-        profile_id=_string(template.get("issuer_profile_id")),
         issuer_did=_string(template.get("issuer_did")),
-        signing_service_id=_string(remote.get("signing_service_id")),
-        signing_key_reference=_string(remote.get("signing_key_reference")),
-        verification_method_id=_string(remote.get("verification_method_id")),
-        algorithm=_first(
-            template.get("issuer_algorithm"),
-            template.get("signing_algorithm"),
-            remote.get("algorithm"),
-        ),
-        key_purpose=_string(remote.get("key_purpose")) or "vc_jwt_issuer",
+        algorithm=_string(template.get("issuer_algorithm")),
+        key_purpose="vc_jwt_issuer",
         credential_format=_remote_format(payload_format),
     )
 
@@ -283,12 +270,7 @@ def _expected_issuer(template: Mapping[str, Any]) -> _ExpectedIssuer:
 def _issuer_configuration_valid(template: Mapping[str, Any]) -> bool:
     expected = _expected_issuer(template)
     return bool(
-        _status(template.get("key_access_mode")) == "remote_signing"
-        and expected.profile_id
-        and expected.issuer_did.startswith("did:")
-        and expected.signing_service_id
-        and expected.signing_key_reference
-        and expected.verification_method_id.startswith(expected.issuer_did + "#")
+        expected.issuer_did.startswith("did:")
         and expected.algorithm in SUPPORTED_ISSUER_ALGORITHMS
         and expected.credential_format == "dc+sd-jwt"
     )
@@ -610,54 +592,6 @@ def _did_publishes_verification_method(
     return verification_method_id in method_ids and verification_method_id in assertion_ids
 
 
-def _resolved_context_matches(
-    context: Mapping[str, Any],
-    expected: _ExpectedIssuer,
-) -> bool:
-    profile = _mapping(context.get("issuer_profile"))
-    service = _mapping(context.get("service"))
-    algorithms = service.get("algorithms")
-    if not isinstance(algorithms, list):
-        algorithms = [service.get("algorithm")] if service.get("algorithm") else []
-    resolved_algorithm = _first(
-        context.get("algorithm"),
-        profile.get("algorithm"),
-        service.get("algorithm"),
-    )
-    algorithm_matches = (
-        resolved_algorithm == expected.algorithm
-        if resolved_algorithm
-        else expected.algorithm in {_string(value) for value in algorithms}
-    )
-    return bool(
-        _first(context.get("issuer_profile_id"), profile.get("id"))
-        == expected.profile_id
-        and _status(profile.get("status")) == "active"
-        and _first(context.get("issuer_did"), profile.get("issuer_did"))
-        == expected.issuer_did
-        and _first(
-            context.get("signing_service_id"),
-            profile.get("signing_service_id"),
-            service.get("id"),
-        )
-        == expected.signing_service_id
-        and _first(
-            context.get("signing_key_reference"),
-            profile.get("signing_key_reference"),
-            service.get("key_reference"),
-        )
-        == expected.signing_key_reference
-        and _first(
-            context.get("verification_method_id"),
-            profile.get("verification_method_id"),
-        )
-        == expected.verification_method_id
-        and _first(context.get("key_purpose"), profile.get("key_purpose"))
-        == expected.key_purpose
-        and algorithm_matches
-    )
-
-
 async def run_canvas_kms_did_challenge(
     *,
     organization_id: str,
@@ -674,23 +608,9 @@ async def run_canvas_kms_did_challenge(
         return False
     expected = _expected_issuer(credential_template)
     try:
-        context = await signing_context.resolve_remote_issuer_context(
-            organization_id,
-            issuer_profile_id=expected.profile_id,
-            issuer_mode="org_managed",
-            credential_format=expected.credential_format,
-            key_purpose=expected.key_purpose,
-            algorithm=expected.algorithm,
-        )
-        if not isinstance(context, Mapping) or not _resolved_context_matches(
-            context, expected
-        ):
-            return False
-
         resolution = await signing_context.resolve_remote_issuer_did(
             organization_id,
             issuer_did=expected.issuer_did,
-            verification_method_id=expected.verification_method_id,
             credential_format=expected.credential_format,
             key_purpose=expected.key_purpose,
             algorithm=expected.algorithm,
@@ -699,25 +619,35 @@ async def run_canvas_kms_did_challenge(
             return False
         if _first(resolution.get("issuer_did")) != expected.issuer_did:
             return False
-        if (
-            _first(resolution.get("verification_method_id"))
-            != expected.verification_method_id
-        ):
+        verification_method_id = _first(resolution.get("verification_method_id"))
+        if not verification_method_id.startswith(expected.issuer_did + "#"):
             return False
         if not _did_publishes_verification_method(
-            resolution, expected.verification_method_id
+            resolution, verification_method_id
         ):
             return False
         did_profile = _mapping(resolution.get("issuer_profile"))
-        if _first(did_profile.get("id")) != expected.profile_id:
+        if _status(did_profile.get("status")) != "active":
             return False
-        signing_service = _mapping(resolution.get("signing_service"))
-        if _first(signing_service.get("id")) != expected.signing_service_id:
+        if (
+            _first(did_profile.get("issuer_did"), expected.issuer_did)
+            != expected.issuer_did
+        ):
+            return False
+        if (
+            _first(did_profile.get("key_purpose"), expected.key_purpose)
+            != expected.key_purpose
+        ):
+            return False
+        if (
+            _first(did_profile.get("algorithm"), expected.algorithm)
+            != expected.algorithm
+        ):
             return False
         public_jwk = resolution.get("public_jwk")
         if not isinstance(public_jwk, Mapping):
             return False
-        if _first(public_jwk.get("kid")) != expected.verification_method_id:
+        if _first(public_jwk.get("kid")) != verification_method_id:
             return False
 
         challenge = (
@@ -726,12 +656,14 @@ async def run_canvas_kms_did_challenge(
             + b"\x00"
             + secrets.token_bytes(32)
         )
-        signed = await signing_context.sign_payload_with_remote_service(
+        signed = await signing_context.sign_payload_with_issuer_did(
             organization_id=organization_id,
-            signing_service_id=expected.signing_service_id,
+            issuer_did=expected.issuer_did,
+            credential_format=expected.credential_format,
+            key_purpose=expected.key_purpose,
             payload=challenge,
             algorithm=expected.algorithm,
-            key_reference=expected.signing_key_reference,
+            expected_verification_method_id=verification_method_id,
         )
         if not isinstance(signed, Mapping):
             return False
@@ -1132,7 +1064,7 @@ async def evaluate_canvas_binding_readiness(
             component="kms_did",
             ready=issuer_config_ready,
             blocking=True,
-            remediation="Configure an active REMOTE_SIGNING issuer profile, service, key, DID verification method, and supported algorithm.",
+            remediation="Configure an active issuer DID and supported algorithm backed by a managed issuer profile.",
             timestamp=timestamp,
         )
     )

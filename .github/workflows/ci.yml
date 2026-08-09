@@ -23,14 +23,14 @@ jobs:
       run:
         working-directory: marty-credentials/rust/marty-rs
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: marty-credentials
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry
@@ -56,14 +56,14 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: marty-credentials
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo-audit
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cargo/bin/cargo-audit
           key: ${{ runner.os }}-cargo-audit
@@ -75,12 +75,14 @@ jobs:
           fi
 
       - name: Run cargo-audit
-        continue-on-error: true
         working-directory: marty-credentials
-        run: cargo audit
+        # RSA compatibility is retained behind Marty crypto adapters and has
+        # no patched upstream release. Keep this one documented exception
+        # explicit; every other vulnerability remains release-blocking.
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
       - name: Cache cargo-deny
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cargo/bin/cargo-deny
           key: ${{ runner.os }}-cargo-deny
@@ -92,7 +94,6 @@ jobs:
           fi
 
       - name: Run cargo-deny
-        continue-on-error: true
         working-directory: marty-credentials
         run: cargo deny check
 
@@ -100,7 +101,7 @@ jobs:
     name: Python Security
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: marty-credentials
 
@@ -112,17 +113,31 @@ jobs:
       - name: Install security tools
         run: |
           python -m pip install --upgrade pip
-          pip install bandit[toml] safety
+          pip install bandit[toml] pip-audit
 
       - name: Run bandit
-        continue-on-error: true
         working-directory: marty-credentials
-        run: bandit -r python/marty_credentials/
+        run: bandit -r python/marty_credentials/ -ll -ii
 
-      - name: Run safety check
-        continue-on-error: true
+      - name: Audit resolvable Python dependencies
         working-directory: marty-credentials
-        run: safety check
+        shell: bash
+        run: |
+          set -euo pipefail
+          pip-audit . --format json --output pip-audit.json
+          python - <<'PY'
+          import json
+
+          report = json.load(open("pip-audit.json", encoding="utf-8"))
+          skipped = {
+              dependency["name"]
+              for dependency in report["dependencies"]
+              if dependency.get("skip_reason")
+          }
+          expected_github_release_dependencies = {"marty-common", "marty-msf"}
+          if skipped != expected_github_release_dependencies:
+              raise SystemExit(f"Unexpected unaudited Python dependencies: {sorted(skipped)}")
+          PY
 
   canvas-portable-migration:
     name: Canvas PostgreSQL Migration Contract
@@ -134,7 +149,7 @@ jobs:
       CANVAS_MIGRATION_SOURCE_REVISION: ${{ github.sha }}
       COMPOSE_PROJECT_NAME: canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
         with:
           path: marty-credentials
 
@@ -167,7 +182,7 @@ jobs:
 
       - name: Upload Canvas migration evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6
         with:
           name: canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
           path: marty-credentials/tests/artifacts/canvas-portable-migration/contract-result.json
@@ -179,6 +194,68 @@ jobs:
         working-directory: marty-credentials
         run: docker compose --file docker-compose.canvas-migration-contract.yml down --volumes --remove-orphans
 
+  issuance-idempotency-contract:
+    name: Issuance Idempotency PostgreSQL Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      ISSUANCE_IDEMPOTENCY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+      COMPOSE_PROJECT_NAME: issuance-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        with:
+          path: marty-credentials
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate disposable idempotency topology
+        working-directory: marty-credentials
+        run: docker compose --file docker-compose.issuance-idempotency-contract.yml config --quiet
+
+      - name: Build idempotency contract image
+        working-directory: marty-credentials
+        run: |
+          mkdir -p tests/artifacts/issuance-idempotency
+          chmod 0777 tests/artifacts/issuance-idempotency
+          docker compose --file docker-compose.issuance-idempotency-contract.yml build --pull idempotency-contract
+
+      - name: Race identical issuance reservations in PostgreSQL
+        working-directory: marty-credentials
+        run: >-
+          docker compose --file docker-compose.issuance-idempotency-contract.yml
+          up --force-recreate --abort-on-container-exit
+          --exit-code-from idempotency-contract idempotency-contract
+
+      - name: Require sanitized idempotency evidence
+        working-directory: marty-credentials
+        run: |
+          test "$(jq -r '.status' tests/artifacts/issuance-idempotency/contract-result.json)" = passed
+          test "$(jq -r '.migration_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = issuance_offer_idempotency
+          test "$(jq -r '.created_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.recovered_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_transaction' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.same_pre_authorized_code' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.raw_key_persisted' tests/artifacts/issuance-idempotency/contract-result.json)" = false
+          test "$(jq -r '.production_repository_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.changed_semantics_rejected' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.early_recovery_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.source_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$ISSUANCE_IDEMPOTENCY_SOURCE_REVISION"
+
+      - name: Upload issuance idempotency evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6
+        with:
+          name: issuance-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: marty-credentials/tests/artifacts/issuance-idempotency/contract-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove disposable idempotency stack
+        if: always()
+        working-directory: marty-credentials
+        run: docker compose --file docker-compose.issuance-idempotency-contract.yml down --volumes --remove-orphans
+
   test-python:
     name: Python Tests
     runs-on: ${{ matrix.os }}
@@ -188,7 +265,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ['3.11', '3.12']
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: marty-credentials
 
@@ -225,7 +302,7 @@ jobs:
 
       - name: Run Python tests
         working-directory: marty-credentials
-        run: pytest tests/ -v
+        run: pytest tests/ packages/tests/ -v
 
   test-wasm:
     name: WASM Tests
@@ -234,7 +311,7 @@ jobs:
       run:
         working-directory: marty-credentials/rust/marty-rs
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           path: marty-credentials
 

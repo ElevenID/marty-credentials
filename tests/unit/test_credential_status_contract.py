@@ -17,6 +17,7 @@ from issuance.infrastructure.api import routes
 async def test_credential_status_identifies_authoritative_issuer() -> None:
     credential = SimpleNamespace(
         id="urn:uuid:credential-123",
+        organization_id="org-1",
         issuer_did="did:jwk:issuer-key",
         status=CredentialStatus.ACTIVE,
         status_updated_at=datetime(2026, 7, 12, tzinfo=timezone.utc),
@@ -29,7 +30,13 @@ async def test_credential_status_identifies_authoritative_issuer() -> None:
 
     repo.get_credential = get_credential
 
-    response = await routes.get_credential_status(credential.id, repo=repo)
+    response = await routes.get_credential_status(
+        credential.id,
+        http_request=SimpleNamespace(
+            headers={"X-Organization-ID": credential.organization_id}
+        ),
+        repo=repo,
+    )
 
     assert response == {
         "id": credential.id,

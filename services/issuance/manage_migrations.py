@@ -9,29 +9,51 @@ import os
 import sys
 from pathlib import Path
 
-# Add parent directories to path for imports
-service_root = Path(__file__).parent
-sys.path.insert(0, str(service_root.parent.parent))
-
 from mmf.framework.infrastructure.migration import (
     AlembicMigrationAdapter,
     MigrationError,
 )
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import SQLAlchemyError
+
 from services.issuance.infrastructure.models import mapper_registry
 
+service_root = Path(__file__).parent
 metadata = mapper_registry.metadata
+ISSUANCE_SCHEMA = "issuance_service"
+
+
+def _sync_database_url() -> str:
+    """Return the configured database URL using Alembic's sync driver."""
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("DATABASE_URL environment variable is required")
+    return database_url.replace("+asyncpg", "")
+
+
+def ensure_issuance_schema() -> None:
+    """Create Alembic's version-table schema before the first revision.
+
+    Alembic creates its version table before executing the initial revision.
+    Because that version table is scoped to ``issuance_service``, a new Marty
+    database must create this service-owned schema at the migration boundary
+    after the platform migrations have installed shared prerequisite schemas.
+    The initial revision retains its idempotent schema creation for backwards
+    compatibility with existing databases.
+    """
+    engine = create_engine(_sync_database_url())
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(f"CREATE SCHEMA IF NOT EXISTS {ISSUANCE_SCHEMA}"))
+    finally:
+        engine.dispose()
 
 
 def get_migration_adapter() -> AlembicMigrationAdapter:
     """Create and return configured migration adapter."""
     from alembic.config import Config
 
-    database_url = os.getenv("DATABASE_URL")
-    if not database_url:
-        raise RuntimeError("DATABASE_URL environment variable is required")
-
-    # Convert asyncpg URL to sync for Alembic
-    sync_url = database_url.replace("+asyncpg", "")
+    sync_url = _sync_database_url()
 
     adapter = AlembicMigrationAdapter(
         database_url=sync_url,
@@ -56,10 +78,11 @@ def get_migration_adapter() -> AlembicMigrationAdapter:
 def upgrade() -> None:
     """Run all pending migrations."""
     try:
+        ensure_issuance_schema()
         adapter = get_migration_adapter()
         adapter.upgrade("head")
         print("✓ Issuance service migrations completed")
-    except MigrationError as e:
+    except (MigrationError, SQLAlchemyError) as e:
         print(f"✗ Migration failed: {e}")
         sys.exit(1)
 

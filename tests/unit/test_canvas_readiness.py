@@ -16,6 +16,7 @@ from issuance.application.canvas_readiness import (
     apply_canvas_readiness_result,
     canvas_binding_is_ready_for_activation,
     evaluate_canvas_binding_readiness,
+    run_canvas_kms_did_challenge,
     verified_canvas_binding_capabilities,
 )
 from issuance.domain.entities import (
@@ -189,18 +190,8 @@ def _fixtures(algorithm: str = "ES256") -> tuple[
         "credential_type": "OpenBadgeCredential",
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "revocation_profile_id": "status-profile-1",
-        "issuer_profile_id": "issuer-profile-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
-        "issuer_key_id": "badge-key-1",
         "issuer_algorithm": algorithm,
-        "key_access_mode": "REMOTE_SIGNING",
-        "remote_signing_config": {
-            "provider": "managed-signing-service",
-            "signing_service_id": "kms-service-1",
-            "signing_key_reference": "badge-key-1",
-            "verification_method_id": "did:web:issuer.example:orgs:org-1#badge-key-1",
-            "key_purpose": "vc_jwt_issuer",
-        },
     }
     status_profile = {
         "id": "status-profile-1",
@@ -267,44 +258,25 @@ def _install_kms_fakes(
     did = "did:web:issuer.example:orgs:org-1"
     public_jwk = {**public_jwk, "kid": vm}
 
-    async def resolve_context(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    async def resolve_did(*args: Any, **kwargs: Any) -> dict[str, Any]:
         assert args == ("org-1",)
         assert kwargs == {
-            "issuer_profile_id": "issuer-profile-1",
-            "issuer_mode": "org_managed",
+            "issuer_did": did,
             "credential_format": "dc+sd-jwt",
             "key_purpose": "vc_jwt_issuer",
             "algorithm": algorithm,
         }
         return {
-            "issuer_profile_id": "issuer-profile-1",
             "issuer_did": did,
-            "signing_service_id": "kms-service-1",
-            "signing_key_reference": "badge-key-1",
             "verification_method_id": vm,
-            "key_purpose": "vc_jwt_issuer",
+            "public_jwk": public_jwk,
             "issuer_profile": {
                 "id": "issuer-profile-1",
                 "status": "active",
                 "issuer_did": did,
-                "signing_service_id": "kms-service-1",
-                "signing_key_reference": "badge-key-1",
-                "verification_method_id": vm,
                 "key_purpose": "vc_jwt_issuer",
                 "algorithm": algorithm,
             },
-            "service": {"id": "kms-service-1", "algorithm": algorithm},
-        }
-
-    async def resolve_did(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        assert args == ("org-1",)
-        assert kwargs["verification_method_id"] == vm
-        return {
-            "issuer_did": did,
-            "verification_method_id": vm,
-            "public_jwk": public_jwk,
-            "issuer_profile": {"id": "issuer-profile-1", "status": "active"},
-            "signing_service": {"id": "kms-service-1"},
             "did_document": {
                 "id": did,
                 "verificationMethod": [{"id": vm, "publicKeyJwk": public_jwk}],
@@ -314,10 +286,14 @@ def _install_kms_fakes(
 
     async def sign(**kwargs: Any) -> dict[str, Any]:
         assert kwargs["organization_id"] == "org-1"
-        assert kwargs["signing_service_id"] == "kms-service-1"
-        assert kwargs["key_reference"] == "badge-key-1"
+        assert kwargs["issuer_did"] == did
+        assert kwargs["credential_format"] == "dc+sd-jwt"
+        assert kwargs["key_purpose"] == "vc_jwt_issuer"
+        assert kwargs["expected_verification_method_id"] == vm
         assert kwargs["algorithm"] == algorithm
         return {
+            "issuer_did": did,
+            "verification_method_id": vm,
             "algorithm": algorithm,
             "signature_raw_b64": _b64(
                 _sign(signing_private, algorithm, kwargs["payload"])
@@ -325,13 +301,10 @@ def _install_kms_fakes(
         }
 
     monkeypatch.setattr(
-        canvas_readiness.signing_context, "resolve_remote_issuer_context", resolve_context
-    )
-    monkeypatch.setattr(
         canvas_readiness.signing_context, "resolve_remote_issuer_did", resolve_did
     )
     monkeypatch.setattr(
-        canvas_readiness.signing_context, "sign_payload_with_remote_service", sign
+        canvas_readiness.signing_context, "sign_payload_with_issuer_did", sign
     )
 
 
@@ -414,6 +387,34 @@ async def test_composite_readiness_accepts_exact_live_kms_did_challenge(
 
 
 @pytest.mark.asyncio
+async def test_kms_challenge_needs_no_profile_or_kms_selector_in_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _platform, _binding, _application, credential, _status_profile = _fixtures("ES256")
+    assert set(credential).isdisjoint(
+        {
+            "issuer_profile_id",
+            "issuer_key_id",
+            "key_access_mode",
+            "remote_signing_config",
+        }
+    )
+
+    signing_private, public_jwk = _key_material("ES256")
+    _install_kms_fakes(
+        monkeypatch,
+        algorithm="ES256",
+        signing_private=signing_private,
+        public_jwk=public_jwk,
+    )
+
+    assert await run_canvas_kms_did_challenge(
+        organization_id="org-1",
+        credential_template=credential,
+    )
+
+
+@pytest.mark.asyncio
 async def test_readiness_fails_closed_for_missing_grant_worker_and_inactive_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -436,7 +437,7 @@ async def test_readiness_fails_closed_for_missing_grant_worker_and_inactive_temp
         raise AssertionError("KMS must not be called for an invalid template")
 
     monkeypatch.setattr(
-        canvas_readiness.signing_context, "resolve_remote_issuer_context", forbidden
+        canvas_readiness.signing_context, "resolve_remote_issuer_did", forbidden
     )
     result = await evaluate_canvas_binding_readiness(
         repo=repo,

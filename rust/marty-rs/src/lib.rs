@@ -50,8 +50,8 @@ pub use marty_verification::{
 mod python_bindings {
     use super::*;
     use pyo3::prelude::*;
-    use ssi::crypto::{AlgorithmInstance, SecretKey};
-    use ssi::jwk::{Params, JWK};
+    use ssi_crypto::{AlgorithmInstance, SecretKey};
+    use ssi_jwk::{Params, JWK};
 
     /// Formats the sum of two numbers as string.
     #[pyfunction]
@@ -126,9 +126,10 @@ mod python_bindings {
         key_size: Option<u32>,
         use_pss: Option<bool>,
     ) -> PyResult<(String, String)> {
-        use rand::rngs::OsRng;
-        use rsa::{traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey};
-        use ssi::jwk::{Algorithm, RSAParams};
+        use rsa::{
+            rand_core::OsRng, traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey,
+        };
+        use ssi_jwk::{Algorithm, RSAParams};
 
         let bits = key_size.unwrap_or(2048);
         if bits != 2048 && bits != 3072 && bits != 4096 {
@@ -153,11 +154,11 @@ mod python_bindings {
         let q = primes.get(1).map(|q| q.to_bytes_be()).unwrap_or_default();
 
         let rsa_params = RSAParams {
-            modulus: Some(ssi::jwk::Base64urlUInt(n)),
-            exponent: Some(ssi::jwk::Base64urlUInt(e)),
-            private_exponent: Some(ssi::jwk::Base64urlUInt(d)),
-            first_prime_factor: Some(ssi::jwk::Base64urlUInt(p)),
-            second_prime_factor: Some(ssi::jwk::Base64urlUInt(q)),
+            modulus: Some(ssi_jwk::Base64urlUInt(n)),
+            exponent: Some(ssi_jwk::Base64urlUInt(e)),
+            private_exponent: Some(ssi_jwk::Base64urlUInt(d)),
+            first_prime_factor: Some(ssi_jwk::Base64urlUInt(p)),
+            second_prime_factor: Some(ssi_jwk::Base64urlUInt(q)),
             first_prime_factor_crt_exponent: None,
             second_prime_factor_crt_exponent: None,
             first_crt_coefficient: None,
@@ -181,7 +182,7 @@ mod python_bindings {
         };
 
         let jwk = JWK {
-            params: ssi::jwk::Params::RSA(rsa_params),
+            params: ssi_jwk::Params::RSA(rsa_params),
             public_key_use: None,
             key_operations: None,
             algorithm: Some(alg),
@@ -393,6 +394,20 @@ mod python_bindings {
         Ok((true, payload_json, "".to_string()))
     }
 
+    /// Prepare a VCDM v2 EdDSA Data Integrity credential for issuer-DID signing.
+    #[pyfunction]
+    pub fn prepare_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+        marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json(request_json)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
+    /// Complete and independently verify a remotely signed Data Integrity credential.
+    #[pyfunction]
+    pub fn complete_vcdm_data_integrity_credential(request_json: &str) -> PyResult<String> {
+        marty_verification::vcdm::complete_vcdm_data_integrity_credential_json(request_json)
+            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
+    }
+
     #[pymodule]
     pub fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // Initialize tracing for structured logging
@@ -407,6 +422,11 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
         m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
         m.add_function(wrap_pyfunction!(verify_jwt, m)?)?;
+        m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
+        m.add_function(wrap_pyfunction!(
+            complete_vcdm_data_integrity_credential,
+            m
+        )?)?;
 
         // Status list classes and functions for credential revocation
         crate::status_list::register_status_list_module(m)?;
