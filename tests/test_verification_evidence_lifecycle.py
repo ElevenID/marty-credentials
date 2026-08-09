@@ -324,7 +324,11 @@ async def test_terminal_decision_remains_immutable_after_session_deadline() -> N
     database_session = MagicMock()
     database_session.execute = AsyncMock(side_effect=[locked_result, clock_result])
     database_session.commit = AsyncMock()
-    database_session.rollback = AsyncMock()
+
+    async def expire_model_on_rollback() -> None:
+        model.submission_sha256 = None
+
+    database_session.rollback = AsyncMock(side_effect=expire_model_on_rollback)
 
     claim = await PostgresVerificationRepository(database_session).claim_submission(
         model.id,

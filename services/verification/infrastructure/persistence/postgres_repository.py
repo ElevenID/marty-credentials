@@ -222,12 +222,12 @@ class PostgresVerificationRepository(IVerificationRepository):
             now = await self._database_now()
             if model.status in {VerificationStatus.VERIFIED, VerificationStatus.FAILED}:
                 entity = self._to_entity(model)
-                await self.session.rollback()
                 state = (
                     SubmissionClaimState.TERMINAL
                     if model.submission_sha256 == presentation_sha256
                     else SubmissionClaimState.CONFLICT
                 )
+                await self.session.rollback()
                 return VerificationSubmissionClaim(state, session=entity)
 
             if model.expires_at is not None and model.expires_at <= now:
@@ -320,12 +320,12 @@ class PostgresVerificationRepository(IVerificationRepository):
             now = await self._database_now()
             if model.status in {VerificationStatus.VERIFIED, VerificationStatus.FAILED}:
                 entity = self._to_entity(model)
-                await self.session.rollback()
                 state = (
                     SubmissionClaimState.TERMINAL
                     if model.submission_sha256 == presentation_sha256
                     else SubmissionClaimState.CONFLICT
                 )
+                await self.session.rollback()
                 return VerificationSubmissionClaim(state, session=entity)
 
             if model.expires_at is not None and model.expires_at <= now:
