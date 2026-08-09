@@ -220,15 +220,6 @@ class PostgresVerificationRepository(IVerificationRepository):
                 return VerificationSubmissionClaim(SubmissionClaimState.NOT_FOUND)
 
             now = await self._database_now()
-            if model.expires_at is not None and model.expires_at <= now:
-                self._expire_model(model, now)
-                entity = self._to_entity(model)
-                await self.session.commit()
-                return VerificationSubmissionClaim(
-                    SubmissionClaimState.EXPIRED,
-                    session=entity,
-                )
-
             if model.status in {VerificationStatus.VERIFIED, VerificationStatus.FAILED}:
                 entity = self._to_entity(model)
                 await self.session.rollback()
@@ -238,6 +229,15 @@ class PostgresVerificationRepository(IVerificationRepository):
                     else SubmissionClaimState.CONFLICT
                 )
                 return VerificationSubmissionClaim(state, session=entity)
+
+            if model.expires_at is not None and model.expires_at <= now:
+                self._expire_model(model, now)
+                entity = self._to_entity(model)
+                await self.session.commit()
+                return VerificationSubmissionClaim(
+                    SubmissionClaimState.EXPIRED,
+                    session=entity,
+                )
 
             if model.status == VerificationStatus.EXPIRED:
                 entity = self._to_entity(model)

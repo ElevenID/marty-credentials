@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import types
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -300,6 +300,46 @@ async def test_postgres_adapter_round_trips_evidence_and_redacts_legacy_raw_data
     assert restored.verification_evidence == entity.verification_evidence
 
 
+@pytest.mark.asyncio
+async def test_terminal_decision_remains_immutable_after_session_deadline() -> None:
+    now = datetime(2026, 8, 9, 12, 0, 0)
+    digest = "a" * 64
+    model = VerificationSessionModel(
+        id="terminal-session",
+        organization_id="org-1",
+        verifier_did="did:web:verifier.example",
+        presentation_definition={"id": "pd-1", "input_descriptors": []},
+        status=VerificationStatus.VERIFIED,
+        verification_evidence={"presentation_sha256": digest},
+        created_at=now - timedelta(minutes=11),
+        updated_at=now - timedelta(minutes=10),
+        expires_at=now - timedelta(minutes=1),
+        nonce=None,
+        submission_sha256=digest,
+    )
+    locked_result = MagicMock()
+    locked_result.scalar_one_or_none.return_value = model
+    clock_result = MagicMock()
+    clock_result.scalar_one.return_value = now
+    database_session = MagicMock()
+    database_session.execute = AsyncMock(side_effect=[locked_result, clock_result])
+    database_session.commit = AsyncMock()
+    database_session.rollback = AsyncMock()
+
+    claim = await PostgresVerificationRepository(database_session).claim_submission(
+        model.id,
+        digest,
+        "retry-token",
+        60,
+    )
+
+    assert claim.state is SubmissionClaimState.TERMINAL
+    assert claim.session is not None
+    assert claim.session.status is VerificationStatus.VERIFIED
+    database_session.commit.assert_not_awaited()
+    database_session.rollback.assert_awaited_once()
+
+
 def test_verification_migration_redacts_raw_data_and_adds_evidence_column() -> None:
     migration = (
         ROOT
@@ -509,6 +549,14 @@ async def test_real_postgres_claim_recovery_and_terminal_fencing() -> None:
         assert finalized.session.status is VerificationStatus.VERIFIED
         assert finalized.session.nonce is None
 
+        async with async_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE public.verification_sessions "
+                    "SET expires_at = clock_timestamp() - interval '1 second' "
+                    "WHERE id = 'race-session'"
+                )
+            )
         same_digest = await claim("race-session", digest, "retry-token")
         different_digest = await claim(
             "race-session",
@@ -516,6 +564,8 @@ async def test_real_postgres_claim_recovery_and_terminal_fencing() -> None:
             "conflict-token",
         )
         assert same_digest.state is SubmissionClaimState.TERMINAL
+        assert same_digest.session is not None
+        assert same_digest.session.status is VerificationStatus.VERIFIED
         assert different_digest.state is SubmissionClaimState.CONFLICT
 
         await create("recovery-session")
