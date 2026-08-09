@@ -19,13 +19,13 @@ from urllib.parse import quote
 
 import grpc
 from issuance.application.credential_vct import resolve_credential_vct
-from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
 from issuance.application.issuance_idempotency import (
     canonical_issuance_request,
     hash_idempotency_key,
     issuance_request_hash,
     normalize_idempotency_key,
 )
+from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
@@ -220,6 +220,68 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         # Active streaming subscribers: subscriber_id → asyncio.Queue
         self._stream_queues: dict[str, asyncio.Queue] = {}
 
+    @staticmethod
+    def _issuance_response_from_transaction(tx) -> pb2.IssuanceResponse:
+        """Reconstruct an offer only from the committed transaction snapshot."""
+
+        from issuance.application.rust_integration import oid4vci_create_credential_offer
+
+        credential_config_id = tx.credential_type or "default"
+        default_config_id = _config_id_for_format_variant(
+            credential_config_id,
+            tx.credential_payload_format,
+        )
+        offer_json = oid4vci_create_credential_offer(
+            issuer_url=_org_issuer_url(tx.organization_id),
+            credential_types=[default_config_id],
+            pre_authorized_code=tx.pre_auth_code,
+            user_pin_required=False,
+        )
+        offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json)}"
+
+        offer_uris: dict[str, str] = {}
+        offer_labels: dict[str, str] = {}
+        for wallet_config in tx.wallet_configs:
+            wallet_id = wallet_config.get("wallet_id", "")
+            if not wallet_id:
+                continue
+            scheme = wallet_config.get("deep_link_scheme", "openid-credential-offer://")
+            format_variant = wallet_config.get("format_variant")
+            wallet_config_id = _config_id_for_format_variant(
+                credential_config_id,
+                format_variant,
+            )
+            wallet_issuer_url = (
+                f"{ISSUER_BASE_URL}/org/{tx.organization_id}/credential-manager"
+                if format_variant == "credential-manager"
+                else f"{ISSUER_BASE_URL}/org/{tx.organization_id}/apple-wallet"
+                if format_variant == "apple-wallet"
+                else _org_issuer_url(tx.organization_id)
+            )
+            wallet_offer = oid4vci_create_credential_offer(
+                issuer_url=wallet_issuer_url,
+                credential_types=[wallet_config_id],
+                pre_authorized_code=tx.pre_auth_code,
+                user_pin_required=False,
+            )
+            encoded = quote(wallet_offer)
+            separator = "&" if "?" in scheme else "?"
+            offer_uris[wallet_id] = f"{scheme}{separator}credential_offer={encoded}"
+            if wallet_config.get("display_name"):
+                offer_labels[wallet_id] = wallet_config["display_name"]
+
+        return pb2.IssuanceResponse(
+            id=tx.id,
+            organization_id=tx.organization_id,
+            credential_template_id=tx.credential_template_id,
+            status=tx.status.value,
+            credential_offer_uri=offer_uri,
+            credential_offer_uris=offer_uris,
+            credential_offer_labels=offer_labels,
+            pre_auth_code=tx.pre_auth_code,
+            expires_at=tx.expires_at.isoformat(),
+        )
+
     # ------------------------------------------------------------------ #
     # InitiateIssuance
     # ------------------------------------------------------------------ #
@@ -227,7 +289,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     async def InitiateIssuance(self, request, context):
         """Initiate a credential offer (OID4VCI)."""
         try:
-            from issuance.application.rust_integration import oid4vci_create_credential_offer
             from issuance.domain.entities import (
                 IssuanceIdempotencyConflictError,
                 IssuanceTransaction,
@@ -242,9 +303,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             repo = self._get_repo()
             try:
-                idempotency_key = normalize_idempotency_key(
-                    getattr(request, "idempotency_key", "")
-                )
+                idempotency_key = normalize_idempotency_key(getattr(request, "idempotency_key", ""))
                 delivery_mode = normalize_delivery_mode(
                     getattr(request, "delivery_mode", "") or "wallet_only"
                 )
@@ -252,6 +311,64 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(str(exc))
                 return pb2.IssuanceResponse()
+
+            requested_issuer_did = str(getattr(request, "issuer_did", "") or "").strip()
+            if not requested_issuer_did:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("issuer_did is required")
+                return pb2.IssuanceResponse()
+
+            claims_json = str(getattr(request, "claims_json", "") or "").strip()
+            if claims_json:
+                if request.claims:
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details("claims and claims_json cannot both be supplied")
+                    return pb2.IssuanceResponse()
+                try:
+                    parsed_claims = json.loads(claims_json)
+                except (TypeError, ValueError) as exc:
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details(f"claims_json must be valid JSON: {exc}")
+                    return pb2.IssuanceResponse()
+                if not isinstance(parsed_claims, dict):
+                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                    context.set_details("claims_json must encode a JSON object")
+                    return pb2.IssuanceResponse()
+                request_claims = parsed_claims
+            else:
+                request_claims = dict(request.claims)
+            if any(
+                reserved in request_claims
+                for reserved in (
+                    "_application_id",
+                    "_credential_subject",
+                    "_credential_document",
+                )
+            ):
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("claims contain a reserved internal field")
+                return pb2.IssuanceResponse()
+
+            resolved_application = str(getattr(request, "application_id", "") or "").strip() or None
+            authorized_client_id = request.authorized_client_id or None
+            request_semantics = canonical_issuance_request(
+                organization_id=request.organization_id,
+                credential_template_id=request.credential_template_id or None,
+                application_id=resolved_application,
+                applicant_id=request.applicant_id or None,
+                subject_did=request.subject_did or None,
+                holder_did=request.holder_did or None,
+                issuer_did=requested_issuer_did,
+                authorized_client_id=authorized_client_id,
+                delivery_mode=delivery_mode,
+                claims=request_claims,
+            )
+            idempotency_key_hash = (
+                hash_idempotency_key(idempotency_key) if idempotency_key else None
+            )
+            idempotency_request_hash = (
+                issuance_request_hash(request_semantics) if idempotency_key else None
+            )
 
             # Validate organization exists via gRPC (best-effort)
             try:
@@ -277,7 +394,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             except Exception as e:
                 logger.warning(f"Could not validate org {request.organization_id}: {e}")
 
-            authorized_client_id = request.authorized_client_id or None
             if authorized_client_id:
                 authorized_client = await repo.get_oid4vci_client(
                     request.organization_id,
@@ -293,6 +409,20 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         "Authorized OID4VCI client is not active for this organization"
                     )
                     return pb2.IssuanceResponse()
+
+            if idempotency_key_hash and idempotency_request_hash:
+                try:
+                    recovered = await repo.recover_transaction_idempotently(
+                        organization_id=request.organization_id,
+                        idempotency_key_hash=idempotency_key_hash,
+                        idempotency_request_hash=idempotency_request_hash,
+                    )
+                except IssuanceIdempotencyConflictError as exc:
+                    context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                    context.set_details(str(exc))
+                    return pb2.IssuanceResponse()
+                if recovered is not None:
+                    return self._issuance_response_from_transaction(recovered)
 
             # Resolve credential type from template via HTTP
             credential_type = "org.iso.18013.5.1.mDL"
@@ -348,8 +478,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         str(getattr(tmpl_resp, "issuer_did", "") or "").strip() or None
                     )
                     template_issuer_algorithm = (
-                        str(getattr(tmpl_resp, "issuer_algorithm", "") or "").strip()
-                        or None
+                        str(getattr(tmpl_resp, "issuer_algorithm", "") or "").strip() or None
                     )
                     validity_days = tmpl_resp.validity_rules.default_validity_days or 365
                     renewable = bool(tmpl_resp.validity_rules.renewable)
@@ -398,9 +527,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     revocation_profile_id = (
                         str(tmpl.get("revocation_profile_id") or "").strip() or None
                     )
-                    template_issuer_did = (
-                        str(tmpl.get("issuer_did") or "").strip() or None
-                    )
+                    template_issuer_did = str(tmpl.get("issuer_did") or "").strip() or None
                     template_issuer_algorithm = (
                         str(tmpl.get("issuer_algorithm") or "").strip() or None
                     )
@@ -415,11 +542,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         max(reissue_seconds // 86400, 1) if reissue_seconds else 30
                     )
 
-            requested_issuer_did = str(getattr(request, "issuer_did", "") or "").strip()
-            if not requested_issuer_did:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("issuer_did is required")
-                return pb2.IssuanceResponse()
             if request.credential_template_id:
                 if not template_issuer_did:
                     context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
@@ -427,13 +549,13 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     return pb2.IssuanceResponse()
                 if requested_issuer_did != template_issuer_did:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                    context.set_details(
-                        "issuer_did must match the credential template issuer DID"
-                    )
+                    context.set_details("issuer_did must match the credential template issuer DID")
                     return pb2.IssuanceResponse()
                 if template_issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
                     context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                    context.set_details("Credential template must define a supported issuer algorithm")
+                    context.set_details(
+                        "Credential template must define a supported issuer algorithm"
+                    )
                     return pb2.IssuanceResponse()
 
             if not revocation_profile_id:
@@ -481,100 +603,50 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             if not credential_vct:
                 credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
 
-            claims_json = str(getattr(request, "claims_json", "") or "").strip()
-            if claims_json:
-                if request.claims:
-                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                    context.set_details("claims and claims_json cannot both be supplied")
-                    return pb2.IssuanceResponse()
-                try:
-                    parsed_claims = json.loads(claims_json)
-                except (TypeError, ValueError) as exc:
-                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                    context.set_details(f"claims_json must be valid JSON: {exc}")
-                    return pb2.IssuanceResponse()
-                if not isinstance(parsed_claims, dict):
-                    context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                    context.set_details("claims_json must encode a JSON object")
-                    return pb2.IssuanceResponse()
-                request_claims = parsed_claims
-            else:
-                request_claims = dict(request.claims)
-            if any(
-                reserved in request_claims
-                for reserved in ("_application_id", "_credential_subject", "_credential_document")
-            ):
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("claims contain a reserved internal field")
-                return pb2.IssuanceResponse()
-
             merged_claims = {**request_claims, "_vct": credential_vct}
             # MIP §8.3 – if the caller deferred claims resolution (only sent
             # _application_id), resolve actual claim values from the application's
             # form_data stored in the issuance service.
-            _resolved_application = str(
-                getattr(request, "application_id", "") or ""
-            ).strip() or None
-            if _resolved_application and (
+            if resolved_application and (
                 not merged_claims or list(merged_claims.keys()) == ["_vct"]
             ):
                 try:
-                    app = await repo.get_application(str(_resolved_application))
+                    app = await repo.get_application(str(resolved_application))
                     if app and app.form_data:
                         merged_claims = {**app.form_data, "_vct": credential_vct}
                         logger.info(
                             "[grpc-initiate] resolved claims from application %s: keys=%s",
-                            _resolved_application,
+                            resolved_application,
                             list(app.form_data.keys()),
                         )
                     else:
                         logger.warning(
                             "[grpc-initiate] application %s not found or has empty form_data",
-                            _resolved_application,
+                            resolved_application,
                         )
                 except Exception as _app_err:
                     logger.warning(
                         "[grpc-initiate] could not resolve application %s: %s",
-                        _resolved_application,
+                        resolved_application,
                         _app_err,
                     )
             effective_template_id = request.credential_template_id or "default"
 
             if idempotency_key and any(
-                str(wallet.get("format_variant") or "") == "didcomm_v2"
-                for wallet in wallet_configs
+                str(wallet.get("format_variant") or "") == "didcomm_v2" for wallet in wallet_configs
             ):
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(
-                    "idempotent initiation does not support DIDComm push delivery"
-                )
+                context.set_details("idempotent initiation does not support DIDComm push delivery")
                 return pb2.IssuanceResponse()
-
-            request_semantics = canonical_issuance_request(
-                organization_id=request.organization_id,
-                credential_template_id=request.credential_template_id or None,
-                application_id=_resolved_application,
-                applicant_id=request.applicant_id or None,
-                subject_did=request.subject_did or None,
-                holder_did=request.holder_did or None,
-                issuer_did=requested_issuer_did or None,
-                authorized_client_id=authorized_client_id,
-                delivery_mode=delivery_mode,
-                claims=request_claims,
-            )
 
             tx = IssuanceTransaction(
                 organization_id=request.organization_id,
                 credential_template_id=effective_template_id,
                 applicant_id=request.applicant_id or None,
-                application_id=_resolved_application,
+                application_id=resolved_application,
                 subject_did=request.subject_did or None,
-                idempotency_key_hash=(
-                    hash_idempotency_key(idempotency_key) if idempotency_key else None
-                ),
-                idempotency_request_hash=(
-                    issuance_request_hash(request_semantics) if idempotency_key else None
-                ),
+                idempotency_key_hash=idempotency_key_hash,
+                idempotency_request_hash=idempotency_request_hash,
                 issuer_did_override=requested_issuer_did or None,
                 issuer_algorithm=template_issuer_algorithm,
                 claims=merged_claims,
@@ -600,60 +672,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details(str(exc))
                 return pb2.IssuanceResponse()
 
-            credential_config_id = tx.credential_type or "default"
-            default_config_id = _config_id_for_format_variant(
-                credential_config_id, tx.credential_payload_format
-            )
-
-            offer_json_str = oid4vci_create_credential_offer(
-                issuer_url=_org_issuer_url(request.organization_id),
-                credential_types=[default_config_id],
-                pre_authorized_code=tx.pre_auth_code,
-                user_pin_required=False,
-            )
-            offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json_str)}"
-
-            # Per-wallet offer URIs
-            credential_offer_uris: dict[str, str] = {}
-            credential_offer_labels: dict[str, str] = {}
-            for wc in tx.wallet_configs:
-                wid = wc.get("wallet_id", "")
-                scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
-                fmt_variant = wc.get("format_variant")
-                if wid:
-                    wallet_config_id = _config_id_for_format_variant(
-                        credential_config_id, fmt_variant
-                    )
-                    wallet_issuer_url = (
-                        f"{ISSUER_BASE_URL}/org/{request.organization_id}/credential-manager"
-                        if fmt_variant == "credential-manager"
-                        else f"{ISSUER_BASE_URL}/org/{request.organization_id}/apple-wallet"
-                        if fmt_variant == "apple-wallet"
-                        else _org_issuer_url(request.organization_id)
-                    )
-                    wallet_offer_json = oid4vci_create_credential_offer(
-                        issuer_url=wallet_issuer_url,
-                        credential_types=[wallet_config_id],
-                        pre_authorized_code=tx.pre_auth_code,
-                        user_pin_required=False,
-                    )
-                    encoded = quote(wallet_offer_json)
-                    sep = "&" if "?" in scheme else "?"
-                    credential_offer_uris[wid] = f"{scheme}{sep}credential_offer={encoded}"
-                    if wc.get("display_name"):
-                        credential_offer_labels[wid] = wc["display_name"]
-
-            response = pb2.IssuanceResponse(
-                id=tx.id,
-                organization_id=tx.organization_id,
-                credential_template_id=tx.credential_template_id,
-                status=tx.status.value,
-                credential_offer_uri=offer_uri,
-                credential_offer_uris=credential_offer_uris,
-                credential_offer_labels=credential_offer_labels,
-                pre_auth_code=tx.pre_auth_code,
-                expires_at=tx.expires_at.isoformat(),
-            )
+            response = self._issuance_response_from_transaction(tx)
 
             if created:
                 await self._emit_credential_event(

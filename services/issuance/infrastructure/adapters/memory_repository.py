@@ -143,6 +143,26 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             self._idempotent_transactions[logical_key] = tx.id
             return copy.deepcopy(tx), True
 
+    async def recover_transaction_idempotently(
+        self,
+        *,
+        organization_id: str,
+        idempotency_key_hash: str,
+        idempotency_request_hash: str,
+    ) -> IssuanceTransaction | None:
+        logical_key = (organization_id, idempotency_key_hash)
+        lock = self._idempotency_locks.setdefault(logical_key, asyncio.Lock())
+        async with lock:
+            existing_id = self._idempotent_transactions.get(logical_key)
+            if existing_id is None:
+                return None
+            existing = self._transactions[existing_id]
+            if existing.idempotency_request_hash != idempotency_request_hash:
+                raise IssuanceIdempotencyConflictError(
+                    "idempotency key was already used for a different issuance request"
+                )
+            return copy.deepcopy(existing)
+
     async def claim_transaction_for_token(
         self,
         prepared_transaction: IssuanceTransaction,

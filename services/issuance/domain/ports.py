@@ -119,6 +119,21 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def recover_transaction_idempotently(
+        self,
+        *,
+        organization_id: str,
+        idempotency_key_hash: str,
+        idempotency_request_hash: str,
+    ) -> IssuanceTransaction | None:
+        """Recover a matching prior reservation without mutable dependency reads.
+
+        Return ``None`` when no reservation exists. Implementations must reject
+        reuse of the tenant/key pair with a different request hash.
+        """
+        pass
+
+    @abstractmethod
     async def claim_transaction_for_token(
         self,
         prepared_transaction: IssuanceTransaction,

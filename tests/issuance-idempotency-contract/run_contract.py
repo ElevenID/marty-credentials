@@ -64,7 +64,9 @@ def _transaction(*, request_hash: str = REQUEST_HASH) -> IssuanceTransaction:
     )
 
 
-async def _exercise_production_repository() -> tuple[list[tuple[IssuanceTransaction, bool]], bool]:
+async def _exercise_production_repository() -> tuple[
+    list[tuple[IssuanceTransaction, bool]], bool, bool
+]:
     async_database_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     engine = create_async_engine(async_database_url)
     repository = PostgresIssuanceRepository(async_sessionmaker(engine, expire_on_commit=False))
@@ -78,22 +80,37 @@ async def _exercise_production_repository() -> tuple[list[tuple[IssuanceTransact
             repository.reserve_transaction_idempotently(_transaction()),
         )
 
+        committed = results[0][0]
+        recovered = await repository.recover_transaction_idempotently(
+            organization_id=committed.organization_id,
+            idempotency_key_hash=committed.idempotency_key_hash or "",
+            idempotency_request_hash=committed.idempotency_request_hash or "",
+        )
+        assert recovered is not None
+        assert recovered.id == committed.id
+        assert recovered.pre_auth_code == committed.pre_auth_code
+        early_recovery_exercised = True
+
         changed_semantics_rejected = False
         try:
-            await repository.reserve_transaction_idempotently(
-                _transaction(request_hash=CHANGED_REQUEST_HASH)
+            await repository.recover_transaction_idempotently(
+                organization_id=committed.organization_id,
+                idempotency_key_hash=committed.idempotency_key_hash or "",
+                idempotency_request_hash=CHANGED_REQUEST_HASH,
             )
         except IssuanceIdempotencyConflictError:
             changed_semantics_rejected = True
         assert changed_semantics_rejected
-        return list(results), changed_semantics_rejected
+        return list(results), changed_semantics_rejected, early_recovery_exercised
     finally:
         await engine.dispose()
 
 
 def main() -> None:
     _upgrade()
-    results, changed_semantics_rejected = asyncio.run(_exercise_production_repository())
+    results, changed_semantics_rejected, early_recovery_exercised = asyncio.run(
+        _exercise_production_repository()
+    )
 
     assert sorted(created for _, created in results) == [False, True]
     assert len({transaction.id for transaction, _ in results}) == 1
@@ -147,6 +164,7 @@ def main() -> None:
                 "raw_key_persisted": raw_key_persisted,
                 "production_repository_exercised": True,
                 "changed_semantics_rejected": changed_semantics_rejected,
+                "early_recovery_exercised": early_recovery_exercised,
             },
             indent=2,
             sort_keys=True,

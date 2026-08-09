@@ -716,9 +716,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             statement = (
                 pg_insert(issuance_transactions_table)
                 .values(**self._transaction_values(tx))
-                .on_conflict_do_nothing(
-                    index_elements=["organization_id", "idempotency_key_hash"]
-                )
+                .on_conflict_do_nothing(index_elements=["organization_id", "idempotency_key_hash"])
                 .returning(*issuance_transactions_table.c)
             )
             created_row = (await session.execute(statement)).first()
@@ -745,6 +743,31 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 )
             await session.commit()
             return existing, False
+
+    async def recover_transaction_idempotently(
+        self,
+        *,
+        organization_id: str,
+        idempotency_key_hash: str,
+        idempotency_request_hash: str,
+    ) -> IssuanceTransaction | None:
+        async with self._session_factory() as session:
+            statement = select(issuance_transactions_table).where(
+                issuance_transactions_table.c.organization_id == organization_id,
+                issuance_transactions_table.c.idempotency_key_hash == idempotency_key_hash,
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                return None
+            existing = self._row_to_transaction(row)
+            if not hmac.compare_digest(
+                existing.idempotency_request_hash or "",
+                idempotency_request_hash,
+            ):
+                raise IssuanceIdempotencyConflictError(
+                    "idempotency key was already used for a different issuance request"
+                )
+            return existing
 
     async def claim_transaction_for_token(
         self,
