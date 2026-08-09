@@ -44,6 +44,7 @@ from issuance.domain.entities import (
     EvidencePolicyReview,
     EvidencePolicyReviewStatus,
     IssuanceEvent,
+    IssuanceIdempotencyConflictError,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
@@ -597,6 +598,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             applicant_id=row.applicant_id,
             application_id=row.application_id,
             subject_did=row.subject_did,
+            idempotency_key_hash=getattr(row, "idempotency_key_hash", None),
+            idempotency_request_hash=getattr(row, "idempotency_request_hash", None),
             status=IssuanceStatus(row.status),
             pre_auth_code=row.pre_auth_code,
             access_token=row.access_token,
@@ -627,47 +630,60 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             revocation_reason=getattr(row, "revocation_reason", None),
         )
 
+    @staticmethod
+    def _transaction_values(tx: IssuanceTransaction) -> dict[str, Any]:
+        return {
+            "id": tx.id,
+            "organization_id": tx.organization_id,
+            "credential_template_id": tx.credential_template_id,
+            "revocation_profile_id": tx.revocation_profile_id,
+            "renewal_of_credential_id": tx.renewal_of_credential_id,
+            "applicant_id": tx.applicant_id,
+            "application_id": tx.application_id,
+            "subject_did": tx.subject_did,
+            "idempotency_key_hash": tx.idempotency_key_hash,
+            "idempotency_request_hash": tx.idempotency_request_hash,
+            "status": tx.status.value,
+            "pre_auth_code": tx.pre_auth_code,
+            "access_token": _hash_token(tx.access_token),
+            "c_nonce": tx.nonce,
+            "issuer_profile_id": tx.issuer_profile_id,
+            "issuer_mode": tx.issuer_mode or "org_managed",
+            "issuer_did_override": tx.issuer_did_override,
+            "issuer_algorithm": tx.issuer_algorithm,
+            "signing_service_id": tx.signing_service_id,
+            "reserved_credential_id": tx.reserved_credential_id,
+            "oid4vci_client_id": tx.oid4vci_client_id,
+            "delivery_mode": tx.delivery_mode or "wallet_only",
+            "claims": tx.claims,
+            "credential_type": tx.credential_type,
+            "zk_predicate_claims": tx.zk_predicate_claims or [],
+            "selective_disclosure_claims": tx.selective_disclosure_claims or [],
+            "credential_payload_format": tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+            "wallet_configs": tx.wallet_configs or [],
+            "validity_days": tx.validity_days,
+            "renewable": tx.renewable,
+            "renewal_window_days": tx.renewal_window_days,
+            "created_at": tx.created_at,
+            "expires_at": tx.expires_at,
+            "issued_at": tx.issued_at,
+            "revoked_at": tx.revoked_at,
+            "revocation_reason": tx.revocation_reason,
+        }
+
     # Transaction methods
     async def save_transaction(self, tx: IssuanceTransaction) -> None:
         async with self._session_factory() as session:
-            tx_data = {
-                "id": tx.id,
-                "organization_id": tx.organization_id,
-                "credential_template_id": tx.credential_template_id,
-                "revocation_profile_id": tx.revocation_profile_id,
-                "renewal_of_credential_id": tx.renewal_of_credential_id,
-                "applicant_id": tx.applicant_id,
-                "application_id": tx.application_id,
-                "subject_did": tx.subject_did,
-                "status": tx.status.value,
-                "pre_auth_code": tx.pre_auth_code,
-                "access_token": _hash_token(tx.access_token),
-                "c_nonce": tx.nonce,
-                "issuer_profile_id": tx.issuer_profile_id,
-                "issuer_mode": tx.issuer_mode or "org_managed",
-                "issuer_did_override": tx.issuer_did_override,
-                "issuer_algorithm": tx.issuer_algorithm,
-                "signing_service_id": tx.signing_service_id,
-                "reserved_credential_id": tx.reserved_credential_id,
-                "oid4vci_client_id": tx.oid4vci_client_id,
-                "delivery_mode": tx.delivery_mode or "wallet_only",
-                "claims": tx.claims,
-                "credential_type": tx.credential_type,
-                "zk_predicate_claims": tx.zk_predicate_claims or [],
-                "selective_disclosure_claims": tx.selective_disclosure_claims or [],
-                "credential_payload_format": tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
-                "wallet_configs": tx.wallet_configs or [],
-                "validity_days": tx.validity_days,
-                "renewable": tx.renewable,
-                "renewal_window_days": tx.renewal_window_days,
-                "created_at": tx.created_at,
-                "expires_at": tx.expires_at,
-                "issued_at": tx.issued_at,
-                "revoked_at": tx.revoked_at,
-                "revocation_reason": tx.revocation_reason,
-            }
+            tx_data = self._transaction_values(tx)
 
-            update_data = {k: v for k, v in tx_data.items() if k not in ("id", "created_at")}
+            immutable = {
+                "id",
+                "created_at",
+                "organization_id",
+                "idempotency_key_hash",
+                "idempotency_request_hash",
+            }
+            update_data = {k: v for k, v in tx_data.items() if k not in immutable}
             allowed_predecessors = [
                 status.value for status in issuance_save_predecessors(tx.status)
             ]
@@ -685,6 +701,75 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 await session.rollback()
                 raise ValueError(f"Stale issuance transaction transition to {tx.status.value}")
             await session.commit()
+
+    async def reserve_transaction_idempotently(
+        self,
+        tx: IssuanceTransaction,
+    ) -> tuple[IssuanceTransaction, bool]:
+        if not tx.idempotency_key_hash:
+            if tx.idempotency_request_hash:
+                raise ValueError("idempotency request hash requires an idempotency key")
+            await self.save_transaction(tx)
+            return tx, True
+        if not tx.idempotency_request_hash:
+            raise ValueError("idempotency key requires an idempotency request hash")
+
+        async with self._session_factory() as session:
+            statement = (
+                pg_insert(issuance_transactions_table)
+                .values(**self._transaction_values(tx))
+                .on_conflict_do_nothing(index_elements=["organization_id", "idempotency_key_hash"])
+                .returning(*issuance_transactions_table.c)
+            )
+            created_row = (await session.execute(statement)).first()
+            if created_row is not None:
+                await session.commit()
+                return self._row_to_transaction(created_row), True
+
+            existing_statement = select(issuance_transactions_table).where(
+                issuance_transactions_table.c.organization_id == tx.organization_id,
+                issuance_transactions_table.c.idempotency_key_hash == tx.idempotency_key_hash,
+            )
+            existing_row = (await session.execute(existing_statement)).first()
+            if existing_row is None:
+                await session.rollback()
+                raise RuntimeError("idempotent issuance reservation was not recoverable")
+            existing = self._row_to_transaction(existing_row)
+            if not hmac.compare_digest(
+                existing.idempotency_request_hash or "",
+                tx.idempotency_request_hash,
+            ):
+                await session.rollback()
+                raise IssuanceIdempotencyConflictError(
+                    "idempotency key was already used for a different issuance request"
+                )
+            await session.commit()
+            return existing, False
+
+    async def recover_transaction_idempotently(
+        self,
+        *,
+        organization_id: str,
+        idempotency_key_hash: str,
+        idempotency_request_hash: str,
+    ) -> IssuanceTransaction | None:
+        async with self._session_factory() as session:
+            statement = select(issuance_transactions_table).where(
+                issuance_transactions_table.c.organization_id == organization_id,
+                issuance_transactions_table.c.idempotency_key_hash == idempotency_key_hash,
+            )
+            row = (await session.execute(statement)).first()
+            if row is None:
+                return None
+            existing = self._row_to_transaction(row)
+            if not hmac.compare_digest(
+                existing.idempotency_request_hash or "",
+                idempotency_request_hash,
+            ):
+                raise IssuanceIdempotencyConflictError(
+                    "idempotency key was already used for a different issuance request"
+                )
+            return existing
 
     async def claim_transaction_for_token(
         self,

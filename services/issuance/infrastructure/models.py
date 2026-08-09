@@ -39,6 +39,8 @@ issuance_transactions_table = Table(
     Column("applicant_id", String, nullable=True),
     Column("application_id", String, nullable=True),
     Column("subject_did", String, nullable=True),
+    Column("idempotency_key_hash", String(64), nullable=True),
+    Column("idempotency_request_hash", String(64), nullable=True),
     Column("status", String, nullable=False, default="pending"),
     Column("pre_auth_code", String, nullable=False, unique=True),
     Column("access_token", String, nullable=True),
@@ -73,6 +75,27 @@ issuance_transactions_table = Table(
     Index("ix_issuance_transactions_applicant_id", "applicant_id"),
     Index("ix_issuance_transactions_application_id", "application_id"),
     Index("ix_issuance_transactions_delivery_mode", "delivery_mode"),
+    Index(
+        "ux_issuance_transactions_org_idempotency_key_hash",
+        "organization_id",
+        "idempotency_key_hash",
+        unique=True,
+    ),
+    CheckConstraint(
+        "(idempotency_key_hash IS NULL AND idempotency_request_hash IS NULL) OR "
+        "(idempotency_key_hash IS NOT NULL AND idempotency_request_hash IS NOT NULL)",
+        name="ck_issuance_transactions_idempotency_pair",
+    ),
+    CheckConstraint(
+        "idempotency_key_hash IS NULL OR "
+        "idempotency_key_hash ~ '^[0-9a-f]{64}$'",
+        name="ck_issuance_transactions_idempotency_key_hash",
+    ),
+    CheckConstraint(
+        "idempotency_request_hash IS NULL OR "
+        "idempotency_request_hash ~ '^[0-9a-f]{64}$'",
+        name="ck_issuance_transactions_idempotency_request_hash",
+    ),
     schema="issuance_service",
 )
 
