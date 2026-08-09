@@ -81,6 +81,11 @@ class TestProtoPackageLazyImports:
         token_fields = issuance_pb2.ExchangeTokenRequest.DESCRIPTOR.fields_by_name
 
         assert initiate_fields["authorized_client_id"].number == 7
+        assert initiate_fields["application_id"].number == 8
+        assert initiate_fields["issuer_did"].number == 9
+        assert initiate_fields["delivery_mode"].number == 10
+        assert initiate_fields["idempotency_key"].number == 11
+        assert initiate_fields["claims_json"].number == 12
         assert token_fields["client_assertion_type"].number == 7
         assert token_fields["client_assertion"].number == 8
 

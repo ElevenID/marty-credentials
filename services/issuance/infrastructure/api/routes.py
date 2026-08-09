@@ -46,6 +46,12 @@ from issuance.application.canvas_issuance_guard import (
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
+from issuance.application.issuance_idempotency import (
+    canonical_issuance_request,
+    hash_idempotency_key,
+    issuance_request_hash,
+    normalize_idempotency_key,
+)
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
@@ -77,6 +83,7 @@ from issuance.domain.entities import (
     DeliveryTarget,
     EventType,
     IssuanceEvent,
+    IssuanceIdempotencyConflictError,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
@@ -3177,6 +3184,16 @@ async def initiate_issuance(
     logged and allowed to proceed for internal service-to-service resilience.
     """
 
+    try:
+        raw_idempotency_key = (
+            http_request.headers.get("Idempotency-Key")
+            if http_request is not None
+            else None
+        )
+        normalized_idempotency_key = normalize_idempotency_key(raw_idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     # Validate organization exists via gRPC
     try:
         from marty_proto.v1 import organization_service_pb2 as org_pb2
@@ -3439,6 +3456,29 @@ async def initiate_issuance(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if http_request is not None:
         _reject_direct_signing_headers(http_request.headers)
+    if normalized_idempotency_key and any(
+        str(wallet.get("format_variant") or "") == "didcomm_v2"
+        for wallet in wallet_configs
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="idempotent initiation does not support DIDComm push delivery",
+        )
+
+    request_semantics = canonical_issuance_request(
+        organization_id=request.organization_id,
+        credential_template_id=request.credential_template_id,
+        application_id=request.application_id,
+        applicant_id=request.applicant_id,
+        subject_did=request.subject_did,
+        holder_did=request.holder_did,
+        issuer_did=request.issuer_did,
+        authorized_client_id=request.authorized_client_id,
+        delivery_mode=delivery_mode,
+        claims=request.claims,
+        credential_subject=request.credential_subject,
+        credential_document=request.credential_document,
+    )
 
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
@@ -3447,6 +3487,16 @@ async def initiate_issuance(
         applicant_id=request.applicant_id,
         application_id=request.application_id,
         subject_did=request.subject_did,
+        idempotency_key_hash=(
+            hash_idempotency_key(normalized_idempotency_key)
+            if normalized_idempotency_key
+            else None
+        ),
+        idempotency_request_hash=(
+            issuance_request_hash(request_semantics)
+            if normalized_idempotency_key
+            else None
+        ),
         # The request supplies a DID only. The internal resolver records the
         # canonical issuer-profile ID after it proves the org/DID/format match.
         issuer_profile_id=None,
@@ -3470,18 +3520,21 @@ async def initiate_issuance(
         tx,
         credential_format=_credential_format_for_remote_context(credential_payload_format),
     )
-    await repo.save_transaction(tx)
+    try:
+        tx, _created = await repo.reserve_transaction_idempotently(tx)
+    except IssuanceIdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     # OID4VCI: Pass credential offer inline for better wallet compatibility.
     # Delegate offer construction entirely to the Rust engine.
     from urllib.parse import quote
 
-    credential_config_id = credential_type or "default"
+    credential_config_id = tx.credential_type or "default"
 
     # The offer must select the configuration that exactly matches the template's
     # representation. Wallets must not infer a different format from transaction
     # state or a removed request-level ``format`` member.
-    normalized_payload_format = _normalize_payload_format(credential_payload_format)
+    normalized_payload_format = _normalize_payload_format(tx.credential_payload_format)
     default_fmt_variant = normalized_payload_format or None
     default_config_id = _credential_configuration_id_for_format(
         credential_config_id, default_fmt_variant

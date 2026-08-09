@@ -107,6 +107,18 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def reserve_transaction_idempotently(
+        self,
+        tx: IssuanceTransaction,
+    ) -> tuple[IssuanceTransaction, bool]:
+        """Atomically create an offer or recover the matching prior transaction.
+
+        The boolean is true only for the caller that created the durable row.
+        Implementations must reject a key reused with another request hash.
+        """
+        pass
+
+    @abstractmethod
     async def claim_transaction_for_token(
         self,
         prepared_transaction: IssuanceTransaction,
