@@ -376,6 +376,16 @@ def test_atomic_session_migration_fails_closed_and_adds_database_guards() -> Non
     assert "disable_existing_loggers=False" in environment
 
 
+def test_verification_model_enums_match_varchar_migration_columns() -> None:
+    status_type = VerificationSessionModel.__table__.c.status.type
+    method_type = VerificationSessionModel.__table__.c.verification_method.type
+
+    assert status_type.native_enum is False
+    assert status_type.length == 32
+    assert method_type.native_enum is False
+    assert method_type.length == 32
+
+
 def test_verification_image_contains_migration_runtime() -> None:
     dockerfile = (ROOT / "services" / "verification" / "Dockerfile").read_text(encoding="utf-8")
 

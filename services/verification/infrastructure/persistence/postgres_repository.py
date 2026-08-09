@@ -76,7 +76,7 @@ class VerificationSessionModel(Base):  # type: ignore[misc]
     verifier_did: Mapped[str] = mapped_column(String, nullable=False)
     presentation_definition: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     status: Mapped[VerificationStatus] = mapped_column(
-        Enum(VerificationStatus),
+        Enum(VerificationStatus, native_enum=False, length=32),
         nullable=False,
         default=VerificationStatus.PENDING,
     )
@@ -95,7 +95,7 @@ class VerificationSessionModel(Base):  # type: ignore[misc]
         default=dict,
     )
     verification_method: Mapped[VerificationMethod | None] = mapped_column(
-        Enum(VerificationMethod),
+        Enum(VerificationMethod, native_enum=False, length=32),
         nullable=True,
     )
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
