@@ -21,7 +21,8 @@ mod verification;
 pub use builder::MdocBuilder;
 pub use document::{MdocPreparedForHsm, MdocSignedDocument};
 pub use verification::{
-    DeviceResponse, MdocPresentationVerificationResult, MdocVerificationResult,
+    DeviceResponse, MdocDocumentVerificationEvidence, MdocPresentationVerificationResult,
+    MdocVerificationResult,
 };
 
 use pyo3::prelude::*;
@@ -43,6 +44,7 @@ pub(crate) fn register_mdoc_module(parent: &Bound<'_, PyModule>) -> PyResult<()>
     parent.add_class::<DeviceResponse>()?;
     parent.add_class::<MdocVerificationResult>()?;
     parent.add_class::<MdocPresentationVerificationResult>()?;
+    parent.add_class::<MdocDocumentVerificationEvidence>()?;
     parent.add_function(wrap_pyfunction!(
         verification::parse_device_response,
         parent
