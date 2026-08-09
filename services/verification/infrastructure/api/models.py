@@ -48,7 +48,7 @@ class SessionResponse(BaseModel):
 class SubmitPresentationRequest(BaseModel):
     """Request to submit a presentation."""
 
-    presentation: dict[str, Any] | str  # Can be JWT or JSON
+    presentation: str
 
 
 class ClaimResult(BaseModel):

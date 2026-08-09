@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from alembic import command
 from alembic.config import Config
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
@@ -51,6 +52,7 @@ from verification.domain.entities import (
     VerificationStatus,
     VerificationSubmissionClaim,
 )
+from verification.infrastructure.api.models import SubmitPresentationRequest
 from verification.infrastructure.persistence.postgres_repository import (
     PostgresVerificationRepository,
     VerificationSessionModel,
@@ -242,6 +244,14 @@ async def test_session_structured_presentation_fails_before_nonce_claim() -> Non
         )
 
     repository.claim_submission.assert_not_awaited()
+
+
+def test_session_submit_contract_advertises_only_nonce_bindable_jwt() -> None:
+    assert SubmitPresentationRequest(presentation="header.payload.signature").presentation == (
+        "header.payload.signature"
+    )
+    with pytest.raises(PydanticValidationError):
+        SubmitPresentationRequest(presentation={"vp": "not-transaction-bound"})
 
 
 @pytest.mark.asyncio
