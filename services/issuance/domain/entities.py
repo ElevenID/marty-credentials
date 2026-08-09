@@ -29,6 +29,10 @@ class IssuanceStatus(str, Enum):
     REVOKED = "revoked"
 
 
+class IssuanceIdempotencyConflictError(ValueError):
+    """An idempotency key was reused for different issuance semantics."""
+
+
 _ISSUANCE_SAVE_PREDECESSORS: dict[IssuanceStatus, frozenset[IssuanceStatus]] = {
     IssuanceStatus.PENDING: frozenset({IssuanceStatus.PENDING}),
     IssuanceStatus.AUTHORIZED: frozenset({IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED}),
@@ -96,6 +100,8 @@ class IssuanceTransaction:
     applicant_id: str | None = None
     application_id: str | None = None
     subject_did: str | None = None
+    idempotency_key_hash: str | None = None
+    idempotency_request_hash: str | None = None
 
     # Transaction state
     status: IssuanceStatus = IssuanceStatus.PENDING

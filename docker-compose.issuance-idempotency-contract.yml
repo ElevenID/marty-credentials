@@ -1,0 +1,53 @@
+services:
+  postgres:
+    image: postgres:15.18-alpine@sha256:57e5b9f69e672385cdf630f42b1306b5ca934c9bf8278b5f8b1948533d75a20b
+    environment:
+      POSTGRES_DB: issuance_idempotency_contract
+      POSTGRES_USER: issuance_contract
+      POSTGRES_PASSWORD: issuance_contract_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U issuance_contract -d issuance_idempotency_contract"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    tmpfs:
+      - /var/lib/postgresql/data:rw,noexec,nosuid,size=256m
+    restart: "no"
+    networks:
+      - issuance-idempotency-contract
+
+  idempotency-contract:
+    build:
+      context: .
+      dockerfile: tests/issuance-idempotency-contract/Dockerfile
+      args:
+        CONTRACT_SOURCE_REVISION: ${ISSUANCE_IDEMPOTENCY_SOURCE_REVISION:-local-worktree}
+    depends_on:
+      postgres:
+        condition: service_healthy
+        restart: false
+    environment:
+      DATABASE_URL: postgresql://issuance_contract:issuance_contract_only@postgres:5432/issuance_idempotency_contract
+      CONTRACT_RESULT_PATH: /artifacts/contract-result.json
+      CONTRACT_SOURCE_REVISION: ${ISSUANCE_IDEMPOTENCY_SOURCE_REVISION:-local-worktree}
+      TOKEN_HMAC_KEY: issuance-idempotency-contract-only-key
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ${ISSUANCE_IDEMPOTENCY_ARTIFACT_DIR:-./tests/artifacts/issuance-idempotency}
+        target: /artifacts
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    networks:
+      - issuance-idempotency-contract
+
+networks:
+  issuance-idempotency-contract:
+    internal: true

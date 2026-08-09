@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import httpx
 from cryptography.exceptions import InvalidSignature
@@ -45,6 +45,12 @@ from issuance.application.canvas_issuance_guard import (
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.issuance_idempotency import (
+    canonical_issuance_request,
+    hash_idempotency_key,
+    issuance_request_hash,
+    normalize_idempotency_key,
+)
 from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
@@ -77,6 +83,7 @@ from issuance.domain.entities import (
     DeliveryTarget,
     EventType,
     IssuanceEvent,
+    IssuanceIdempotencyConflictError,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
@@ -3162,6 +3169,94 @@ async def put_oid4vci_registered_client(
     )
 
 
+async def _issuance_response_from_transaction(
+    *,
+    tx: IssuanceTransaction,
+    request: InitiateIssuanceRequest,
+    repo: IIssuanceRepository,
+) -> IssuanceResponse:
+    """Reconstruct an offer only from the committed transaction snapshot."""
+
+    credential_config_id = tx.credential_type or "default"
+    normalized_payload_format = _normalize_payload_format(tx.credential_payload_format)
+    default_config_id = _credential_configuration_id_for_format(
+        credential_config_id,
+        normalized_payload_format or None,
+    )
+    offer_json_str = oid4vci_create_credential_offer(
+        issuer_url=org_issuer_url(tx.organization_id),
+        credential_types=[default_config_id],
+        pre_authorized_code=tx.pre_auth_code,
+        user_pin_required=False,
+    )
+    offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json_str)}"
+
+    credential_offer_uris: dict[str, str] = {}
+    credential_offer_labels: dict[str, str] = {}
+    logger.info(
+        "Building credential_offer_uris from %d wallet configs",
+        len(tx.wallet_configs),
+    )
+    for wallet_config in tx.wallet_configs:
+        wallet_id = wallet_config.get("wallet_id", "")
+        if not wallet_id:
+            continue
+        scheme = wallet_config.get("deep_link_scheme", "openid-credential-offer://")
+        format_variant = wallet_config.get("format_variant")
+
+        if format_variant == "didcomm_v2":
+            holder_did = request.holder_did or request.subject_did
+            if holder_did:
+                try:
+                    delivery = await _didcomm_sign_and_deliver(
+                        tx=tx,
+                        holder_did=holder_did,
+                        repo=repo,
+                    )
+                    credential_offer_uris[wallet_id] = f"didcomm://{delivery.service_endpoint}"
+                except Exception as exc:
+                    logger.warning("DIDComm auto-delivery failed: %s", exc)
+                    credential_offer_uris[wallet_id] = f"didcomm://pending?transaction_id={tx.id}"
+            else:
+                credential_offer_uris[wallet_id] = f"didcomm://pending?transaction_id={tx.id}"
+        else:
+            wallet_config_id = _credential_configuration_id_for_format(
+                credential_config_id,
+                format_variant,
+            )
+            wallet_issuer_url = (
+                org_issuer_url_credential_manager(tx.organization_id)
+                if format_variant == "credential-manager"
+                else org_issuer_url_apple_wallet(tx.organization_id)
+                if format_variant == "apple-wallet"
+                else org_issuer_url(tx.organization_id)
+            )
+            wallet_offer_json = oid4vci_create_credential_offer(
+                issuer_url=wallet_issuer_url,
+                credential_types=[wallet_config_id],
+                pre_authorized_code=tx.pre_auth_code,
+                user_pin_required=False,
+            )
+            encoded = quote(wallet_offer_json)
+            separator = "&" if "?" in scheme else "?"
+            credential_offer_uris[wallet_id] = f"{scheme}{separator}credential_offer={encoded}"
+
+        if wallet_config.get("display_name"):
+            credential_offer_labels[wallet_id] = wallet_config["display_name"]
+
+    return IssuanceResponse(
+        id=tx.id,
+        organization_id=tx.organization_id,
+        credential_template_id=tx.credential_template_id,
+        status=tx.status.value,
+        credential_offer_uri=offer_uri,
+        credential_offer_uris=credential_offer_uris,
+        credential_offer_labels=credential_offer_labels,
+        pre_auth_code=tx.pre_auth_code,
+        expires_at=tx.expires_at.isoformat(),
+    )
+
+
 @issuance_router.post(
     "/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)]
 )
@@ -3176,6 +3271,42 @@ async def initiate_issuance(
     so callers receive a proper 4xx response.  Network / 5xx failures are
     logged and allowed to proceed for internal service-to-service resilience.
     """
+
+    try:
+        raw_idempotency_key = (
+            http_request.headers.get("Idempotency-Key") if http_request is not None else None
+        )
+        normalized_idempotency_key = normalize_idempotency_key(raw_idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        delivery_mode = normalize_delivery_mode(request.delivery_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if http_request is not None:
+        _reject_direct_signing_headers(http_request.headers)
+
+    request_semantics = canonical_issuance_request(
+        organization_id=request.organization_id,
+        credential_template_id=request.credential_template_id,
+        application_id=request.application_id,
+        applicant_id=request.applicant_id,
+        subject_did=request.subject_did,
+        holder_did=request.holder_did,
+        issuer_did=request.issuer_did,
+        authorized_client_id=request.authorized_client_id,
+        delivery_mode=delivery_mode,
+        claims=request.claims,
+        credential_subject=request.credential_subject,
+        credential_document=request.credential_document,
+    )
+    idempotency_key_hash = (
+        hash_idempotency_key(normalized_idempotency_key) if normalized_idempotency_key else None
+    )
+    idempotency_request_hash = (
+        issuance_request_hash(request_semantics) if normalized_idempotency_key else None
+    )
 
     # Validate organization exists via gRPC
     try:
@@ -3220,6 +3351,22 @@ async def initiate_issuance(
             raise HTTPException(
                 status_code=422,
                 detail="authorized_client_id has an unsupported authentication method",
+            )
+
+    if idempotency_key_hash and idempotency_request_hash:
+        try:
+            recovered = await repo.recover_transaction_idempotently(
+                organization_id=request.organization_id,
+                idempotency_key_hash=idempotency_key_hash,
+                idempotency_request_hash=idempotency_request_hash,
+            )
+        except IssuanceIdempotencyConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if recovered is not None:
+            return await _issuance_response_from_transaction(
+                tx=recovered,
+                request=request,
+                repo=repo,
             )
 
     # Resolve credential type from template via gRPC (preferred) with HTTP fallback.
@@ -3268,9 +3415,7 @@ async def initiate_issuance(
             credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             revocation_profile_id = tmpl_resp.revocation_profile_id or None
             template_issuer_did = getattr(tmpl_resp, "issuer_did", None) or None
-            template_issuer_algorithm = (
-                getattr(tmpl_resp, "issuer_algorithm", None) or None
-            )
+            template_issuer_algorithm = getattr(tmpl_resp, "issuer_algorithm", None) or None
             wallet_configs = (
                 json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
             )
@@ -3433,12 +3578,13 @@ async def initiate_issuance(
     # DB column is NOT NULL; when callers omit template id, persist a stable fallback.
     effective_credential_template_id = request.credential_template_id or "default"
 
-    try:
-        delivery_mode = normalize_delivery_mode(request.delivery_mode)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if http_request is not None:
-        _reject_direct_signing_headers(http_request.headers)
+    if normalized_idempotency_key and any(
+        str(wallet.get("format_variant") or "") == "didcomm_v2" for wallet in wallet_configs
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="idempotent initiation does not support DIDComm push delivery",
+        )
 
     tx = IssuanceTransaction(
         organization_id=request.organization_id,
@@ -3447,6 +3593,8 @@ async def initiate_issuance(
         applicant_id=request.applicant_id,
         application_id=request.application_id,
         subject_did=request.subject_did,
+        idempotency_key_hash=idempotency_key_hash,
+        idempotency_request_hash=idempotency_request_hash,
         # The request supplies a DID only. The internal resolver records the
         # canonical issuer-profile ID after it proves the org/DID/format match.
         issuer_profile_id=None,
@@ -3470,105 +3618,15 @@ async def initiate_issuance(
         tx,
         credential_format=_credential_format_for_remote_context(credential_payload_format),
     )
-    await repo.save_transaction(tx)
+    try:
+        tx, _created = await repo.reserve_transaction_idempotently(tx)
+    except IssuanceIdempotencyConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    # OID4VCI: Pass credential offer inline for better wallet compatibility.
-    # Delegate offer construction entirely to the Rust engine.
-    from urllib.parse import quote
-
-    credential_config_id = credential_type or "default"
-
-    # The offer must select the configuration that exactly matches the template's
-    # representation. Wallets must not infer a different format from transaction
-    # state or a removed request-level ``format`` member.
-    normalized_payload_format = _normalize_payload_format(credential_payload_format)
-    default_fmt_variant = normalized_payload_format or None
-    default_config_id = _credential_configuration_id_for_format(
-        credential_config_id, default_fmt_variant
-    )
-    offer_json_str = oid4vci_create_credential_offer(
-        issuer_url=org_issuer_url(request.organization_id),
-        credential_types=[default_config_id],
-        pre_authorized_code=tx.pre_auth_code,
-        user_pin_required=False,
-    )
-
-    # Encode offer as inline JSON in openid-credential-offer URI
-    offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json_str)}"
-
-    # Build per-wallet offer URIs.  Each wallet entry may carry an optional
-    # "format_variant" key that selects the right
-    # credential_configuration_id for that wallet's SDK.
-    credential_offer_uris: dict[str, str] = {}
-    credential_offer_labels: dict[str, str] = {}  # wallet_id → display_name from template
-    didcomm_delivery_results: list[dict] = []
-    logger.info(
-        f"Building credential_offer_uris from {len(tx.wallet_configs)} wallet configs: {tx.wallet_configs}"
-    )
-    for wc in tx.wallet_configs:
-        wid = wc.get("wallet_id", "")
-        scheme = wc.get("deep_link_scheme", "openid-credential-offer://")
-        fmt_variant = wc.get("format_variant")
-        if not wid:
-            continue
-
-        # DIDComm v2 wallets: push delivery instead of offer URI
-        if fmt_variant == "didcomm_v2":
-            holder_did_for_delivery = request.holder_did or request.subject_did
-            if holder_did_for_delivery:
-                try:
-                    delivery = await _didcomm_sign_and_deliver(
-                        tx=tx,
-                        holder_did=holder_did_for_delivery,
-                        repo=repo,
-                    )
-                    didcomm_delivery_results.append(delivery.model_dump())
-                    credential_offer_uris[wid] = f"didcomm://{delivery.service_endpoint}"
-                except Exception as dc_err:
-                    logger.warning(
-                        f"DIDComm auto-delivery to {holder_did_for_delivery} failed: {dc_err}"
-                    )
-                    credential_offer_uris[wid] = f"didcomm://pending?transaction_id={tx.id}"
-            else:
-                # No holder_did — caller must use /didcomm/deliver later
-                credential_offer_uris[wid] = f"didcomm://pending?transaction_id={tx.id}"
-            if wc.get("display_name"):
-                credential_offer_labels[wid] = wc["display_name"]
-            continue
-
-        if wid:
-            wallet_config_id = _credential_configuration_id_for_format(
-                credential_config_id, fmt_variant
-            )
-            wallet_issuer_url = (
-                org_issuer_url_credential_manager(request.organization_id)
-                if fmt_variant == "credential-manager"
-                else org_issuer_url_apple_wallet(request.organization_id)
-                if fmt_variant == "apple-wallet"
-                else org_issuer_url(request.organization_id)
-            )
-            wallet_offer_json = oid4vci_create_credential_offer(
-                issuer_url=wallet_issuer_url,
-                credential_types=[wallet_config_id],
-                pre_authorized_code=tx.pre_auth_code,
-                user_pin_required=False,
-            )
-            encoded = quote(wallet_offer_json)
-            sep = "&" if "?" in scheme else "?"
-            credential_offer_uris[wid] = f"{scheme}{sep}credential_offer={encoded}"
-            if wc.get("display_name"):
-                credential_offer_labels[wid] = wc["display_name"]
-
-    return IssuanceResponse(
-        id=tx.id,
-        organization_id=tx.organization_id,
-        credential_template_id=tx.credential_template_id,
-        status=tx.status.value,
-        credential_offer_uri=offer_uri,
-        credential_offer_uris=credential_offer_uris,
-        credential_offer_labels=credential_offer_labels,
-        pre_auth_code=tx.pre_auth_code,
-        expires_at=tx.expires_at.isoformat(),
+    return await _issuance_response_from_transaction(
+        tx=tx,
+        request=request,
+        repo=repo,
     )
 
 
