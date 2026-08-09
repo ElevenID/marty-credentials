@@ -376,7 +376,9 @@ async def test_real_postgres_claim_recovery_and_terminal_fencing() -> None:
                     expires_at, nonce
                 ) VALUES
                     ('legacy-terminal', 'org-1', 'did:web:verifier.example', '{}'::jsonb,
-                     'VERIFIED', jsonb_build_object('presentation_sha256', :terminal_digest),
+                     'VERIFIED', jsonb_build_object(
+                         'presentation_sha256', CAST(:terminal_digest AS TEXT)
+                     ),
                      clock_timestamp(), clock_timestamp(), clock_timestamp() + interval '1 hour',
                      :duplicate_nonce),
                     ('legacy-pending-a', 'org-1', 'did:web:verifier.example', '{}'::jsonb,
