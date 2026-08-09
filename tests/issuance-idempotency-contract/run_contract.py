@@ -26,6 +26,16 @@ REQUEST_HASH = "b" * 64
 def _upgrade() -> None:
     with psycopg.connect(DATABASE_URL) as connection:
         connection.execute("CREATE SCHEMA IF NOT EXISTS issuance_service")
+        connection.execute("CREATE SCHEMA IF NOT EXISTS organization_service")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS organization_service.organizations (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR,
+                slug VARCHAR
+            )
+            """
+        )
         connection.commit()
 
     config = Config("/contract/migrations/alembic.ini")
