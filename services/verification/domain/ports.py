@@ -3,33 +3,50 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .entities import VerificationSession
+from .entities import VerificationSession, VerificationSubmissionClaim
 
 
 class IVerificationRepository(ABC):
     """Repository interface for verification sessions."""
-    
+
     @abstractmethod
-    async def save_session(self, session: VerificationSession) -> None:
-        """Save or update a verification session."""
+    async def create_session(
+        self,
+        session: VerificationSession,
+        duration_seconds: int,
+    ) -> VerificationSession:
+        """Create a session with a storage-clock expiry."""
         pass
-    
+
+    @abstractmethod
+    async def claim_submission(
+        self,
+        session_id: str,
+        presentation_sha256: str,
+        processing_token: str,
+        lease_seconds: int,
+    ) -> VerificationSubmissionClaim:
+        """Atomically bind a pending session nonce to one presentation digest."""
+        pass
+
+    @abstractmethod
+    async def finalize_submission(
+        self,
+        session: VerificationSession,
+        presentation_sha256: str,
+        processing_token: str,
+    ) -> VerificationSubmissionClaim:
+        """Atomically persist a terminal result owned by the active worker."""
+        pass
+
     @abstractmethod
     async def get_by_id(self, session_id: str) -> VerificationSession | None:
         """Retrieve a verification session by ID."""
         pass
-    
-    @abstractmethod
-    async def get_by_nonce(self, nonce: str) -> VerificationSession | None:
-        """Retrieve a verification session by nonce."""
-        pass
-    
+
     @abstractmethod
     async def list_by_organization(
-        self,
-        organization_id: str,
-        limit: int = 100,
-        offset: int = 0
+        self, organization_id: str, limit: int = 100, offset: int = 0
     ) -> list[VerificationSession]:
         """List verification sessions for an organization."""
         pass
@@ -37,7 +54,7 @@ class IVerificationRepository(ABC):
 
 class ICredentialVerifier(ABC):
     """Interface for credential verification logic."""
-    
+
     @abstractmethod
     async def verify_w3c_vc(
         self,
@@ -52,17 +69,14 @@ class ICredentialVerifier(ABC):
     ) -> dict[str, Any]:
         """Verify a W3C Verifiable Credential."""
         pass
-    
+
     @abstractmethod
     async def verify_jwt_vp(
-        self,
-        presentation_jwt: str,
-        expected_audience: str,
-        expected_nonce: str | None = None
+        self, presentation_jwt: str, expected_audience: str, expected_nonce: str | None = None
     ) -> dict[str, Any]:
         """Verify a JWT Verifiable Presentation."""
         pass
-    
+
     @abstractmethod
     async def verify_presentation(
         self,
