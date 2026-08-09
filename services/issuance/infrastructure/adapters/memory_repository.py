@@ -2,7 +2,9 @@
 
 import asyncio
 import copy
+import hashlib
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -79,6 +81,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self._oid4vci_clients: dict[tuple[str, str], Oid4vciRegisteredClient] = {}
         self._oid4vci_client_assertions: dict[tuple[str, str, str], datetime] = {}
         self._oid4vci_client_assertion_lock = asyncio.Lock()
+        self._oid4vci_ephemeral_capabilities: dict[
+            tuple[str, str], tuple[float, dict[str, Any] | None]
+        ] = {}
+        self._oid4vci_ephemeral_capability_lock = asyncio.Lock()
         self._canvas_event_receipts: dict[tuple[str | None, str], CanvasEventReceipt] = {}
         self._canvas_lti_launch_states: dict[str, CanvasLtiLaunchState] = {}
         self._canvas_platforms: dict[str, CanvasPlatform] = {}
@@ -275,6 +281,90 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 return False
             self._oid4vci_client_assertions[key] = expires_at
             return True
+
+    @staticmethod
+    def _ephemeral_capability_digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    async def _save_ephemeral_capability(
+        self,
+        *,
+        purpose: str,
+        value: str,
+        payload: dict[str, Any] | None,
+        ttl_seconds: int,
+    ) -> bool:
+        if not value or not 1 <= ttl_seconds <= 3600:
+            raise ValueError("OID4VCI capability value and bounded TTL are required")
+        key = (purpose, self._ephemeral_capability_digest(value))
+        async with self._oid4vci_ephemeral_capability_lock:
+            now = time.monotonic()
+            self._oid4vci_ephemeral_capabilities = {
+                capability_key: entry
+                for capability_key, entry in self._oid4vci_ephemeral_capabilities.items()
+                if entry[0] > now
+            }
+            if key in self._oid4vci_ephemeral_capabilities:
+                return False
+            self._oid4vci_ephemeral_capabilities[key] = (
+                now + ttl_seconds,
+                copy.deepcopy(payload),
+            )
+            return True
+
+    async def _consume_ephemeral_capability(
+        self,
+        *,
+        purpose: str,
+        value: str,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        if not value:
+            return False, None
+        key = (purpose, self._ephemeral_capability_digest(value))
+        async with self._oid4vci_ephemeral_capability_lock:
+            entry = self._oid4vci_ephemeral_capabilities.pop(key, None)
+        if entry is None or entry[0] <= time.monotonic():
+            return False, None
+        return True, copy.deepcopy(entry[1])
+
+    async def save_pushed_authorization_request(
+        self,
+        request_uri: str,
+        params: dict[str, Any],
+        *,
+        ttl_seconds: int,
+    ) -> bool:
+        return await self._save_ephemeral_capability(
+            purpose="par",
+            value=request_uri,
+            payload=params,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def consume_pushed_authorization_request(
+        self,
+        request_uri: str,
+    ) -> dict[str, Any] | None:
+        live, payload = await self._consume_ephemeral_capability(
+            purpose="par",
+            value=request_uri,
+        )
+        return payload if live and isinstance(payload, dict) else None
+
+    async def save_proof_nonce(self, nonce: str, *, ttl_seconds: int) -> bool:
+        return await self._save_ephemeral_capability(
+            purpose="proof_nonce",
+            value=nonce,
+            payload=None,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def consume_proof_nonce(self, nonce: str) -> bool:
+        live, _ = await self._consume_ephemeral_capability(
+            purpose="proof_nonce",
+            value=nonce,
+        )
+        return live
 
     async def save_credential(self, cred: IssuedCredential) -> None:
         self._credentials[cred.id] = cred

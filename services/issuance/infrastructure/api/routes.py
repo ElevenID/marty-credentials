@@ -795,49 +795,14 @@ async def _enforce_token_rate_limit(request: Request) -> None:
 
 
 # ---------------------------------------------------------------------------
-# In-memory Pushed Authorization Request (PAR) store — RFC 9126
+# Pushed Authorization Request (PAR) storage — RFC 9126
 # ---------------------------------------------------------------------------
 _PAR_TTL_SECONDS = 90
-
-
-class _PARStore:
-    """Thread-safe in-memory store for PAR requests with TTL expiry.
-
-    PAR requests are ephemeral (90s lifetime) so an in-memory dict with
-    lazy cleanup is sufficient.  If the server restarts, wallets simply
-    re-send the PAR — no durability needed.
-    """
-
-    def __init__(self) -> None:
-        self._store: dict[str, tuple[float, dict]] = {}  # uri → (expires_at, params)
-        self._lock = asyncio.Lock()
-
-    async def save(self, request_uri: str, params: dict) -> None:
-        async with self._lock:
-            self._store[request_uri] = (time.monotonic() + _PAR_TTL_SECONDS, params)
-
-    async def pop(self, request_uri: str) -> dict | None:
-        """Retrieve and delete a PAR request (single-use)."""
-        async with self._lock:
-            entry = self._store.pop(request_uri, None)
-            # Lazy cleanup of expired entries
-            now = time.monotonic()
-            expired = [k for k, (exp, _) in self._store.items() if exp < now]
-            for k in expired:
-                del self._store[k]
-        if entry is None:
-            return None
-        expires_at, params = entry
-        if time.monotonic() > expires_at:
-            return None  # expired
-        return params
-
-
-_par_store = _PARStore()
+_PAR_MAX_PAYLOAD_BYTES = 16 * 1024
 
 
 # ---------------------------------------------------------------------------
-# In-memory nonce pool — OID4VCI v1 §7.3
+# Shared nonce pool — OID4VCI v1 §7.3
 # ---------------------------------------------------------------------------
 # The EUDI Wallet Kit (and other spec-compliant wallets) calls the nonce
 # endpoint WITHOUT an Authorization header.  The resulting nonce is not
@@ -845,39 +810,9 @@ _par_store = _PARStore()
 # submits a credential request with proof containing that nonce, the
 # credential endpoint must be able to validate it.
 #
-# This pool stores all recently-issued nonces so the proof validator can
-# accept them even when they don't match tx.nonce.
+# The repository stores only nonce digests and atomically consumes them across
+# workers and replicas, including during a rolling deployment.
 _NONCE_POOL_TTL_SECONDS = 300
-
-
-class _NoncePool:
-    """Thread-safe single-use nonce pool with TTL expiry."""
-
-    def __init__(self) -> None:
-        self._nonces: dict[str, float] = {}  # nonce → expires_at
-        self._lock = asyncio.Lock()
-
-    async def add(self, nonce: str) -> None:
-        async with self._lock:
-            self._nonces[nonce] = time.monotonic() + _NONCE_POOL_TTL_SECONDS
-            # Lazy cleanup
-            now = time.monotonic()
-            expired = [k for k, exp in self._nonces.items() if exp < now]
-            for k in expired:
-                del self._nonces[k]
-
-    async def consume(self, nonce: str) -> bool:
-        """Check and consume a nonce (single-use). Returns True if valid."""
-        async with self._lock:
-            exp = self._nonces.pop(nonce, None)
-            if exp is None:
-                return False
-            if time.monotonic() > exp:
-                return False
-            return True
-
-
-_nonce_pool = _NoncePool()
 
 
 # ---------------------------------------------------------------------------
@@ -3642,7 +3577,17 @@ async def authorize(
     organization_id = issuer_org or organization_id
 
     if request_uri:
-        par_params = await _par_store.pop(request_uri)
+        try:
+            par_params = await repo.consume_pushed_authorization_request(request_uri)
+        except Exception as exc:
+            logger.error("PAR capability store unavailable (%s)", type(exc).__name__)
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "temporarily_unavailable",
+                    "error_description": "Authorization request storage is unavailable",
+                },
+            )
         if par_params is None:
             return JSONResponse(
                 status_code=400,
@@ -3821,6 +3766,7 @@ async def pushed_authorization_request(
     authorization_details: str = Form(None),
     organization_id: str = Form(None),
     issuer_org: str = Query(None),
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
 ) -> JSONResponse:
     """Pushed Authorization Request endpoint (RFC 9126 §2).
 
@@ -3837,28 +3783,50 @@ async def pushed_authorization_request(
     # parameter. A form organization remains available for existing internal
     # integrations, but cannot override the issuer selected by discovery.
     organization_id = issuer_org or organization_id
-    request_uri = f"urn:ietf:params:oauth:request_uri:{_uuid.uuid4()}"
+    par_params = {
+        "response_type": response_type,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": code_challenge_method,
+        "issuer_state": issuer_state,
+        "authorization_details": authorization_details,
+        "organization_id": organization_id,
+    }
+    encoded_params = json.dumps(par_params, separators=(",", ":")).encode("utf-8")
+    if len(encoded_params) > _PAR_MAX_PAYLOAD_BYTES:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "invalid_request",
+                "error_description": "Pushed authorization request is too large",
+            },
+        )
 
-    await _par_store.save(
-        request_uri,
-        {
-            "response_type": response_type,
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": scope,
-            "state": state,
-            "code_challenge": code_challenge,
-            "code_challenge_method": code_challenge_method,
-            "issuer_state": issuer_state,
-            "authorization_details": authorization_details,
-            "organization_id": organization_id,
-        },
-    )
+    request_uri = f"urn:ietf:params:oauth:request_uri:{_uuid.uuid4()}"
+    try:
+        stored = await repo.save_pushed_authorization_request(
+            request_uri,
+            par_params,
+            ttl_seconds=_PAR_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.error("PAR capability store unavailable (%s)", type(exc).__name__)
+        stored = False
+    if not stored:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "temporarily_unavailable",
+                "error_description": "Authorization request storage is unavailable",
+            },
+        )
 
     logger.info(
-        "[par] client_id=%s request_uri=%s",
+        "[par] client_id=%s stored=true",
         client_id,
-        request_uri[:60],
     )
 
     return JSONResponse(
@@ -4176,18 +4144,32 @@ async def exchange_token(
     )
 
 
-@issuance_router.post("/nonce", response_model=NonceResponse)
+@issuance_router.post(
+    "/nonce",
+    response_model=NonceResponse,
+    dependencies=[Depends(_enforce_token_rate_limit)],
+)
 async def nonce_endpoint(
     response: Response,
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
 ) -> NonceResponse:
     """Return an OID4VCI Final proof nonce without client authentication."""
     import secrets as _secrets
 
     new_nonce = _secrets.token_urlsafe(32)
 
-    # The pool makes accepted proofs one-time while allowing issuer metadata to
-    # expose an unauthenticated nonce endpoint as required by OID4VCI Final.
-    await _nonce_pool.add(new_nonce)
+    # Shared storage makes accepted proofs one-time across workers and rolling
+    # deployments while the endpoint remains unauthenticated as required.
+    try:
+        stored = await repo.save_proof_nonce(
+            new_nonce,
+            ttl_seconds=_NONCE_POOL_TTL_SECONDS,
+        )
+    except Exception as exc:
+        logger.error("Proof nonce store unavailable (%s)", type(exc).__name__)
+        stored = False
+    if not stored:
+        raise HTTPException(status_code=503, detail="Proof nonce storage is unavailable")
 
     # OID4VCI §7.3: Cache-Control MUST be no-store to prevent nonce caching
     response.headers["Cache-Control"] = "no-store"
@@ -4556,7 +4538,18 @@ async def issue_credential(
     # The nonce claim is now cryptographically bound. Consume it atomically so
     # a replay or a concurrent duplicate still fails without enabling a nonce
     # exhaustion attack using unauthenticated bytes.
-    if not await _nonce_pool.consume(_proof_nonce):
+    try:
+        nonce_consumed = await repo.consume_proof_nonce(_proof_nonce)
+    except Exception as exc:
+        logger.error("Proof nonce store unavailable (%s)", type(exc).__name__)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "temporarily_unavailable",
+                "error_description": "Proof nonce storage is unavailable",
+            },
+        )
+    if not nonce_consumed:
         return JSONResponse(
             status_code=400,
             content={

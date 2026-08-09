@@ -373,6 +373,7 @@ def test_authorization_metadata_advertises_client_auth_only_where_resolvable(
 
 @pytest.mark.asyncio
 async def test_par_tenant_binding_cannot_be_overridden_by_form_body() -> None:
+    repo = InMemoryIssuanceRepository()
     response = await routes.pushed_authorization_request(
         http_request=_token_request(),
         response_type="code",
@@ -386,9 +387,10 @@ async def test_par_tenant_binding_cannot_be_overridden_by_form_body() -> None:
         authorization_details=None,
         organization_id="org-b",
         issuer_org="org-a",
+        repo=repo,
     )
     payload = json.loads(response.body)
-    stored = await routes._par_store.pop(payload["request_uri"])
+    stored = await repo.consume_pushed_authorization_request(payload["request_uri"])
 
     assert response.status_code == 201
     assert stored is not None

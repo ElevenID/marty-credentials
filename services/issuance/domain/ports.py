@@ -1097,6 +1097,36 @@ class IIssuanceRepository(ABC):
         """Return human display metadata keyed by credential_type."""
         pass
 
+    # Ephemeral OID4VCI capabilities (PAR request URIs and proof nonces)
+    @abstractmethod
+    async def save_pushed_authorization_request(
+        self,
+        request_uri: str,
+        params: dict[str, Any],
+        *,
+        ttl_seconds: int,
+    ) -> bool:
+        """Persist one opaque PAR capability; return false on a key collision."""
+        pass
+
+    @abstractmethod
+    async def consume_pushed_authorization_request(
+        self,
+        request_uri: str,
+    ) -> dict[str, Any] | None:
+        """Atomically consume one unexpired PAR capability."""
+        pass
+
+    @abstractmethod
+    async def save_proof_nonce(self, nonce: str, *, ttl_seconds: int) -> bool:
+        """Persist one opaque proof nonce; return false on a key collision."""
+        pass
+
+    @abstractmethod
+    async def consume_proof_nonce(self, nonce: str) -> bool:
+        """Atomically consume one unexpired proof nonce."""
+        pass
+
     # Authorization session methods (OID4VCI authorization code flow)
     @abstractmethod
     async def save_authorization_session(self, session: AuthorizationSession) -> None:

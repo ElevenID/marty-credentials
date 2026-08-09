@@ -242,6 +242,46 @@ jobs:
         working-directory: marty-credentials
         run: pytest tests/ packages/tests/ -v
 
+  oid4vci-capability-postgres:
+    name: OID4VCI Capability PostgreSQL Race
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OID4VCI_CAPABILITY_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
+    services:
+      postgres:
+        image: postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+        env:
+          POSTGRES_USER: marty
+          POSTGRES_PASSWORD: marty_test
+          POSTGRES_DB: marty_oid4vci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marty -d marty_oid4vci_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: marty-credentials
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Install service test dependencies
+        working-directory: marty-credentials
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev] "psycopg[binary]==3.2.3"
+
+      - name: Exercise shared atomic PAR and proof-nonce consumption
+        working-directory: marty-credentials
+        run: pytest tests/test_oid4vci_ephemeral_capabilities_postgres.py -v
+
   test-wasm:
     name: WASM Tests
     runs-on: ubuntu-latest

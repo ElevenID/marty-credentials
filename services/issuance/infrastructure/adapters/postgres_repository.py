@@ -82,6 +82,7 @@ from issuance.infrastructure.models import (
     issuance_transactions_table,
     issued_credentials_table,
     oid4vci_client_assertions_table,
+    oid4vci_ephemeral_capabilities_table,
     oid4vci_registered_clients_table,
     organization_integration_secrets_table,
 )
@@ -112,6 +113,7 @@ _TOKEN_HMAC_KEY_RAW = _read_required_secret("TOKEN_HMAC_KEY")
 _TOKEN_HMAC_KEY: bytes = _TOKEN_HMAC_KEY_RAW.encode()
 logger = logging.getLogger(__name__)
 _integration_secret_encryption = None
+_EPHEMERAL_CAPABILITY_CLEANUP_LIMIT = 1000
 
 
 def _get_integration_secret_encryption():
@@ -851,6 +853,129 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             await session.commit()
             return result.rowcount == 1
+
+    @staticmethod
+    def _ephemeral_capability_digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+    async def _save_ephemeral_capability(
+        self,
+        *,
+        purpose: str,
+        value: str,
+        payload: dict[str, Any] | None,
+        ttl_seconds: int,
+    ) -> bool:
+        if not value or not 1 <= ttl_seconds <= 3600:
+            raise ValueError("OID4VCI capability value and bounded TTL are required")
+
+        digest = self._ephemeral_capability_digest(value)
+        async with self._session_factory() as session:
+            database_now = func.clock_timestamp()
+            await session.execute(
+                text(
+                    """
+                    WITH expired AS (
+                        SELECT purpose, key_digest
+                        FROM issuance_service.oid4vci_ephemeral_capabilities
+                        WHERE expires_at <= clock_timestamp()
+                        ORDER BY expires_at
+                        LIMIT :cleanup_limit
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    DELETE FROM issuance_service.oid4vci_ephemeral_capabilities AS capabilities
+                    USING expired
+                    WHERE capabilities.purpose = expired.purpose
+                      AND capabilities.key_digest = expired.key_digest
+                    """
+                ),
+                {"cleanup_limit": _EPHEMERAL_CAPABILITY_CLEANUP_LIMIT},
+            )
+            values: dict[str, Any] = {
+                "purpose": purpose,
+                "key_digest": digest,
+                "expires_at": database_now + timedelta(seconds=ttl_seconds),
+            }
+            if payload is not None:
+                values["payload"] = payload
+            result = await session.execute(
+                pg_insert(oid4vci_ephemeral_capabilities_table)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=["purpose", "key_digest"])
+            )
+            await session.commit()
+            return result.rowcount == 1
+
+    async def _consume_ephemeral_capability(
+        self,
+        *,
+        purpose: str,
+        value: str,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        if not value:
+            return False, None
+
+        digest = self._ephemeral_capability_digest(value)
+        async with self._session_factory() as session:
+            statement = (
+                delete(oid4vci_ephemeral_capabilities_table)
+                .where(
+                    oid4vci_ephemeral_capabilities_table.c.purpose == purpose,
+                    oid4vci_ephemeral_capabilities_table.c.key_digest == digest,
+                )
+                .returning(
+                    oid4vci_ephemeral_capabilities_table.c.payload,
+                    (
+                        oid4vci_ephemeral_capabilities_table.c.expires_at
+                        > func.clock_timestamp()
+                    ).label("is_live"),
+                )
+            )
+            row = (await session.execute(statement)).first()
+            await session.commit()
+            if row is None or not row.is_live:
+                return False, None
+            payload = row.payload if isinstance(row.payload, dict) else None
+            return True, payload
+
+    async def save_pushed_authorization_request(
+        self,
+        request_uri: str,
+        params: dict[str, Any],
+        *,
+        ttl_seconds: int,
+    ) -> bool:
+        return await self._save_ephemeral_capability(
+            purpose="par",
+            value=request_uri,
+            payload=params,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def consume_pushed_authorization_request(
+        self,
+        request_uri: str,
+    ) -> dict[str, Any] | None:
+        live, payload = await self._consume_ephemeral_capability(
+            purpose="par",
+            value=request_uri,
+        )
+        return payload if live and payload is not None else None
+
+    async def save_proof_nonce(self, nonce: str, *, ttl_seconds: int) -> bool:
+        return await self._save_ephemeral_capability(
+            purpose="proof_nonce",
+            value=nonce,
+            payload=None,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def consume_proof_nonce(self, nonce: str) -> bool:
+        live, _ = await self._consume_ephemeral_capability(
+            purpose="proof_nonce",
+            value=nonce,
+        )
+        return live
 
     async def get_credential_types_for_org(self, org_id: str) -> list[str]:
         """Return distinct credential_type values for an org's issuable templates.

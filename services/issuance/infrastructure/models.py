@@ -116,6 +116,35 @@ oid4vci_client_assertions_table = Table(
     schema="issuance_service",
 )
 
+# Short-lived opaque capabilities shared by every issuance process. Only a
+# one-way digest is stored, so database access does not reveal a live PAR URI
+# or proof nonce. The payload exists only for PAR and is bounded at the route.
+oid4vci_ephemeral_capabilities_table = Table(
+    "oid4vci_ephemeral_capabilities",
+    mapper_registry.metadata,
+    Column("purpose", String(32), primary_key=True),
+    Column("key_digest", String(64), primary_key=True),
+    Column("payload", JSON, nullable=True),
+    Column(
+        "created_at",
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
+    ),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "purpose IN ('par', 'proof_nonce')",
+        name="ck_oid4vci_ephemeral_capabilities_purpose",
+    ),
+    CheckConstraint(
+        "(purpose = 'par' AND payload IS NOT NULL) OR "
+        "(purpose = 'proof_nonce' AND payload IS NULL)",
+        name="ck_oid4vci_ephemeral_capabilities_payload",
+    ),
+    Index("ix_oid4vci_ephemeral_capabilities_expires_at", "expires_at"),
+    schema="issuance_service",
+)
+
 # Issued Credentials table
 issued_credentials_table = Table(
     "issued_credentials",
