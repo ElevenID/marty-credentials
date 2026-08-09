@@ -3,7 +3,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from alembic.script import ScriptDirectory
-
 from verification import manage_migrations
 
 
@@ -50,4 +49,4 @@ def test_upgrade_bootstraps_version_schema_before_alembic(monkeypatch) -> None:
 def test_verification_migration_graph_has_exactly_one_head() -> None:
     config = manage_migrations.get_config("postgresql+psycopg://unused/unused")
 
-    assert ScriptDirectory.from_config(config).get_heads() == ["202608081900"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["202608091200"]

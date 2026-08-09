@@ -6,15 +6,16 @@ the mmf database infrastructure side-effects.
 
 from typing import Any
 
-from pydantic import BaseModel
-
+from pydantic import BaseModel, Field
 
 # ============================================================================
 # Request/Response Models
 # ============================================================================
 
+
 class PresentationDefinition(BaseModel):
     """OID4VP Presentation Definition."""
+
     id: str
     input_descriptors: list[dict[str, Any]]
     format: dict[str, Any] | None = None
@@ -22,16 +23,18 @@ class PresentationDefinition(BaseModel):
 
 class CreateSessionRequest(BaseModel):
     """Request to create a verification session."""
+
     organization_id: str
     verifier_did: str
     presentation_definition: PresentationDefinition
-    required_credential_types: list[str] = []
-    trusted_issuers: list[str] = []
-    session_duration_seconds: int = 600
+    required_credential_types: list[str] = Field(default_factory=list)
+    trusted_issuers: list[str] = Field(default_factory=list)
+    session_duration_seconds: int = Field(default=600, ge=30, le=3600)
 
 
 class SessionResponse(BaseModel):
     """Verification session response."""
+
     id: str
     organization_id: str
     verifier_did: str
@@ -44,11 +47,13 @@ class SessionResponse(BaseModel):
 
 class SubmitPresentationRequest(BaseModel):
     """Request to submit a presentation."""
+
     presentation: dict[str, Any] | str  # Can be JWT or JSON
 
 
 class ClaimResult(BaseModel):
     """MIP §26 — Per-claim verification result."""
+
     claim_name: str
     required: bool = True
     present: bool = False
@@ -58,11 +63,12 @@ class ClaimResult(BaseModel):
 
 class VerificationResult(BaseModel):
     """MIP §26 — Verification result response (protocol-compliant shape)."""
+
     # Legacy field retained for backward compatibility
     valid: bool
     # Protocol-conformant fields (MIP §26 VerificationResult)
     overall_result: str = "FAIL"  # PASS | FAIL
-    claim_results: list[ClaimResult] = []
+    claim_results: list[ClaimResult] = Field(default_factory=list)
     trust_chain_valid: bool = False
     revocation_checked: bool = False
     revocation_status: str | None = None  # VALID | REVOKED | UNKNOWN | SKIPPED
@@ -79,21 +85,23 @@ class VerificationResult(BaseModel):
 
 class VerifyDirectRequest(BaseModel):
     """Request for direct (stateless) verification."""
+
     organization_id: str
     presentation: dict[str, Any] | str
     presentation_definition: PresentationDefinition
     verifier_did: str
-    trusted_issuers: list[str] = []
+    trusted_issuers: list[str] = Field(default_factory=list)
 
 
 class VerifyVdsNcRequest(BaseModel):
     """Request to verify a VDS-NC barcode."""
+
     barcode: str
     issuer_jwk_json: str | None = None
     issuer_did: str | None = None
     organization_id: str | None = None
     verification_method_id: str | None = None
-    trusted_issuers: list[str] = []
+    trusted_issuers: list[str] = Field(default_factory=list)
     credential_format: str = "vds_nc"
     key_purpose: str = "vdsnc_signing"
     algorithm: str | None = None
@@ -102,9 +110,10 @@ class VerifyVdsNcRequest(BaseModel):
 
 class VdsNcVerificationResult(BaseModel):
     """Result of VDS-NC barcode verification."""
+
     valid: bool
     country: str | None = None
     payload: dict[str, Any] | None = None
     signature_status: str = "Unknown"
-    errors: list[str] = []
+    errors: list[str] = Field(default_factory=list)
     method: str = "vds_nc"
