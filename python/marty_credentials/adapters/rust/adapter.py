@@ -13,12 +13,10 @@ from typing import Any
 from uuid import uuid4
 
 from marty_credentials.config import get_config
-from marty_credentials.infrastructure.auth.token_validator import (
-    CredentialVerificationError,
-    TokenValidator,
+from marty_credentials.native_backend import (
+    NativeOperationError,
+    require_marty_rs,
 )
-
-logger = logging.getLogger(__name__)
 from marty_credentials.ports import (
     CredentialData,
     CredentialOffer,
@@ -29,19 +27,12 @@ from marty_credentials.ports import (
     VerificationResult,
 )
 
+logger = logging.getLogger(__name__)
 
-def _get_marty_rs():
+
+def _get_marty_rs(capabilities: tuple[str, ...] = ()):
     """Lazy import of Rust bindings."""
-    try:
-        import _marty_rs
-
-        return _marty_rs
-    except ImportError:
-        raise RuntimeError(
-            "marty-rs bindings not available. "
-            "Install with: pip install marty-credentials[ffi] "
-            "or build with: cd rust && maturin develop"
-        )
+    return require_marty_rs(capabilities)
 
 
 class RustKeyManager:
@@ -55,14 +46,14 @@ class RustKeyManager:
 
     def generate_key(self, algorithm: KeyAlgorithm = KeyAlgorithm.ES256) -> KeyPair:
         """Generate a new key pair using Rust crypto."""
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(("generate_p256_did_jwk",))
 
         if algorithm == KeyAlgorithm.ES256:
-            did, jwk_json = marty_rs.generate_p256_key()
-        elif algorithm == KeyAlgorithm.EDDSA:
-            did, jwk_json = marty_rs.generate_did_key()
+            did, jwk_json = marty_rs.generate_p256_did_jwk()
         else:
-            raise ValueError(f"Unsupported algorithm: {algorithm}. Use ES256 or EdDSA.")
+            raise NativeOperationError(
+                f"The supported native key boundary does not expose {algorithm.value} generation"
+            )
 
         return KeyPair(
             did=did,
@@ -124,7 +115,7 @@ class RustCredentialIssuer:
             mdoc_doctype: Document type for mDoc credentials.
             zk_predicate_claims: Claim names for ZK predicate proofs.
         """
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(("create_verifiable_credential",))
 
         claims_json = json.dumps(subject.claims)
 
@@ -136,10 +127,10 @@ class RustCredentialIssuer:
             claims_json=claims_json,
             format=credential_format,
             expiration_seconds=expiration_seconds,
-            selective_disclosure_claims=selective_disclosure_claims,
+            selective_disclosure_claims=selective_disclosure_claims or [],
             mdoc_namespace=mdoc_namespace,
             mdoc_doctype=mdoc_doctype,
-            zk_predicate_claims=zk_predicate_claims,
+            zk_predicate_claims=zk_predicate_claims or [],
         )
 
         now = datetime.utcnow()
@@ -166,7 +157,9 @@ class RustCredentialIssuer:
         wallet_format: str = "standard",
     ) -> CredentialOffer:
         """Create an OID4VCI credential offer using the v2 engine."""
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(
+            ("create_credential_offer", "generate_offer_uri")
+        )
 
         offer_id = str(uuid4())
         pre_auth_code = secrets.token_urlsafe(32) if pre_authorized else None
@@ -205,7 +198,7 @@ class RustCredentialIssuer:
         Supports multi-format metadata with per-credential-type format lists,
         doctype/vct fields, and claim definitions.
         """
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(("generate_issuer_metadata",))
 
         return marty_rs.generate_issuer_metadata(
             issuer_url=issuer_url,
@@ -250,16 +243,9 @@ class RustCredentialWallet:
         nonce: str | None = None,
     ) -> str:
         """Create a verifiable presentation using Rust."""
-        marty_rs = _get_marty_rs()
-
-        credential_jwts = [c.jwt for c in credentials if c.jwt]
-
-        return marty_rs.create_presentation(
-            holder_did=holder_key.did,
-            holder_jwk_json=holder_key.jwk_json,
-            credential_jwts=credential_jwts,
-            audience=audience,
-            nonce=nonce,
+        raise NativeOperationError(
+            "Legacy VP-JWT construction is not exposed by the supported native boundary; "
+            "use the OID4VP wallet flow"
         )
 
     def redeem_offer(self, offer_uri: str, holder_key: KeyPair) -> CredentialData:
@@ -270,121 +256,22 @@ class RustCredentialWallet:
         """
         from urllib.parse import parse_qs, urlparse
 
-        import httpx
-
         parsed = urlparse(offer_uri)
         params = parse_qs(parsed.query)
 
         if "credential_offer_uri" not in params:
             raise ValueError("Unsupported offer URI format")
 
-        offer_endpoint = params["credential_offer_uri"][0]
-
-        with httpx.Client() as client:
-            try:
-                resp = client.get(offer_endpoint)
-                resp.raise_for_status()
-                offer_data = resp.json()
-            except Exception:
-                issuer_url = offer_endpoint.split("/offers/")[0]
-                offer_data = {
-                    "credential_issuer": issuer_url,
-                    "credential_configuration_ids": ["UniversityDegreeCredential"],
-                    "grants": {},
-                }
-
-        issuer_url = offer_data["credential_issuer"]
-        credential_configuration_ids = offer_data.get("credential_configuration_ids", [])
-        if not credential_configuration_ids:
-            credential_configuration_ids = ["UniversityDegreeCredential"]
-
-        try:
-            with httpx.Client() as client:
-                resp = client.get(f"{issuer_url}/api/issuer/metadata")
-                if resp.status_code == 404:
-                    resp = client.get(f"{issuer_url}/.well-known/openid-credential-issuer")
-
-                if resp.status_code == 200:
-                    metadata = resp.json()
-                    credential_endpoint = metadata.get(
-                        "credential_endpoint", f"{issuer_url}/api/issuer/credential"
-                    )
-                else:
-                    credential_endpoint = f"{issuer_url}/api/issuer/credential"
-        except Exception:
-            credential_endpoint = f"{issuer_url}/api/issuer/credential"
-
-        # Validate OAuth2 token from issuer
-        # TODO: Token should be obtained from proper OAuth2 flow with issuer
         config = get_config()
         if not config.oauth_client_id or not config.oauth_client_secret:
             raise ValueError(
                 "OAuth2 credentials not configured. Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET"
             )
         
-        # For now, raise an error indicating this flow requires proper OAuth2 implementation
-        raise NotImplementedError(
-            "Credential request requires OAuth2 access token from issuer. "
-            "This should be obtained via proper OAuth2 authorization code flow or client credentials flow. "
-            "Mock token usage has been removed for security."
+        raise NativeOperationError(
+            "Credential offer redemption requires the canonical OID4VCI wallet flow; "
+            "the legacy implicit-token adapter is disabled"
         )
-
-        cred_type = credential_configuration_ids[0]
-
-        proof_jwt = self.create_presentation(
-            holder_key=holder_key,
-            credentials=[],
-            audience=issuer_url,
-            nonce=str(uuid4()),
-        )
-
-        payload = {
-            "format": "jwt_vc_json",
-            "credential_definition": {"type": ["VerifiableCredential", cred_type]},
-            "proof": {"proof_type": "jwt", "jwt": proof_jwt},
-        }
-
-        with httpx.Client() as client:
-            resp = client.post(
-                credential_endpoint,
-                json=payload,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            resp.raise_for_status()
-            credential_resp = resp.json()
-
-        credential_jwt = credential_resp.get("credential")
-        if not credential_jwt:
-            raise ValueError("No credential received")
-
-        verifier = RustCredentialVerifier()
-        result = verifier.verify_credential(credential_jwt)
-
-        if not result.valid:
-            logger.error(
-                "Credential verification failed",
-                extra={
-                    "credential_type": cred_type,
-                    "issuer": issuer_url,
-                    "error": result.error,
-                },
-            )
-            raise CredentialVerificationError(
-                f"Credential verification failed: {result.error}",
-                details={"issuer": issuer_url, "credential_type": cred_type},
-            )
-
-        credential = CredentialData(
-            id=f"urn:uuid:{uuid4()}",
-            types=["VerifiableCredential", cred_type],
-            issuer=result.issuer or issuer_url,
-            subject=CredentialSubject(claims=result.claims),
-            issuance_date=datetime.utcnow(),
-            jwt=credential_jwt,
-        )
-
-        self.store_credential(credential)
-        return credential
 
 
 class RustCredentialVerifier:
@@ -396,27 +283,9 @@ class RustCredentialVerifier:
         expected_issuer: str | None = None,
     ) -> VerificationResult:
         """Verify a credential JWT using Rust."""
-        marty_rs = _get_marty_rs()
-
-        valid, payload_json, error = marty_rs.verify_jwt(
-            jwt=credential_jwt,
-            expected_issuer=expected_issuer,
-            expected_audience=None,
-        )
-
-        if not valid:
-            return VerificationResult(valid=False, error=error)
-
-        payload = json.loads(payload_json)
-        issuer = payload.get("iss")
-
-        vc = payload.get("vc", {})
-        subject = vc.get("credentialSubject", {})
-
-        return VerificationResult(
-            valid=True,
-            claims=subject,
-            issuer=issuer,
+        raise NativeOperationError(
+            "Credential verification requires explicit issuer public key or trust-profile "
+            "input; use VerificationService.verify_w3c_vc"
         )
 
     def verify_presentation(
@@ -426,37 +295,9 @@ class RustCredentialVerifier:
         expected_nonce: str | None = None,
     ) -> VerificationResult:
         """Verify a presentation JWT using Rust."""
-        marty_rs = _get_marty_rs()
-
-        valid, payload_json, error = marty_rs.verify_jwt(
-            jwt=presentation_jwt,
-            expected_issuer=None,
-            expected_audience=expected_audience,
-        )
-
-        if not valid:
-            return VerificationResult(valid=False, error=error)
-
-        payload = json.loads(payload_json)
-
-        if expected_nonce and payload.get("nonce") != expected_nonce:
-            return VerificationResult(
-                valid=False,
-                error=f"Nonce mismatch: expected {expected_nonce}",
-            )
-
-        vp = payload.get("vp", {})
-        holder = vp.get("holder")
-        credentials = vp.get("verifiableCredential", [])
-
-        return VerificationResult(
-            valid=True,
-            claims={
-                "holder": holder,
-                "credential_count": len(credentials),
-                "credentials": credentials,
-            },
-            issuer=payload.get("iss"),
+        raise NativeOperationError(
+            "Presentation verification requires verifier-owned OID4VP request state; "
+            "use the canonical OID4VP verifier flow"
         )
 
     def create_presentation_request(

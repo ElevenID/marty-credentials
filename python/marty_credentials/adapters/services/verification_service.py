@@ -2,82 +2,53 @@
 import base64
 import json
 import logging
+import secrets
 import time
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Union
-from datetime import datetime
+from typing import Any, Dict, List, Optional, Union
+
 from sqlalchemy.orm import Session
 
-from marty_credentials.native_backend import require_marty_rs
-
-_marty_rs = require_marty_rs()
-
-# Import Open Badges from marty_verification_py
-try:
-    from marty_verification_py import (
-        open_badge_ob2_verify,
-        open_badge_ob3_verify,
-    )
-    OPEN_BADGES_AVAILABLE = True
-except ImportError:
-    OPEN_BADGES_AVAILABLE = False
-    open_badge_ob2_verify = None
-    open_badge_ob3_verify = None
-
-import secrets
-import uuid
-from datetime import timedelta
 from marty_credentials.adapters.persistence.models import (
-    Credential, CredentialType, CredentialStatus, VerificationLog, 
-    VerificationResult, ZkChallenge
+    Credential,
+    CredentialStatus,
+    VerificationLog,
+    VerificationResult,
+    ZkChallenge,
 )
 from marty_credentials.config import get_config
 from marty_credentials.infrastructure.observability.metrics import (
-    credentials_verified_total,
-    credential_verification_failures_total,
     credential_verification_duration_seconds,
-    mdoc_signature_verification_duration_seconds,
+    credential_verification_failures_total,
+    credentials_verified_total,
 )
-from marty_credentials.ports.types import (
-    VerificationResult as PortVerificationResult, 
-    ZkChallengeSession
+from marty_credentials.native_backend import (
+    NativeOperationError,
+    require_marty_rs,
+    require_marty_verification,
 )
+from marty_credentials.ports.types import VerificationResult as PortVerificationResult
+from marty_credentials.ports.types import ZkChallengeSession
 from marty_credentials.ports.verifier import ICredentialVerifier
 
 logger = logging.getLogger(__name__)
 
+_marty_rs = require_marty_rs(
+    ("verify_mdoc_cbor", "verify_mdoc_issuer", "verify_sd_jwt", "verify_vcdm_jwt")
+)
+_marty_verification = require_marty_verification(
+    ("open_badge_ob2_verify", "open_badge_ob3_verify", "public_key_pem_to_jwk")
+)
+
 
 def _public_key_pem_to_jwk(public_key_pem: str) -> dict[str, str]:
     """Convert supported public PEM keys to Core's public-JWK boundary."""
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import ec, ed25519
-
-    def encode(value: bytes) -> str:
-        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
-
-    key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
-    if isinstance(key, ec.EllipticCurvePublicKey) and isinstance(
-        key.curve, ec.SECP256R1
-    ):
-        numbers = key.public_numbers()
-        return {
-            "kty": "EC",
-            "crv": "P-256",
-            "x": encode(numbers.x.to_bytes(32, "big")),
-            "y": encode(numbers.y.to_bytes(32, "big")),
-        }
-    if isinstance(key, ed25519.Ed25519PublicKey):
-        return {
-            "kty": "OKP",
-            "crv": "Ed25519",
-            "x": encode(
-                key.public_bytes(
-                    serialization.Encoding.Raw,
-                    serialization.PublicFormat.Raw,
-                )
-            ),
-        }
-    raise ValueError("Only P-256 and Ed25519 public keys are supported for VC-JWT")
+    converted = json.loads(_marty_verification.public_key_pem_to_jwk(public_key_pem))
+    if not isinstance(converted, dict) or "d" in converted:
+        raise ValueError("Native public-key conversion returned invalid key material")
+    return converted
 
 
 def _load_trusted_certs() -> List[str]:
@@ -290,27 +261,9 @@ class VerificationService(ICredentialVerifier):
     ) -> ZkChallengeSession:
         """Create a ZK proof challenge session."""
         session_id = str(uuid.uuid4())
-        nonce = secrets.token_bytes(32)
         expires_at = datetime.utcnow() + timedelta(minutes=10)
-        
-        challenge = ZkChallenge(
-            session_id=session_id,
-            nonce=secrets.token_urlsafe(32), # Base64 encoded for storage
-            doctype=doctype,
-            verifier_id=verifier_id,
-            expires_at=expires_at
-        )
-        # Re-set nonce to match what we actually use in the session object
-        challenge.nonce = secrets.token_urlsafe(32)
-        
-        # We'll use the actual bytes for the session object
         nonce_bytes = secrets.token_bytes(32)
-        challenge.nonce = secrets.token_urlsafe(32) # Wait, I'm being messy. Let's be clean.
-        
-        # Consistent nonce:
-        nonce_bytes = secrets.token_bytes(32)
-        import base64
-        nonce_b64 = base64.b64encode(nonce_bytes).decode('utf-8')
+        nonce_b64 = base64.b64encode(nonce_bytes).decode("utf-8")
         
         challenge = ZkChallenge(
             session_id=session_id,
@@ -341,7 +294,7 @@ class VerificationService(ICredentialVerifier):
         # Look up challenge session
         challenge = self.db.query(ZkChallenge).filter(
             ZkChallenge.session_id == session_id,
-            ZkChallenge.used == False,
+            ZkChallenge.used.is_(False),
             ZkChallenge.expires_at > datetime.utcnow()
         ).first()
         
@@ -355,32 +308,10 @@ class VerificationService(ICredentialVerifier):
         challenge.used = True
         self.db.commit()
         
-        import base64
-        nonce_bytes = base64.b64decode(challenge.nonce)
-        
         try:
-            # Use the newly exposed verify_age_zkp from marty_verification_py
-            try:
-                from marty_verification_py import verify_age_zkp
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Native ZK verification backend is unavailable; refusing verification"
-                ) from exc
-
-            is_valid = verify_age_zkp(nonce_bytes, mso, proof)
-            
-            if is_valid:
-                return PortVerificationResult(
-                    valid=True,
-                    verification_method="zk_ligero",
-                    claims={"age_over_18": True} # Predicate proven by proof
-                )
-            else:
-                return PortVerificationResult(
-                    valid=False,
-                    error="ZK proof verification failed",
-                    verification_method="zk_ligero"
-                )
+            raise NativeOperationError(
+                "Longfellow ZK proof verification is not exposed by the supported native backend"
+            )
         except Exception as e:
             logger.error(f"ZK verification error: {e}")
             return PortVerificationResult(
@@ -396,36 +327,10 @@ class VerificationService(ICredentialVerifier):
         verifier_did: str
     ) -> Dict[str, Any]:
         """Verify a Google Longfellow ZK interactive proof (Ligero protocol)"""
-        start_time = time.time()
-        
         try:
-            # Import from the unified marty_verification_py package
-            try:
-                from marty_verification_py import verify_age_zkp
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Native ZK verification backend is unavailable; refusing verification"
-                ) from exc
-
-            is_valid = verify_age_zkp(session_nonce, mso_bytes, proof_bytes)
-            
-            result_enum = VerificationResult.ZK_PROOF_VALID if is_valid else VerificationResult.FAILED
-            
-            details = {
-                "protocol": "longfellow-zk-ligero",
-                "interactive": True,
-                "proof_size": len(proof_bytes)
-            }
-            
-            self._log_verification(None, verifier_did, result_enum, details)
-            
-            return {
-                "valid": is_valid,
-                "verification_method": "zk_ligero",
-                "details": details,
-                "claims": {"age_over_18": True} if is_valid else {}
-            }
-            
+            raise NativeOperationError(
+                "Longfellow ZK proof verification is not exposed by the supported native backend"
+            )
         except Exception as e:
             self._log_verification(
                 None,
@@ -444,15 +349,17 @@ class VerificationService(ICredentialVerifier):
     ) -> Dict[str, Any]:
         """Verify an SD-JWT and extract disclosed claims"""
         try:
-            # Use Rust binding to verify SD-JWT
-            verifier = _marty_rs.SdJwtVerifier(public_key_pem)
-            
-            # Verify signature and structure (pass the SD-JWT/presentation string)
-            claims_json = verifier.verify(sd_jwt)
-            
-            # Parse disclosed claims from JSON
-            import json
-            disclosed_claims = json.loads(claims_json)
+            issuer_public_jwk = _public_key_pem_to_jwk(public_key_pem)
+            disclosed_claims = json.loads(
+                _marty_rs.verify_sd_jwt(
+                    sd_jwt,
+                    json.dumps(issuer_public_jwk),
+                    None,
+                    None,
+                )
+            )
+            if not isinstance(disclosed_claims, dict):
+                raise ValueError("Native SD-JWT verifier returned invalid claims")
             
             # Filter claims per SD-JWT spec:
             # - Keep essential standard JWT claims for security validation (iss, sub, exp)
@@ -574,18 +481,26 @@ class VerificationService(ICredentialVerifier):
 
             mdoc_bytes = _to_bytes(mdoc)
 
-            # Use Rust bindings for proper CBOR parsing and verification
-            device_response = _marty_rs.parse_device_response(list(mdoc_bytes))
-            
-            # Extract claims from mDL fields
-            mdl_claims = device_response.get_mdl_fields()
-            
-            # Get document types
-            document_types = device_response.document_types()
-            
-            # Get all namespaces
-            namespaces_dict = device_response.get_all_namespaces()
-            namespaces_list = list(namespaces_dict.keys()) if isinstance(namespaces_dict, dict) else []
+            disclosed_claims = _marty_rs.verify_mdoc_cbor(list(mdoc_bytes))
+            if not isinstance(disclosed_claims, dict):
+                raise ValueError("Native mDoc verifier returned invalid claims")
+            mdoc_metadata = disclosed_claims.get("_mdoc", {})
+            documents = mdoc_metadata.get("documents", []) if isinstance(mdoc_metadata, dict) else []
+            if not isinstance(documents, list):
+                raise ValueError("Native mDoc verifier returned invalid document metadata")
+            document_types = [
+                document["doc_type"]
+                for document in documents
+                if isinstance(document, dict) and isinstance(document.get("doc_type"), str)
+            ]
+            namespaces_dict: Dict[str, Any] = {}
+            for document in documents:
+                if isinstance(document, dict) and isinstance(document.get("namespaces"), dict):
+                    namespaces_dict.update(document["namespaces"])
+            namespaces_list = list(namespaces_dict)
+            mdl_claims = {
+                key: value for key, value in disclosed_claims.items() if key != "_mdoc"
+            }
             
             # Check validity (simplified - actual verification would check signatures)
             valid_from = mdl_claims.get("issue_date") or mdl_claims.get("valid_from")
@@ -610,17 +525,15 @@ class VerificationService(ICredentialVerifier):
                 trusted_certs = trusted_issuer_keys or _load_trusted_certs()
                 if not trusted_certs:
                     signature_error = "No trusted mDoc issuer certificates configured"
-                elif hasattr(_marty_rs, 'verify_mdoc_signature'):
-                    verification_result = _marty_rs.verify_mdoc_signature(
-                        mdoc_bytes=mdoc_bytes,
-                        trusted_issuer_certs_pem=trusted_certs,
+                else:
+                    verification_result = _marty_rs.verify_mdoc_issuer(
+                        list(mdoc_bytes),
+                        trusted_certs,
                     )
                     signature_valid = verification_result.signature_valid
-                    issuer_verified = verification_result.issuer_verified
+                    issuer_verified = verification_result.issuer_trusted
                     if not signature_valid or not issuer_verified:
                         signature_error = verification_result.error
-                else:
-                    signature_error = "Native mDoc signature verification is unavailable"
             except Exception as e:
                 signature_error = str(e)
                 logger.warning(f"mDoc signature verification failed: {e}")
@@ -768,9 +681,6 @@ class VerificationService(ICredentialVerifier):
         credential_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Verify an Open Badge credential (v2 or v3)"""
-        if not OPEN_BADGES_AVAILABLE:
-            return {"valid": False, "error": "Open Badges support not available"}
-        
         try:
             # Detect version
             context = credential.get("@context", [])
@@ -792,9 +702,13 @@ class VerificationService(ICredentialVerifier):
             # Verify via Rust bindings
             verify_request_json = json.dumps(verify_request)
             if is_ob2:
-                result_json = open_badge_ob2_verify(verify_request_json)
+                result_json = _marty_verification.open_badge_ob2_verify(
+                    verify_request_json
+                )
             else:
-                result_json = open_badge_ob3_verify(verify_request_json)
+                result_json = _marty_verification.open_badge_ob3_verify(
+                    verify_request_json
+                )
             
             result = json.loads(result_json)
             
@@ -882,8 +796,6 @@ class VerificationService(ICredentialVerifier):
         for entry in status_entries:
             status_list_credential = entry.get("statusListCredential")
             status_list_index = entry.get("statusListIndex")
-            status_purpose = entry.get("statusPurpose", "revocation")
-            
             if not status_list_credential or status_list_index is None:
                 continue
             
