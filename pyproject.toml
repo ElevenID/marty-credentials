@@ -52,9 +52,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ffi = [
-    "marty-rs",  # Rust FFI bindings
-]
+# marty-core owns the canonical native wheel. Install the exact
+# release/dependencies.json asset before selecting this compatibility extra.
+ffi = []
 spruceid = [
     "didkit>=0.3",
 ]

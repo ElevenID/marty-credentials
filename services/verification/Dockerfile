@@ -37,6 +37,8 @@ RUN echo "${MARTY_RS_SHA256}  /release-deps/${MARTY_RS_WHEEL}" | sha256sum -c - 
 
 COPY services/verification /app/services/verification
 COPY packages /app/packages
+COPY python/marty_credentials /app/marty_credentials
+RUN python -c "from verification.application.rust_verifier import validate_marty_rs_capabilities; validate_marty_rs_capabilities()"
 
 WORKDIR /app/services/verification
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

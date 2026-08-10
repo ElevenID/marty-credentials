@@ -47,20 +47,20 @@ def test_native_extension_capability_contract_accepts_complete_module(monkeypatc
     rust_integration.validate_marty_rs_capabilities()
 
 
-def test_native_extension_uses_marty_core_package_name(monkeypatch) -> None:
+def test_native_extension_rejects_nested_compatibility_package(monkeypatch) -> None:
     from issuance.application import rust_integration
+    from marty_credentials.native_backend import NativeBackendUnavailable
 
     extension = SimpleNamespace()
     package = SimpleNamespace(_marty_rs=extension)
-    # Mask an installed top-level wheel so this test deterministically
-    # exercises the nested-package compatibility path in every CI matrix job.
     monkeypatch.setitem(sys.modules, "_marty_rs", None)
     monkeypatch.setitem(sys.modules, "marty_rs", package)
 
-    assert rust_integration.get_marty_rs() is extension
+    with pytest.raises(NativeBackendUnavailable):
+        rust_integration.get_marty_rs()
 
 
-def test_native_extension_supports_legacy_top_level_module(monkeypatch) -> None:
+def test_native_extension_uses_canonical_top_level_module(monkeypatch) -> None:
     from issuance.application import rust_integration
 
     extension = SimpleNamespace()
@@ -68,6 +68,22 @@ def test_native_extension_supports_legacy_top_level_module(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "_marty_rs", extension)
 
     assert rust_integration.get_marty_rs() is extension
+
+
+def test_verification_native_contract_rejects_missing_capability(monkeypatch) -> None:
+    from marty_credentials.native_backend import NativeBackendUnavailable
+    from verification.application import rust_verifier
+
+    monkeypatch.setattr(
+        rust_verifier,
+        "require_marty_rs",
+        lambda capabilities=(): (_ for _ in ()).throw(
+            NativeBackendUnavailable("missing verify_vcdm_data_integrity")
+        ),
+    )
+
+    with pytest.raises(NativeBackendUnavailable, match="verify_vcdm_data_integrity"):
+        rust_verifier.validate_marty_rs_capabilities()
 
 
 def test_native_extension_capability_contract_rejects_incomplete_module(monkeypatch) -> None:
@@ -137,6 +153,7 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
     assert "validate_marty_rs_capabilities()" in dockerfile
+    assert "COPY python/marty_credentials /app/marty_credentials" in dockerfile
     assert "COPY marty-core/" not in dockerfile
     assert dependencies["marty-rs"]["repository"] == "ElevenID/marty-core"
     assert dependencies["marty-rs"]["asset"].startswith("marty_rs-")
@@ -145,8 +162,46 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert core_release["asset"].startswith(f"marty_rs-{core_release['version']}-")
     assert len(core_release["commit"]) == 40
     assert len(core_release["sha256"]) == 64
+    assert core_release["platform_assets"]["linux-x86_64"] == {
+        "asset": core_release["asset"],
+        "sha256": core_release["sha256"],
+    }
+    assert set(core_release["platform_assets"]) == {
+        "linux-x86_64",
+        "macos-arm64",
+        "windows-x86_64",
+    }
     core_revisions = {
         cargo["workspace"]["dependencies"][package]["rev"]
         for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
     }
     assert core_revisions == {core_release["commit"]}
+
+
+def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(
+        encoding="utf-8"
+    )
+    verification_image = (ROOT / "services" / "verification" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    dependency_loop = "for dependency in marty-rs marty-msf marty-common; do"
+    assert dependency_loop in workflow
+    assert "draft-release.json" not in workflow
+    assert "Draft must contain exactly one Linux x86_64 marty-rs wheel" not in workflow
+    assert "marty_rs_asset_id" not in workflow
+    assert "marty_rs_sha256=$(jq -r" in workflow
+    assert "COPY python/marty_credentials /app/marty_credentials" in verification_image
+    assert "validate_marty_rs_capabilities()" in verification_image
+
+
+def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+
+    assert not any(
+        dependency.startswith("marty-rs") for dependency in project["dependencies"]
+    )
+    assert project["optional-dependencies"]["ffi"] == []

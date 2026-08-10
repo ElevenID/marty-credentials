@@ -3,7 +3,7 @@ resolver = "2"
 members = ["rust/marty-rs"]
 
 [workspace.package]
-version = "0.1.49"
+version = "0.1.50"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -11,12 +11,12 @@ repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a", features = ["sod-builder"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a", default-features = false }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "ef8421e7c545f5d54796a636e6ba4079cf2becc9", features = ["sod-builder"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "ef8421e7c545f5d54796a636e6ba4079cf2becc9", default-features = false }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a" }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "ef8421e7c545f5d54796a636e6ba4079cf2becc9" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }

@@ -11,6 +11,8 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from marty_credentials.native_backend import require_marty_rs
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,25 +68,7 @@ def get_marty_rs():
     Raises:
         ImportError: If marty-rs bindings are not available.
     """
-    try:
-        # Current maturin release wheels expose the extension at the top level.
-        # Prefer it so an older separately installed ``marty_rs`` compatibility
-        # package cannot shadow the extension built with this service release.
-        import _marty_rs
-
-        return _marty_rs
-    except ImportError as e:
-        try:
-            # Legacy wheels packaged the same extension as a nested module.
-            from marty_rs import _marty_rs
-
-            return _marty_rs
-        except ImportError:
-            logger.error("marty-rs bindings not available - credential signing will fail")
-            raise ImportError(
-                "marty-rs Python bindings are required for credential signing. "
-                "Ensure the marty-bindings crate is built and installed."
-            ) from e
+    return require_marty_rs()
 
 
 REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
@@ -125,7 +109,9 @@ def validate_marty_rs_capabilities() -> None:
         if not callable(getattr(marty_rs, capability, None))
     )
     if missing:
-        raise RuntimeError(
+        from marty_credentials.native_backend import NativeBackendUnavailable
+
+        raise NativeBackendUnavailable(
             "marty-rs native extension is missing required capabilities: " + ", ".join(missing)
         )
 

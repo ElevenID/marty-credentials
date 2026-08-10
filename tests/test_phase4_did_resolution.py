@@ -666,7 +666,14 @@ class TestRustCredentialVerifierIssuerResolution:
             rust_verifier.RustCredentialVerifier
         )
         verifier.marty_rs = MagicMock()
-        verifier.marty_rs.verify_w3c_vc_signature.return_value = json.dumps({"valid": True})
+        verifier.marty_rs.verify_vcdm_data_integrity.return_value = json.dumps(
+            {
+                "valid": True,
+                "kind": "credential",
+                "verified_credentials": 1,
+                "errors": [],
+            }
+        )
 
         result = await verifier.verify_w3c_vc(
             credential,
@@ -678,8 +685,30 @@ class TestRustCredentialVerifierIssuerResolution:
             algorithm="ES256",
         )
 
-        assert result["valid"] is True
+        assert result["valid"] is False
+        assert result["cryptographic_valid"] is True
+        assert result["decision_ready"] is False
         assert result["issuer_trusted"] is True
+        assert result["revocation_checked"] is False
+        native_request = json.loads(
+            verifier.marty_rs.verify_vcdm_data_integrity.call_args.args[0]
+        )
+        assert native_request == {
+            "document": credential,
+            "resolved_verification_methods": [
+                {
+                    "id": vm_id,
+                    "controller": issuer_did,
+                    "public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "abc",
+                        "y": "def",
+                        "kid": vm_id,
+                    },
+                }
+            ],
+        }
         resolver.assert_awaited_once_with(
             issuer_did,
             organization_id="org-acme",

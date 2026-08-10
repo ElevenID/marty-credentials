@@ -66,15 +66,14 @@ def locked_marty_rs_version(repository: Path) -> str:
 
 
 def stable_asset_names(version: str) -> set[str]:
+    """Return assets owned by the credentials release.
+
+    Native ``marty_rs`` wheels and WASM bundles are owned and released by
+    marty-core. Credentials releases publish only their Python source package;
+    service images consume the independently pinned Core wheel.
+    """
     return {
-        "checksums-wasm.txt",
-        "marty-rs-sbom.json",
-        "marty-rs-wasm.tar.gz",
         f"marty_credentials-{version}.tar.gz",
-        f"marty_rs-{version}-cp311-abi3-macosx_10_12_x86_64.whl",
-        f"marty_rs-{version}-cp311-abi3-macosx_11_0_arm64.whl",
-        f"marty_rs-{version}-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        f"marty_rs-{version}-cp311-abi3-win_amd64.whl",
     }
 
 

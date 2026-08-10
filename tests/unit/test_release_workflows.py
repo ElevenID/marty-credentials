@@ -72,7 +72,7 @@ def test_release_tool_installs_are_version_pinned() -> None:
     assert "cargo install cargo-cyclonedx --version 0.5.9 --locked" in STABLE
     assert "cargo install git-cliff --version 2.13.1 --locked" in STABLE
     assert "python -m pip install build==1.5.0" in STABLE
-    assert "python -m pip install maturin==1.14.1 pytest==9.1.1" in STABLE
+    assert 'python -m pip install pytest==9.1.1 "release-deps/$asset"' in STABLE
     assert "hatchling==1.31.0" in PYPROJECT
     assert "hatch-vcs==0.5.0" in PYPROJECT
     assert "maturin==1.14.1" in PYPROJECT
