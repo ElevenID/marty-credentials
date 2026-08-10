@@ -66,6 +66,7 @@ all = [
 ]
 dev = [
     "alembic>=1.13",
+    "psycopg[binary]>=3.2",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pytest-cov>=4.0",

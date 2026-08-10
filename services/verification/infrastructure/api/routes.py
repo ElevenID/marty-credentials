@@ -6,12 +6,18 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-
 from mmf.infrastructure.database.session import get_db_session
 
-from ...application.rust_verifier import RustCredentialVerifier
 from ...application.did_resolver import resolve_issuer_did
-from ...application.service import VerificationService
+from ...application.rust_verifier import RustCredentialVerifier
+from ...application.service import (
+    UnsupportedSessionPresentationError,
+    VerificationService,
+    VerificationSessionBusyError,
+    VerificationSessionConflictError,
+    VerificationSessionExpiredError,
+    VerificationSessionNotFoundError,
+)
 from ..persistence.postgres_repository import PostgresVerificationRepository
 from .models import (
     ClaimResult,
@@ -19,10 +25,10 @@ from .models import (
     PresentationDefinition,
     SessionResponse,
     SubmitPresentationRequest,
+    VdsNcVerificationResult,
     VerificationResult,
     VerifyDirectRequest,
     VerifyVdsNcRequest,
-    VdsNcVerificationResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +74,7 @@ async def _verify_api_key(
 # Dependency Injection
 # ============================================================================
 
+
 def get_verification_repository() -> PostgresVerificationRepository:
     """Get verification repository instance."""
     session = get_db_session()
@@ -81,7 +88,7 @@ def get_credential_verifier() -> RustCredentialVerifier:
 
 def get_verification_service(
     repo: PostgresVerificationRepository = Depends(get_verification_repository),
-    verifier: RustCredentialVerifier = Depends(get_credential_verifier)
+    verifier: RustCredentialVerifier = Depends(get_credential_verifier),
 ) -> VerificationService:
     """Get verification service instance."""
     return VerificationService(repo, verifier)
@@ -91,10 +98,12 @@ def get_verification_service(
 # Endpoints
 # ============================================================================
 
-@verification_router.post("/sessions", response_model=SessionResponse, dependencies=[Depends(_verify_api_key)])
+
+@verification_router.post(
+    "/sessions", response_model=SessionResponse, dependencies=[Depends(_verify_api_key)]
+)
 async def create_verification_session(
-    request: CreateSessionRequest,
-    service: VerificationService = Depends(get_verification_service)
+    request: CreateSessionRequest, service: VerificationService = Depends(get_verification_service)
 ) -> SessionResponse:
     """Create a new verification session for OID4VP flow."""
     try:
@@ -104,9 +113,9 @@ async def create_verification_session(
             presentation_definition=request.presentation_definition.dict(),
             required_credential_types=request.required_credential_types,
             trusted_issuers=request.trusted_issuers,
-            session_duration_seconds=request.session_duration_seconds
+            session_duration_seconds=request.session_duration_seconds,
         )
-        
+
         return SessionResponse(
             id=session.id,
             organization_id=session.organization_id,
@@ -115,14 +124,14 @@ async def create_verification_session(
             request_uri=session.request_uri or "",
             nonce=session.nonce or "",
             expires_at=session.expires_at.isoformat() if session.expires_at else "",
-            created_at=session.created_at.isoformat()
+            created_at=session.created_at.isoformat(),
         )
-        
+
     except Exception as e:
         logger.error(f"Failed to create verification session: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create verification session"
+            detail="Failed to create verification session",
         )
 
 
@@ -130,50 +139,74 @@ async def create_verification_session(
 async def submit_presentation(
     session_id: str,
     request: SubmitPresentationRequest,
-    service: VerificationService = Depends(get_verification_service)
+    service: VerificationService = Depends(get_verification_service),
 ) -> VerificationResult:
     """Submit a presentation to an existing verification session."""
     try:
         session = await service.submit_presentation(
-            session_id=session_id,
-            presentation=request.presentation
+            session_id=session_id, presentation=request.presentation
         )
-        
+
         is_valid = session.status.value == "verified"
+        evidence = session.verification_evidence
         return VerificationResult(
             valid=is_valid,
             overall_result="PASS" if is_valid else "FAIL",
-            trust_chain_valid=is_valid,
-            revocation_checked=is_valid,
-            revocation_status="VALID" if is_valid else "SKIPPED",
+            trust_chain_valid=evidence.get("trust_chain_valid") is True,
+            revocation_checked=evidence.get("revocation_checked") is True,
+            revocation_status=evidence.get("revocation_status", "SKIPPED"),
             evaluated_at=session.verified_at.isoformat() if session.verified_at else None,
-            verifier_nonce=session.nonce if hasattr(session, 'nonce') else None,
+            verifier_nonce=session.nonce if hasattr(session, "nonce") else None,
             verified_claims=session.verified_claims,
-            verification_method=session.verification_method.value if session.verification_method else None,
+            verification_method=session.verification_method.value
+            if session.verification_method
+            else None,
             error=session.error_message,
             verified_at=session.verified_at.isoformat() if session.verified_at else None,
         )
-        
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid presentation data")
+
+    except VerificationSessionNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Verification session not found",
+        ) from exc
+    except VerificationSessionExpiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail="Verification session has expired",
+        ) from exc
+    except (VerificationSessionBusyError, VerificationSessionConflictError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Verification session submission conflicts",
+        ) from exc
+    except UnsupportedSessionPresentationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Session presentation cannot be bound to the verifier nonce",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid presentation data",
+        ) from exc
     except Exception as e:
         logger.error(f"Failed to submit presentation: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Presentation submission failed"
+            detail="Presentation submission failed",
         )
 
 
 @verification_router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(
-    session_id: str,
-    service: VerificationService = Depends(get_verification_service)
+    session_id: str, service: VerificationService = Depends(get_verification_service)
 ) -> SessionResponse:
     """Get a verification session."""
     session = await service.get_session(session_id)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-    
+
     return SessionResponse(
         id=session.id,
         organization_id=session.organization_id,
@@ -182,14 +215,15 @@ async def get_session(
         request_uri=session.request_uri or "",
         nonce=session.nonce or "",
         expires_at=session.expires_at.isoformat() if session.expires_at else "",
-        created_at=session.created_at.isoformat()
+        created_at=session.created_at.isoformat(),
     )
 
 
-@verification_router.post("/verify", response_model=VerificationResult, dependencies=[Depends(_verify_api_key)])
+@verification_router.post(
+    "/verify", response_model=VerificationResult, dependencies=[Depends(_verify_api_key)]
+)
 async def verify_presentation_direct(
-    request: VerifyDirectRequest,
-    service: VerificationService = Depends(get_verification_service)
+    request: VerifyDirectRequest, service: VerificationService = Depends(get_verification_service)
 ) -> VerificationResult:
     """Verify a presentation directly without creating a session (stateless)."""
     try:
@@ -198,26 +232,25 @@ async def verify_presentation_direct(
             presentation=request.presentation,
             presentation_definition=request.presentation_definition.dict(),
             verifier_did=request.verifier_did,
-            trusted_issuers=request.trusted_issuers
+            trusted_issuers=request.trusted_issuers,
         )
-        
+
         is_valid = result["valid"]
         return VerificationResult(
             valid=is_valid,
-            overall_result="PASS" if is_valid else "FAIL",
-            trust_chain_valid=is_valid,
-            revocation_checked=is_valid,
-            revocation_status="VALID" if is_valid else "SKIPPED",
-            verified_claims=result.get("verified_claims"),
+            overall_result=result.get("overall_result", "FAIL"),
+            trust_chain_valid=result.get("trust_chain_valid") is True,
+            revocation_checked=result.get("revocation_checked") is True,
+            revocation_status=result.get("revocation_status", "SKIPPED"),
+            verified_claims=result.get("verified_claims") if is_valid else {},
             verification_method=result.get("verification_method"),
             error=result.get("error"),
         )
-        
+
     except Exception as e:
         logger.error(f"Direct verification failed: {e}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Verification failed"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Verification failed"
         )
 
 
@@ -227,7 +260,11 @@ async def health_check() -> dict[str, str]:
     return {"status": "healthy"}
 
 
-@verification_router.post("/verify/vds-nc", response_model=VdsNcVerificationResult, dependencies=[Depends(_verify_api_key)])
+@verification_router.post(
+    "/verify/vds-nc",
+    response_model=VdsNcVerificationResult,
+    dependencies=[Depends(_verify_api_key)],
+)
 async def verify_vds_nc_barcode(
     request: VerifyVdsNcRequest,
     verifier: RustCredentialVerifier = Depends(get_credential_verifier),
@@ -256,7 +293,9 @@ async def verify_vds_nc_barcode(
                 algorithm=request.algorithm,
                 allow_public_fallback=request.allow_public_did_fallback,
             )
-            public_jwk = issuer_resolution.get("public_jwk") if isinstance(issuer_resolution, dict) else None
+            public_jwk = (
+                issuer_resolution.get("public_jwk") if isinstance(issuer_resolution, dict) else None
+            )
             if not isinstance(public_jwk, dict):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

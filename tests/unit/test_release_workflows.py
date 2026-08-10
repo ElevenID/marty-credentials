@@ -61,7 +61,7 @@ def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
     assert "sha256sum ./* > SHA256SUMS" not in IMAGES
     assert "43d14bc2b83dec42d39ecae14e916627a18bb661" not in IMAGES
     assert (
-        IMAGES.count("actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a")
+        IMAGES.count("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8")
         == 2
     )
 
@@ -103,7 +103,7 @@ def test_docker_actions_use_verified_node24_commits() -> None:
     assert "8d2750c68a42422c14e847fe6c8ac0403b4cbd6f" not in IMAGES
     assert "c94ce9fb468520275223c153574b00df6fe4bcc9" not in IMAGES
     assert IMAGES.count("docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c") == 2
-    assert IMAGES.count("docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0") == 2
+    assert IMAGES.count("docker/login-action@dbcb813823bdd20940b903addbd779551569679f") == 2
 
 
 def test_image_release_has_fail_closed_recovery_states() -> None:
