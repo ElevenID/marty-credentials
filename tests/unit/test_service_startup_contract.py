@@ -175,11 +175,32 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
         "macos-arm64",
         "windows-x86_64",
     }
+    verification_release = dependencies["marty-verification"]
+    assert verification_release["repository"] == "ElevenID/marty-core"
+    assert verification_release["tag"] == f"v{verification_release['version']}"
+    assert verification_release["asset"].startswith(
+        f"marty_verification_py-{verification_release['version']}-"
+    )
+    assert verification_release["commit"] == core_release["commit"]
+    assert set(verification_release["platform_assets"]) == {
+        "linux-x86_64",
+        "macos-arm64",
+        "windows-x86_64",
+    }
     core_revisions = {
         cargo["workspace"]["dependencies"][package]["rev"]
         for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
     }
-    assert core_revisions == {core_release["commit"]}
+    assert len(core_revisions) == 1
+    source_revision = core_revisions.pop()
+    assert len(source_revision) == 40
+
+    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert f"MARTY_CORE_REVISION: {source_revision}" in ci_workflow
+    assert "maturin build --release --compatibility off" in ci_workflow
+    assert "name: core-python-${{ runner.os }}" in ci_workflow
 
 
 def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
