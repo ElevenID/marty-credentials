@@ -236,14 +236,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          repository=$(jq -r '.["marty-rs"].repository' release/dependencies.json)
-          release_tag=$(jq -r '.["marty-rs"].tag' release/dependencies.json)
-          asset=$(jq -r '.["marty-rs"].asset' release/dependencies.json)
-          expected=$(jq -r '.["marty-rs"].sha256' release/dependencies.json)
-          mkdir release-deps
-          gh release download "$release_tag" --repo "$repository" --pattern "$asset" --dir release-deps
-          echo "$expected  release-deps/$asset" | sha256sum -c -
-          python -m pip install pytest==9.1.1 "release-deps/$asset"
+          python scripts/install_pinned_core.py --repository . --destination release-deps
+          python -m pip install pytest==9.1.1
           pip install -e .[dev]
           PYTHONPATH="$GITHUB_WORKSPACE/services" python -c \
             "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; from verification.application.rust_verifier import validate_marty_rs_capabilities as verification; issuance(); verification()"

@@ -2,9 +2,11 @@
 FROM python:3.12-slim-bookworm@sha256:8a7e7cc04fd3e2bd787f7f24e22d5d119aa590d429b50c95dfe12b3abe52f48b
 
 ARG MARTY_RS_SHA256
+ARG MARTY_VERIFICATION_SHA256
 ARG MARTY_MSF_SHA256
 ARG MARTY_COMMON_SHA256
 ARG MARTY_RS_WHEEL
+ARG MARTY_VERIFICATION_WHEEL
 ARG MARTY_MSF_WHEEL
 ARG MARTY_COMMON_WHEEL
 
@@ -20,6 +22,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 COPY release-deps /release-deps
 RUN echo "${MARTY_RS_SHA256}  /release-deps/${MARTY_RS_WHEEL}" | sha256sum -c - \
+    && echo "${MARTY_VERIFICATION_SHA256}  /release-deps/${MARTY_VERIFICATION_WHEEL}" | sha256sum -c - \
     && echo "${MARTY_MSF_SHA256}  /release-deps/${MARTY_MSF_WHEEL}" | sha256sum -c - \
     && echo "${MARTY_COMMON_SHA256}  /release-deps/${MARTY_COMMON_WHEEL}" | sha256sum -c - \
     && pip install --no-cache-dir /release-deps/*.whl \

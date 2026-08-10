@@ -28,7 +28,9 @@ def test_issuance_module_runs_the_created_app_without_development_reload() -> No
     production_call = calls[-1]
     assert isinstance(production_call.args[0], ast.Name)
     assert production_call.args[0].id == "app"
-    reload_keyword = next(keyword for keyword in production_call.keywords if keyword.arg == "reload")
+    reload_keyword = next(
+        keyword for keyword in production_call.keywords if keyword.arg == "reload"
+    )
     assert isinstance(reload_keyword.value, ast.Constant)
     assert reload_keyword.value.value is False
 
@@ -95,7 +97,9 @@ def test_native_extension_capability_contract_rejects_incomplete_module(monkeypa
         rust_integration.validate_marty_rs_capabilities()
 
 
-def test_native_extension_capability_contract_requires_remote_mdoc_split_signing(monkeypatch) -> None:
+def test_native_extension_capability_contract_requires_remote_mdoc_split_signing(
+    monkeypatch,
+) -> None:
     from issuance.application import rust_integration
 
     incomplete_module = SimpleNamespace(
@@ -179,29 +183,26 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
 
 
 def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(encoding="utf-8")
     verification_image = (ROOT / "services" / "verification" / "Dockerfile").read_text(
         encoding="utf-8"
     )
 
-    dependency_loop = "for dependency in marty-rs marty-msf marty-common; do"
+    dependency_loop = "for dependency in marty-rs marty-verification marty-msf marty-common; do"
     assert dependency_loop in workflow
     assert "draft-release.json" not in workflow
     assert "Draft must contain exactly one Linux x86_64 marty-rs wheel" not in workflow
     assert "marty_rs_asset_id" not in workflow
     assert "marty_rs_sha256=$(jq -r" in workflow
+    assert "marty_verification_sha256=$(jq -r" in workflow
     assert "COPY python/marty_credentials /app/marty_credentials" in verification_image
+    assert "ARG MARTY_VERIFICATION_WHEEL" in verification_image
+    assert "ARG MARTY_VERIFICATION_SHA256" in verification_image
     assert "validate_marty_rs_capabilities()" in verification_image
 
 
 def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
-        "project"
-    ]
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
-    assert not any(
-        dependency.startswith("marty-rs") for dependency in project["dependencies"]
-    )
+    assert not any(dependency.startswith("marty-rs") for dependency in project["dependencies"])
     assert project["optional-dependencies"]["ffi"] == []
