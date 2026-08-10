@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from marty_credentials.adapters.adapters.credentials.multipaz import MultipazKeyManager
 from marty_credentials.adapters.services import issuance_service, verification_service
 from marty_credentials.native_backend import (
     NativeBackendUnavailable,
@@ -16,6 +17,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVICE_FILES = (
     ROOT / "python/marty_credentials/adapters/services/issuance_service.py",
     ROOT / "python/marty_credentials/adapters/services/verification_service.py",
+)
+RETIRED_OR_NATIVE_KERNEL_FILES = SERVICE_FILES + (
+    ROOT / "services/issuance/application/key_attestation.py",
+    ROOT / "services/issuance/application/oid4vci_client_auth.py",
+    ROOT / "python/marty_credentials/adapters/adapters/credentials/multipaz.py",
 )
 
 
@@ -29,8 +35,36 @@ def test_service_kernels_do_not_import_python_crypto_or_legacy_native_package() 
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported_modules.add(node.module)
 
-    assert not any(name == "cryptography" or name.startswith("cryptography.") for name in imported_modules)
+    assert not any(
+        name == "cryptography" or name.startswith("cryptography.") for name in imported_modules
+    )
     assert "marty_verification_py" not in imported_modules
+
+
+def test_remaining_jwt_and_mdoc_kernels_do_not_import_python_crypto() -> None:
+    for path in RETIRED_OR_NATIVE_KERNEL_FILES:
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imported_modules = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        imported_modules.update(
+            node.module
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        )
+        assert not any(
+            name == "cryptography" or name.startswith("cryptography.") for name in imported_modules
+        ), path
+        assert "cbor2" not in imported_modules, path
+
+
+def test_retired_multipaz_python_crypto_adapter_fails_closed() -> None:
+    with pytest.raises(NativeOperationError, match="canonical Rust mDoc"):
+        MultipazKeyManager()
 
 
 def test_verification_loader_rejects_missing_capability(monkeypatch) -> None:

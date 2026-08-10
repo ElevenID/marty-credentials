@@ -11,7 +11,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from marty_credentials.native_backend import require_marty_rs
+from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_verify_pkce_s256",
         "oid4vci_verify_proof_jwt",
         "oid4vci_verify_key_attestation_bound_proof_jwt",
+        "oid4vci_verify_compact_jwt",
         "prepare_vcdm_data_integrity_credential",
     }
 )
@@ -302,9 +303,7 @@ async def create_jwt_vc_with_remote_signing(
         # object and require its own issuer identifier and validity period.
         "issuer": issuer_did,
         "validFrom": datetime.fromtimestamp(now, UTC).isoformat().replace("+00:00", "Z"),
-        "validUntil": datetime.fromtimestamp(
-            now + int(expiration_seconds or 31536000), UTC
-        )
+        "validUntil": datetime.fromtimestamp(now + int(expiration_seconds or 31536000), UTC)
         .isoformat()
         .replace("+00:00", "Z"),
         "credentialSubject": subject,
@@ -488,9 +487,7 @@ async def create_vcdm_data_integrity_with_remote_signing(
     credential_status = claims.pop("credentialStatus", None)
     if credential_document is not None:
         if credential_subject is not None or claims:
-            raise RuntimeError(
-                "credential_document cannot be combined with subject claims"
-            )
+            raise RuntimeError("credential_document cannot be combined with subject claims")
         # JSON round-tripping gives the signing engine a private, JSON-only
         # document snapshot and prevents caller mutation during async signing.
         credential = json.loads(_json_dumps_compact(credential_document))
@@ -499,51 +496,33 @@ async def create_vcdm_data_integrity_with_remote_signing(
         if "proof" in credential:
             raise RuntimeError("credential_document must be unsigned")
         context = credential.get("@context")
-        if (
-            not isinstance(context, list)
-            or not context
-            or context[0] != _VCDM_CONTEXT
-        ):
-            raise RuntimeError(
-                "credential_document must use the VCDM v2 base context first"
-            )
+        if not isinstance(context, list) or not context or context[0] != _VCDM_CONTEXT:
+            raise RuntimeError("credential_document must use the VCDM v2 base context first")
         credential_types = credential.get("type")
         credential_types = (
-            credential_types
-            if isinstance(credential_types, list)
-            else [credential_types]
+            credential_types if isinstance(credential_types, list) else [credential_types]
         )
         if "VerifiableCredential" not in credential_types:
-            raise RuntimeError(
-                "credential_document type must include VerifiableCredential"
-            )
+            raise RuntimeError("credential_document type must include VerifiableCredential")
         subject = credential.get("credentialSubject")
         subject_values = subject if isinstance(subject, list) else [subject]
         if not subject_values or not all(
             isinstance(item, dict) and item for item in subject_values
         ):
-            raise RuntimeError(
-                "credential_document must contain a non-empty credentialSubject"
-            )
+            raise RuntimeError("credential_document must contain a non-empty credentialSubject")
         document_issuer = credential.get("issuer")
         document_issuer_id = (
-            document_issuer.get("id")
-            if isinstance(document_issuer, dict)
-            else document_issuer
+            document_issuer.get("id") if isinstance(document_issuer, dict) else document_issuer
         )
         if document_issuer_id is None:
             credential["issuer"] = issuer_did
         elif document_issuer_id != issuer_did:
-            raise RuntimeError(
-                "credential_document issuer does not match the resolved issuer DID"
-            )
+            raise RuntimeError("credential_document issuer does not match the resolved issuer DID")
         document_id = credential.get("id")
         if document_id is None:
             credential["id"] = credential_id
         elif document_id != credential_id:
-            raise RuntimeError(
-                "credential_document id does not match the reserved credential ID"
-            )
+            raise RuntimeError("credential_document id does not match the reserved credential ID")
         now = datetime.now(UTC)
         credential.setdefault("validFrom", now.isoformat().replace("+00:00", "Z"))
         credential.setdefault(
@@ -640,9 +619,7 @@ async def create_vcdm_data_integrity_with_remote_signing(
     completed = json.loads(completed_json)
     completed_issuer = completed.get("issuer") if isinstance(completed, dict) else None
     completed_issuer_id = (
-        completed_issuer.get("id")
-        if isinstance(completed_issuer, dict)
-        else completed_issuer
+        completed_issuer.get("id") if isinstance(completed_issuer, dict) else completed_issuer
     )
     if (
         not isinstance(completed, dict)
@@ -848,6 +825,27 @@ def verify_key_attestation_bound_proof_jwt(
     except Exception as e:
         return False, "", None, f"key-attestation-bound proof JWT error: {e}"
 
+
+def verify_compact_jwt(
+    compact_jwt: str,
+    public_jwk: dict[str, Any],
+    expected_algorithm: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify a compact JWT signature through the canonical Rust backend."""
+    marty_rs = get_marty_rs()
+    try:
+        header_json, claims_json = marty_rs.oid4vci_verify_compact_jwt(
+            compact_jwt,
+            json.dumps(public_jwk, separators=(",", ":"), sort_keys=True),
+            expected_algorithm,
+        )
+        header = json.loads(header_json)
+        claims = json.loads(claims_json)
+    except (RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise NativeOperationError("compact JWT verification failed") from exc
+    if not isinstance(header, dict) or not isinstance(claims, dict):
+        raise NativeOperationError("native compact JWT verification returned invalid JSON")
+    return header, claims
 
 
 # ---------------------------------------------------------------------------

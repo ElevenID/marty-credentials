@@ -150,25 +150,19 @@ Update documentation:
 
 ## Known Issues / Future Work
 
-### 1. **marty-bindings Crate Missing**
+### 1. **Canonical Native Release Required**
 
-**Current State**: Using temporary marty-rs from marty-credentials  
-**Required**: Create `marty-core/marty-bindings/` crate with PyO3 bindings
+`marty-core/marty-bindings` (`marty-rs`) and `marty-verification` are now the
+authoritative Python-facing native backends. Production and CI install both
+checksum-pinned wheels from the same immutable `marty-core` release. Missing or
+incompatible bindings fail startup with typed native-backend errors; native
+operation failures are also typed and never invoke Python cryptographic
+fallbacks.
 
-```bash
-# TODO: Create new crate
-cd marty-core
-cargo new --lib marty-bindings
-# Add to marty-core/Cargo.toml workspace members
-# Implement PyO3 bindings wrapping marty-crypto, marty-verification
-```
-
-**Dockerfile update needed** (already commented in Dockerfile):
-```dockerfile
-# Once marty-bindings exists:
-WORKDIR /build/marty-core/marty-bindings
-RUN maturin build --release --out /wheels
-```
+The next release must publish version `0.1.39` wheels for Linux x86_64, macOS
+arm64, and Windows x86_64. Replace release-manifest placeholders with hashes
+computed from the published assets before enabling the downstream production
+builds.
 
 ### 2. **MMF Gateway Adapters Missing**
 
@@ -206,8 +200,8 @@ Add:
 - Ready for Kong/Consul integration
 
 ✅ **Production Readiness**
-- No mock/fallback code
-- Proper error handling (raises ImportError if bindings missing)
+- No cryptographic or protocol fallback code
+- Typed, fail-closed native backend and operation errors
 - Health checks
 - Connection pooling
 - Graceful shutdown
