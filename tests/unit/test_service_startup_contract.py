@@ -115,6 +115,86 @@ def test_native_extension_capability_contract_requires_remote_mdoc_split_signing
         rust_integration.validate_marty_rs_capabilities()
 
 
+def test_native_extension_contract_requires_remote_jwt_prepare_and_assemble() -> None:
+    from issuance.application import rust_integration
+
+    assert {
+        "oid4vci_prepare_sd_jwt",
+        "oid4vci_assemble_sd_jwt",
+        "oid4vci_prepare_jwt_vc",
+        "oid4vci_assemble_jwt_vc",
+    }.issubset(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
+
+    source = (ROOT / "services/issuance/application/rust_integration.py").read_text(
+        encoding="utf-8"
+    )
+    sd_jwt_body = source.split(
+        "async def create_sd_jwt_vc_with_remote_signing", 1
+    )[1].split("async def create_jwt_vc_with_remote_signing", 1)[0]
+    jwt_vc_body = source.split("async def create_jwt_vc_with_remote_signing", 1)[1].split(
+        "_PRIVATE_JWK_MEMBERS", 1
+    )[0]
+    for prohibited in ("hashlib", "secrets.token_bytes", "encoded_header", "encoded_payload"):
+        assert prohibited not in sd_jwt_body
+        assert prohibited not in jwt_vc_body
+
+
+@pytest.mark.asyncio
+async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    calls: list[tuple[str, object]] = []
+
+    class Extension:
+        def oid4vci_prepare_sd_jwt(self, *args):
+            calls.append(("prepare_sd_jwt", args))
+            return SimpleNamespace(signing_input="sd.header.payload")
+
+        def oid4vci_assemble_sd_jwt(self, prepared, signature):
+            calls.append(("assemble_sd_jwt", (prepared, signature)))
+            return "sd.header.payload.AQID~", "urn:uuid:sd"
+
+        def oid4vci_prepare_jwt_vc(self, *args):
+            calls.append(("prepare_jwt_vc", args))
+            return SimpleNamespace(signing_input="jwt.header.payload")
+
+        def oid4vci_assemble_jwt_vc(self, prepared, signature):
+            calls.append(("assemble_jwt_vc", (prepared, signature)))
+            return "jwt.header.payload.AQID", "urn:uuid:jwt"
+
+    async def remote_sign(message: bytes, algorithm: str | None):
+        calls.append(("sign", (message, algorithm)))
+        return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
+
+    sd_jwt = await rust_integration.create_sd_jwt_vc_with_remote_signing(
+        issuer_did="did:web:issuer.example",
+        remote_sign=remote_sign,
+        subject_id="did:key:holder",
+        credential_type="AccessBadge",
+        claims_json='{"name":"Alice"}',
+        algorithm="ES256",
+        verification_method_id="did:web:issuer.example#key-1",
+    )
+    jwt_vc = await rust_integration.create_jwt_vc_with_remote_signing(
+        issuer_did="did:web:issuer.example",
+        remote_sign=remote_sign,
+        subject_id="did:key:holder",
+        credential_type="AccessBadge",
+        claims_json='{"name":"Alice"}',
+        algorithm="ES256",
+        verification_method_id="did:web:issuer.example#key-1",
+    )
+
+    assert sd_jwt == ("sd.header.payload.AQID~", "urn:uuid:sd")
+    assert jwt_vc == ("jwt.header.payload.AQID", "urn:uuid:jwt")
+    assert ("sign", (b"sd.header.payload", "ES256")) in calls
+    assert ("sign", (b"jwt.header.payload", "ES256")) in calls
+    assert any(name == "assemble_sd_jwt" for name, _ in calls)
+    assert any(name == "assemble_jwt_vc" for name, _ in calls)
+
+
 def test_key_attestation_binding_passes_only_the_exact_validated_token(monkeypatch) -> None:
     from issuance.application import rust_integration
 
