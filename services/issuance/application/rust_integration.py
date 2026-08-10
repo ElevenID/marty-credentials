@@ -7,7 +7,7 @@ import logging
 import os
 import secrets
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -87,6 +87,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         # It requires the authoritative marty-core prepare/sign/assemble split
         # so the KMS signs the exact COSE payload remotely.
         "oid4vci_prepare_mdoc",
+        "oid4vci_normalize_ecdsa_signature",
         "oid4vci_assemble_mdoc",
         "oid4vci_create_authorization_response",
         "oid4vci_create_credential_offer",
@@ -96,6 +97,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_verify_proof_jwt",
         "oid4vci_verify_key_attestation_bound_proof_jwt",
         "oid4vci_verify_compact_jwt",
+        "oid4vci_verify_detached_signature",
         "prepare_vcdm_data_integrity_credential",
     }
 )
@@ -846,6 +848,38 @@ def verify_compact_jwt(
     if not isinstance(header, dict) or not isinstance(claims, dict):
         raise NativeOperationError("native compact JWT verification returned invalid JSON")
     return header, claims
+
+
+def verify_detached_signature(
+    message: bytes,
+    signature: bytes,
+    public_jwk: Mapping[str, Any],
+    expected_algorithm: str,
+) -> bool:
+    """Verify a provider/KMS signature through the canonical Rust backend."""
+    marty_rs = get_marty_rs()
+    try:
+        return bool(
+            marty_rs.oid4vci_verify_detached_signature(
+                message,
+                signature,
+                json.dumps(dict(public_jwk), separators=(",", ":"), sort_keys=True),
+                expected_algorithm,
+            )
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError("detached signature verification failed") from exc
+
+
+def normalize_ecdsa_signature(signature: bytes, expected_algorithm: str) -> bytes:
+    """Normalize a provider ECDSA signature in the canonical Rust backend."""
+    marty_rs = get_marty_rs()
+    try:
+        return bytes(
+            marty_rs.oid4vci_normalize_ecdsa_signature(signature, expected_algorithm)
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError("ECDSA signature normalization failed") from exc
 
 
 # ---------------------------------------------------------------------------

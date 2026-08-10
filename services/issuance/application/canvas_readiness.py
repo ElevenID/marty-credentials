@@ -25,11 +25,6 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import (
-    encode_dss_signature,
-)
 from issuance.application.canvas_feature_flags import (
     portable_canvas_enabled_for_organization,
 )
@@ -38,6 +33,7 @@ from issuance.application.canvas_oauth import (
     CANVAS_OAUTH_CAPABILITY_SCOPES,
     canvas_oauth_scopes_for_capabilities,
 )
+from issuance.application.rust_integration import verify_detached_signature
 from issuance.domain.entities import (
     ApplicationTemplate,
     CanvasEvidenceFactType,
@@ -500,14 +496,7 @@ def _b64url_decode(value: str) -> bytes:
     return base64.urlsafe_b64decode(encoded + b"=" * ((4 - len(encoded) % 4) % 4))
 
 
-def _b64url_uint(value: Any) -> int:
-    raw = _b64url_decode(_string(value))
-    if not raw:
-        raise ValueError("JWK integer is empty")
-    return int.from_bytes(raw, "big")
-
-
-def _public_key_from_jwk(jwk: Mapping[str, Any], algorithm: str) -> Any:
+def _validate_public_jwk_policy(jwk: Mapping[str, Any], algorithm: str) -> None:
     if _PRIVATE_JWK_FIELDS.intersection(jwk):
         raise ValueError("DID resolver returned private JWK material")
     key_type = _string(jwk.get("kty"))
@@ -518,30 +507,18 @@ def _public_key_from_jwk(jwk: Mapping[str, Any], algorithm: str) -> Any:
     if algorithm == "RS256":
         if key_type != "RSA":
             raise ValueError("RS256 requires an RSA DID verification key")
-        return rsa.RSAPublicNumbers(
-            e=_b64url_uint(jwk.get("e")),
-            n=_b64url_uint(jwk.get("n")),
-        ).public_key()
+        return
 
     if algorithm in {"ES256", "ES384"}:
         expected_curve = "P-256" if algorithm == "ES256" else "P-384"
-        curve: ec.EllipticCurve = (
-            ec.SECP256R1() if algorithm == "ES256" else ec.SECP384R1()
-        )
         if key_type != "EC" or _string(jwk.get("crv")) != expected_curve:
             raise ValueError(f"{algorithm} requires an {expected_curve} DID verification key")
-        return ec.EllipticCurvePublicNumbers(
-            x=_b64url_uint(jwk.get("x")),
-            y=_b64url_uint(jwk.get("y")),
-            curve=curve,
-        ).public_key()
+        return
 
     if algorithm == "EdDSA":
         if key_type != "OKP" or _string(jwk.get("crv")) != "Ed25519":
             raise ValueError("EdDSA requires an Ed25519 DID verification key")
-        return ed25519.Ed25519PublicKey.from_public_bytes(
-            _b64url_decode(_string(jwk.get("x")))
-        )
+        return
 
     raise ValueError("Unsupported issuer algorithm")
 
@@ -553,24 +530,9 @@ def _verify_challenge_signature(
     payload: bytes,
     signature: bytes,
 ) -> None:
-    key = _public_key_from_jwk(public_jwk, algorithm)
-    if algorithm == "RS256":
-        key.verify(signature, payload, padding.PKCS1v15(), hashes.SHA256())
-        return
-    if algorithm in {"ES256", "ES384"}:
-        coordinate_bytes = 32 if algorithm == "ES256" else 48
-        if len(signature) == coordinate_bytes * 2:
-            signature = encode_dss_signature(
-                int.from_bytes(signature[:coordinate_bytes], "big"),
-                int.from_bytes(signature[coordinate_bytes:], "big"),
-            )
-        digest = hashes.SHA256() if algorithm == "ES256" else hashes.SHA384()
-        key.verify(signature, payload, ec.ECDSA(digest))
-        return
-    if algorithm == "EdDSA":
-        key.verify(signature, payload)
-        return
-    raise ValueError("Unsupported issuer algorithm")
+    _validate_public_jwk_policy(public_jwk, algorithm)
+    if not verify_detached_signature(payload, signature, public_jwk, algorithm):
+        raise ValueError("Issuer challenge signature verification failed")
 
 
 def _did_publishes_verification_method(

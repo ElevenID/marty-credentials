@@ -20,7 +20,6 @@ from typing import Any, Literal
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
-from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from fastapi import (
     APIRouter,
     Depends,
@@ -60,6 +59,7 @@ from issuance.application.rust_integration import (
     didcomm_extract_endpoint,
     didcomm_pack_credential,
     didcomm_resolve_did,
+    normalize_ecdsa_signature,
     oid4vci_create_authorization_response,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
@@ -565,22 +565,15 @@ def _remote_mdoc_signature_raw(signature: dict[str, Any], algorithm: str) -> byt
     padded = encoded + "=" * (-len(encoded) % 4)
     raw = base64.urlsafe_b64decode(padded)
     encoding = str(signature.get("signature_encoding") or "").lower()
-    coordinate_length = {"ES256": 32, "ES384": 48}.get(algorithm.upper())
-    if coordinate_length is None:
+    normalized_algorithm = algorithm.upper()
+    if normalized_algorithm not in {"ES256", "ES384"}:
         raise RuntimeError(f"Unsupported remote mDoc algorithm {algorithm!r}")
-    if encoding in {"raw_ieee_p1363", "raw", "ieee_p1363"}:
-        if len(raw) == coordinate_length * 2:
-            return raw
-        raise RuntimeError(f"Invalid {algorithm} P1363 signature length for remote mDoc signing")
-    if encoding != "der":
+    if encoding not in {"raw_ieee_p1363", "raw", "ieee_p1363", "der"}:
         raise RuntimeError(f"Unsupported remote mDoc signature encoding {encoding!r}")
     try:
-        r, s = decode_dss_signature(raw)
-    except ValueError as exc:
-        raise RuntimeError("Remote mDoc signature is not valid DER ECDSA") from exc
-    if r.bit_length() > coordinate_length * 8 or s.bit_length() > coordinate_length * 8:
-        raise RuntimeError(f"Invalid {algorithm} DER signature coordinate for remote mDoc signing")
-    return r.to_bytes(coordinate_length, "big") + s.to_bytes(coordinate_length, "big")
+        return normalize_ecdsa_signature(raw, normalized_algorithm)
+    except NativeOperationError as exc:
+        raise RuntimeError("Remote mDoc signature encoding is invalid") from exc
 
 
 async def apply_remote_issuer_context(

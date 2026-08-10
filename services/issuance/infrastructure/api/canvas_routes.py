@@ -15,8 +15,6 @@ from typing import Annotated, Any, Literal, Protocol
 from urllib.parse import quote, urlencode, urljoin, urlparse
 
 import httpx
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from issuance.application.application_approval import (
     approve_application_for_issuance,
@@ -94,6 +92,7 @@ from issuance.application.mip_integration_primitives import (
 )
 from issuance.application.rust_integration import (
     verify_canvas_lti_launch,
+    verify_compact_jwt,
 )
 from issuance.domain.entities import (
     Application,
@@ -1867,13 +1866,6 @@ def _json_b64url(value: dict[str, Any]) -> str:
     return _b64url_encode(json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
 
-def _jwk_uint(jwk: dict[str, Any], field: str) -> int:
-    value = jwk.get(field)
-    if not isinstance(value, str) or not value.strip():
-        raise HTTPException(status_code=409, detail=f"Canvas LTI tool signing JWK is missing {field}")
-    return int.from_bytes(_b64url_decode(value), "big")
-
-
 _RSA_PRIVATE_JWK_FIELDS = {"d", "p", "q", "dp", "dq", "qi", "oth"}
 
 
@@ -2053,7 +2045,7 @@ async def _lti_tool_signing_challenge_ready() -> bool:
     try:
         signer = _tool_jwt_signer()
         token = await signer.sign_jwt(payload)
-        encoded_header, encoded_payload, encoded_signature = token.split(".")
+        encoded_header, encoded_payload, _encoded_signature = token.split(".")
         header = json.loads(_b64url_decode(encoded_header))
         signed_payload = json.loads(_b64url_decode(encoded_payload))
         if (
@@ -2082,17 +2074,8 @@ async def _lti_tool_signing_challenge_ready() -> bool:
             or jwk.get("use") not in {None, "sig"}
         ):
             return False
-        public_key = rsa.RSAPublicNumbers(
-            e=_jwk_uint(jwk, "e"),
-            n=_jwk_uint(jwk, "n"),
-        ).public_key()
-        public_key.verify(
-            _b64url_decode(encoded_signature),
-            f"{encoded_header}.{encoded_payload}".encode("ascii"),
-            padding.PKCS1v15(),
-            hashes.SHA256(),
-        )
-        return True
+        verified_header, verified_payload = verify_compact_jwt(token, jwk, "RS256")
+        return verified_header == header and verified_payload == payload
     except Exception:  # noqa: BLE001 - every signer/configuration failure blocks readiness
         return False
 
