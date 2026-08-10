@@ -13,6 +13,7 @@ repository = "https://github.com/ElevenID/marty-credentials"
 # Core crates from marty-core
 marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a", features = ["sod-builder"] }
 marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "5d8e98ac90100139e48aa2cb436158f07d79bc2a", default-features = false }
+marty-core-bindings = { package = "marty-bindings", git = "https://github.com/ElevenID/marty-core", rev = "cd501c6621dce4b8b04a3bdf791818683c6c114e", default-features = false }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
