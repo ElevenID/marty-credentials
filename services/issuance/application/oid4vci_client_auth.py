@@ -15,15 +15,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from issuance.application.rust_integration import verify_compact_jwt
+from marty_credentials.native_backend import (
+    NativeOperationError,
+    require_marty_verification,
+)
 
 JWT_BEARER_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 _ALLOWED_PUBLIC_JWK_FIELDS = frozenset({"alg", "crv", "key_ops", "kid", "kty", "use", "x", "y"})
 _CLOCK_SKEW_SECONDS = 60
 _MAX_ASSERTION_LIFETIME_SECONDS = 300
+
+_marty_verification = require_marty_verification(("p256_public_jwk_to_pem",))
 
 
 class ClientAuthenticationError(ValueError):
@@ -70,27 +73,6 @@ def _decode_base64url(value: str, *, field: str) -> bytes:
         )
     except (ValueError, TypeError) as exc:
         raise ClientAuthenticationError(f"{field} is not valid base64url") from exc
-    return decoded
-
-
-def _decode_json_segment(value: str, *, field: str) -> dict[str, Any]:
-    def reject_duplicate_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name, member in pairs:
-            if name in result:
-                raise ClientAuthenticationError(f"{field} contains duplicate members")
-            result[name] = member
-        return result
-
-    try:
-        decoded = json.loads(
-            _decode_base64url(value, field=field),
-            object_pairs_hook=reject_duplicate_members,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ClientAuthenticationError(f"{field} is not valid JSON") from exc
-    if not isinstance(decoded, dict):
-        raise ClientAuthenticationError(f"{field} must be a JSON object")
     return decoded
 
 
@@ -144,12 +126,10 @@ def normalize_public_client_jwks(jwks: dict[str, Any]) -> dict[str, list[dict[st
                 f"jwks.keys[{index}] P-256 coordinates must be 32 bytes"
             )
         try:
-            ec.EllipticCurvePublicNumbers(
-                int.from_bytes(x, "big"),
-                int.from_bytes(y, "big"),
-                ec.SECP256R1(),
-            ).public_key()
-        except ValueError as exc:
+            _marty_verification.p256_public_jwk_to_pem(
+                json.dumps(raw_key, separators=(",", ":"), sort_keys=True)
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
             raise ClientAuthenticationError(
                 f"jwks.keys[{index}] is not a valid P-256 public key"
             ) from exc
@@ -204,46 +184,27 @@ def verify_private_key_jwt(
     parts = assertion.split(".")
     if len(parts) != 3 or not all(parts):
         raise ClientAuthenticationError("client_assertion must be a compact JWT")
-    encoded_header, encoded_claims, encoded_signature = parts
-    header = _decode_json_segment(encoded_header, field="client assertion header")
-    claims = _decode_json_segment(encoded_claims, field="client assertion claims")
-
-    if header.get("alg") != "ES256":
-        raise ClientAuthenticationError("client assertion must use ES256")
+    normalized_jwks = normalize_public_client_jwks(public_jwks)
+    verified_candidates: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    for key in normalized_jwks["keys"]:
+        try:
+            header, claims = verify_compact_jwt(assertion, key, "ES256")
+        except NativeOperationError:
+            continue
+        if header.get("kid") == key["kid"]:
+            verified_candidates.append((header, claims, key))
+    if len(verified_candidates) != 1:
+        raise ClientAuthenticationError(
+            "client assertion signature verification failed or JWT is malformed"
+        )
+    header, claims, key = verified_candidates[0]
     if "jwk" in header or "jku" in header or "x5u" in header:
         raise ClientAuthenticationError("client assertion must select a registered key by kid")
     if header.get("crit") or header.get("b64") is False:
         raise ClientAuthenticationError("client assertion uses unsupported JOSE extensions")
     if header.get("typ") not in (None, "JWT"):
         raise ClientAuthenticationError("client assertion typ must be JWT when present")
-    key_id = header.get("kid")
-    if not isinstance(key_id, str) or not key_id:
-        raise ClientAuthenticationError("client assertion kid is required")
-
-    normalized_jwks = normalize_public_client_jwks(public_jwks)
-    matching_keys = [key for key in normalized_jwks["keys"] if key["kid"] == key_id]
-    if len(matching_keys) != 1:
-        raise ClientAuthenticationError("client assertion kid is not registered")
-    key = matching_keys[0]
-    signature = _decode_base64url(encoded_signature, field="client assertion signature")
-    if len(signature) != 64:
-        raise ClientAuthenticationError("client assertion has an invalid ES256 signature")
-    public_key = ec.EllipticCurvePublicNumbers(
-        int.from_bytes(_decode_base64url(key["x"], field="registered jwk x"), "big"),
-        int.from_bytes(_decode_base64url(key["y"], field="registered jwk y"), "big"),
-        ec.SECP256R1(),
-    ).public_key()
-    try:
-        public_key.verify(
-            encode_dss_signature(
-                int.from_bytes(signature[:32], "big"),
-                int.from_bytes(signature[32:], "big"),
-            ),
-            f"{encoded_header}.{encoded_claims}".encode("ascii"),
-            ec.ECDSA(hashes.SHA256()),
-        )
-    except InvalidSignature as exc:
-        raise ClientAuthenticationError("client assertion signature verification failed") from exc
+    key_id = key["kid"]
 
     if claims.get("iss") != client_id or claims.get("sub") != client_id:
         raise ClientAuthenticationError(

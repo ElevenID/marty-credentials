@@ -73,24 +73,30 @@ def test_release_tool_installs_are_version_pinned() -> None:
     assert "cargo install cargo-cyclonedx --version 0.5.9 --locked" in STABLE
     assert "cargo install git-cliff --version 2.13.1 --locked" in STABLE
     assert "python -m pip install build==1.5.0" in STABLE
-    assert 'python -m pip install pytest==9.1.1 "release-deps/$asset"' in STABLE
+    assert (
+        "python scripts/install_pinned_core.py --repository . --destination release-deps" in STABLE
+    )
+    assert "python -m pip install pytest==9.1.1" in STABLE
     assert "hatchling==1.31.0" in PYPROJECT
     assert "hatch-vcs==0.5.0" in PYPROJECT
     assert "maturin==1.14.1" in PYPROJECT
 
 
 def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
-    wheel_matrix = STABLE.split("  build-python-wheels:", 1)[1].split(
-        "\n  build-wasm:", 1
-    )[0]
+    wheel_matrix = STABLE.split("  build-python-wheels:", 1)[1].split("\n  build-wasm:", 1)[0]
     assert "- os: ubuntu-latest\n            target: aarch64" in wheel_matrix
 
 
-def test_ci_authenticates_pinned_core_release_downloads() -> None:
+def test_ci_installs_exact_source_built_core_artifacts() -> None:
     install_step = CI.split("      - name: Install dependencies", 1)[1].split(
         "\n      - name: Install Python package", 1
     )[0]
-    assert "GH_TOKEN: ${{ github.token }}" in install_step
+    assert "release-deps" in install_step
+    assert "len(wheels) == 2" in install_step
+    assert "install_pinned_core.py" not in install_step
+    assert "ref: ${{ env.MARTY_CORE_REVISION }}" in CI
+    assert "marty-core/marty-bindings/Cargo.toml" in CI
+    assert "marty-core/marty-verification/Cargo.toml" in CI
 
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:

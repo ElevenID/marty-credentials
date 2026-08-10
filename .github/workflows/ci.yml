@@ -10,6 +10,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  MARTY_CORE_REVISION: 5b6d1fe711625e2d8048f3348e0edfc5cdde1d5b
 
 jobs:
   test-rust:
@@ -256,8 +257,61 @@ jobs:
         working-directory: marty-credentials
         run: docker compose --file docker-compose.issuance-idempotency-contract.yml down --volumes --remove-orphans
 
+  build-core-python-wheels:
+    name: Core Python Wheels
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-core
+          ref: ${{ env.MARTY_CORE_REVISION }}
+          path: marty-core
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+
+      - name: Cache Core build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            marty-core/target
+          key: ${{ runner.os }}-core-python-${{ env.MARTY_CORE_REVISION }}
+
+      - name: Build exact pinned Core wheels
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin==1.14.1
+          maturin build --release --compatibility off --manifest-path marty-core/marty-bindings/Cargo.toml --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core/marty-verification/Cargo.toml --out core-wheels
+
+      - name: Require both native distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find core-wheels -maxdepth 1 -name 'marty_rs-*.whl' | wc -l)" -eq 1
+          test "$(find core-wheels -maxdepth 1 -name 'marty_verification_py-*.whl' | wc -l)" -eq 1
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: core-python-${{ runner.os }}
+          path: core-wheels/*.whl
+          if-no-files-found: error
+          retention-days: 2
+
   test-python:
     name: Python Tests
+    needs: build-core-python-wheels
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -274,14 +328,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: core-python-${{ runner.os }}
+          path: marty-credentials/release-deps
+
       - name: Install dependencies
         working-directory: marty-credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           pip install --upgrade pip
           pip install pytest pytest-asyncio
-          python scripts/install_pinned_core.py --repository . --destination release-deps
+          python -c "import pathlib, subprocess, sys; wheels = sorted(map(str, pathlib.Path('release-deps').glob('*.whl'))); assert len(wheels) == 2, wheels; subprocess.run([sys.executable, '-m', 'pip', 'install', *wheels], check=True)"
 
       - name: Install Python package
         working-directory: marty-credentials

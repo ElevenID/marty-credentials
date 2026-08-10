@@ -184,7 +184,7 @@ def test_verify_private_key_jwt_rejects_signature_from_another_key() -> None:
             },
             "exp must be after iat",
         ),
-        ({"exp": float("nan")}, "exp must be a NumericDate"),
+        ({"exp": float("nan")}, "JWT is malformed"),
         ({"nbf": int((NOW + timedelta(minutes=2)).timestamp())}, "not yet valid"),
         ({"jti": ""}, "jti is required"),
     ],

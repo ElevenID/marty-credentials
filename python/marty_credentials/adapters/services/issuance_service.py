@@ -1,32 +1,25 @@
 """Issuance service for creating digital identity credentials"""
 import json
 import time
-from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy.orm import Session
 
-from marty_credentials.native_backend import require_marty_rs
-
-_marty_rs = require_marty_rs()
-
-# Import Open Badges from marty_verification_py
-try:
-    from marty_verification_py import (
-        open_badge_ob2_issue,
-        open_badge_ob3_issue,
-    )
-    OPEN_BADGES_AVAILABLE = True
-except ImportError:
-    OPEN_BADGES_AVAILABLE = False
-    open_badge_ob2_issue = None
-    open_badge_ob3_issue = None
-
 from marty_credentials.adapters.persistence.models import (
-    Credential, CredentialType, CredentialStatus, Holder
+    Credential,
+    CredentialStatus,
+    CredentialType,
+    Holder,
 )
 from marty_credentials.infrastructure.observability.metrics import (
-    credentials_issued_total,
     credential_issuance_duration_seconds,
+    credentials_issued_total,
+)
+from marty_credentials.native_backend import (
+    NativeOperationError,
+    require_marty_rs,
+    require_marty_verification,
 )
 
 # Optional status list service
@@ -37,6 +30,21 @@ except ImportError:
     CredentialStatusService = None
     STATUS_LIST_AVAILABLE = False
 
+_marty_rs = require_marty_rs(
+    (
+        "create_verifiable_credential",
+        "generate_p256_jwk",
+        "sd_jwt_create_presentation",
+    )
+)
+_marty_verification = require_marty_verification(
+    (
+        "open_badge_ob2_issue",
+        "open_badge_ob3_issue",
+        "p256_public_jwk_to_pem",
+    )
+)
+
 
 class IssuanceService:
     """Service for issuing various types of digital identity credentials"""
@@ -46,56 +54,12 @@ class IssuanceService:
         self.credential_status_service = credential_status_service
         
     def _generate_keys(self) -> tuple[str, str]:
-        """Generate a P-256 key pair for signing"""
-        # Using P-256 as it's widely supported across all formats
-        # Returns (did, jwk_json_string)
-        did, jwk_json = _marty_rs.generate_p256_key()
-        
-        # Parse JWK to get key components
-        import json
-        jwk = json.loads(jwk_json)
-        
-        # Convert to PEM format for signing operations
-        # For now, we'll keep the JWK format and use it directly
-        # In production, convert to PEM or use JWK directly with the Rust functions
-        
-        # Return as tuple (private_key_jwk, public_key_jwk)
-        # For the private key, we include d parameter
-        # For public key, we exclude d parameter
-        public_jwk = {k: v for k, v in jwk.items() if k != 'd'}
-        
-        return jwk_json, json.dumps(public_jwk)
+        """Generate private and public P-256 JWKs in the native backend."""
+        return _marty_rs.generate_p256_jwk()
 
     def _jwk_to_public_pem(self, jwk_json: str) -> str:
-        """Encode a public P-256 JWK as SubjectPublicKeyInfo PEM."""
-        import base64
-
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-
-        jwk = json.loads(jwk_json)
-        if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256" or "d" in jwk:
-            raise ValueError("Expected a public EC P-256 JWK")
-
-        def decode_coordinate(name: str) -> int:
-            encoded = jwk.get(name)
-            if not isinstance(encoded, str):
-                raise ValueError(f"Public JWK is missing {name}")
-            padding = "=" * ((4 - len(encoded) % 4) % 4)
-            coordinate = base64.urlsafe_b64decode(encoded + padding)
-            if len(coordinate) != 32:
-                raise ValueError(f"Public JWK {name} must be 32 bytes")
-            return int.from_bytes(coordinate, "big")
-
-        public_key = ec.EllipticCurvePublicNumbers(
-            decode_coordinate("x"),
-            decode_coordinate("y"),
-            ec.SECP256R1(),
-        ).public_key()
-        return public_key.public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode("ascii")
+        """Encode a public P-256 JWK as SubjectPublicKeyInfo PEM in Rust."""
+        return _marty_verification.p256_public_jwk_to_pem(jwk_json)
     
     def _find_or_create_holder(self, holder_did: str) -> Holder:
         """Find existing holder or create new one"""
@@ -257,14 +221,12 @@ class IssuanceService:
         # Generate issuer keys
         private_key_jwk, public_key = self._generate_keys()
         
-        # Flatten namespaces into a single claims dict for the v2 engine
-        flat_claims: Dict[str, Any] = {}
-        for ns, ns_claims in namespaces.items():
-            for key, value in ns_claims.items():
-                flat_claims[f"{ns}.{key}"] = value
-        
-        # Default namespace
-        namespace = next(iter(namespaces.keys()), f"{doc_type}")
+        if len(namespaces) != 1:
+            raise NativeOperationError(
+                "The native mDoc issuance boundary currently supports exactly one namespace"
+            )
+        namespace, namespace_claims = next(iter(namespaces.items()))
+        flat_claims: Dict[str, Any] = dict(namespace_claims)
         
         # Use v2 engine to create mDoc
         mdoc_result_str, credential_id = _marty_rs.create_verifiable_credential(
@@ -323,17 +285,11 @@ class IssuanceService:
         audience: Optional[str] = None
     ) -> str:
         """Create a presentation from an SD-JWT with selective disclosure"""
-        presentation = _marty_rs.SdJwtPresentation(sd_jwt)
-        
-        # Add disclosure for selected fields by name
-        for field in disclosed_fields:
-            presentation.disclose_claim(field)
-        
-        # Create the presentation (with or without key binding)
-        return presentation.create_presentation(
-            holder_key_pem=None,  # No key binding for now
-            nonce=nonce,
-            audience=audience
+        return _marty_rs.sd_jwt_create_presentation(
+            sd_jwt,
+            disclosed_fields,
+            nonce,
+            audience,
         )
     
     def issue_openid4vp_request(
@@ -379,9 +335,6 @@ class IssuanceService:
         issuer_jwk: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Issue an Open Badge v2 credential with JWS signature"""
-        if not OPEN_BADGES_AVAILABLE:
-            raise RuntimeError("Open Badges support not available")
-        
         # Generate P-256 keys (Ed25519 not available in _marty_rs yet)
         if issuer_jwk:
             jwk_str = json.dumps(issuer_jwk)
@@ -428,7 +381,9 @@ class IssuanceService:
                 "kid": f"{issuer_did}#key-1"
             }
         }
-        result = json.loads(open_badge_ob2_issue(json.dumps(issue_request)))
+        result = json.loads(
+            _marty_verification.open_badge_ob2_issue(json.dumps(issue_request))
+        )
         
         # Get or create holder
         holder = self.db.query(Holder).filter_by(did=recipient_email).first()
@@ -465,50 +420,17 @@ class IssuanceService:
         x509_key_pem: Optional[str] = None
     ) -> Dict[str, Any]:
         """Issue an Open Badge v3 credential"""
-        if not OPEN_BADGES_AVAILABLE:
-            raise RuntimeError("Open Badges support not available")
-        
         # Get or generate signing material
-        if x509_cert_pem and x509_key_pem:
-            # Use X509 certificate - convert RSA key to JWK format for signing
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.backends import default_backend
-            from cryptography.hazmat.primitives.asymmetric import rsa
-            import base64
-            
-            # Load the private key
-            private_key = serialization.load_pem_private_key(
-                x509_key_pem.encode('utf-8'),
-                password=None,
-                backend=default_backend()
+        if x509_cert_pem or x509_key_pem:
+            raise NativeOperationError(
+                "Open Badge X.509 private-key conversion is not supported by the native "
+                "credential boundary; provide issuer_jwk or a configured issuer profile"
             )
-            
-            # Extract RSA components for JWK
-            public_key = private_key.public_key()
-            public_numbers = public_key.public_numbers()
-            private_numbers = private_key.private_numbers()
-            
-            # Convert to base64url encoding
-            def int_to_base64url(n):
-                byte_length = (n.bit_length() + 7) // 8
-                return base64.urlsafe_b64encode(n.to_bytes(byte_length, 'big')).rstrip(b'=').decode('ascii')
-            
-            issuer_jwk = {
-                "kty": "RSA",
-                "n": int_to_base64url(public_numbers.n),
-                "e": int_to_base64url(public_numbers.e),
-                "d": int_to_base64url(private_numbers.d),
-                "p": int_to_base64url(private_numbers.p),
-                "q": int_to_base64url(private_numbers.q),
-                "dp": int_to_base64url(private_numbers.dmp1),
-                "dq": int_to_base64url(private_numbers.dmq1),
-                "qi": int_to_base64url(private_numbers.iqmp)
-            }
         elif issuer_jwk:
             issuer_jwk_str = json.dumps(issuer_jwk)
             issuer_jwk = json.loads(issuer_jwk_str)
         else:
-            _, issuer_jwk_str = self._generate_keys()
+            issuer_jwk_str, _ = self._generate_keys()
             issuer_jwk = json.loads(issuer_jwk_str)
         
         # Build credential
@@ -552,7 +474,9 @@ class IssuanceService:
             "credential": credential_data,
             "signing": {"jwk": issuer_jwk, "verification_method": f"{issuer_did}#key-1"}
         }
-        result = json.loads(open_badge_ob3_issue(json.dumps(issue_request)))
+        result = json.loads(
+            _marty_verification.open_badge_ob3_issue(json.dumps(issue_request))
+        )
         
         # Get or create holder
         holder = self.db.query(Holder).filter_by(did=recipient_did).first()

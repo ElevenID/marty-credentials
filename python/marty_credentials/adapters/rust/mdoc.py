@@ -5,24 +5,11 @@ mDoc credential issuance and presentation using marty-rs Rust library.
 Provides ISO 18013-5 compliant mobile document operations.
 """
 
-import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-
-def _get_marty_rs():
-    """Lazy import of Rust bindings."""
-    try:
-        import _marty_rs
-
-        return _marty_rs
-    except ImportError:
-        raise RuntimeError(
-            "marty-rs bindings not available. "
-            "Install with: pip install marty-credentials[ffi] "
-            "or build with: cd rust && maturin develop"
-        )
+from marty_credentials.native_backend import NativeOperationError
 
 
 @dataclass
@@ -121,35 +108,9 @@ class RustMdocIssuer:
         Returns:
             MdocCredential with CBOR-encoded mDoc
         """
-        marty_rs = _get_marty_rs()
-        
-        # Create issuance request
-        request = marty_rs.MdocIssuanceRequest(
-            doc_type=doc_type,
-            namespaces_json=json.dumps(namespaces),
-        )
-        
-        # Set validity
-        request.validity = marty_rs.MdocValidityInfo.years_from_now(validity_years)
-        
-        # Set device key
-        request.device_key = marty_rs.MdocDeviceKeyInfo.from_jwk(
-            json.dumps(device_key_jwk)
-        )
-        
-        # Issue the credential
-        result = marty_rs.create_mdoc_credential(
-            request,
-            issuer_cert_pem,
-            issuer_key_pem,
-        )
-        
-        return MdocCredential(
-            doc_type=result.doc_type,
-            cbor_base64=result.cbor_base64,
-            credential_id=result.credential_id,
-            issued_at=datetime.fromtimestamp(result.issued_at),
-            valid_until=datetime.fromtimestamp(result.valid_until),
+        raise NativeOperationError(
+            "The legacy PEM-based mDoc issuer contract is not supported by the canonical "
+            "native boundary; use OID4VCI mso_mdoc issuance with a JWK issuer profile"
         )
 
     def prepare_mdoc_for_hsm(
@@ -173,23 +134,9 @@ class RustMdocIssuer:
         Returns:
             PreparedMdoc with signature payload for HSM
         """
-        marty_rs = _get_marty_rs()
-        
-        request = marty_rs.MdocIssuanceRequest(
-            doc_type=doc_type,
-            namespaces_json=json.dumps(namespaces),
-        )
-        request.validity = marty_rs.MdocValidityInfo.years_from_now(validity_years)
-        request.device_key = marty_rs.MdocDeviceKeyInfo.from_jwk(
-            json.dumps(device_key_jwk)
-        )
-        
-        prepared = marty_rs.prepare_mdoc_for_signing(request)
-        
-        return PreparedMdoc(
-            signature_payload_base64=prepared.signature_payload_base64,
-            prepared_state_base64=prepared.prepared_state_base64,
-            doc_type=prepared.doc_type,
+        raise NativeOperationError(
+            "The legacy mDoc HSM preparation contract is not exposed by the supported "
+            "native boundary; use the canonical OID4VCI prepare/assemble flow"
         )
 
     def complete_mdoc_with_hsm_signature(
@@ -208,27 +155,9 @@ class RustMdocIssuer:
         Returns:
             Completed MdocCredential
         """
-        marty_rs = _get_marty_rs()
-        
-        # Create the PreparedMdoc Python object for Rust
-        rust_prepared = marty_rs.PreparedMdoc(
-            signature_payload_base64=prepared.signature_payload_base64,
-            prepared_state_base64=prepared.prepared_state_base64,
-            doc_type=prepared.doc_type,
-        )
-        
-        result = marty_rs.complete_mdoc_with_signature(
-            rust_prepared,
-            signature_base64,
-            issuer_cert_pem,
-        )
-        
-        return MdocCredential(
-            doc_type=result.doc_type,
-            cbor_base64=result.cbor_base64,
-            credential_id=result.credential_id,
-            issued_at=datetime.fromtimestamp(result.issued_at),
-            valid_until=datetime.fromtimestamp(result.valid_until),
+        raise NativeOperationError(
+            "The legacy mDoc HSM completion contract is not exposed by the supported "
+            "native boundary; use the canonical OID4VCI prepare/assemble flow"
         )
 
 
@@ -254,27 +183,9 @@ class RustMdocPresenter:
         Returns:
             Base64-encoded DeviceResponse CBOR
         """
-        marty_rs = _get_marty_rs()
-        
-        # Create Rust MdocCredential object
-        rust_credential = marty_rs.MdocCredential(
-            doc_type=credential.doc_type,
-            cbor_base64=credential.cbor_base64,
-            credential_id=credential.credential_id,
-            issued_at=int(credential.issued_at.timestamp()),
-            valid_until=int(credential.valid_until.timestamp()),
-        )
-        
-        # Create disclosure request
-        disclosure_request = marty_rs.MdocDisclosureRequest(
-            requested_fields_json=json.dumps(disclosed_claims),
-            intent_to_retain=False,
-        )
-        
-        return marty_rs.create_device_response(
-            rust_credential,
-            disclosure_request,
-            device_key_pem,
+        raise NativeOperationError(
+            "The legacy mDoc presentation contract lacks verifier-owned session state; "
+            "use the canonical ISO 18013/OID4VP wallet flow"
         )
 
     @staticmethod

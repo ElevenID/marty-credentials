@@ -1,17 +1,15 @@
 """Rust integration for credential signing operations."""
 
 import base64
-import hashlib
 import json
 import logging
 import os
-import secrets
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from marty_credentials.native_backend import require_marty_rs
+from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +85,12 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         # It requires the authoritative marty-core prepare/sign/assemble split
         # so the KMS signs the exact COSE payload remotely.
         "oid4vci_prepare_mdoc",
+        "oid4vci_normalize_ecdsa_signature",
         "oid4vci_assemble_mdoc",
+        "oid4vci_prepare_sd_jwt",
+        "oid4vci_assemble_sd_jwt",
+        "oid4vci_prepare_jwt_vc",
+        "oid4vci_assemble_jwt_vc",
         "oid4vci_create_authorization_response",
         "oid4vci_create_credential_offer",
         "oid4vci_create_token_response",
@@ -95,6 +98,8 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_verify_pkce_s256",
         "oid4vci_verify_proof_jwt",
         "oid4vci_verify_key_attestation_bound_proof_jwt",
+        "oid4vci_verify_compact_jwt",
+        "oid4vci_verify_detached_signature",
         "prepare_vcdm_data_integrity_credential",
     }
 )
@@ -161,83 +166,42 @@ async def create_sd_jwt_vc_with_remote_signing(
             "verification_method_id must identify a key controlled by the issuer DID"
         )
 
-    now = int(datetime.now(UTC).timestamp())
-    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
-    sd_claims = set(selective_disclosure_claims or [])
+    expected_algorithm = algorithm or "ES256"
+    binding = get_marty_rs()
+    try:
+        prepared = binding.oid4vci_prepare_sd_jwt(
+            issuer_did,
+            verification_method_id,
+            expected_algorithm,
+            subject_id,
+            credential_type,
+            json.dumps(claims),
+            int(expiration_seconds or 31536000),
+            list(selective_disclosure_claims or []),
+            credential_format,
+            credential_id,
+            json.dumps(holder_jwk) if holder_jwk is not None else None,
+            list(issuer_certificate_chain or []),
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError(f"Native SD-JWT preparation failed: {exc}") from exc
 
-    payload: dict[str, Any] = {
-        "iss": issuer_did,
-        "iat": now,
-        "nbf": now,
-        "exp": now + int(expiration_seconds or 31536000),
-        "jti": credential_id,
-        "vct": credential_type,
-    }
-    if subject_id:
-        payload["sub"] = subject_id
-        if holder_jwk:
-            public_holder_jwk = {
-                key: value
-                for key, value in holder_jwk.items()
-                if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
-            }
-            payload["cnf"] = {"jwk": public_holder_jwk}
-        else:
-            payload["cnf"] = {"kid": subject_id}
-
-    disclosures: list[str] = []
-    sd_hashes: list[str] = []
-    for key, value in claims.items():
-        if key in sd_claims:
-            disclosure = [base64url_encode(secrets.token_bytes(16)), key, value]
-            disclosure_b64 = base64url_encode(_json_dumps_compact(disclosure).encode("utf-8"))
-            sd_hashes.append(
-                base64url_encode(hashlib.sha256(disclosure_b64.encode("ascii")).digest())
-            )
-            disclosures.append(disclosure_b64)
-        else:
-            payload[key] = value
-
-    if sd_hashes:
-        payload["_sd_alg"] = "sha-256"
-        # Sort the _sd digests for deterministic output, matching sd-jwt-rs issuer behavior.
-        payload["_sd"] = sorted(sd_hashes)
-
-    # SD-JWT VC format identifiers must remain consistent with the OID4VCI
-    # credential configuration selected by the wallet. The Final OID4VCI
-    # profile exercised by the official suite requires ``dc+sd-jwt``.
-    header = {
-        "alg": algorithm or "ES256",
-        "typ": "dc+sd-jwt" if credential_format == "dc+sd-jwt" else "vc+sd-jwt",
-        "kid": verification_method_id,
-    }
-    if issuer_certificate_chain:
-        if not all(isinstance(item, str) and item.strip() for item in issuer_certificate_chain):
-            raise RuntimeError("issuer profile certificate chain contains an invalid x5c entry")
-        header["x5c"] = list(issuer_certificate_chain)
-    encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
-    encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
-    signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
-
-    sign_result = await remote_sign(signing_input, algorithm)
+    sign_result = await remote_sign(prepared.signing_input.encode("ascii"), algorithm)
     response_algorithm = sign_result.get("algorithm")
     signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
     if not isinstance(signature_b64, str) or not signature_b64:
         raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
 
-    if response_algorithm and response_algorithm != header["alg"]:
+    if response_algorithm and response_algorithm != expected_algorithm:
         logger.debug(
             "Remote signer returned algorithm %s for requested %s",
             response_algorithm,
-            header["alg"],
+            expected_algorithm,
         )
-
-    jwt = f"{encoded_header}.{encoded_payload}.{signature_b64}"
-    # SD-JWT compact serialization: jwt~disc1~disc2~  (trailing ~ with no KB JWT)
-    # When there are no disclosures, output jwt~ to match sd-jwt-rs issuer behavior.
-    # jwt~~ would produce an empty-string disclosure that breaks sd-jwt-rs parsing.
-    jwt_parts = [jwt] + disclosures
-    return f"{'~'.join(jwt_parts)}~", credential_id
+    try:
+        return binding.oid4vci_assemble_sd_jwt(prepared, signature_b64)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError(f"Native SD-JWT assembly failed: {exc}") from exc
 
 
 async def create_jwt_vc_with_remote_signing(
@@ -270,85 +234,31 @@ async def create_jwt_vc_with_remote_signing(
             "verification_method_id must identify a key controlled by the issuer DID"
         )
 
-    now = int(datetime.now(UTC).timestamp())
-    credential_id = credential_id or f"urn:uuid:{uuid.uuid4()}"
-    credential_status = claims.pop("credentialStatus", None)
-    if credential_subject is None:
-        subject: dict[str, Any] | list[dict[str, Any]] = dict(claims)
-        if subject_id:
-            subject.setdefault("id", subject_id)
-    else:
-        if claims:
-            raise RuntimeError("explicit credential_subject cannot be combined with subject claims")
-        if isinstance(credential_subject, dict):
-            if not credential_subject:
-                raise RuntimeError("credential_subject must contain at least one claim")
-            subject = dict(credential_subject)
-        elif (
-            isinstance(credential_subject, list)
-            and credential_subject
-            and all(isinstance(item, dict) and item for item in credential_subject)
-        ):
-            subject = [dict(item) for item in credential_subject]
-        else:
-            raise RuntimeError(
-                "credential_subject must be a non-empty object or list of non-empty objects"
-            )
-
-    vc: dict[str, Any] = {
-        "@context": ["https://www.w3.org/ns/credentials/v2"],
-        "type": ["VerifiableCredential", credential_type],
-        # ``iss`` is required by JWT, but VCDM consumers process this nested
-        # object and require its own issuer identifier and validity period.
-        "issuer": issuer_did,
-        "validFrom": datetime.fromtimestamp(now, UTC).isoformat().replace("+00:00", "Z"),
-        "validUntil": datetime.fromtimestamp(
-            now + int(expiration_seconds or 31536000), UTC
+    expected_algorithm = algorithm or "ES256"
+    binding = get_marty_rs()
+    try:
+        prepared = binding.oid4vci_prepare_jwt_vc(
+            issuer_did,
+            verification_method_id,
+            expected_algorithm,
+            subject_id,
+            credential_type,
+            json.dumps(claims),
+            int(expiration_seconds or 31536000),
+            credential_id,
+            json.dumps(credential_subject) if credential_subject is not None else None,
         )
-        .isoformat()
-        .replace("+00:00", "Z"),
-        "credentialSubject": subject,
-    }
-    if isinstance(credential_status, dict):
-        vc["credentialStatus"] = credential_status
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError(f"Native JWT-VC preparation failed: {exc}") from exc
 
-    payload: dict[str, Any] = {
-        "iss": issuer_did,
-        "iat": now,
-        "nbf": now,
-        "exp": now + int(expiration_seconds or 31536000),
-        "jti": credential_id,
-        "vc": vc,
-    }
-    # The holder that proves possession at the OID4VCI endpoint is not always
-    # the semantic subject named by an explicitly supplied VCDM credential.
-    # JWT ``sub`` is optional, but when present the VCDM verifier requires it
-    # to identify one of the credentialSubject objects.  Preserve ``sub`` for
-    # the ordinary holder-bound path and for explicit subjects that actually
-    # name the holder; otherwise omit it instead of issuing a contradictory
-    # credential.  The issuer identity remains the selected profile's DID and
-    # signing remains internal to that profile's custody backend.
-    subject_values = subject if isinstance(subject, list) else [subject]
-    subject_identifies_holder = any(
-        isinstance(item, dict) and item.get("id") == subject_id for item in subject_values
-    )
-    if subject_id and subject_identifies_holder:
-        payload["sub"] = subject_id
-
-    header = {
-        "alg": algorithm or "ES256",
-        "typ": "vc+jwt",
-        "kid": verification_method_id,
-    }
-    encoded_header = base64url_encode(_json_dumps_compact(header).encode("utf-8"))
-    encoded_payload = base64url_encode(_json_dumps_compact(payload).encode("utf-8"))
-    sign_result = await remote_sign(
-        f"{encoded_header}.{encoded_payload}".encode("ascii"), algorithm
-    )
+    sign_result = await remote_sign(prepared.signing_input.encode("ascii"), algorithm)
     signature_b64 = sign_result.get("signature_raw_b64") or sign_result.get("signature_b64")
     if not isinstance(signature_b64, str) or not signature_b64:
         raise RuntimeError("Issuer-profile signer returned no usable JWS signature")
-    return f"{encoded_header}.{encoded_payload}.{signature_b64}", credential_id
+    try:
+        return binding.oid4vci_assemble_jwt_vc(prepared, signature_b64)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError(f"Native JWT-VC assembly failed: {exc}") from exc
 
 
 _PRIVATE_JWK_MEMBERS = frozenset(
@@ -488,9 +398,7 @@ async def create_vcdm_data_integrity_with_remote_signing(
     credential_status = claims.pop("credentialStatus", None)
     if credential_document is not None:
         if credential_subject is not None or claims:
-            raise RuntimeError(
-                "credential_document cannot be combined with subject claims"
-            )
+            raise RuntimeError("credential_document cannot be combined with subject claims")
         # JSON round-tripping gives the signing engine a private, JSON-only
         # document snapshot and prevents caller mutation during async signing.
         credential = json.loads(_json_dumps_compact(credential_document))
@@ -499,51 +407,33 @@ async def create_vcdm_data_integrity_with_remote_signing(
         if "proof" in credential:
             raise RuntimeError("credential_document must be unsigned")
         context = credential.get("@context")
-        if (
-            not isinstance(context, list)
-            or not context
-            or context[0] != _VCDM_CONTEXT
-        ):
-            raise RuntimeError(
-                "credential_document must use the VCDM v2 base context first"
-            )
+        if not isinstance(context, list) or not context or context[0] != _VCDM_CONTEXT:
+            raise RuntimeError("credential_document must use the VCDM v2 base context first")
         credential_types = credential.get("type")
         credential_types = (
-            credential_types
-            if isinstance(credential_types, list)
-            else [credential_types]
+            credential_types if isinstance(credential_types, list) else [credential_types]
         )
         if "VerifiableCredential" not in credential_types:
-            raise RuntimeError(
-                "credential_document type must include VerifiableCredential"
-            )
+            raise RuntimeError("credential_document type must include VerifiableCredential")
         subject = credential.get("credentialSubject")
         subject_values = subject if isinstance(subject, list) else [subject]
         if not subject_values or not all(
             isinstance(item, dict) and item for item in subject_values
         ):
-            raise RuntimeError(
-                "credential_document must contain a non-empty credentialSubject"
-            )
+            raise RuntimeError("credential_document must contain a non-empty credentialSubject")
         document_issuer = credential.get("issuer")
         document_issuer_id = (
-            document_issuer.get("id")
-            if isinstance(document_issuer, dict)
-            else document_issuer
+            document_issuer.get("id") if isinstance(document_issuer, dict) else document_issuer
         )
         if document_issuer_id is None:
             credential["issuer"] = issuer_did
         elif document_issuer_id != issuer_did:
-            raise RuntimeError(
-                "credential_document issuer does not match the resolved issuer DID"
-            )
+            raise RuntimeError("credential_document issuer does not match the resolved issuer DID")
         document_id = credential.get("id")
         if document_id is None:
             credential["id"] = credential_id
         elif document_id != credential_id:
-            raise RuntimeError(
-                "credential_document id does not match the reserved credential ID"
-            )
+            raise RuntimeError("credential_document id does not match the reserved credential ID")
         now = datetime.now(UTC)
         credential.setdefault("validFrom", now.isoformat().replace("+00:00", "Z"))
         credential.setdefault(
@@ -640,9 +530,7 @@ async def create_vcdm_data_integrity_with_remote_signing(
     completed = json.loads(completed_json)
     completed_issuer = completed.get("issuer") if isinstance(completed, dict) else None
     completed_issuer_id = (
-        completed_issuer.get("id")
-        if isinstance(completed_issuer, dict)
-        else completed_issuer
+        completed_issuer.get("id") if isinstance(completed_issuer, dict) else completed_issuer
     )
     if (
         not isinstance(completed, dict)
@@ -848,6 +736,59 @@ def verify_key_attestation_bound_proof_jwt(
     except Exception as e:
         return False, "", None, f"key-attestation-bound proof JWT error: {e}"
 
+
+def verify_compact_jwt(
+    compact_jwt: str,
+    public_jwk: dict[str, Any],
+    expected_algorithm: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Verify a compact JWT signature through the canonical Rust backend."""
+    marty_rs = get_marty_rs()
+    try:
+        header_json, claims_json = marty_rs.oid4vci_verify_compact_jwt(
+            compact_jwt,
+            json.dumps(public_jwk, separators=(",", ":"), sort_keys=True),
+            expected_algorithm,
+        )
+        header = json.loads(header_json)
+        claims = json.loads(claims_json)
+    except (RuntimeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise NativeOperationError("compact JWT verification failed") from exc
+    if not isinstance(header, dict) or not isinstance(claims, dict):
+        raise NativeOperationError("native compact JWT verification returned invalid JSON")
+    return header, claims
+
+
+def verify_detached_signature(
+    message: bytes,
+    signature: bytes,
+    public_jwk: Mapping[str, Any],
+    expected_algorithm: str,
+) -> bool:
+    """Verify a provider/KMS signature through the canonical Rust backend."""
+    marty_rs = get_marty_rs()
+    try:
+        return bool(
+            marty_rs.oid4vci_verify_detached_signature(
+                message,
+                signature,
+                json.dumps(dict(public_jwk), separators=(",", ":"), sort_keys=True),
+                expected_algorithm,
+            )
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError("detached signature verification failed") from exc
+
+
+def normalize_ecdsa_signature(signature: bytes, expected_algorithm: str) -> bytes:
+    """Normalize a provider ECDSA signature in the canonical Rust backend."""
+    marty_rs = get_marty_rs()
+    try:
+        return bytes(
+            marty_rs.oid4vci_normalize_ecdsa_signature(signature, expected_algorithm)
+        )
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError("ECDSA signature normalization failed") from exc
 
 
 # ---------------------------------------------------------------------------

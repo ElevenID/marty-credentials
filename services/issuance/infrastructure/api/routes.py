@@ -20,13 +20,6 @@ from typing import Any, Literal
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import (
-    decode_dss_signature,
-    encode_dss_signature,
-)
 from fastapi import (
     APIRouter,
     Depends,
@@ -66,10 +59,12 @@ from issuance.application.rust_integration import (
     didcomm_extract_endpoint,
     didcomm_pack_credential,
     didcomm_resolve_did,
+    normalize_ecdsa_signature,
     oid4vci_create_authorization_response,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
     oid4vci_exchange_auth_code_for_token,
+    verify_compact_jwt,
     verify_key_attestation_bound_proof_jwt,
     verify_proof_jwt,
 )
@@ -110,6 +105,7 @@ from issuance.infrastructure.api.signing_context import (
     sign_payload_with_issuer_did,
 )
 from issuance.infrastructure.grpc_security import create_service_channel
+from marty_credentials.native_backend import NativeOperationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
@@ -233,11 +229,15 @@ def _validated_dpop_jkt(
 ) -> str:
     """Verify an allowed DPoP proof and return its RFC 7638 key thumbprint."""
     try:
-        encoded_header, encoded_claims, encoded_signature = proof.split(".")
-        header = json.loads(_b64url_decode(encoded_header))
-        claims = json.loads(_b64url_decode(encoded_claims))
-        signature = _b64url_decode(encoded_signature)
-        jwk = header["jwk"]
+        encoded_header, _encoded_claims, _encoded_signature = proof.split(".")
+        unverified_header = json.loads(_b64url_decode(encoded_header))
+        algorithm = unverified_header.get("alg")
+        jwk = unverified_header.get("jwk")
+        if algorithm not in {"ES256", "PS256"} or not isinstance(jwk, dict):
+            raise ValueError("DPoP proof must contain an approved public JWK")
+        header, claims = verify_compact_jwt(proof, jwk, algorithm)
+        if header.get("jwk") != jwk:
+            raise ValueError("DPoP proof verification key does not match its JOSE header")
         if header.get("typ") != "dpop+jwt" or header.get("alg") not in {"ES256", "PS256"}:
             raise ValueError("DPoP proof must use typ=dpop+jwt and an approved algorithm")
         if claims.get("htm", "").upper() != method.upper() or not isinstance(
@@ -246,43 +246,18 @@ def _validated_dpop_jkt(
             raise ValueError("DPoP proof has invalid htm or htu")
         if expected_htu is not None and claims["htu"].rstrip("/") != expected_htu.rstrip("/"):
             raise ValueError("DPoP proof htu does not match the target endpoint")
-        signed_content = f"{encoded_header}.{encoded_claims}".encode("ascii")
         if header["alg"] == "ES256":
-            if len(signature) != 64 or jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
+            if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256":
                 raise ValueError("unsupported ES256 DPoP proof key")
-            public_key = ec.EllipticCurvePublicNumbers(
-                int.from_bytes(_b64url_decode(jwk["x"]), "big"),
-                int.from_bytes(_b64url_decode(jwk["y"]), "big"),
-                ec.SECP256R1(),
-            ).public_key()
-            public_key.verify(
-                encode_dss_signature(
-                    int.from_bytes(signature[:32], "big"), int.from_bytes(signature[32:], "big")
-                ),
-                signed_content,
-                ec.ECDSA(hashes.SHA256()),
-            )
         else:
             if jwk.get("kty") != "RSA":
                 raise ValueError("unsupported PS256 DPoP proof key")
-            public_key = rsa.RSAPublicNumbers(
-                int.from_bytes(_b64url_decode(jwk["e"]), "big"),
-                int.from_bytes(_b64url_decode(jwk["n"]), "big"),
-            ).public_key()
-            public_key.verify(
-                signature,
-                signed_content,
-                padding.PSS(
-                    mgf=padding.MGF1(hashes.SHA256()), salt_length=hashes.SHA256().digest_size
-                ),
-                hashes.SHA256(),
-            )
         if access_token is not None:
             expected_ath = _b64url_encode(hashlib.sha256(access_token.encode("utf-8")).digest())
             if claims.get("ath") != expected_ath:
                 raise ValueError("DPoP proof access-token hash does not match")
         return _dpop_thumbprint(jwk)
-    except (KeyError, TypeError, ValueError, InvalidSignature, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError, ValueError, NativeOperationError, json.JSONDecodeError) as exc:
         raise ValueError("invalid DPoP proof") from exc
 
 
@@ -590,22 +565,15 @@ def _remote_mdoc_signature_raw(signature: dict[str, Any], algorithm: str) -> byt
     padded = encoded + "=" * (-len(encoded) % 4)
     raw = base64.urlsafe_b64decode(padded)
     encoding = str(signature.get("signature_encoding") or "").lower()
-    coordinate_length = {"ES256": 32, "ES384": 48}.get(algorithm.upper())
-    if coordinate_length is None:
+    normalized_algorithm = algorithm.upper()
+    if normalized_algorithm not in {"ES256", "ES384"}:
         raise RuntimeError(f"Unsupported remote mDoc algorithm {algorithm!r}")
-    if encoding in {"raw_ieee_p1363", "raw", "ieee_p1363"}:
-        if len(raw) == coordinate_length * 2:
-            return raw
-        raise RuntimeError(f"Invalid {algorithm} P1363 signature length for remote mDoc signing")
-    if encoding != "der":
+    if encoding not in {"raw_ieee_p1363", "raw", "ieee_p1363", "der"}:
         raise RuntimeError(f"Unsupported remote mDoc signature encoding {encoding!r}")
     try:
-        r, s = decode_dss_signature(raw)
-    except ValueError as exc:
-        raise RuntimeError("Remote mDoc signature is not valid DER ECDSA") from exc
-    if r.bit_length() > coordinate_length * 8 or s.bit_length() > coordinate_length * 8:
-        raise RuntimeError(f"Invalid {algorithm} DER signature coordinate for remote mDoc signing")
-    return r.to_bytes(coordinate_length, "big") + s.to_bytes(coordinate_length, "big")
+        return normalize_ecdsa_signature(raw, normalized_algorithm)
+    except NativeOperationError as exc:
+        raise RuntimeError("Remote mDoc signature encoding is invalid") from exc
 
 
 async def apply_remote_issuer_context(

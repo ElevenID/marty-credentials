@@ -22,6 +22,28 @@
       }
     }
   },
+  "marty-verification": {
+    "version": "0.1.38",
+    "repository": "ElevenID/marty-core",
+    "tag": "v0.1.38",
+    "commit": "ef8421e7c545f5d54796a636e6ba4079cf2becc9",
+    "asset": "marty_verification_py-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "07439c56aec820f1c45b5fa7c324e7c78c48be4bda5a3bb6fa4aa3505f37b18a",
+    "platform_assets": {
+      "linux-x86_64": {
+        "asset": "marty_verification_py-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "07439c56aec820f1c45b5fa7c324e7c78c48be4bda5a3bb6fa4aa3505f37b18a"
+      },
+      "macos-arm64": {
+        "asset": "marty_verification_py-0.1.38-cp311-abi3-macosx_11_0_arm64.whl",
+        "sha256": "fcbaf37d4bc6f678c03a87381e5bf8fd6418614ef7122b9f68905647c9c2f303"
+      },
+      "windows-x86_64": {
+        "asset": "marty_verification_py-0.1.38-cp311-abi3-win_amd64.whl",
+        "sha256": "4213a97c64d0e8a0549706a081506963fa8509e93929766d54bca3e99a64e7bc"
+      }
+    }
+  },
   "marty-msf": {
     "version": "1.0.0",
     "repository": "ElevenID/marty-microservices-framework",

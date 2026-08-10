@@ -8,44 +8,28 @@ via Rust FFI bindings.
 import json
 import logging
 import secrets
-from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
 from marty_credentials.config import get_config
-from marty_credentials.infrastructure.auth.token_validator import (
-    CredentialVerificationError,
-    TokenValidator,
-)
-
-logger = logging.getLogger(__name__)
+from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 from marty_credentials.ports.credential_ports import (
     CredentialData,
-    CredentialFormat,
     CredentialOffer,
     CredentialSubject,
-    ICredentialIssuer,
-    ICredentialVerifier,
-    ICredentialWallet,
-    IKeyManager,
     KeyAlgorithm,
     KeyPair,
     PresentationRequest,
     VerificationResult,
 )
 
+logger = logging.getLogger(__name__)
 
-def _get_marty_rs():
+
+def _get_marty_rs(capabilities: tuple[str, ...] = ()):
     """Lazy import of Rust bindings."""
-    try:
-        import _marty_rs
-
-        return _marty_rs
-    except ImportError:
-        raise RuntimeError(
-            "SpruceID bindings not available. " "Build with: cd rust && maturin develop"
-        )
+    return require_marty_rs(capabilities)
 
 
 class SpruceIDKeyManager:
@@ -78,27 +62,14 @@ class SpruceIDKeyManager:
         Raises:
             ValueError: If algorithm is not supported
         """
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(("generate_p256_did_jwk",))
 
         if algorithm == KeyAlgorithm.ES256:
-            did, jwk_json = marty_rs.generate_p256_key()
-        elif algorithm == KeyAlgorithm.ES384:
-            did, jwk_json = marty_rs.generate_p384_key()
-        elif algorithm == KeyAlgorithm.EDDSA:
-            did, jwk_json = marty_rs.generate_did_key()
-        elif algorithm.value.startswith("RS"):
-            # RSA with PKCS#1 padding: RS256 (2048), RS384 (3072), RS512 (4096)
-            key_sizes = {"RS256": 2048, "RS384": 3072, "RS512": 4096}
-            key_size = key_sizes.get(algorithm.value, 2048)
-            did, jwk_json = marty_rs.generate_rsa_key(key_size=key_size, use_pss=False)
-        elif algorithm.value.startswith("PS"):
-            # RSA-PSS padding: PS256 (2048), PS384 (3072), PS512 (4096)
-            key_sizes = {"PS256": 2048, "PS384": 3072, "PS512": 4096}
-            key_size = key_sizes.get(algorithm.value, 2048)
-            did, jwk_json = marty_rs.generate_rsa_key(key_size=key_size, use_pss=True)
+            did, jwk_json = marty_rs.generate_p256_did_jwk()
         else:
-            supported = ["ES256", "ES384", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "EdDSA"]
-            raise ValueError(f"Unsupported algorithm: {algorithm}. Supported: {supported}")
+            raise NativeOperationError(
+                f"The supported native key boundary does not expose {algorithm.value} generation"
+            )
 
         return KeyPair(
             did=did,
@@ -152,7 +123,7 @@ class SpruceIDCredentialIssuer:
             mdoc_doctype: Document type for mDoc credentials.
             zk_predicate_claims: Claim names for ZK predicate proofs.
         """
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(("create_verifiable_credential",))
 
         claims_json = json.dumps(subject.claims)
 
@@ -164,10 +135,10 @@ class SpruceIDCredentialIssuer:
             claims_json=claims_json,
             format=credential_format,
             expiration_seconds=expiration_seconds,
-            selective_disclosure_claims=selective_disclosure_claims,
+            selective_disclosure_claims=selective_disclosure_claims or [],
             mdoc_namespace=mdoc_namespace,
             mdoc_doctype=mdoc_doctype,
-            zk_predicate_claims=zk_predicate_claims,
+            zk_predicate_claims=zk_predicate_claims or [],
         )
 
         now = datetime.utcnow()
@@ -196,7 +167,9 @@ class SpruceIDCredentialIssuer:
         wallet_format: str = "standard",
     ) -> CredentialOffer:
         """Create an OID4VCI credential offer using the v2 engine."""
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(
+            ("create_credential_offer", "generate_offer_uri")
+        )
 
         offer_id = str(uuid4())
         pre_auth_code = secrets.token_urlsafe(32) if pre_authorized else None
@@ -235,7 +208,7 @@ class SpruceIDCredentialIssuer:
         Supports multi-format metadata with per-credential-type format lists,
         doctype/vct fields, and claim definitions.
         """
-        marty_rs = _get_marty_rs()
+        marty_rs = _get_marty_rs(("generate_issuer_metadata",))
 
         return marty_rs.generate_issuer_metadata(
             issuer_url=issuer_url,
@@ -273,16 +246,9 @@ class SpruceIDCredentialWallet:
         nonce: str | None = None,
     ) -> str:
         """Create a verifiable presentation."""
-        marty_rs = _get_marty_rs()
-
-        credential_jwts = [c.jwt for c in credentials if c.jwt]
-
-        return marty_rs.create_presentation(
-            holder_did=holder_key.did,
-            holder_jwk_json=holder_key.jwk_json,
-            credential_jwts=credential_jwts,
-            audience=audience,
-            nonce=nonce,
+        raise NativeOperationError(
+            "Legacy VP-JWT construction is not exposed by the supported native boundary; "
+            "use the OID4VP wallet flow"
         )
 
     def redeem_offer(self, offer_uri: str, holder_key: KeyPair) -> CredentialData:
@@ -291,137 +257,22 @@ class SpruceIDCredentialWallet:
         """
         from urllib.parse import parse_qs, urlparse
 
-        import httpx
-
         # Parse offer URI
         parsed = urlparse(offer_uri)
         params = parse_qs(parsed.query)
 
-        if "credential_offer_uri" in params:
-            offer_endpoint = params["credential_offer_uri"][0]
-
-            # Fetch offer details
-            with httpx.Client() as client:
-                try:
-                    resp = client.get(offer_endpoint)
-                    resp.raise_for_status()
-                    offer_data = resp.json()
-                except Exception:
-                    # Fallback for demo if offer endpoint is not reachable or mock
-                    # We assume the issuer_url is the base of offer_endpoint
-                    issuer_url = offer_endpoint.split("/offers/")[0]
-                    offer_data = {
-                        "credential_issuer": issuer_url,
-                        "credential_configuration_ids": ["UniversityDegreeCredential"],
-                        "grants": {},
-                    }
-
-            issuer_url = offer_data["credential_issuer"]
-            credential_configuration_ids = offer_data.get("credential_configuration_ids", [])
-            if not credential_configuration_ids:
-                credential_configuration_ids = ["UniversityDegreeCredential"]
-
-            # Get issuer metadata to find endpoints
-            try:
-                with httpx.Client() as client:
-                    resp = client.get(f"{issuer_url}/api/issuer/metadata")
-                    if resp.status_code == 404:
-                        # Try standard location
-                        resp = client.get(f"{issuer_url}/.well-known/openid-credential-issuer")
-
-                    if resp.status_code == 200:
-                        metadata = resp.json()
-                        _token_endpoint = metadata.get(
-                            "token_endpoint", f"{issuer_url}/api/issuer/token"
-                        )
-                        credential_endpoint = metadata.get(
-                            "credential_endpoint", f"{issuer_url}/api/issuer/credential"
-                        )
-                    else:
-                        # Fallback defaults
-                        _token_endpoint = f"{issuer_url}/api/issuer/token"
-                        credential_endpoint = f"{issuer_url}/api/issuer/credential"
-            except Exception:
-                _token_endpoint = f"{issuer_url}/api/issuer/token"
-                credential_endpoint = f"{issuer_url}/api/issuer/credential"
-
-            # OAuth2 token required - raise error to indicate proper implementation needed
-            # TODO: Token should be obtained from proper OAuth2 flow with issuer
-            config = get_config()
-            if not config.oauth_client_id or not config.oauth_client_secret:
-                raise ValueError(
-                    "OAuth2 credentials not configured. Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET"
-                )
-            
-            # For now, raise an error indicating this flow requires proper OAuth2 implementation
-            raise NotImplementedError(
-                "Credential request requires OAuth2 access token from issuer. "
-                "This should be obtained via proper OAuth2 authorization code flow or client credentials flow. "
-                "Mock token usage has been removed for security."
-            )
-
-            # 2. Request Credential
-            cred_type = credential_configuration_ids[0]
-
-            # Create proof (using presentation as proof for now)
-            proof_jwt = self.create_presentation(
-                holder_key=holder_key, credentials=[], audience=issuer_url, nonce=str(uuid4())
-            )
-
-            payload = {
-                "format": "jwt_vc_json",
-                "credential_definition": {"type": ["VerifiableCredential", cred_type]},
-                "proof": {"proof_type": "jwt", "jwt": proof_jwt},
-            }
-
-            with httpx.Client() as client:
-                resp = client.post(
-                    credential_endpoint,
-                    json=payload,
-                    headers={"Authorization": f"Bearer {access_token}"},
-                )
-                resp.raise_for_status()
-                credential_resp = resp.json()
-
-            credential_jwt = credential_resp.get("credential")
-            if not credential_jwt:
-                raise ValueError("No credential received")
-
-            # Verify and store
-            # We need to get the verifier to verify the credential
-            # But we are in the wallet adapter.
-            # We can use the SpruceIDCredentialVerifier directly or via factory
-            verifier = SpruceIDCredentialVerifier()
-            result = verifier.verify_credential(credential_jwt)
-
-            if not result.valid:
-                logger.error(
-                    "Credential verification failed",
-                    extra={
-                        "credential_type": cred_type,
-                        "issuer": issuer_url,
-                        "error": result.error,
-                    },
-                )
-                raise CredentialVerificationError(
-                    f"Credential verification failed: {result.error}",
-                    details={"issuer": issuer_url, "credential_type": cred_type},
-                )
-
-            credential = CredentialData(
-                id=f"urn:uuid:{uuid4()}",
-                types=["VerifiableCredential", cred_type],
-                issuer=result.issuer or issuer_url,
-                subject=CredentialSubject(claims=result.claims),
-                issuance_date=datetime.utcnow(),
-                jwt=credential_jwt,
-            )
-
-            self.store_credential(credential)
-            return credential
-
-        else:
+        if "credential_offer_uri" not in params:
             raise ValueError("Unsupported offer URI format")
+
+        config = get_config()
+        if not config.oauth_client_id or not config.oauth_client_secret:
+            raise ValueError(
+                "OAuth2 credentials not configured. Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET"
+            )
+        raise NativeOperationError(
+            "Credential offer redemption requires the canonical OID4VCI wallet flow; "
+            "the legacy implicit-token adapter is disabled"
+        )
 
 
 class SpruceIDCredentialVerifier:
@@ -433,31 +284,9 @@ class SpruceIDCredentialVerifier:
         expected_issuer: str | None = None,
     ) -> VerificationResult:
         """Verify a credential JWT."""
-        marty_rs = _get_marty_rs()
-
-        valid, payload_json, error = marty_rs.verify_jwt(
-            jwt=credential_jwt,
-            expected_issuer=expected_issuer,
-            expected_audience=None,
-        )
-
-        if not valid:
-            return VerificationResult(
-                valid=False,
-                error=error,
-            )
-
-        payload = json.loads(payload_json)
-        issuer = payload.get("iss")
-
-        # Extract claims from VC
-        vc = payload.get("vc", {})
-        subject = vc.get("credentialSubject", {})
-
-        return VerificationResult(
-            valid=True,
-            claims=subject,
-            issuer=issuer,
+        raise NativeOperationError(
+            "Credential verification requires explicit issuer public key or trust-profile "
+            "input; use VerificationService.verify_w3c_vc"
         )
 
     def verify_presentation(
@@ -467,42 +296,9 @@ class SpruceIDCredentialVerifier:
         expected_nonce: str | None = None,
     ) -> VerificationResult:
         """Verify a presentation JWT."""
-        marty_rs = _get_marty_rs()
-
-        valid, payload_json, error = marty_rs.verify_jwt(
-            jwt=presentation_jwt,
-            expected_issuer=None,
-            expected_audience=expected_audience,
-        )
-
-        if not valid:
-            return VerificationResult(
-                valid=False,
-                error=error,
-            )
-
-        payload = json.loads(payload_json)
-
-        # Check nonce if provided
-        if expected_nonce and payload.get("nonce") != expected_nonce:
-            return VerificationResult(
-                valid=False,
-                error=f"Nonce mismatch: expected {expected_nonce}",
-            )
-
-        # Extract claims from VP
-        vp = payload.get("vp", {})
-        holder = vp.get("holder")
-        credentials = vp.get("verifiableCredential", [])
-
-        return VerificationResult(
-            valid=True,
-            claims={
-                "holder": holder,
-                "credential_count": len(credentials),
-                "credentials": credentials,
-            },
-            issuer=payload.get("iss"),
+        raise NativeOperationError(
+            "Presentation verification requires verifier-owned OID4VP request state; "
+            "use the canonical OID4VP verifier flow"
         )
 
     def create_presentation_request(

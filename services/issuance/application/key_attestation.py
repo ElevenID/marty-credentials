@@ -16,10 +16,17 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, padding, rsa
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from marty_credentials.native_backend import require_marty_verification
+
+_marty_verification = require_marty_verification(
+    (
+        "ChainValidator",
+        "ValidationConfig",
+        "certificate_der_to_pem",
+        "get_certificate_public_key",
+        "verify_signature",
+    )
+)
 
 
 class KeyAttestationError(ValueError):
@@ -126,9 +133,7 @@ class KeyAttestationPolicy:
             _normalize_https_origin(value)
             for value in _string_tuple(raw.get("status_list_allowed_origins"))
         )
-        status_roots = (
-            _string_tuple(raw.get("status_list_trusted_root_certificates_pem")) or roots
-        )
+        status_roots = _string_tuple(raw.get("status_list_trusted_root_certificates_pem")) or roots
         status_algorithms = (
             frozenset(_string_tuple(raw.get("status_list_allowed_algorithms"))) or algorithms
         )
@@ -226,150 +231,65 @@ def _decode_json_part(value: str, name: str) -> dict[str, Any]:
     return decoded
 
 
-def _verify_signature_with_key(
-    public_key: Any,
+def _verify_signature_with_certificate(
+    leaf_certificate_der: bytes,
     signature: bytes,
     message: bytes,
     algorithm: str,
 ) -> None:
     try:
-        if algorithm in {"ES256", "ES384"}:
-            coordinate_size = {"ES256": 32, "ES384": 48}[algorithm]
-            curve = {"ES256": ec.SECP256R1, "ES384": ec.SECP384R1}[algorithm]
-            if not isinstance(public_key, ec.EllipticCurvePublicKey) or not isinstance(
-                public_key.curve, curve
-            ):
-                raise KeyAttestationError(
-                    "Key attestation algorithm does not match certificate key"
-                )
-            if len(signature) != coordinate_size * 2:
-                raise KeyAttestationError("Key attestation has invalid ECDSA signature length")
-            r = int.from_bytes(signature[:coordinate_size], "big")
-            s = int.from_bytes(signature[coordinate_size:], "big")
-            digest = hashes.SHA256() if algorithm == "ES256" else hashes.SHA384()
-            public_key.verify(encode_dss_signature(r, s), message, ec.ECDSA(digest))
-        elif algorithm == "EdDSA":
-            if not isinstance(public_key, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
-                raise KeyAttestationError(
-                    "Key attestation algorithm does not match certificate key"
-                )
-            public_key.verify(signature, message)
-        elif algorithm in {"RS256", "PS256"}:
-            if not isinstance(public_key, rsa.RSAPublicKey):
-                raise KeyAttestationError(
-                    "Key attestation algorithm does not match certificate key"
-                )
-            rsa_padding: padding.AsymmetricPadding
-            if algorithm == "RS256":
-                rsa_padding = padding.PKCS1v15()
-            else:
-                rsa_padding = padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=32)
-            public_key.verify(signature, message, rsa_padding, hashes.SHA256())
-        else:
-            raise KeyAttestationError(f"Unsupported key attestation algorithm {algorithm!r}")
-    except KeyAttestationError:
-        raise
-    except Exception as exc:  # cryptography exposes algorithm-specific exceptions
-        raise KeyAttestationError("Key attestation signature verification failed") from exc
-
-
-def _verify_certificate_signature(child: x509.Certificate, issuer: x509.Certificate) -> None:
-    key = issuer.public_key()
-    try:
-        if isinstance(key, ec.EllipticCurvePublicKey):
-            key.verify(
-                child.signature,
-                child.tbs_certificate_bytes,
-                ec.ECDSA(child.signature_hash_algorithm),
-            )
-        elif isinstance(key, rsa.RSAPublicKey):
-            signature_padding = child.signature_algorithm_parameters
-            if not isinstance(signature_padding, padding.AsymmetricPadding):
-                signature_padding = padding.PKCS1v15()
-            key.verify(
-                child.signature,
-                child.tbs_certificate_bytes,
-                signature_padding,
-                child.signature_hash_algorithm,
-            )
-        elif isinstance(key, (ed25519.Ed25519PublicKey, ed448.Ed448PublicKey)):
-            key.verify(child.signature, child.tbs_certificate_bytes)
-        else:
-            raise KeyAttestationError("Unsupported certificate issuer public key")
-    except KeyAttestationError:
-        raise
-    except Exception as exc:
-        raise KeyAttestationError("Key attestation certificate chain signature is invalid") from exc
-
-
-def _require_ca_certificate(certificate: x509.Certificate) -> None:
-    try:
-        constraints = certificate.extensions.get_extension_for_class(
-            x509.BasicConstraints
-        ).value
-    except x509.ExtensionNotFound as exc:
-        raise KeyAttestationError(
-            "Key attestation certificate chain issuer has no CA constraint"
-        ) from exc
-    if not constraints.ca:
-        raise KeyAttestationError("Key attestation certificate chain issuer is not a CA")
-    try:
-        key_usage = certificate.extensions.get_extension_for_class(x509.KeyUsage).value
-    except x509.ExtensionNotFound:
-        return
-    if not key_usage.key_cert_sign:
-        raise KeyAttestationError(
-            "Key attestation certificate chain issuer cannot sign certificates"
+        public_key_der = bytes(_marty_verification.get_certificate_public_key(leaf_certificate_der))
+        valid = _marty_verification.verify_signature(
+            algorithm,
+            public_key_der,
+            message,
+            signature,
         )
+    except Exception as exc:
+        raise KeyAttestationError(
+            "Key attestation algorithm does not match certificate key"
+        ) from exc
+    if not valid:
+        raise KeyAttestationError("Key attestation signature verification failed")
 
 
 def _validate_certificate_chain(
     encoded_chain: Sequence[Any],
     trusted_roots_pem: Sequence[str],
     now: datetime,
-) -> x509.Certificate:
+) -> bytes:
     if not encoded_chain or any(not isinstance(item, str) or not item for item in encoded_chain):
         raise KeyAttestationError("Key attestation x5c must be a non-empty certificate array")
     try:
-        chain = [
-            x509.load_der_x509_certificate(base64.b64decode(item, validate=True))
-            for item in encoded_chain
-        ]
-        roots = [x509.load_pem_x509_certificate(item.encode("utf-8")) for item in trusted_roots_pem]
+        chain = [base64.b64decode(item, validate=True) for item in encoded_chain]
     except (ValueError, TypeError) as exc:
         raise KeyAttestationError("Key attestation certificate encoding is invalid") from exc
-    if not roots:
+    if not trusted_roots_pem:
         raise KeyAttestationError("Key attestation policy has no trusted roots")
-
-    for certificate in chain:
-        if now < certificate.not_valid_before_utc or now > certificate.not_valid_after_utc:
-            raise KeyAttestationError("Key attestation certificate is outside its validity period")
     try:
-        leaf_key_usage = chain[0].extensions.get_extension_for_class(x509.KeyUsage).value
-    except x509.ExtensionNotFound:
-        leaf_key_usage = None
-    if leaf_key_usage is not None and not leaf_key_usage.digital_signature:
-        raise KeyAttestationError("Key attestation certificate cannot sign digital assertions")
-    for child, issuer in zip(chain, chain[1:], strict=False):
-        if child.issuer != issuer.subject:
-            raise KeyAttestationError("Key attestation certificate chain issuer does not match")
-        _require_ca_certificate(issuer)
-        _verify_certificate_signature(child, issuer)
-
-    terminal = chain[-1]
-    for root in roots:
-        if now < root.not_valid_before_utc or now > root.not_valid_after_utc:
-            continue
-        if terminal.fingerprint(hashes.SHA256()) == root.fingerprint(hashes.SHA256()):
-            return chain[0]
-        if terminal.issuer == root.subject:
-            try:
-                _require_ca_certificate(root)
-                _verify_certificate_signature(terminal, root)
-                return chain[0]
-            except KeyAttestationError:
-                continue
-    raise KeyAttestationError("Key attestation certificate chain is not trusted by issuer profile")
+        config = _marty_verification.ValidationConfig(
+            check_crl=False,
+            check_ocsp=False,
+            revocation_mode="hard_fail",
+            validation_moment=now.isoformat(),
+            required_key_usage=["digital_signature"],
+            certificate_type="any",
+        )
+        validator = _marty_verification.ChainValidator.with_config(config)
+        for root in trusted_roots_pem:
+            validator.add_trust_anchor(root)
+        chain_pem = [
+            _marty_verification.certificate_der_to_pem(certificate) for certificate in chain
+        ]
+        result = validator.validate_chain(chain_pem)
+    except Exception as exc:
+        raise KeyAttestationError("Key attestation certificate encoding is invalid") from exc
+    if not result.valid:
+        detail = "; ".join(result.errors) if result.errors else "native chain validation failed"
+        raise KeyAttestationError(
+            f"Key attestation certificate chain is not trusted by issuer profile: {detail}"
+        )
+    return chain[0]
 
 
 def _required_timestamp(claims: Mapping[str, Any], name: str) -> int:
@@ -402,8 +322,8 @@ def _status_list_value(
         policy.status_list_trusted_root_certificates_pem,
         now,
     )
-    _verify_signature_with_key(
-        leaf.public_key(),
+    _verify_signature_with_certificate(
+        leaf,
         _b64url_decode(parts[2]),
         f"{parts[0]}.{parts[1]}".encode("ascii"),
         algorithm,
@@ -424,9 +344,7 @@ def _status_list_value(
         if exp <= now_timestamp:
             raise KeyAttestationError("Status List Token has expired")
     ttl = claims.get("ttl")
-    if ttl is not None and (
-        isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0
-    ):
+    if ttl is not None and (isinstance(ttl, bool) or not isinstance(ttl, int) or ttl <= 0):
         raise KeyAttestationError("Status List Token ttl must be a positive integer")
 
     status_list = claims.get("status_list")
@@ -564,13 +482,16 @@ async def validate_token_status_list_entry(
         token = bytes(body).decode("ascii").strip()
     except UnicodeDecodeError as exc:
         raise KeyAttestationError("Status List Token response is not ASCII") from exc
-    return _status_list_value(
-        token,
-        uri=uri,
-        index=index,
-        policy=policy,
-        now=now or datetime.now(UTC),
-    ) == 0
+    return (
+        _status_list_value(
+            token,
+            uri=uri,
+            index=index,
+            policy=policy,
+            now=now or datetime.now(UTC),
+        )
+        == 0
+    )
 
 
 async def validate_key_attestation_jwt(
@@ -601,8 +522,8 @@ async def validate_key_attestation_jwt(
         policy.trusted_root_certificates_pem,
         current,
     )
-    _verify_signature_with_key(
-        leaf.public_key(),
+    _verify_signature_with_certificate(
+        leaf,
         _b64url_decode(parts[2]),
         f"{parts[0]}.{parts[1]}".encode("ascii"),
         algorithm,
@@ -638,8 +559,7 @@ async def validate_key_attestation_jwt(
     ):
         raise KeyAttestationError("Key attestation key_storage must be a non-empty string array")
     if policy.required_key_storage and (
-        not isinstance(key_storage, list)
-        or not policy.required_key_storage.issubset(key_storage)
+        not isinstance(key_storage, list) or not policy.required_key_storage.issubset(key_storage)
     ):
         raise KeyAttestationError("Key attestation does not meet key-storage requirements")
     if user_authentication is not None and (
@@ -721,9 +641,7 @@ async def verify_oid4vci_proof_with_issuer_policy(
         raw_attestation = header.get("key_attestation")
 
         policy: KeyAttestationPolicy | None = None
-        if issuer_context is not None and isinstance(
-            issuer_context.get("issuer_profile"), Mapping
-        ):
+        if issuer_context is not None and isinstance(issuer_context.get("issuer_profile"), Mapping):
             policy = KeyAttestationPolicy.from_issuer_context(
                 issuer_context,
                 organization_id=organization_id,
@@ -731,9 +649,7 @@ async def verify_oid4vci_proof_with_issuer_policy(
 
         if raw_attestation is None:
             if policy is not None and policy.mode == "required":
-                raise KeyAttestationError(
-                    "Issuer profile requires a key-attestation-bound proof"
-                )
+                raise KeyAttestationError("Issuer profile requires a key-attestation-bound proof")
             return proof_verifier(proof_jwt, expected_nonce, issuer_url)
 
         if not isinstance(raw_attestation, str) or not raw_attestation:
@@ -743,9 +659,7 @@ async def verify_oid4vci_proof_with_issuer_policy(
                 "Key-attestation-bound proof has no resolved tenant issuer policy"
             )
         if policy.mode == "disabled":
-            raise KeyAttestationError(
-                "Issuer profile does not allow key-attestation-bound proofs"
-            )
+            raise KeyAttestationError("Issuer profile does not allow key-attestation-bound proofs")
 
         effective_status_validator = status_validator
         if effective_status_validator is None and policy.status_validation != "disabled":

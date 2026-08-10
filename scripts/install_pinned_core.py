@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install the checksum-pinned canonical marty-core wheel for this platform."""
+"""Install checksum-pinned canonical marty-core wheels for this platform."""
 
 from __future__ import annotations
 
@@ -15,6 +15,12 @@ from typing import Any
 
 class PinnedCoreError(RuntimeError):
     """The pinned Core dependency cannot be selected or authenticated."""
+
+
+CORE_WHEELS = {
+    "marty-rs": "marty_rs-",
+    "marty-verification": "marty_verification_py-",
+}
 
 
 def platform_key() -> str:
@@ -37,12 +43,16 @@ def platform_key() -> str:
     return f"{operating_system}-{architecture}"
 
 
-def load_core_dependency(repository: Path, key: str) -> dict[str, str]:
+def load_core_dependency(
+    repository: Path,
+    key: str,
+    dependency_name: str = "marty-rs",
+) -> dict[str, str]:
     try:
         payload: Any = json.loads(
             (repository / "release" / "dependencies.json").read_text(encoding="utf-8")
         )
-        core = payload["marty-rs"]
+        core = payload[dependency_name]
         selected = core["platform_assets"][key]
         result = {
             "repository": core["repository"],
@@ -56,7 +66,10 @@ def load_core_dependency(repository: Path, key: str) -> dict[str, str]:
 
     if result["tag"] != f"v{result['version']}":
         raise PinnedCoreError("pinned Core tag and version do not match")
-    if not result["asset"].startswith(f"marty_rs-{result['version']}-"):
+    expected_prefix = CORE_WHEELS.get(dependency_name)
+    if expected_prefix is None:
+        raise PinnedCoreError(f"unsupported pinned Core dependency: {dependency_name}")
+    if not result["asset"].startswith(f"{expected_prefix}{result['version']}-"):
         raise PinnedCoreError("pinned Core wheel and version do not match")
     if len(result["sha256"]) != 64 or any(
         character not in "0123456789abcdef" for character in result["sha256"]
@@ -65,37 +78,46 @@ def load_core_dependency(repository: Path, key: str) -> dict[str, str]:
     return result
 
 
-def install_pinned_core(repository: Path, destination: Path) -> Path:
-    dependency = load_core_dependency(repository, platform_key())
+def install_pinned_core(repository: Path, destination: Path) -> list[Path]:
+    dependencies = [
+        load_core_dependency(repository, platform_key(), dependency_name)
+        for dependency_name in CORE_WHEELS
+    ]
     destination.mkdir(parents=True, exist_ok=True)
-    wheel = destination / dependency["asset"]
-    if wheel.exists():
-        raise PinnedCoreError(f"download destination already exists: {wheel}")
+    wheels: list[Path] = []
+    for dependency in dependencies:
+        wheel = destination / dependency["asset"]
+        if wheel.exists():
+            raise PinnedCoreError(f"download destination already exists: {wheel}")
 
+        subprocess.run(
+            [
+                "gh",
+                "release",
+                "download",
+                dependency["tag"],
+                "--repo",
+                dependency["repository"],
+                "--pattern",
+                dependency["asset"],
+                "--dir",
+                str(destination),
+            ],
+            check=True,
+        )
+        if not wheel.is_file():
+            raise PinnedCoreError(f"GitHub release did not provide {dependency['asset']}")
+        actual = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        if actual != dependency["sha256"]:
+            raise PinnedCoreError(
+                f"pinned Core digest mismatch: expected {dependency['sha256']}, got {actual}"
+            )
+        wheels.append(wheel)
     subprocess.run(
-        [
-            "gh",
-            "release",
-            "download",
-            dependency["tag"],
-            "--repo",
-            dependency["repository"],
-            "--pattern",
-            dependency["asset"],
-            "--dir",
-            str(destination),
-        ],
+        [sys.executable, "-m", "pip", "install", *(str(wheel) for wheel in wheels)],
         check=True,
     )
-    if not wheel.is_file():
-        raise PinnedCoreError(f"GitHub release did not provide {dependency['asset']}")
-    actual = hashlib.sha256(wheel.read_bytes()).hexdigest()
-    if actual != dependency["sha256"]:
-        raise PinnedCoreError(
-            f"pinned Core digest mismatch: expected {dependency['sha256']}, got {actual}"
-        )
-    subprocess.run([sys.executable, "-m", "pip", "install", str(wheel)], check=True)
-    return wheel
+    return wheels
 
 
 def main() -> int:
@@ -104,11 +126,12 @@ def main() -> int:
     parser.add_argument("--destination", type=Path, required=True)
     args = parser.parse_args()
     try:
-        wheel = install_pinned_core(args.repository.resolve(), args.destination.resolve())
+        wheels = install_pinned_core(args.repository.resolve(), args.destination.resolve())
     except (OSError, PinnedCoreError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(wheel)
+    for wheel in wheels:
+        print(wheel)
     return 0
 
 

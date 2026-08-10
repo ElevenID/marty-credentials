@@ -180,7 +180,7 @@ jobs:
           set -euo pipefail
           jq -e '.schema == "marty.release-dependencies/v1"' release/dependencies.json >/dev/null
           mkdir release-deps
-          for dependency in marty-rs marty-msf marty-common; do
+          for dependency in marty-rs marty-verification marty-msf marty-common; do
             repository=$(jq -r --arg dependency "$dependency" '.[$dependency].repository' release/dependencies.json)
             release_tag=$(jq -r --arg dependency "$dependency" '.[$dependency].tag' release/dependencies.json)
             asset=$(jq -r --arg dependency "$dependency" '.[$dependency].asset' release/dependencies.json)
@@ -190,9 +190,11 @@ jobs:
           done
           {
             echo "marty_rs_wheel=$(jq -r '.["marty-rs"].asset' release/dependencies.json)"
+            echo "marty_verification_wheel=$(jq -r '.["marty-verification"].asset' release/dependencies.json)"
             echo "marty_msf_wheel=$(jq -r '.["marty-msf"].asset' release/dependencies.json)"
             echo "marty_common_wheel=$(jq -r '.["marty-common"].asset' release/dependencies.json)"
             echo "marty_rs_sha256=$(jq -r '.["marty-rs"].sha256' release/dependencies.json)"
+            echo "marty_verification_sha256=$(jq -r '.["marty-verification"].sha256' release/dependencies.json)"
             echo "marty_msf_sha256=$(jq -r '.["marty-msf"].sha256' release/dependencies.json)"
             echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)"
           } >> "$GITHUB_OUTPUT"
@@ -216,9 +218,11 @@ jobs:
             org.opencontainers.image.version=${{ needs.validate-draft.outputs.tag }}
           build-args: |
             MARTY_RS_WHEEL=${{ steps.deps.outputs.marty_rs_wheel }}
+            MARTY_VERIFICATION_WHEEL=${{ steps.deps.outputs.marty_verification_wheel }}
             MARTY_MSF_WHEEL=${{ steps.deps.outputs.marty_msf_wheel }}
             MARTY_COMMON_WHEEL=${{ steps.deps.outputs.marty_common_wheel }}
             MARTY_RS_SHA256=${{ steps.deps.outputs.marty_rs_sha256 }}
+            MARTY_VERIFICATION_SHA256=${{ steps.deps.outputs.marty_verification_sha256 }}
             MARTY_MSF_SHA256=${{ steps.deps.outputs.marty_msf_sha256 }}
             MARTY_COMMON_SHA256=${{ steps.deps.outputs.marty_common_sha256 }}
           provenance: mode=max
