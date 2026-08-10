@@ -73,6 +73,7 @@ def stable_asset_names(version: str) -> set[str]:
         f"marty_credentials-{version}.tar.gz",
         f"marty_rs-{version}-cp311-abi3-macosx_10_12_x86_64.whl",
         f"marty_rs-{version}-cp311-abi3-macosx_11_0_arm64.whl",
+        f"marty_rs-{version}-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
         f"marty_rs-{version}-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
         f"marty_rs-{version}-cp311-abi3-win_amd64.whl",
     }

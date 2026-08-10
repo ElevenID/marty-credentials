@@ -45,7 +45,11 @@ def test_version_from_tag_rejects_noncanonical_stable_tags(tag: str) -> None:
 def test_release_asset_contract_is_complete_and_disjoint() -> None:
     stable = release_contract.stable_asset_names("0.1.7")
     images = release_contract.image_evidence_names()
-    assert len(stable) == 8
+    assert len(stable) == 9
+    assert (
+        "marty_rs-0.1.7-cp311-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+        in stable
+    )
     assert len(images) == 4
     assert stable.isdisjoint(images)
     assert release_contract.data_asset_names("0.1.7") == stable | images
@@ -88,7 +92,7 @@ def test_checksum_manifest_covers_only_all_data_assets(tmp_path: Path) -> None:
     release_contract.verify_checksums(tmp_path, "0.1.7")
 
     lines = manifest.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 12
+    assert len(lines) == 13
     assert [line.split("  ", 1)[1] for line in lines] == sorted(expected)
     assert all("SHA256SUMS" not in line for line in lines)
 
