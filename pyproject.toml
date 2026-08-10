@@ -49,11 +49,14 @@ dependencies = [
     # transitive dependencies.
     "googleapis-common-protos>=1.63.0",
     "protobuf>=4.25.0",
-    "marty-rs>=0.1.50",
 ]
 
 [project.optional-dependencies]
-ffi = []
+ffi = [
+    # The native wheel is shipped as an asset of the same GitHub release.
+    # Production images install that exact wheel before validating capabilities.
+    "marty-rs>=0.1.50",
+]
 spruceid = [
     "didkit>=0.3",
 ]

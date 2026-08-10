@@ -184,3 +184,14 @@ def test_release_images_use_the_credential_release_native_wheel() -> None:
     assert "marty_rs_sha256=\"${marty_rs_digest#sha256:}\"" in workflow
     assert "COPY python/marty_credentials /app/marty_credentials" in verification_image
     assert "validate_marty_rs_capabilities()" in verification_image
+
+
+def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+
+    assert not any(
+        dependency.startswith("marty-rs") for dependency in project["dependencies"]
+    )
+    assert project["optional-dependencies"]["ffi"] == ["marty-rs>=0.1.50"]

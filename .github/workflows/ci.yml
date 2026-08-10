@@ -298,6 +298,8 @@ jobs:
 
       - name: Enforce native verification backend contract
         working-directory: marty-credentials
+        env:
+          PYTHONPATH: ${{ github.workspace }}/marty-credentials/services
         run: >-
           python -c "from issuance.application.rust_integration import
           validate_marty_rs_capabilities as validate_issuance;
