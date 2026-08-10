@@ -276,6 +276,8 @@ jobs:
 
       - name: Install dependencies
         working-directory: marty-credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           pip install --upgrade pip
           pip install pytest pytest-asyncio
