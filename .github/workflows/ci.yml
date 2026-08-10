@@ -231,7 +231,7 @@ jobs:
         working-directory: marty-credentials
         run: |
           test "$(jq -r '.status' tests/artifacts/issuance-idempotency/contract-result.json)" = passed
-          test "$(jq -r '.migration_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = issuance_offer_idempotency
+          test "$(jq -r '.migration_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = merge_issuance_heads
           test "$(jq -r '.created_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
           test "$(jq -r '.recovered_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
           test "$(jq -r '.same_transaction' tests/artifacts/issuance-idempotency/contract-result.json)" = true
