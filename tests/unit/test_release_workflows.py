@@ -1,6 +1,7 @@
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
+CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
 IMAGES = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(encoding="utf-8")
 PYPI = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
@@ -76,6 +77,20 @@ def test_release_tool_installs_are_version_pinned() -> None:
     assert "hatchling==1.31.0" in PYPROJECT
     assert "hatch-vcs==0.5.0" in PYPROJECT
     assert "maturin==1.14.1" in PYPROJECT
+
+
+def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
+    wheel_matrix = STABLE.split("  build-python-wheels:", 1)[1].split(
+        "\n  build-wasm:", 1
+    )[0]
+    assert "- os: ubuntu-latest\n            target: aarch64" in wheel_matrix
+
+
+def test_ci_authenticates_pinned_core_release_downloads() -> None:
+    install_step = CI.split("      - name: Install dependencies", 1)[1].split(
+        "\n      - name: Install Python package", 1
+    )[0]
+    assert "GH_TOKEN: ${{ github.token }}" in install_step
 
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:
