@@ -49,7 +49,7 @@ dependencies = [
     # transitive dependencies.
     "googleapis-common-protos>=1.63.0",
     "protobuf>=4.25.0",
-    "marty-rs>=0.1.49",
+    "marty-rs>=0.1.50",
 ]
 
 [project.optional-dependencies]
