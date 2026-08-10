@@ -101,7 +101,8 @@ async def test_structural_verifier_error_is_fatal() -> None:
     )
     verifier.verify_w3c_vc = AsyncMock(
         return_value={
-            "valid": True,
+            "valid": False,
+            "signature_verified": True,
             "issuer_trusted": True,
             "claims": {"employee_id": "E-123"},
         }
@@ -128,10 +129,110 @@ async def test_structural_verifier_error_is_fatal() -> None:
 
 
 @pytest.mark.asyncio
+async def test_structural_verifier_requires_scoped_low_level_evidence() -> None:
+    verifier = RustCredentialVerifier.__new__(RustCredentialVerifier)
+    verifier.marty_rs = MagicMock()
+    verifier.marty_rs.verify_presentation_structure.return_value = json.dumps(
+        {
+            "valid": False,
+            "check_valid": True,
+            "decision_ready": False,
+            "scope": "presentation_structure",
+            "evidence": {"presentation_structure": "passed"},
+            "descriptor_results": [],
+            "errors": [],
+        }
+    )
+    verifier.verify_w3c_vc = AsyncMock(
+        return_value={
+            "valid": False,
+            "signature_verified": True,
+            "issuer_trusted": True,
+            "claims": {"employee_id": "E-123"},
+        }
+    )
+
+    result = await verifier.verify_presentation(
+        presentation={
+            "verifiableCredential": [{"id": "credential-1"}],
+            "presentation_submission": {
+                "id": "submission-1",
+                "definition_id": "pd-1",
+                "descriptor_map": [],
+            },
+        },
+        presentation_definition={
+            "id": "pd-1",
+            "input_descriptors": [{"id": "employee"}],
+        },
+        verifier_did="did:web:verifier.example",
+        organization_id="org-1",
+    )
+
+    assert result["valid"] is False
+    assert result["cryptographic_valid"] is False
+    assert result["credential_proofs_valid"] is True
+    assert result["presentation_structure_valid"] is True
+    assert result["presentation_constraints_checked"] is False
+    assert result["decision_ready"] is False
+    assert result["trust_chain_valid"] is True
+    assert result["revocation_checked"] is False
+
+
+@pytest.mark.asyncio
+async def test_structural_verifier_rejects_legacy_valid_only_result() -> None:
+    verifier = RustCredentialVerifier.__new__(RustCredentialVerifier)
+    verifier.marty_rs = MagicMock()
+    verifier.marty_rs.verify_presentation_structure.return_value = json.dumps(
+        {"valid": True}
+    )
+    verifier.verify_w3c_vc = AsyncMock(
+        return_value={
+            "valid": False,
+            "signature_verified": True,
+            "issuer_trusted": True,
+            "claims": {},
+        }
+    )
+
+    result = await verifier.verify_presentation(
+        presentation={
+            "verifiableCredential": [{"id": "credential-1"}],
+            "presentation_submission": {
+                "id": "submission-1",
+                "definition_id": "pd-1",
+                "descriptor_map": [],
+            },
+        },
+        presentation_definition={
+            "id": "pd-1",
+            "input_descriptors": [{"id": "employee"}],
+        },
+        verifier_did="did:web:verifier.example",
+        organization_id="org-1",
+    )
+
+    assert result["valid"] is False
+    assert "evidence was incomplete" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_outer_jwt_proof_does_not_authenticate_embedded_claims() -> None:
     verifier = RustCredentialVerifier.__new__(RustCredentialVerifier)
     verifier.marty_rs = MagicMock()
-    verifier.marty_rs.verify_vp_token_jwt.return_value = json.dumps({"valid": True})
+    verifier.marty_rs.oid4vp_verify_vp_token.return_value = json.dumps(
+        {
+            "valid": False,
+            "check_valid": True,
+            "decision_ready": False,
+            "scope": "presentation_proof",
+            "evidence": {
+                "presentation_proof": "passed",
+                "transaction_binding": "passed",
+            },
+            "errors": [],
+        }
+    )
     payload = (
         base64.urlsafe_b64encode(
             json.dumps(
@@ -156,3 +257,28 @@ async def test_outer_jwt_proof_does_not_authenticate_embedded_claims() -> None:
     assert result["presentation_proof_valid"] is True
     assert result["credential_proofs_valid"] is False
     assert result["claims"] == []
+
+
+@pytest.mark.asyncio
+async def test_outer_jwt_rejects_incomplete_low_level_evidence() -> None:
+    verifier = RustCredentialVerifier.__new__(RustCredentialVerifier)
+    verifier.marty_rs = MagicMock()
+    verifier.marty_rs.oid4vp_verify_vp_token.return_value = json.dumps(
+        {
+            "valid": False,
+            "check_valid": True,
+            "decision_ready": False,
+            "scope": "presentation_proof",
+            "evidence": {"presentation_proof": "passed"},
+            "errors": [],
+        }
+    )
+
+    result = await verifier.verify_jwt_vp(
+        "header.payload.signature",
+        expected_audience="did:web:verifier.example",
+        expected_nonce="nonce-1",
+    )
+
+    assert result["valid"] is False
+    assert "evidence was incomplete" in result["error"]

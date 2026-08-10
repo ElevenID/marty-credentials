@@ -78,11 +78,11 @@ def test_verification_native_contract_rejects_missing_capability(monkeypatch) ->
         rust_verifier,
         "require_marty_rs",
         lambda capabilities=(): (_ for _ in ()).throw(
-            NativeBackendUnavailable("missing verify_w3c_vc_signature")
+            NativeBackendUnavailable("missing verify_vcdm_data_integrity")
         ),
     )
 
-    with pytest.raises(NativeBackendUnavailable, match="verify_w3c_vc_signature"):
+    with pytest.raises(NativeBackendUnavailable, match="verify_vcdm_data_integrity"):
         rust_verifier.validate_marty_rs_capabilities()
 
 
@@ -162,6 +162,15 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert core_release["asset"].startswith(f"marty_rs-{core_release['version']}-")
     assert len(core_release["commit"]) == 40
     assert len(core_release["sha256"]) == 64
+    assert core_release["platform_assets"]["linux-x86_64"] == {
+        "asset": core_release["asset"],
+        "sha256": core_release["sha256"],
+    }
+    assert set(core_release["platform_assets"]) == {
+        "linux-x86_64",
+        "macos-arm64",
+        "windows-x86_64",
+    }
     core_revisions = {
         cargo["workspace"]["dependencies"][package]["rev"]
         for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
@@ -169,7 +178,7 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert core_revisions == {core_release["commit"]}
 
 
-def test_release_images_use_the_credential_release_native_wheel() -> None:
+def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(
         encoding="utf-8"
     )
@@ -177,11 +186,12 @@ def test_release_images_use_the_credential_release_native_wheel() -> None:
         encoding="utf-8"
     )
 
-    dependency_loop = "for dependency in marty-msf marty-common; do"
+    dependency_loop = "for dependency in marty-rs marty-msf marty-common; do"
     assert dependency_loop in workflow
-    assert "releases/$RELEASE_ID" in workflow
-    assert "marty_rs_asset_id" in workflow
-    assert "marty_rs_sha256=\"${marty_rs_digest#sha256:}\"" in workflow
+    assert "draft-release.json" not in workflow
+    assert "Draft must contain exactly one Linux x86_64 marty-rs wheel" not in workflow
+    assert "marty_rs_asset_id" not in workflow
+    assert "marty_rs_sha256=$(jq -r" in workflow
     assert "COPY python/marty_credentials /app/marty_credentials" in verification_image
     assert "validate_marty_rs_capabilities()" in verification_image
 
@@ -194,4 +204,4 @@ def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
     assert not any(
         dependency.startswith("marty-rs") for dependency in project["dependencies"]
     )
-    assert project["optional-dependencies"]["ffi"] == ["marty-rs>=0.1.50"]
+    assert project["optional-dependencies"]["ffi"] == []

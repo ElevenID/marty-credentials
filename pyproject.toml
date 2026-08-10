@@ -52,11 +52,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-ffi = [
-    # The native wheel is shipped as an asset of the same GitHub release.
-    # Production images install that exact wheel before validating capabilities.
-    "marty-rs>=0.1.50",
-]
+# marty-core owns the canonical native wheel. Install the exact
+# release/dependencies.json asset before selecting this compatibility extra.
+ffi = []
 spruceid = [
     "didkit>=0.3",
 ]

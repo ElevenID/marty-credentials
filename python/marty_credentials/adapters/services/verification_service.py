@@ -1,4 +1,5 @@
 """Verification service for validating digital identity credentials"""
+import base64
 import json
 import logging
 import time
@@ -44,6 +45,39 @@ from marty_credentials.ports.types import (
 from marty_credentials.ports.verifier import ICredentialVerifier
 
 logger = logging.getLogger(__name__)
+
+
+def _public_key_pem_to_jwk(public_key_pem: str) -> dict[str, str]:
+    """Convert supported public PEM keys to Core's public-JWK boundary."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+
+    def encode(value: bytes) -> str:
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+    key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+    if isinstance(key, ec.EllipticCurvePublicKey) and isinstance(
+        key.curve, ec.SECP256R1
+    ):
+        numbers = key.public_numbers()
+        return {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": encode(numbers.x.to_bytes(32, "big")),
+            "y": encode(numbers.y.to_bytes(32, "big")),
+        }
+    if isinstance(key, ed25519.Ed25519PublicKey):
+        return {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": encode(
+                key.public_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PublicFormat.Raw,
+                )
+            ),
+        }
+    raise ValueError("Only P-256 and Ed25519 public keys are supported for VC-JWT")
 
 
 def _load_trusted_certs() -> List[str]:
@@ -135,9 +169,20 @@ class VerificationService(ICredentialVerifier):
             if not public_key_pem:
                 raise ValueError("A public key is required for JWT signature verification")
 
-            authenticated_claims = json.loads(
-                _marty_rs.verify_jws_with_pem(jwt_token, public_key_pem)
+            verification = json.loads(
+                _marty_rs.verify_vcdm_jwt(
+                    json.dumps(
+                        {
+                            "token": jwt_token,
+                            "issuer_public_jwk": _public_key_pem_to_jwk(public_key_pem),
+                        }
+                    )
+                )
             )
+            if verification.get("valid") is not True:
+                errors = [str(error) for error in verification.get("errors", []) if error]
+                raise ValueError("; ".join(errors) or "Native VC-JWT verification failed")
+            authenticated_claims = verification.get("claims")
             if not isinstance(authenticated_claims, dict):
                 raise ValueError("Native JWT verifier returned invalid claims")
 
@@ -148,6 +193,7 @@ class VerificationService(ICredentialVerifier):
             
             # Check revocation status
             is_revoked = False
+            status_checked = False
             credential_id = None
             cred_id_value = vc.get("id") or authenticated_claims.get("jti")
             if cred_id_value is not None:
@@ -171,16 +217,24 @@ class VerificationService(ICredentialVerifier):
                 
                 if stored_cred:
                     credential_id = stored_cred.id
+                    status_checked = True
                     is_revoked = stored_cred.status == CredentialStatus.REVOKED
             
-            is_valid = not is_expired and not is_revoked
+            # This legacy adapter accepts caller-supplied key material and has no
+            # organization-owned issuer-trust resolver. It may report scoped
+            # cryptographic evidence, but it must never turn that into a final
+            # credential acceptance decision.
+            cryptographic_valid = not is_expired
+            is_valid = False
             
-            result = VerificationResult.SUCCESS if is_valid else VerificationResult.FAILED
+            result = VerificationResult.FAILED
             
             details = {
                 "signature_valid": True,
                 "expired": is_expired,
                 "revoked": is_revoked,
+                "status_checked": status_checked,
+                "issuer_trust_established": False,
                 "credential_type": "w3c_vc"
             }
             
@@ -189,7 +243,14 @@ class VerificationService(ICredentialVerifier):
             result_valid = is_valid
             
             return {
-                "valid": is_valid,
+                "valid": False,
+                "cryptographic_valid": cryptographic_valid,
+                "trust_chain_valid": False,
+                "revocation_checked": status_checked,
+                "revocation_status": (
+                    "REVOKED" if is_revoked else "VALID" if status_checked else "SKIPPED"
+                ),
+                "error": "Issuer trust is not established by this legacy adapter",
                 "details": details,
                 "claims": authenticated_claims
             }

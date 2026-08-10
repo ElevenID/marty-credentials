@@ -162,8 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
-      # The service wheel belongs to the unpublished draft being finalized.
-      contents: write
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -177,12 +176,11 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
         run: |
           set -euo pipefail
           jq -e '.schema == "marty.release-dependencies/v1"' release/dependencies.json >/dev/null
           mkdir release-deps
-          for dependency in marty-msf marty-common; do
+          for dependency in marty-rs marty-msf marty-common; do
             repository=$(jq -r --arg dependency "$dependency" '.[$dependency].repository' release/dependencies.json)
             release_tag=$(jq -r --arg dependency "$dependency" '.[$dependency].tag' release/dependencies.json)
             asset=$(jq -r --arg dependency "$dependency" '.[$dependency].asset' release/dependencies.json)
@@ -190,33 +188,11 @@ jobs:
             gh release download "$release_tag" --repo "$repository" --pattern "$asset" --dir release-deps
             echo "$expected  release-deps/$asset" | sha256sum -c -
           done
-          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > draft-release.json
-          wheel_count="$(jq -r \
-            '[.assets[] | select(.name | test("^marty_rs-.*-cp311-abi3-manylinux_2_17_x86_64\\.manylinux2014_x86_64\\.whl$"))] | length' \
-            draft-release.json)"
-          if [ "$wheel_count" -ne 1 ]; then
-            echo "::error::Draft must contain exactly one Linux x86_64 marty-rs wheel"
-            exit 1
-          fi
-          marty_rs_wheel="$(jq -er \
-            '.assets[] | select(.name | test("^marty_rs-.*-cp311-abi3-manylinux_2_17_x86_64\\.manylinux2014_x86_64\\.whl$")) | .name' \
-            draft-release.json)"
-          marty_rs_asset_id="$(jq -er --arg name "$marty_rs_wheel" \
-            '.assets[] | select(.name == $name) | .id' draft-release.json)"
-          marty_rs_digest="$(jq -er --arg name "$marty_rs_wheel" \
-            '.assets[] | select(.name == $name) | .digest' draft-release.json)"
-          marty_rs_sha256="${marty_rs_digest#sha256:}"
-          gh api -H 'Accept: application/octet-stream' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/releases/assets/$marty_rs_asset_id" \
-            > "release-deps/$marty_rs_wheel"
-          echo "$marty_rs_sha256  release-deps/$marty_rs_wheel" | sha256sum -c -
           {
-            echo "marty_rs_wheel=$marty_rs_wheel"
+            echo "marty_rs_wheel=$(jq -r '.["marty-rs"].asset' release/dependencies.json)"
             echo "marty_msf_wheel=$(jq -r '.["marty-msf"].asset' release/dependencies.json)"
             echo "marty_common_wheel=$(jq -r '.["marty-common"].asset' release/dependencies.json)"
-            echo "marty_rs_sha256=$marty_rs_sha256"
+            echo "marty_rs_sha256=$(jq -r '.["marty-rs"].sha256' release/dependencies.json)"
             echo "marty_msf_sha256=$(jq -r '.["marty-msf"].sha256' release/dependencies.json)"
             echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)"
           } >> "$GITHUB_OUTPUT"

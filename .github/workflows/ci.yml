@@ -274,23 +274,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-
       - name: Install dependencies
+        working-directory: marty-credentials
         run: |
           pip install --upgrade pip
-          pip install maturin pytest pytest-asyncio
-
-      - name: Build Python package
-        working-directory: marty-credentials/rust/marty-rs
-        run: maturin build --locked --features python --interpreter python --out dist
-
-      - name: Install Python bindings
-        working-directory: marty-credentials/rust/marty-rs
-        run: >-
-          python -c "import pathlib, subprocess, sys;
-          subprocess.check_call([sys.executable, '-m', 'pip', 'install',
-          str(next(pathlib.Path('dist').glob('*.whl')))])"
+          pip install pytest pytest-asyncio
+          python scripts/install_pinned_core.py --repository . --destination release-deps
 
       - name: Install Python package
         working-directory: marty-credentials

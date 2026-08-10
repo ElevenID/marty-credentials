@@ -229,14 +229,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
-      - name: Install and test Python package
+      - name: Install pinned canonical Core wheel and test Python package
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python -m pip install maturin==1.14.1 pytest==9.1.1
-          cd rust/marty-rs
-          maturin build --locked --features python --interpreter python --out dist
-          python -c "import pathlib, subprocess, sys; subprocess.check_call([sys.executable, '-m', 'pip', 'install', str(next(pathlib.Path('dist').glob('*.whl')))])"
-          cd ../..
+          set -euo pipefail
+          repository=$(jq -r '.["marty-rs"].repository' release/dependencies.json)
+          release_tag=$(jq -r '.["marty-rs"].tag' release/dependencies.json)
+          asset=$(jq -r '.["marty-rs"].asset' release/dependencies.json)
+          expected=$(jq -r '.["marty-rs"].sha256' release/dependencies.json)
+          mkdir release-deps
+          gh release download "$release_tag" --repo "$repository" --pattern "$asset" --dir release-deps
+          echo "$expected  release-deps/$asset" | sha256sum -c -
+          python -m pip install pytest==9.1.1 "release-deps/$asset"
           pip install -e .[dev]
+          PYTHONPATH="$GITHUB_WORKSPACE/services" python -c \
+            "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; from verification.application.rust_verifier import validate_marty_rs_capabilities as verification; issuance(); verification()"
           pytest tests/ packages/tests/
 
   create-release-draft:
@@ -261,10 +269,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
-      - name: Download all stable artifacts
+      - name: Download credentials-owned stable artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: release-artifacts
+          pattern: source-dist
       - name: Collect the exact stable artifact set
         env:
           TAG: ${{ needs.validate-release-source.outputs.tag }}

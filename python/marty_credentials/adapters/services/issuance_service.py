@@ -65,6 +65,37 @@ class IssuanceService:
         public_jwk = {k: v for k, v in jwk.items() if k != 'd'}
         
         return jwk_json, json.dumps(public_jwk)
+
+    def _jwk_to_public_pem(self, jwk_json: str) -> str:
+        """Encode a public P-256 JWK as SubjectPublicKeyInfo PEM."""
+        import base64
+
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        jwk = json.loads(jwk_json)
+        if jwk.get("kty") != "EC" or jwk.get("crv") != "P-256" or "d" in jwk:
+            raise ValueError("Expected a public EC P-256 JWK")
+
+        def decode_coordinate(name: str) -> int:
+            encoded = jwk.get(name)
+            if not isinstance(encoded, str):
+                raise ValueError(f"Public JWK is missing {name}")
+            padding = "=" * ((4 - len(encoded) % 4) % 4)
+            coordinate = base64.urlsafe_b64decode(encoded + padding)
+            if len(coordinate) != 32:
+                raise ValueError(f"Public JWK {name} must be 32 bytes")
+            return int.from_bytes(coordinate, "big")
+
+        public_key = ec.EllipticCurvePublicNumbers(
+            decode_coordinate("x"),
+            decode_coordinate("y"),
+            ec.SECP256R1(),
+        ).public_key()
+        return public_key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
     
     def _find_or_create_holder(self, holder_did: str) -> Holder:
         """Find existing holder or create new one"""
@@ -204,7 +235,7 @@ class IssuanceService:
         self.db.commit()
         
         # Derive public key PEM from JWK for verification
-        public_key_pem = _marty_rs.p256_public_jwk_to_pem(public_key)
+        public_key_pem = self._jwk_to_public_pem(public_key)
         
         return {
             "credential": sd_jwt_result,
