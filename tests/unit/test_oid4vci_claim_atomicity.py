@@ -194,7 +194,7 @@ async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid
         "verify_proof_jwt",
         lambda *_args, **_kwargs: (True, "did:key:wallet", {}, None),
     )
-    monkeypatch.setattr(routes._nonce_pool, "consume", reject_nonce)
+    monkeypatch.setattr(repo, "consume_proof_nonce", reject_nonce)
 
     response = await routes.issue_credential(
         _request(),
@@ -211,6 +211,45 @@ async def test_credential_endpoint_reports_invalid_nonce_separately_from_invalid
     assert json.loads(response.body) == {
         "error": "invalid_nonce",
         "error_description": "Proof nonce is missing, expired, or already used",
+    }
+
+
+@pytest.mark.asyncio
+async def test_credential_endpoint_fails_closed_when_nonce_store_is_unavailable(
+    monkeypatch,
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(_transaction())
+
+    async def resolve_context(_transaction, **_kwargs):
+        return {}
+
+    async def unavailable(_nonce: str) -> bool:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
+    monkeypatch.setattr(
+        routes,
+        "verify_proof_jwt",
+        lambda *_args, **_kwargs: (True, "did:key:wallet", {}, None),
+    )
+    monkeypatch.setattr(repo, "consume_proof_nonce", unavailable)
+
+    response = await routes.issue_credential(
+        _request(),
+        routes.CredentialRequest(
+            credential_configuration_id="OpenBadgeCredential#sd-jwt",
+            proofs={"jwt": [_proof_jwt()]},
+        ),
+        authorization="Bearer wallet-token",
+        repo=repo,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 503
+    assert json.loads(response.body) == {
+        "error": "temporarily_unavailable",
+        "error_description": "Proof nonce storage is unavailable",
     }
 
 
@@ -235,7 +274,7 @@ async def test_invalid_proof_does_not_consume_wallet_nonce(monkeypatch) -> None:
         "verify_proof_jwt",
         lambda *_args, **_kwargs: (False, "", None, "invalid signature"),
     )
-    monkeypatch.setattr(routes._nonce_pool, "consume", consume_nonce)
+    monkeypatch.setattr(repo, "consume_proof_nonce", consume_nonce)
 
     response = await routes.issue_credential(
         _request(),
@@ -801,7 +840,7 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
         return None
 
     monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
-    monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
+    monkeypatch.setattr(repo, "consume_proof_nonce", _accept_test_nonce)
     monkeypatch.setattr(routes, "require_canvas_issuance_ready", readiness_barrier)
     monkeypatch.setattr(
         routes, "verify_proof_jwt", lambda *_args, **_kwargs: (True, "did:key:learner", {}, None)
@@ -933,7 +972,7 @@ async def test_ldp_vc_uses_native_builder_and_did_mediated_profile_signing(monke
         return None
 
     monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
-    monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
+    monkeypatch.setattr(repo, "consume_proof_nonce", _accept_test_nonce)
     monkeypatch.setattr(routes, "require_canvas_issuance_ready", no_op)
     monkeypatch.setattr(
         routes,
@@ -1058,7 +1097,7 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         return None
 
     monkeypatch.setattr(routes, "apply_remote_issuer_context", resolve_context)
-    monkeypatch.setattr(routes._nonce_pool, "consume", _accept_test_nonce)
+    monkeypatch.setattr(repo, "consume_proof_nonce", _accept_test_nonce)
     monkeypatch.setattr(routes, "require_canvas_issuance_ready", readiness_barrier)
     monkeypatch.setattr(
         routes,
