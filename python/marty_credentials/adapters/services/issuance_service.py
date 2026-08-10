@@ -5,8 +5,9 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
-# Import Rust bindings
-import _marty_rs
+from marty_credentials.native_backend import require_marty_rs
+
+_marty_rs = require_marty_rs()
 
 # Import Open Badges from marty_verification_py
 try:
@@ -64,95 +65,6 @@ class IssuanceService:
         public_jwk = {k: v for k, v in jwk.items() if k != 'd'}
         
         return jwk_json, json.dumps(public_jwk)
-    
-    def _jwk_to_pem(self, jwk_json: str) -> str:
-        """Convert JWK to private key PEM format"""
-        import json
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.backends import default_backend
-        import base64
-        
-        jwk = json.loads(jwk_json)
-        
-        # Decode base64url encoded values
-        def b64url_decode(data):
-            padding = '=' * (4 - len(data) % 4)
-            return base64.urlsafe_b64decode(data + padding)
-        
-        x = b64url_decode(jwk['x'])
-        y = b64url_decode(jwk['y'])
-        d = b64url_decode(jwk['d'])
-        
-        # Create EC private key
-        private_numbers = ec.EllipticCurvePrivateNumbers(
-            int.from_bytes(d, 'big'),
-            ec.EllipticCurvePublicNumbers(
-                int.from_bytes(x, 'big'),
-                int.from_bytes(y, 'big'),
-                ec.SECP256R1()
-            )
-        )
-        
-        private_key = private_numbers.private_key(default_backend())
-        
-        # Convert to PEM
-        pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption()
-        )
-        
-        return pem.decode('utf-8')
-    
-    def _jwk_to_public_pem(self, jwk_json: str) -> str:
-        """Convert JWK to public key PEM format"""
-        import json
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.backends import default_backend
-        import base64
-        
-        jwk = json.loads(jwk_json)
-        
-        # Decode base64url encoded values
-        def b64url_decode(data):
-            padding = '=' * (4 - len(data) % 4)
-            return base64.urlsafe_b64decode(data + padding)
-        
-        x = b64url_decode(jwk['x'])
-        y = b64url_decode(jwk['y'])
-        
-        # Create EC public key
-        public_numbers = ec.EllipticCurvePublicNumbers(
-            int.from_bytes(x, 'big'),
-            int.from_bytes(y, 'big'),
-            ec.SECP256R1()
-        )
-        
-        public_key = public_numbers.public_key(default_backend())
-        
-        # Convert to PEM
-        pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        
-        return pem.decode('utf-8')
-
-    def _private_pem_to_public_pem(self, private_key_pem: str) -> str:
-        """Derive public key PEM from a private key PEM"""
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.backends import default_backend
-        key_obj = serialization.load_pem_private_key(
-            private_key_pem.encode(), password=None, backend=default_backend()
-        )
-        public_key = key_obj.public_key()
-        public_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        )
-        return public_pem.decode('utf-8')
     
     def _find_or_create_holder(self, holder_did: str) -> Holder:
         """Find existing holder or create new one"""
@@ -292,8 +204,7 @@ class IssuanceService:
         self.db.commit()
         
         # Derive public key PEM from JWK for verification
-        private_key_pem = self._jwk_to_pem(private_key_jwk)
-        public_key_pem = self._private_pem_to_public_pem(private_key_pem)
+        public_key_pem = _marty_rs.p256_public_jwk_to_pem(public_key)
         
         return {
             "credential": sd_jwt_result,

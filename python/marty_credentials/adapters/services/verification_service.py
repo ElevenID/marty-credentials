@@ -7,8 +7,9 @@ from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-# Import Rust bindings for SD-JWT and mDoc
-import _marty_rs
+from marty_credentials.native_backend import require_marty_rs
+
+_marty_rs = require_marty_rs()
 
 # Import Open Badges from marty_verification_py
 try:
@@ -112,68 +113,45 @@ class VerificationService(ICredentialVerifier):
     
     def verify_w3c_vc(
         self,
-        credential: Dict[str, Any],
+        credential: Union[Dict[str, Any], str],
         verifier_did: str,
         public_key_pem: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Verify a W3C Verifiable Credential"""
+        """Verify a compact JWT VC with the native signature backend."""
         start_time = time.time()
         credential_type = "w3c_vc"
         result_valid = False
         
         try:
-            # The credential dict might contain the VC structure or be a JWT string
-            # If it's a dict with a JWT in the proof, extract that
+            jwt_token: Optional[str]
             if isinstance(credential, dict):
-                # Check for obviously invalid credentials
-                if "proof" in credential and isinstance(credential["proof"], dict):
-                    jwt_token = credential["proof"].get("jwt")
-                    # Check if JWT is obviously invalid
-                    if jwt_token and (jwt_token.startswith("invalid.") or jwt_token.count(".") < 2):
-                        return {
-                            "valid": False,
-                            "error": "invalid signature",
-                            "details": {"signature_valid": False, "error": "Malformed JWT signature"},
-                            "claims": {}
-                        }
-                
-                # Check for invalid issuer
-                issuer = credential.get("issuer", "")
-                if issuer and "invalid" in issuer.lower():
-                    return {
-                        "valid": False,
-                        "error": "invalid signature",
-                        "details": {"signature_valid": False, "error": "Invalid issuer DID"},
-                        "claims": {}
-                    }
-                
-                # Extract claims from credential structure
-                claims = credential.get("credentialSubject", {})
-                exp_date = credential.get("expirationDate")
-                
+                proof = credential.get("proof")
+                jwt_token = proof.get("jwt") if isinstance(proof, dict) else None
             else:
-                # It's a JWT string
                 jwt_token = credential
-                
-                # We need to decode without verification first to get claims
-                # For now, do basic structure validation
-                claims = {}
-            
-            # Check expiration
-            is_expired = False
-            if isinstance(credential, dict) and "expirationDate" in credential:
-                exp_date = credential["expirationDate"]
-                if exp_date:
-                    from datetime import datetime
-                    exp_dt = datetime.fromisoformat(exp_date.rstrip('Z'))
-                    is_expired = exp_dt < datetime.utcnow()
+
+            if not isinstance(jwt_token, str) or jwt_token.count(".") != 2:
+                raise ValueError("A compact JWT credential is required")
+            if not public_key_pem:
+                raise ValueError("A public key is required for JWT signature verification")
+
+            authenticated_claims = json.loads(
+                _marty_rs.verify_jws_with_pem(jwt_token, public_key_pem)
+            )
+            if not isinstance(authenticated_claims, dict):
+                raise ValueError("Native JWT verifier returned invalid claims")
+
+            vc_claim = authenticated_claims.get("vc")
+            vc = vc_claim if isinstance(vc_claim, dict) else {}
+            exp = authenticated_claims.get("exp")
+            is_expired = isinstance(exp, (int, float)) and exp < time.time()
             
             # Check revocation status
             is_revoked = False
             credential_id = None
-            if isinstance(credential, dict) and "id" in credential:
+            cred_id_value = vc.get("id") or authenticated_claims.get("jti")
+            if cred_id_value is not None:
                 # Look up in database - try by integer ID first
-                cred_id_value = credential["id"]
                 stored_cred = None
                 
                 # Try direct ID lookup if it's an integer or can be converted
@@ -195,13 +173,12 @@ class VerificationService(ICredentialVerifier):
                     credential_id = stored_cred.id
                     is_revoked = stored_cred.status == CredentialStatus.REVOKED
             
-            # For test mode without key verification, accept if not expired/revoked
             is_valid = not is_expired and not is_revoked
             
             result = VerificationResult.SUCCESS if is_valid else VerificationResult.FAILED
             
             details = {
-                "signature_valid": True,  # Assuming valid for test mode
+                "signature_valid": True,
                 "expired": is_expired,
                 "revoked": is_revoked,
                 "credential_type": "w3c_vc"
@@ -214,7 +191,7 @@ class VerificationService(ICredentialVerifier):
             return {
                 "valid": is_valid,
                 "details": details,
-                "claims": credential if isinstance(credential, dict) else {}
+                "claims": authenticated_claims
             }
             
         except Exception as e:

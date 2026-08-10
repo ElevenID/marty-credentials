@@ -8,6 +8,11 @@ from mmf.core.logging import setup_logging
 from mmf.infrastructure.database.postgres import PostgresAdapter
 
 from infrastructure.api.routes import verification_router
+from marty_credentials.native_backend import marty_rs_diagnostic
+from verification.application.rust_verifier import (
+    REQUIRED_MARTY_RS_CAPABILITIES,
+    validate_marty_rs_capabilities,
+)
 
 # Setup logging
 setup_logging()
@@ -31,6 +36,7 @@ app.include_router(verification_router)
 @app.on_event("startup")
 async def startup():
     """Initialize service on startup."""
+    validate_marty_rs_capabilities()
     logger.info("Starting verification-service...")
     # Database tables will be created by migrations
 
@@ -38,7 +44,11 @@ async def startup():
 @app.get("/health")
 async def health():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "verification"}
+    return {
+        "status": "healthy",
+        "service": "verification",
+        "native_backend": marty_rs_diagnostic(REQUIRED_MARTY_RS_CAPABILITIES),
+    }
 
 
 if __name__ == "__main__":

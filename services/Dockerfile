@@ -45,6 +45,7 @@ RUN echo "${MARTY_RS_SHA256}  /release-deps/${MARTY_RS_WHEEL}" | sha256sum -c - 
 
 COPY services/issuance /app/services/issuance
 COPY packages /app/packages
+COPY python/marty_credentials /app/marty_credentials
 COPY python/status_list /app/status_list
 RUN python -c "from issuance.application.rust_integration import validate_marty_rs_capabilities; validate_marty_rs_capabilities()"
 

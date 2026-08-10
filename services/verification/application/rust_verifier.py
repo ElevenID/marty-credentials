@@ -4,6 +4,8 @@ import json
 import logging
 from typing import Any
 
+from marty_credentials.native_backend import require_marty_rs
+
 from .did_resolver import extract_credential_verification_method, resolve_issuer_did
 
 logger = logging.getLogger(__name__)
@@ -11,15 +13,22 @@ logger = logging.getLogger(__name__)
 
 def get_marty_rs():
     """Import and return the marty-rs Python bindings."""
-    try:
-        import _marty_rs
-        return _marty_rs
-    except ImportError as e:
-        logger.error("marty-rs bindings not available - verification will be limited")
-        raise ImportError(
-            "marty-rs Python bindings are required for credential verification. "
-            "Ensure the marty-bindings crate is built and installed."
-        ) from e
+    return require_marty_rs()
+
+
+REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
+    {
+        "vds_nc_verify",
+        "verify_presentation_structure",
+        "verify_vp_token_jwt",
+        "verify_w3c_vc_signature",
+    }
+)
+
+
+def validate_marty_rs_capabilities() -> None:
+    """Fail startup if credential verification cannot use its native kernels."""
+    require_marty_rs(REQUIRED_MARTY_RS_CAPABILITIES)
 
 
 class RustCredentialVerifier:

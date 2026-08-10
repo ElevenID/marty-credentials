@@ -296,6 +296,15 @@ jobs:
         working-directory: marty-credentials
         run: pip install -e .[dev]
 
+      - name: Enforce native verification backend contract
+        working-directory: marty-credentials
+        run: >-
+          python -c "from issuance.application.rust_integration import
+          validate_marty_rs_capabilities as validate_issuance;
+          from verification.application.rust_verifier import
+          validate_marty_rs_capabilities as validate_verification;
+          validate_issuance(); validate_verification()"
+
       - name: Verify issuance migration graph has one head
         working-directory: marty-credentials/services/issuance/infrastructure/migrations
         run: python -m alembic -c alembic.ini heads

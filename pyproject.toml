@@ -49,12 +49,11 @@ dependencies = [
     # transitive dependencies.
     "googleapis-common-protos>=1.63.0",
     "protobuf>=4.25.0",
+    "marty-rs>=0.1.49",
 ]
 
 [project.optional-dependencies]
-ffi = [
-    "marty-rs",  # Rust FFI bindings
-]
+ffi = []
 spruceid = [
     "didkit>=0.3",
 ]
