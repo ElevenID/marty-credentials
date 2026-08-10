@@ -10,7 +10,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: be8a38b6aef3aee588f0581bd337d2cc7609e98c
+  MARTY_CORE_REVISION: 5b6d1fe711625e2d8048f3348e0edfc5cdde1d5b
 
 jobs:
   test-rust:
