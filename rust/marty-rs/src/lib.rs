@@ -586,11 +586,6 @@ mod python_bindings {
         // Initialize tracing for structured logging
         crate::init_tracing();
 
-        // Register the authoritative marty-core protocol, verification, and
-        // provider-integration surface before adding credential-specific APIs.
-        // This keeps the one published `_marty_rs` wheel capability-complete.
-        marty_core_bindings::register_marty_bindings(m)?;
-
         m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
         m.add_function(wrap_pyfunction!(get_ssi_version, m)?)?;
         m.add_function(wrap_pyfunction!(check_isomdl, m)?)?;

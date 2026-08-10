@@ -195,19 +195,3 @@ def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
         dependency.startswith("marty-rs") for dependency in project["dependencies"]
     )
     assert project["optional-dependencies"]["ffi"] == ["marty-rs>=0.1.50"]
-
-
-def test_credential_wheel_extends_the_canonical_core_binding_registry() -> None:
-    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
-    crate = tomllib.loads(
-        (ROOT / "rust" / "marty-rs" / "Cargo.toml").read_text(encoding="utf-8")
-    )
-    source = (ROOT / "rust" / "marty-rs" / "src" / "lib.rs").read_text(
-        encoding="utf-8"
-    )
-
-    core_binding = cargo["workspace"]["dependencies"]["marty-core-bindings"]
-    assert core_binding["package"] == "marty-bindings"
-    assert core_binding["default-features"] is False
-    assert "dep:marty-core-bindings" in crate["features"]["python"]
-    assert "marty_core_bindings::register_marty_bindings(m)?" in source

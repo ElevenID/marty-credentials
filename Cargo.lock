@@ -63,31 +63,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "affinidi-messaging-didcomm"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08f942b5c39668555d7dbb27a03842e96cb2f116791010f493d25f0d17ed2625"
-dependencies = [
- "aes",
- "base64ct",
- "cbc",
- "ed25519-dalek 2.2.0",
- "hmac 0.12.1",
- "k256",
- "p256 0.13.2",
- "rand_core 0.6.4",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "subtle",
- "thiserror 2.0.20",
- "url",
- "uuid",
- "x25519-dalek",
- "zeroize",
-]
-
-[[package]]
 name = "ahash"
 version = "0.7.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2966,31 +2941,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
-name = "marty-bindings"
-version = "0.1.37"
-source = "git+https://github.com/ElevenID/marty-core?rev=cd501c6621dce4b8b04a3bdf791818683c6c114e#cd501c6621dce4b8b04a3bdf791818683c6c114e"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "ciborium",
- "coset 0.3.8",
- "isomdl",
- "marty-crypto 0.1.37",
- "marty-didcomm",
- "marty-oid4vci 0.1.37",
- "marty-types",
- "marty-verification 0.1.37",
- "pem-rfc7468 0.7.0",
- "pyo3",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "marty-crypto"
 version = "0.1.35"
 source = "git+https://github.com/ElevenID/marty-core?rev=5d8e98ac90100139e48aa2cb436158f07d79bc2a#5d8e98ac90100139e48aa2cb436158f07d79bc2a"
@@ -3037,73 +2987,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marty-crypto"
-version = "0.1.37"
-source = "git+https://github.com/ElevenID/marty-core?rev=cd501c6621dce4b8b04a3bdf791818683c6c114e#cd501c6621dce4b8b04a3bdf791818683c6c114e"
-dependencies = [
- "aes",
- "aes-gcm",
- "base64 0.22.1",
- "cbc",
- "chrono",
- "cipher",
- "cmac",
- "cms",
- "const-oid 0.9.6",
- "der 0.7.10",
- "des",
- "ecdsa 0.16.9",
- "ed25519-dalek 2.2.0",
- "ed448-goldilocks-plus",
- "elliptic-curve 0.13.8",
- "hex",
- "hkdf",
- "hmac 0.12.1",
- "p12",
- "p256 0.13.2",
- "p384",
- "p521",
- "pbkdf2",
- "pem-rfc7468 0.7.0",
- "pkcs5",
- "pkcs8 0.10.2",
- "rand 0.8.7",
- "rand_core 0.10.1",
- "rsa",
- "serde",
- "sha1",
- "sha2 0.10.9",
- "signature 2.2.0",
- "spki 0.7.3",
- "thiserror 2.0.20",
- "x25519-dalek",
- "x509-cert",
- "x509-ocsp",
- "zkryptium",
-]
-
-[[package]]
-name = "marty-didcomm"
-version = "0.1.37"
-source = "git+https://github.com/ElevenID/marty-core?rev=cd501c6621dce4b8b04a3bdf791818683c6c114e#cd501c6621dce4b8b04a3bdf791818683c6c114e"
-dependencies = [
- "affinidi-messaging-didcomm",
- "base64 0.22.1",
- "bs58 0.5.1",
- "chrono",
- "ed25519-dalek 2.2.0",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "url",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
 name = "marty-oid4vci"
 version = "0.1.35"
 source = "git+https://github.com/ElevenID/marty-core?rev=5d8e98ac90100139e48aa2cb436158f07d79bc2a#5d8e98ac90100139e48aa2cb436158f07d79bc2a"
@@ -3126,36 +3009,6 @@ dependencies = [
  "ssi-crypto",
  "ssi-jwk",
  "thiserror 2.0.20",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "marty-oid4vci"
-version = "0.1.37"
-source = "git+https://github.com/ElevenID/marty-core?rev=cd501c6621dce4b8b04a3bdf791818683c6c114e#cd501c6621dce4b8b04a3bdf791818683c6c114e"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "ciborium",
- "coset 0.3.8",
- "ed25519-dalek 2.2.0",
- "isomdl",
- "jsonwebtoken",
- "p256 0.13.2",
- "p384",
- "rand 0.8.7",
- "regex",
- "reqwest",
- "sd-jwt-rs",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "ssi-crypto",
- "ssi-jwk",
- "thiserror 2.0.20",
- "tokio",
  "tracing",
  "url",
  "uuid",
@@ -3179,10 +3032,9 @@ dependencies = [
  "isomdl",
  "js-sys",
  "jsonwebtoken",
- "marty-bindings",
- "marty-crypto 0.1.35",
- "marty-oid4vci 0.1.35",
- "marty-verification 0.1.35",
+ "marty-crypto",
+ "marty-oid4vci",
+ "marty-verification",
  "openssl",
  "p256 0.14.0",
  "pem-rfc7468 1.0.0",
@@ -3210,17 +3062,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "marty-types"
-version = "0.1.37"
-source = "git+https://github.com/ElevenID/marty-core?rev=cd501c6621dce4b8b04a3bdf791818683c6c114e#cd501c6621dce4b8b04a3bdf791818683c6c114e"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "serde_yaml",
-]
-
-[[package]]
 name = "marty-verification"
 version = "0.1.35"
 source = "git+https://github.com/ElevenID/marty-core?rev=5d8e98ac90100139e48aa2cb436158f07d79bc2a#5d8e98ac90100139e48aa2cb436158f07d79bc2a"
@@ -3243,7 +3084,7 @@ dependencies = [
  "iref",
  "isomdl",
  "ldap3",
- "marty-crypto 0.1.35",
+ "marty-crypto",
  "moka",
  "p256 0.13.2",
  "p384",
@@ -3270,61 +3111,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-error",
- "x509-cert",
- "zeroize",
-]
-
-[[package]]
-name = "marty-verification"
-version = "0.1.37"
-source = "git+https://github.com/ElevenID/marty-core?rev=cd501c6621dce4b8b04a3bdf791818683c6c114e#cd501c6621dce4b8b04a3bdf791818683c6c114e"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "bs58 0.4.0",
- "chrono",
- "ciborium",
- "cms",
- "const-oid 0.9.6",
- "der 0.7.10",
- "ecdsa 0.16.9",
- "ed25519-dalek 2.2.0",
- "elliptic-curve 0.13.8",
- "flate2",
- "futures",
- "hex",
- "hmac 0.12.1",
- "iref",
- "isomdl",
- "ldap3",
- "marty-crypto 0.1.37",
- "moka",
- "p256 0.13.2",
- "p384",
- "p521",
- "pem-rfc7468 0.7.0",
- "pkcs8 0.10.2",
- "rand 0.8.7",
- "reqwest",
- "rsa",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.10.9",
- "signature 2.2.0",
- "spki 0.7.3",
- "ssi-claims",
- "ssi-crypto",
- "ssi-dids",
- "ssi-json-ld",
- "ssi-jwk",
- "ssi-jws",
- "ssi-verification-methods",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
- "tracing-error",
- "uuid",
  "x509-cert",
  "zeroize",
 ]
@@ -4790,19 +4576,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap 2.14.0",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "serdect"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6254,12 +6027,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
-
-[[package]]
 name = "unsigned-varint"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6281,14 +6048,7 @@ dependencies = [
  "idna",
  "percent-encoding",
  "serde",
- "serde_derive",
 ]
-
-[[package]]
-name = "urlencoding"
-version = "2.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8-decode"
@@ -6317,7 +6077,6 @@ dependencies = [
  "atomic",
  "getrandom 0.4.3",
  "js-sys",
- "rand 0.10.2",
  "serde_core",
  "wasm-bindgen",
 ]
