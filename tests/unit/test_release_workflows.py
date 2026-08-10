@@ -78,6 +78,13 @@ def test_release_tool_installs_are_version_pinned() -> None:
     assert "maturin==1.14.1" in PYPROJECT
 
 
+def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
+    wheel_matrix = STABLE.split("  build-python-wheels:", 1)[1].split(
+        "\n  build-wasm:", 1
+    )[0]
+    assert "- os: ubuntu-latest\n            target: aarch64" in wheel_matrix
+
+
 def test_pypi_waits_for_the_immutable_stable_release() -> None:
     assert "workflow_call:" in PYPI
     assert "workflow_dispatch:" in PYPI
