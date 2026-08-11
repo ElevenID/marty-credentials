@@ -10,12 +10,18 @@ README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 
 def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
+    source_job = STABLE.split("  build-source-dist:", 1)[1].split("\n  test:", 1)[0]
     assert "validate-release-source:" in STABLE
     assert "python scripts/release_contract.py validate-source" in STABLE
     assert "+refs/heads/main:refs/remotes/origin/main" in STABLE
     assert "$GITHUB_REPOSITORY/.github/workflows/release-stable.yml@refs/tags/$TAG" in STABLE
     assert "Run the stable workflow from the exact release tag ref" in STABLE
     assert "python scripts/release_contract.py collect-stable" in STABLE
+    assert "python scripts/release_contract.py validate-sdist" in STABLE
+    assert '--archive "dist/marty_credentials-${TAG#v}.tar.gz"' in STABLE
+    assert '"/Cargo.toml"' in PYPROJECT
+    assert '"/Cargo.lock"' in PYPROJECT
+    assert "dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4" in source_job
     # Repository immutability is enabled out of band because GITHUB_TOKEN has
     # no Administration permission for the immutable-releases endpoint.
     assert "immutable-releases" not in STABLE

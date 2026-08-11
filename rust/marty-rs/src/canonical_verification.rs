@@ -55,7 +55,7 @@ mod tests {
             },
             "components": [{
                 "component_id": "marty-credentials",
-                "version": "0.1.52",
+                "version": "0.1.53",
                 "artifact_digest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
                 "adapter_id": "verification-service",
                 "adapter_version": "1.0.0"

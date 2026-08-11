@@ -116,7 +116,7 @@ def _governance() -> VerificationGovernanceContext:
         ),
         component=ComponentReference(
             "marty-credentials",
-            "0.1.52",
+            "0.1.53",
             DIGEST,
             "verification-service",
             "1.0.0",

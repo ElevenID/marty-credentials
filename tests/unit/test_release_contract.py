@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,54 @@ def _write_files(directory: Path, names: set[str]) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     for name in names:
         (directory / name).write_bytes(f"contents:{name}".encode())
+
+
+def _write_sdist(tmp_path: Path, *, include_lock: bool = True) -> Path:
+    root = tmp_path / "tree" / "marty_credentials-0.1.7"
+    crate = root / "rust" / "marty-rs"
+    (crate / "src").mkdir(parents=True)
+    (root / "Cargo.toml").write_text(
+        """[workspace]
+members = ["rust/marty-rs"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.7"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+""",
+        encoding="utf-8",
+    )
+    if include_lock:
+        (root / "Cargo.lock").write_text(
+            """version = 4
+
+[[package]]
+name = "marty-rs"
+version = "0.1.7"
+""",
+            encoding="utf-8",
+        )
+    (root / "pyproject.toml").write_text("[build-system]\n", encoding="utf-8")
+    (crate / "Cargo.toml").write_text(
+        """[package]
+name = "marty-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+""",
+        encoding="utf-8",
+    )
+    (crate / "src" / "lib.rs").write_text("", encoding="utf-8")
+    archive = tmp_path / "marty_credentials-0.1.7.tar.gz"
+    with tarfile.open(archive, mode="w:gz") as bundle:
+        bundle.add(root, arcname=root.name)
+    return archive
 
 
 def _release_payload(
@@ -79,6 +129,27 @@ def test_collect_stable_artifacts_requires_exact_set(tmp_path: Path) -> None:
     (source / "unexpected.txt").write_text("unexpected", encoding="utf-8")
     with pytest.raises(release_contract.ReleaseContractError, match="unexpected"):
         release_contract.collect_stable_artifacts(source, tmp_path / "other", "0.1.7")
+
+
+def test_source_distribution_resolves_locked_workspace_metadata(tmp_path: Path) -> None:
+    release_contract.validate_sdist(_write_sdist(tmp_path), "0.1.7")
+
+
+def test_source_distribution_requires_root_cargo_metadata(tmp_path: Path) -> None:
+    archive = _write_sdist(tmp_path, include_lock=False)
+    with pytest.raises(release_contract.ReleaseContractError, match="missing build metadata"):
+        release_contract.validate_sdist(archive, "0.1.7")
+
+
+def test_source_distribution_rejects_platform_specific_traversal(tmp_path: Path) -> None:
+    archive = tmp_path / "marty_credentials-0.1.7.tar.gz"
+    member = tarfile.TarInfo("marty_credentials-0.1.7/..\\outside")
+    member.size = 1
+    with tarfile.open(archive, mode="w:gz") as bundle:
+        bundle.addfile(member, io.BytesIO(b"x"))
+
+    with pytest.raises(release_contract.ReleaseContractError, match="unsafe member"):
+        release_contract.validate_sdist(archive, "0.1.7")
 
 
 def test_checksum_manifest_covers_only_all_data_assets(tmp_path: Path) -> None:
