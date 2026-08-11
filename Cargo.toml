@@ -13,6 +13,7 @@ repository = "https://github.com/ElevenID/marty-credentials"
 # Core crates from marty-core
 marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "77789c591afe9859cbd1b948e437eb61f1c0bc2b", features = ["sod-builder"] }
 marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "77789c591afe9859cbd1b948e437eb61f1c0bc2b", default-features = false }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "c33ac3f5b95e86744dc3ee24e167ebb048431b7e" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
@@ -53,7 +54,6 @@ tokio = { version = "1.42", features = ["rt", "rt-multi-thread", "sync", "macros
 uuid = { version = "1.11", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = { version = "2.0" }
-flate2 = { version = "1.0" }
 
 # Logging
 tracing = { version = "0.1" }
