@@ -10,8 +10,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 TAG_PATTERN = re.compile(r"^v(?P<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$")
@@ -130,6 +132,101 @@ def collect_stable_artifacts(source: Path, destination: Path, version: str) -> N
         seen.add(item.name)
         shutil.copyfile(item, destination / item.name)
     require_names(seen, stable_asset_names(version), "stable")
+
+
+def validate_sdist(archive: Path, version: str) -> None:
+    expected_name = f"marty_credentials-{version}.tar.gz"
+    expected_root = f"marty_credentials-{version}"
+    if archive.name != expected_name or not archive.is_file() or archive.is_symlink():
+        raise ReleaseContractError("source distribution path is invalid")
+
+    required = {
+        f"{expected_root}/Cargo.toml",
+        f"{expected_root}/Cargo.lock",
+        f"{expected_root}/pyproject.toml",
+        f"{expected_root}/rust/marty-rs/Cargo.toml",
+        f"{expected_root}/rust/marty-rs/src/lib.rs",
+    }
+    try:
+        with tarfile.open(archive, mode="r:gz") as bundle:
+            names: set[str] = set()
+            for member in bundle.getmembers():
+                name = member.name.rstrip("/")
+                path = PurePosixPath(name)
+                if (
+                    not name
+                    or "\\" in name
+                    or path.is_absolute()
+                    or not path.parts
+                    or path.parts[0] != expected_root
+                    or any(part in {"", ".", ".."} for part in path.parts)
+                    or not (member.isfile() or member.isdir())
+                    or member.issym()
+                    or member.islnk()
+                    or member.isdev()
+                    or name in names
+                ):
+                    raise ReleaseContractError("source distribution contains an unsafe member")
+                names.add(name)
+            missing = required - names
+            if missing:
+                raise ReleaseContractError(
+                    f"source distribution is missing build metadata: {sorted(missing)!r}"
+                )
+
+            with tempfile.TemporaryDirectory(prefix="marty-credentials-sdist-") as temporary:
+                bundle.extractall(temporary, filter="data")
+                root = Path(temporary) / expected_root
+                if workspace_version(root) != version:
+                    raise ReleaseContractError(
+                        "source distribution workspace version does not match"
+                    )
+                if locked_marty_rs_version(root) != version:
+                    raise ReleaseContractError(
+                        "source distribution locked marty-rs version does not match"
+                    )
+                completed = subprocess.run(
+                    [
+                        "cargo",
+                        "metadata",
+                        "--locked",
+                        "--no-deps",
+                        "--format-version",
+                        "1",
+                        "--manifest-path",
+                        str(root / "rust" / "marty-rs" / "Cargo.toml"),
+                    ],
+                    cwd=root,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                metadata = json.loads(completed.stdout)
+                packages = metadata.get("packages")
+                matches = (
+                    [
+                        package
+                        for package in packages
+                        if isinstance(package, dict)
+                        and package.get("name") == "marty-rs"
+                        and package.get("version") == version
+                    ]
+                    if isinstance(packages, list)
+                    else []
+                )
+                if len(matches) != 1:
+                    raise ReleaseContractError(
+                        "source distribution cargo metadata is not release-bound"
+                    )
+    except ReleaseContractError:
+        raise
+    except (
+        OSError,
+        tarfile.TarError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ) as error:
+        raise ReleaseContractError("source distribution is not independently buildable") from error
 
 
 def write_checksums(directory: Path, version: str) -> Path:
@@ -369,6 +466,10 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--destination", type=Path, required=True)
     collect.add_argument("--tag", required=True)
 
+    sdist = subparsers.add_parser("validate-sdist")
+    sdist.add_argument("--archive", type=Path, required=True)
+    sdist.add_argument("--tag", required=True)
+
     checksums = subparsers.add_parser("write-checksums")
     checksums.add_argument("--directory", type=Path, required=True)
     checksums.add_argument("--tag", required=True)
@@ -410,6 +511,8 @@ def main(argv: list[str] | None = None) -> int:
             validate_source(args.repository, args.tag, args.commit)
         elif args.command == "collect-stable":
             collect_stable_artifacts(args.source, args.destination, version_from_tag(args.tag))
+        elif args.command == "validate-sdist":
+            validate_sdist(args.archive, version_from_tag(args.tag))
         elif args.command == "write-checksums":
             write_checksums(args.directory, version_from_tag(args.tag))
         elif args.command == "verify-checksums":

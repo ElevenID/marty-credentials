@@ -95,6 +95,8 @@ packages = ["python/marty_credentials", "python/status_list"]
 
 [tool.hatch.build.targets.sdist]
 include = [
+    "/Cargo.toml",
+    "/Cargo.lock",
     "/python",
     "/rust",
     "/README.md",
