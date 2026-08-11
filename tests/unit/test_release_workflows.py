@@ -3,6 +3,9 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
+PREPARE_STABLE = (ROOT / ".github" / "workflows" / "prepare-stable-tag.yml").read_text(
+    encoding="utf-8"
+)
 IMAGES = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(encoding="utf-8")
 PYPI = (ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(encoding="utf-8")
 PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -34,6 +37,26 @@ def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
     assert "client_payload[commit_sha]" in STABLE
     assert "softprops/action-gh-release" not in STABLE
     assert "SHA256SUMS" not in STABLE
+
+
+def test_stable_tag_requires_exact_main_gate_evidence() -> None:
+    policy = (ROOT / ".github" / "stable-tag-policy.json").read_text(encoding="utf-8")
+    for path in (
+        ".github/workflows/ci.yml",
+        ".github/workflows/open-source-policy.yml",
+        ".github/workflows/organization-quality.yml",
+        ".github/workflows/license-compliance.yml",
+        "dynamic/github-code-scanning/codeql",
+    ):
+        assert path in policy
+    assert "scripts/stable_tag_gate.py prepare" in PREPARE_STABLE
+    assert "git ls-remote --tags" in PREPARE_STABLE
+    assert "git tag -a" in PREPARE_STABLE
+    assert "stable-tag-evidence-${{ inputs.tag }}" in PREPARE_STABLE
+    assert "gh workflow run release-stable.yml --ref" in PREPARE_STABLE
+    assert "scripts/stable_tag_gate.py validate-release" in STABLE
+    assert "gh run download" in STABLE
+    assert "actions: read" in STABLE
 
 
 def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
