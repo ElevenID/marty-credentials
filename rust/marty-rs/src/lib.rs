@@ -9,6 +9,10 @@ mod error;
 #[cfg(feature = "python")]
 mod status_list;
 
+// Thin local parity binding over the exact pinned Core decision builder.
+#[cfg(feature = "python")]
+mod canonical_verification;
+
 // mDoc issuance and presentation module (only for python)
 #[cfg(feature = "python")]
 pub mod mdoc;
@@ -427,6 +431,7 @@ mod python_bindings {
             complete_vcdm_data_integrity_credential,
             m
         )?)?;
+        crate::canonical_verification::register(m)?;
 
         // Status list classes and functions for credential revocation
         crate::status_list::register_status_list_module(m)?;

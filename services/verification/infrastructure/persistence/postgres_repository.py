@@ -183,7 +183,7 @@ class PostgresVerificationRepository(IVerificationRepository):
                 required_claims=session.required_claims,
                 presentation_data=None,
                 verified_claims=None,
-                verification_evidence={},
+                verification_evidence=session.verification_evidence,
                 verification_method=None,
                 verified_at=None,
                 created_at=now,

@@ -40,6 +40,17 @@ if "mmf.infrastructure.database.base" not in sys.modules:
     sys.modules["mmf.infrastructure.database"] = database_module
     sys.modules["mmf.infrastructure.database.base"] = database_base_module
 
+from verification.application.canonical_result import pending_evidence
+from verification.application.governance import (
+    SESSION_CREATE_PURPOSE,
+    ComponentReference,
+    PolicyProfile,
+    ProfileReference,
+    TrustProfile,
+    VerificationGovernanceContext,
+    canonical_digest,
+    governance_from_snapshot,
+)
 from verification.application.service import (
     UnsupportedSessionPresentationError,
     VerificationService,
@@ -59,14 +70,96 @@ from verification.infrastructure.persistence.postgres_repository import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+DIGEST = "sha256:" + "1" * 64
+ORGANIZATION_ID = "123e4567-e89b-42d3-a456-426614174000"
+PRESENTATION_DEFINITION = {
+    "id": "pd-1",
+    "input_descriptors": [{"id": "employee"}],
+}
+
+
+def _governance() -> VerificationGovernanceContext:
+    policy_content = {
+        "verifier_id": "did:web:verifier.example",
+        "presentation_definition_digest": canonical_digest(PRESENTATION_DEFINITION),
+        "required_checks": [
+            "presentation.structure",
+            "presentation.proof",
+            "credential.proof",
+            "issuer.trust",
+            "credential.status",
+            "holder.binding",
+            "transaction.binding",
+            "claim.constraints",
+        ],
+    }
+    trust_content = {
+        "trusted_issuers": ["did:web:issuer.example"],
+        "allow_public_did_fallback": False,
+    }
+    return VerificationGovernanceContext(
+        client_id="test-client",
+        purpose=SESSION_CREATE_PURPOSE,
+        organization_id=ORGANIZATION_ID,
+        policy=PolicyProfile(
+            ORGANIZATION_ID,
+            ProfileReference("policy:test", "1.0.0", canonical_digest(policy_content)),
+            policy_content["verifier_id"],
+            policy_content["presentation_definition_digest"],
+            tuple(policy_content["required_checks"]),
+        ),
+        trust_profile=TrustProfile(
+            ORGANIZATION_ID,
+            ProfileReference("trust:test", "1.0.0", canonical_digest(trust_content)),
+            tuple(trust_content["trusted_issuers"]),
+            False,
+        ),
+        component=ComponentReference(
+            "marty-credentials",
+            "0.1.51",
+            DIGEST,
+            "verification-service",
+            "1.0.0",
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _registered_session_governance(monkeypatch):
+    """Keep service tests focused while exercising the production resume call."""
+    registry = MagicMock()
+    registry.resume_session.side_effect = governance_from_snapshot
+    monkeypatch.setattr(
+        "verification.application.service.load_governance",
+        lambda: registry,
+    )
+    return registry
+
+
+def _canonical_evidence(*, valid: bool, processing_status: str = "COMPLETED") -> dict:
+    decision = (
+        "PASS" if valid else ("FAIL" if processing_status == "COMPLETED" else "INDETERMINATE")
+    )
+    return {
+        "schema_version": 2,
+        "canonical_result": {
+            "valid": valid,
+            "decision": decision,
+            "processing_status": processing_status,
+        },
+        "evidence_records": [],
+    }
 
 
 def _pending_session() -> VerificationSession:
+    governance = _governance()
     return VerificationSession(
         id="session-1",
-        organization_id="org-1",
+        organization_id=ORGANIZATION_ID,
         verifier_did="did:web:verifier.example",
-        presentation_definition={"id": "pd-1", "input_descriptors": [{"id": "employee"}]},
+        presentation_definition=PRESENTATION_DEFINITION,
+        trusted_issuers=list(governance.trust_profile.trusted_issuers),
+        verification_evidence=pending_evidence(governance),
         nonce="n" * 43,
     )
 
@@ -97,7 +190,7 @@ def _claimed_repository(session: VerificationSession) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_success_persists_claim_free_evidence_without_raw_presentation() -> None:
+async def test_success_persists_claim_free_evidence_without_raw_presentation(monkeypatch) -> None:
     session = _pending_session()
     repository = _claimed_repository(session)
     verifier = MagicMock()
@@ -112,6 +205,10 @@ async def test_success_persists_claim_free_evidence_without_raw_presentation() -
         }
     )
     presentation = "header.sensitive-employee-id.signature"
+    monkeypatch.setattr(
+        "verification.application.service.build_canonical_result",
+        lambda **_kwargs: _canonical_evidence(valid=True),
+    )
 
     result = await VerificationService(repository, verifier).submit_presentation(
         session.id,
@@ -120,27 +217,17 @@ async def test_success_persists_claim_free_evidence_without_raw_presentation() -
 
     assert result.status is VerificationStatus.VERIFIED
     assert result.presentation_data is None
-    assert result.verification_evidence == {
-        "schema_version": 1,
-        "overall_result": "PASS",
-        "cryptographic_valid": True,
-        "trust_chain_valid": True,
-        "revocation_checked": True,
-        "revocation_status": "VALID",
-        "verification_method": "jwt_vp",
-        "presentation_sha256": result.verification_evidence["presentation_sha256"],
-        "evaluated_at": result.verification_evidence["evaluated_at"],
-    }
+    assert result.verification_evidence == _canonical_evidence(valid=True)
     serialized_evidence = json.dumps(result.verification_evidence)
     assert "sensitive-employee-id" not in serialized_evidence
     assert "header." not in serialized_evidence
-    assert len(result.verification_evidence["presentation_sha256"]) == 64
+    assert result.verified_claims == {}
     repository.claim_submission.assert_awaited_once()
     repository.finalize_submission.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_failed_decision_persists_negative_evidence() -> None:
+async def test_failed_decision_persists_negative_evidence(monkeypatch) -> None:
     session = _pending_session()
     repository = _claimed_repository(session)
     verifier = MagicMock()
@@ -154,6 +241,10 @@ async def test_failed_decision_persists_negative_evidence() -> None:
             "error": "signature invalid",
         }
     )
+    monkeypatch.setattr(
+        "verification.application.service.build_canonical_result",
+        lambda **_kwargs: _canonical_evidence(valid=False),
+    )
 
     result = await VerificationService(repository, verifier).submit_presentation(
         session.id,
@@ -162,20 +253,27 @@ async def test_failed_decision_persists_negative_evidence() -> None:
 
     assert result.status is VerificationStatus.FAILED
     assert result.presentation_data is None
-    assert result.verification_evidence["overall_result"] == "FAIL"
-    assert result.verification_evidence["cryptographic_valid"] is False
-    assert result.verification_evidence["verification_method"] == "jwt_vp"
+    assert result.verification_evidence["canonical_result"]["decision"] == "FAIL"
     assert "sensitive-payload" not in json.dumps(result.verification_evidence)
-    assert result.error_message == "Verification failed"
+    assert result.error_message == "Verification did not produce a passing canonical decision"
 
 
 @pytest.mark.asyncio
-async def test_verifier_exception_is_not_persisted() -> None:
+async def test_verifier_exception_is_not_persisted(monkeypatch) -> None:
     session = _pending_session()
     repository = _claimed_repository(session)
     verifier = MagicMock()
     verifier.verify_jwt_vp = AsyncMock(
         side_effect=RuntimeError("failed while parsing sensitive-payload")
+    )
+
+    def build_after_error(**kwargs):
+        assert kwargs["processing_status"] == "ERROR"
+        return _canonical_evidence(valid=False, processing_status="ERROR")
+
+    monkeypatch.setattr(
+        "verification.application.service.build_canonical_result",
+        build_after_error,
     )
 
     result = await VerificationService(repository, verifier).submit_presentation(
@@ -184,8 +282,33 @@ async def test_verifier_exception_is_not_persisted() -> None:
     )
 
     assert result.status is VerificationStatus.FAILED
-    assert result.error_message == "Verification failed due to verifier error"
+    assert result.error_message == "Verification did not produce a passing canonical decision"
     assert "sensitive-payload" not in json.dumps(result.verification_evidence)
+
+
+@pytest.mark.asyncio
+async def test_canonical_builder_exception_finalizes_fail_closed(monkeypatch) -> None:
+    session = _pending_session()
+    repository = _claimed_repository(session)
+    verifier = MagicMock()
+    verifier.verify_jwt_vp = AsyncMock(return_value={"presentation_proof_valid": True})
+    monkeypatch.setattr(
+        "verification.application.service.build_canonical_result",
+        MagicMock(side_effect=RuntimeError("sensitive native failure")),
+    )
+
+    result = await VerificationService(repository, verifier).submit_presentation(
+        session.id,
+        "header.sensitive-payload.signature",
+    )
+
+    assert result.status is VerificationStatus.FAILED
+    assert result.error_message == "Canonical verification result unavailable"
+    assert result.verification_evidence["schema_version"] == 1
+    assert result.verification_evidence["legacy"] is True
+    assert result.verification_evidence["reason_code"] == "CANONICAL_RESULT_BUILD_FAILED"
+    assert "sensitive" not in json.dumps(result.verification_evidence)
+    repository.finalize_submission.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -301,7 +424,7 @@ async def test_postgres_adapter_round_trips_evidence_and_redacts_legacy_raw_data
     model = database_session.add.call_args.args[0]
     assert isinstance(model, VerificationSessionModel)
     assert model.presentation_data is None
-    assert model.verification_evidence == {}
+    assert model.verification_evidence == entity.verification_evidence
 
     model.presentation_data = {"legacy": "raw-credential"}
     model.verification_evidence = entity.verification_evidence

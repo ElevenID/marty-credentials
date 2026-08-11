@@ -19,39 +19,55 @@ if "mmf.core.exceptions" not in sys.modules:
     sys.modules["mmf.core"] = mmf_core_module
     sys.modules["mmf.core.exceptions"] = mmf_exceptions_module
 
+from verification.application.canonical_result import _mapped_check  # noqa: E402
 from verification.application.rust_verifier import RustCredentialVerifier  # noqa: E402
-from verification.application.service import reduce_verification_result  # noqa: E402
 
 
-def test_reducer_does_not_invent_trust_or_revocation_from_valid() -> None:
-    result = reduce_verification_result(
-        {"valid": True, "verified_claims": {"employee_id": "E-123"}}
+def test_adapter_mapping_does_not_invent_trust_or_status_from_valid() -> None:
+    evidence: list[dict[str, str]] = []
+    trust = _mapped_check(
+        "issuer.trust",
+        {"valid": True, "verified_claims": {"employee_id": "E-123"}},
+        component_id="marty-credentials",
+        evaluated_at="2026-08-11T00:00:00Z",
+        evidence_records=evidence,
+    )
+    status = _mapped_check(
+        "credential.status",
+        {"valid": True},
+        component_id="marty-credentials",
+        evaluated_at="2026-08-11T00:00:00Z",
+        evidence_records=evidence,
     )
 
-    assert result["valid"] is False
-    assert result["overall_result"] == "FAIL"
-    assert result["cryptographic_valid"] is True
-    assert result["trust_chain_valid"] is False
-    assert result["revocation_checked"] is False
-    assert result["revocation_status"] == "SKIPPED"
-    assert result["verified_claims"] == {}
+    assert trust["outcome"] == "NOT_PERFORMED"
+    assert status["outcome"] == "NOT_PERFORMED"
+    assert evidence == []
 
 
-def test_reducer_passes_only_with_all_required_evidence() -> None:
-    result = reduce_verification_result(
-        {
-            "valid": True,
-            "cryptographic_valid": True,
-            "trust_chain_valid": True,
-            "revocation_checked": True,
-            "revocation_status": "VALID",
-            "verified_claims": {"employee_id": "E-123"},
-        }
+def test_adapter_mapping_records_only_explicit_required_evidence() -> None:
+    evidence: list[dict[str, str]] = []
+    trust = _mapped_check(
+        "issuer.trust",
+        {"trust_chain_valid": True},
+        component_id="marty-credentials",
+        evaluated_at="2026-08-11T00:00:00Z",
+        evidence_records=evidence,
+    )
+    status = _mapped_check(
+        "credential.status",
+        {"revocation_checked": True, "revocation_status": "VALID"},
+        component_id="marty-credentials",
+        evaluated_at="2026-08-11T00:00:00Z",
+        evidence_records=evidence,
     )
 
-    assert result["valid"] is True
-    assert result["overall_result"] == "PASS"
-    assert result["verified_claims"] == {"employee_id": "E-123"}
+    assert trust["outcome"] == "PASSED"
+    assert status["outcome"] == "PASSED"
+    assert [record["check_id"] for record in evidence] == [
+        "issuer.trust",
+        "credential.status",
+    ]
 
 
 @pytest.mark.asyncio
@@ -173,7 +189,7 @@ async def test_structural_verifier_requires_scoped_low_level_evidence() -> None:
     assert result["cryptographic_valid"] is False
     assert result["credential_proofs_valid"] is True
     assert result["presentation_structure_valid"] is True
-    assert result["presentation_constraints_checked"] is False
+    assert "presentation_constraints_valid" not in result
     assert result["decision_ready"] is False
     assert result["trust_chain_valid"] is True
     assert result["revocation_checked"] is False
@@ -183,9 +199,7 @@ async def test_structural_verifier_requires_scoped_low_level_evidence() -> None:
 async def test_structural_verifier_rejects_legacy_valid_only_result() -> None:
     verifier = RustCredentialVerifier.__new__(RustCredentialVerifier)
     verifier.marty_rs = MagicMock()
-    verifier.marty_rs.verify_presentation_structure.return_value = json.dumps(
-        {"valid": True}
-    )
+    verifier.marty_rs.verify_presentation_structure.return_value = json.dumps({"valid": True})
     verifier.verify_w3c_vc = AsyncMock(
         return_value={
             "valid": False,
@@ -255,7 +269,7 @@ async def test_outer_jwt_proof_does_not_authenticate_embedded_claims() -> None:
 
     assert result["valid"] is False
     assert result["presentation_proof_valid"] is True
-    assert result["credential_proofs_valid"] is False
+    assert "credential_proofs_valid" not in result
     assert result["claims"] == []
 
 

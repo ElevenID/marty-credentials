@@ -11,18 +11,18 @@ Covers:
 import base64
 import hashlib
 import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import httpx
-import pytest
+import os
 
 # ---------------------------------------------------------------------------
 # Path manipulation so that "verification.*" and "issuance.*" resolve.
 # ---------------------------------------------------------------------------
 import sys
-import os
 import types
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
@@ -38,10 +38,10 @@ if _SERVICES not in sys.path:
 from verification.application.did_resolver import (
     extract_credential_verification_method,
     extract_public_key_jwk,
-    resolve_issuer_did,
     resolve_did,
     resolve_did_jwk,
     resolve_did_key,
+    resolve_issuer_did,
 )
 
 
@@ -354,6 +354,25 @@ class TestResolveIssuerDid:
     """Org-scoped issuer DID resolution client."""
 
     @pytest.mark.asyncio
+    async def test_requires_a_dedicated_internal_resolver_credential(self, monkeypatch):
+        from verification.application import did_resolver
+
+        monkeypatch.delenv("SIGNING_KEYS_INTERNAL_API_KEY", raising=False)
+        monkeypatch.delenv("SIGNING_KEYS_INTERNAL_API_KEY_FILE", raising=False)
+        client = MagicMock()
+
+        with (
+            patch.object(did_resolver.httpx, "AsyncClient", client),
+            pytest.raises(ValueError, match="SIGNING_KEYS_INTERNAL_API_KEY"),
+        ):
+            await resolve_issuer_did(
+                "did:web:issuer.example",
+                organization_id="org-acme",
+            )
+
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_uses_org_registry_before_public_resolution(self, monkeypatch):
         issuer_did = "did:web:issuer.example.com:orgs:acme"
         vm_id = f"{issuer_did}#issuer-key"
@@ -364,10 +383,20 @@ class TestResolveIssuerDid:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "ok": True,
+            "organization_id": "org-acme",
             "issuer_did": issuer_did,
             "verification_method_id": vm_id,
-            "did_document": {"id": issuer_did, "verificationMethod": []},
+            "did_document": {
+                "id": issuer_did,
+                "verificationMethod": [{"id": vm_id, "controller": issuer_did}],
+                "assertionMethod": [vm_id],
+            },
+            "verification_method": {"id": vm_id, "controller": issuer_did},
             "public_jwk": {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def", "kid": vm_id},
+            "resolver": {
+                "type": "organization_issuer_profile",
+                "public_fallback_used": False,
+            },
         }
 
         mock_client = AsyncMock()
@@ -395,6 +424,77 @@ class TestResolveIssuerDid:
         assert call.kwargs["params"]["organization_id"] == "org-acme"
         assert call.kwargs["params"]["issuer_did"] == issuer_did
         assert call.kwargs["headers"] == {"X-API-Key": "test-key"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "case",
+        [
+            "organization",
+            "issuer",
+            "verification_method",
+            "private_key",
+            "controller",
+            "assertion_relationship",
+            "resolver_provenance",
+        ],
+    )
+    async def test_rejects_mismatched_org_resolver_provenance(self, case):
+        from verification.application import did_resolver
+
+        issuer_did = "did:web:issuer.example.com:orgs:acme"
+        vm_id = f"{issuer_did}#issuer-key"
+        resolved = {
+            "ok": True,
+            "organization_id": "org-acme",
+            "issuer_did": issuer_did,
+            "verification_method_id": vm_id,
+            "did_document": {
+                "id": issuer_did,
+                "verificationMethod": [{"id": vm_id, "controller": issuer_did}],
+                "assertionMethod": [vm_id],
+            },
+            "verification_method": {"id": vm_id, "controller": issuer_did},
+            "public_jwk": {
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "abc",
+                "y": "def",
+                "kid": vm_id,
+            },
+            "resolver": {
+                "type": "organization_issuer_profile",
+                "public_fallback_used": False,
+            },
+        }
+        if case == "organization":
+            resolved["organization_id"] = "org-attacker"
+        elif case == "issuer":
+            resolved["issuer_did"] = "did:web:attacker.example"
+        elif case == "verification_method":
+            resolved["verification_method_id"] = "did:web:attacker.example#key"
+        elif case == "private_key":
+            resolved["public_jwk"]["d"] = "private"
+        elif case == "controller":
+            resolved["verification_method"]["controller"] = "did:web:attacker.example"
+        elif case == "assertion_relationship":
+            resolved["did_document"]["assertionMethod"] = []
+        else:
+            resolved["resolver"]["public_fallback_used"] = True
+
+        with (
+            patch.object(
+                did_resolver,
+                "_resolve_issuer_did_via_org_registry",
+                new=AsyncMock(return_value=resolved),
+            ),
+            pytest.raises(ValueError),
+        ):
+            await resolve_issuer_did(
+                issuer_did,
+                organization_id="org-acme",
+                verification_method_id=vm_id,
+                trusted_issuers=[issuer_did],
+            )
 
     @pytest.mark.asyncio
     async def test_fails_closed_when_org_registry_rejects_issuer(self, monkeypatch):
@@ -542,7 +642,7 @@ class TestVdsNcDidResolutionRoute:
     """VDS-NC verification should support DID-backed issuer resolution."""
 
     @pytest.mark.asyncio
-    async def test_verify_vds_nc_resolves_issuer_did_before_verifying(self, monkeypatch):
+    async def test_verification_routes_project_canonical_evidence(self, monkeypatch):
         if "mmf.infrastructure.database.session" not in sys.modules:
             mmf_module = types.ModuleType("mmf")
             mmf_core_module = types.ModuleType("mmf.core")
@@ -580,10 +680,55 @@ class TestVdsNcDidResolutionRoute:
             postgres_repo_module,
         )
 
+        from verification.application.governance import (
+            VDS_NC_VERIFY_PURPOSE,
+            ComponentReference,
+            PolicyProfile,
+            ProfileReference,
+            TrustProfile,
+            VerificationGovernanceContext,
+            canonical_digest,
+        )
         from verification.infrastructure.api import routes
 
         issuer_did = "did:web:issuer.example.com:orgs:acme"
         vm_id = f"{issuer_did}#vdsnc-key"
+        organization_id = "123e4567-e89b-42d3-a456-426614174000"
+        digest = "sha256:" + "1" * 64
+        policy_content = {
+            "verifier_id": "did:web:verifier.example.com",
+            "presentation_definition_digest": digest,
+            "required_checks": ["credential.proof", "issuer.trust"],
+        }
+        trust_content = {
+            "trusted_issuers": [issuer_did],
+            "allow_public_did_fallback": False,
+        }
+        governance = VerificationGovernanceContext(
+            client_id="vds-client",
+            purpose=VDS_NC_VERIFY_PURPOSE,
+            organization_id=organization_id,
+            policy=PolicyProfile(
+                organization_id=organization_id,
+                reference=ProfileReference("policy:vds", "1.0.0", canonical_digest(policy_content)),
+                verifier_id=policy_content["verifier_id"],
+                presentation_definition_digest=policy_content["presentation_definition_digest"],
+                required_checks=tuple(policy_content["required_checks"]),
+            ),
+            trust_profile=TrustProfile(
+                organization_id=organization_id,
+                reference=ProfileReference("trust:vds", "1.0.0", canonical_digest(trust_content)),
+                trusted_issuers=tuple(trust_content["trusted_issuers"]),
+                allow_public_did_fallback=False,
+            ),
+            component=ComponentReference(
+                "marty-credentials",
+                "0.1.51",
+                digest,
+                "verification-service",
+                "1.0.0",
+            ),
+        )
         resolver = AsyncMock(
             return_value={
                 "ok": True,
@@ -609,21 +754,33 @@ class TestVdsNcDidResolutionRoute:
                 }
 
         verifier = FakeVerifier()
+
+        canonical_builder = routes.build_canonical_result
+
+        def build_result(**kwargs):
+            assert kwargs["governance"] is governance
+            assert kwargs["presentation"] == "header~{}~sig"
+            assert kwargs["adapter_result"] == {
+                "credential_proofs_valid": True,
+                "trust_chain_valid": True,
+            }
+            return canonical_builder(**kwargs)
+
+        monkeypatch.setattr(routes, "build_canonical_result", build_result)
         result = await routes.verify_vds_nc_barcode(
             routes.VerifyVdsNcRequest(
                 barcode="header~{}~sig",
                 issuer_did=issuer_did,
-                organization_id="org-acme",
                 verification_method_id=vm_id,
-                trusted_issuers=[issuer_did],
                 algorithm="ES256",
             ),
             verifier=verifier,
+            governance=governance,
         )
 
         resolver.assert_awaited_once_with(
             issuer_did,
-            organization_id="org-acme",
+            organization_id=organization_id,
             verification_method_id=vm_id,
             trusted_issuers=[issuer_did],
             credential_format="vds_nc",
@@ -633,7 +790,115 @@ class TestVdsNcDidResolutionRoute:
         )
         assert json.loads(verifier.issuer_jwk_json)["kid"] == vm_id
         assert result.valid is True
-        assert result.signature_status == "VALID"
+        assert result.canonical_result["decision"] == "PASS"
+        assert result.verification_method == "vds_nc"
+        assert "payload" not in result.model_dump()
+
+        from verification.application.canonical_result import build_canonical_result
+        from verification.application.governance import (
+            DIRECT_VERIFY_PURPOSE,
+            ComponentReference,
+            PolicyProfile,
+            ProfileReference,
+            TrustProfile,
+            VerificationGovernanceContext,
+            canonical_digest,
+        )
+        from verification.infrastructure.api import routes
+
+        definition = {"id": "pd-direct", "input_descriptors": [{"id": "employee"}]}
+        organization_id = "123e4567-e89b-42d3-a456-426614174000"
+        policy_content = {
+            "verifier_id": "did:web:verifier.example.com",
+            "presentation_definition_digest": canonical_digest(definition),
+            "required_checks": [
+                "presentation.structure",
+                "presentation.proof",
+                "credential.proof",
+                "issuer.trust",
+                "credential.status",
+                "holder.binding",
+                "transaction.binding",
+                "claim.constraints",
+            ],
+        }
+        trust_content = {
+            "trusted_issuers": ["did:web:issuer.example.com:orgs:acme"],
+            "allow_public_did_fallback": False,
+        }
+        digest = "sha256:" + "1" * 64
+        governance = VerificationGovernanceContext(
+            client_id="direct-client",
+            purpose=DIRECT_VERIFY_PURPOSE,
+            organization_id=organization_id,
+            policy=PolicyProfile(
+                organization_id=organization_id,
+                reference=ProfileReference(
+                    "policy:direct", "1.0.0", canonical_digest(policy_content)
+                ),
+                verifier_id=policy_content["verifier_id"],
+                presentation_definition_digest=policy_content["presentation_definition_digest"],
+                required_checks=tuple(policy_content["required_checks"]),
+            ),
+            trust_profile=TrustProfile(
+                organization_id=organization_id,
+                reference=ProfileReference(
+                    "trust:direct", "1.0.0", canonical_digest(trust_content)
+                ),
+                trusted_issuers=tuple(trust_content["trusted_issuers"]),
+                allow_public_did_fallback=False,
+            ),
+            component=ComponentReference(
+                "marty-credentials",
+                "0.1.51",
+                digest,
+                "verification-service",
+                "1.0.0",
+            ),
+        )
+        presentation = {"verifiableCredential": []}
+        evidence = build_canonical_result(
+            governance=governance,
+            verification_id="verification:direct",
+            transaction_id="transaction:direct",
+            presentation=presentation,
+            adapter_result={
+                "presentation_structure_valid": True,
+                "presentation_proof_valid": True,
+                "credential_proofs_valid": True,
+                "trust_chain_valid": True,
+                "revocation_checked": True,
+                "revocation_status": "VALID",
+                "holder_binding_valid": True,
+                "transaction_binding_valid": True,
+                "presentation_constraints_valid": True,
+            },
+        )
+
+        service = MagicMock()
+        service.verify_presentation_direct = AsyncMock(
+            return_value={"evidence": evidence, "verification_method": "w3c_vc"}
+        )
+        response = await routes.verify_presentation_direct(
+            routes.VerifyDirectRequest(
+                presentation=presentation,
+                presentation_definition=definition,
+                verifier_did=policy_content["verifier_id"],
+            ),
+            service=service,
+            governance=governance,
+        )
+
+        assert response.valid is True
+        assert response.overall_result == "PASS"
+        assert response.canonical_result == evidence["canonical_result"]
+        assert response.verification_method == "w3c_vc"
+        service.verify_presentation_direct.assert_awaited_once_with(
+            presentation=presentation,
+            presentation_definition=definition,
+            verifier_did=policy_content["verifier_id"],
+            governance=governance,
+        )
 
 
 class TestRustCredentialVerifierIssuerResolution:
@@ -690,9 +955,7 @@ class TestRustCredentialVerifierIssuerResolution:
         assert result["decision_ready"] is False
         assert result["issuer_trusted"] is True
         assert result["revocation_checked"] is False
-        native_request = json.loads(
-            verifier.marty_rs.verify_vcdm_data_integrity.call_args.args[0]
-        )
+        native_request = json.loads(verifier.marty_rs.verify_vcdm_data_integrity.call_args.args[0])
         assert native_request == {
             "document": credential,
             "resolved_verification_methods": [
@@ -778,6 +1041,15 @@ class TestVerificationServiceContextPropagation:
             monkeypatch.setitem(sys.modules, "mmf.core", mmf_core_module)
             monkeypatch.setitem(sys.modules, "mmf.core.exceptions", mmf_exceptions_module)
 
+        from verification.application.governance import (
+            DIRECT_VERIFY_PURPOSE,
+            ComponentReference,
+            PolicyProfile,
+            ProfileReference,
+            TrustProfile,
+            VerificationGovernanceContext,
+            canonical_digest,
+        )
         from verification.application.service import VerificationService
 
         class FakeVerifier:
@@ -797,17 +1069,60 @@ class TestVerificationServiceContextPropagation:
 
         fake_verifier = FakeVerifier()
         service = VerificationService(repository=MagicMock(), verifier=fake_verifier)
-
-        result = await service.verify_presentation_direct(
-            organization_id="org-acme",
-            presentation={"verifiableCredential": []},
-            presentation_definition={"id": "pd-1", "input_descriptors": []},
-            verifier_did="did:web:verifier.example.com",
-            trusted_issuers=["did:web:issuer.example.com:orgs:acme"],
+        definition = {"id": "pd-1", "input_descriptors": []}
+        digest = "sha256:" + "1" * 64
+        governance = VerificationGovernanceContext(
+            client_id="client-acme",
+            purpose=DIRECT_VERIFY_PURPOSE,
+            organization_id="123e4567-e89b-42d3-a456-426614174000",
+            policy=PolicyProfile(
+                organization_id="123e4567-e89b-42d3-a456-426614174000",
+                reference=ProfileReference("policy:acme", "1.0.0", digest),
+                verifier_id="did:web:verifier.example.com",
+                presentation_definition_digest=canonical_digest(definition),
+                required_checks=(
+                    "presentation.structure",
+                    "presentation.proof",
+                    "credential.proof",
+                    "issuer.trust",
+                    "credential.status",
+                    "holder.binding",
+                    "transaction.binding",
+                    "claim.constraints",
+                ),
+            ),
+            trust_profile=TrustProfile(
+                organization_id="123e4567-e89b-42d3-a456-426614174000",
+                reference=ProfileReference("trust:acme", "1.0.0", digest),
+                trusted_issuers=("did:web:issuer.example.com:orgs:acme",),
+                allow_public_did_fallback=False,
+            ),
+            component=ComponentReference(
+                "marty-credentials",
+                "0.1.51",
+                digest,
+                "verification-service",
+                "1.0.0",
+            ),
+        )
+        monkeypatch.setattr(
+            "verification.application.service.build_canonical_result",
+            lambda **_kwargs: {
+                "schema_version": 2,
+                "canonical_result": {"valid": True, "decision": "PASS"},
+                "evidence_records": [],
+            },
         )
 
-        assert result["valid"] is True
-        assert fake_verifier.kwargs["organization_id"] == "org-acme"
+        result = await service.verify_presentation_direct(
+            presentation={"verifiableCredential": []},
+            presentation_definition=definition,
+            verifier_did="did:web:verifier.example.com",
+            governance=governance,
+        )
+
+        assert result["evidence"]["canonical_result"]["valid"] is True
+        assert fake_verifier.kwargs["organization_id"] == "123e4567-e89b-42d3-a456-426614174000"
         assert fake_verifier.kwargs["trusted_issuers"] == ["did:web:issuer.example.com:orgs:acme"]
 
 

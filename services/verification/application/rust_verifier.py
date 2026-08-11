@@ -23,6 +23,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "verify_presentation_structure",
         "verify_vcdm_data_integrity",
         "verify_vcdm_jwt",
+        "verification_build_decision_result",
     }
 )
 
@@ -61,12 +62,23 @@ def _scoped_check_passed(
     )
 
 
+def _scoped_evidence_flag(result: dict[str, Any], name: str) -> bool | None:
+    evidence = result.get("evidence")
+    if not isinstance(evidence, dict) or name not in evidence:
+        return None
+    if evidence[name] == "passed":
+        return True
+    if evidence[name] == "failed":
+        return False
+    return None
+
+
 class RustCredentialVerifier:
     """Credential verifier using Rust cryptography via PyO3 bindings."""
-    
+
     def __init__(self):
         self.marty_rs = get_marty_rs()
-    
+
     async def verify_w3c_vc(
         self,
         credential: dict[str, Any],
@@ -124,9 +136,7 @@ class RustCredentialVerifier:
                 issuer_public_key = issuer_resolution.get("public_jwk")
             except ValueError as resolve_err:
                 did_resolution_error = str(resolve_err)
-                logger.warning(
-                    "Could not resolve issuer DID %s: %s", issuer, resolve_err
-                )
+                logger.warning("Could not resolve issuer DID %s: %s", issuer, resolve_err)
                 return {
                     "valid": False,
                     "error": did_resolution_error,
@@ -184,7 +194,8 @@ class RustCredentialVerifier:
                 sig_error = str(sig_exc)
                 logger.warning(
                     "W3C VC signature verification failed for %s: %s",
-                    issuer, sig_exc,
+                    issuer,
+                    sig_exc,
                 )
 
             if not signature_verified:
@@ -209,8 +220,7 @@ class RustCredentialVerifier:
                         organization_id
                         and not (
                             isinstance(issuer_resolution.get("resolver"), dict)
-                            and issuer_resolution["resolver"].get("type")
-                            == "public_did_resolution"
+                            and issuer_resolution["resolver"].get("type") == "public_did_resolution"
                         )
                     )
                 )
@@ -227,7 +237,9 @@ class RustCredentialVerifier:
                 "issuer": issuer,
                 "issuer_did_resolved": issuer_did_doc is not None,
                 "issuer_public_key": issuer_public_key,
-                "verification_method_id": issuer_resolution.get("verification_method_id") if isinstance(issuer_resolution, dict) else verification_method_id,
+                "verification_method_id": issuer_resolution.get("verification_method_id")
+                if isinstance(issuer_resolution, dict)
+                else verification_method_id,
                 "did_resolution_error": did_resolution_error,
                 "signature_error": sig_error,
                 "issuer_resolution": issuer_resolution,
@@ -238,13 +250,10 @@ class RustCredentialVerifier:
 
         except Exception as e:
             logger.error(f"W3C VC verification failed: {e}")
-            return {"valid": False, "error": str(e)}
-    
+            return {"valid": False, "processing_error": True, "error": str(e)}
+
     async def verify_jwt_vp(
-        self,
-        presentation_jwt: str,
-        expected_audience: str,
-        expected_nonce: str | None = None
+        self, presentation_jwt: str, expected_audience: str, expected_nonce: str | None = None
     ) -> dict[str, Any]:
         """Verify a JWT Verifiable Presentation using the marty-oid4vci VerificationEngine.
 
@@ -266,15 +275,24 @@ class RustCredentialVerifier:
                 scope="presentation_proof",
                 evidence=("presentation_proof", "transaction_binding"),
             ):
-                return {
+                failed_result: dict[str, Any] = {
                     "valid": False,
                     "error": _verification_errors(
                         result, "VP token verification evidence was incomplete"
                     ),
                 }
+                for field, evidence_name in (
+                    ("presentation_proof_valid", "presentation_proof"),
+                    ("transaction_binding_valid", "transaction_binding"),
+                ):
+                    value = _scoped_evidence_flag(result, evidence_name)
+                    if value is not None:
+                        failed_result[field] = value
+                return failed_result
 
             # Decode payload to extract VP claims for the caller
             import base64
+
             parts = presentation_jwt.split(".")
             payload_b64 = parts[1] if len(parts) == 3 else ""
             padding = 4 - len(payload_b64) % 4
@@ -294,7 +312,7 @@ class RustCredentialVerifier:
                 "valid": False,
                 "cryptographic_valid": False,
                 "presentation_proof_valid": True,
-                "credential_proofs_valid": False,
+                "transaction_binding_valid": True,
                 "claims": [],
                 "holder": payload.get("iss") or vp.get("holder"),
                 "method": "jwt_vp",
@@ -306,8 +324,8 @@ class RustCredentialVerifier:
 
         except Exception as e:
             logger.error(f"JWT VP verification failed: {e}")
-            return {"valid": False, "error": str(e)}
-    
+            return {"valid": False, "processing_error": True, "error": str(e)}
+
     async def verify_presentation(
         self,
         presentation: dict[str, Any],
@@ -332,6 +350,7 @@ class RustCredentialVerifier:
                 return {
                     "valid": False,
                     "cryptographic_valid": False,
+                    "credential_proofs_valid": False,
                     "error": "Presentation contains no verifiable credentials",
                 }
 
@@ -340,6 +359,7 @@ class RustCredentialVerifier:
                 return {
                     "valid": False,
                     "cryptographic_valid": False,
+                    "presentation_structure_valid": False,
                     "error": "Presentation definition contains no input descriptors",
                 }
 
@@ -348,6 +368,7 @@ class RustCredentialVerifier:
                 return {
                     "valid": False,
                     "cryptographic_valid": False,
+                    "presentation_structure_valid": False,
                     "error": "Presentation submission is required",
                 }
 
@@ -359,6 +380,7 @@ class RustCredentialVerifier:
                     return {
                         "valid": False,
                         "cryptographic_valid": False,
+                        "credential_proofs_valid": False,
                         "error": "Unsupported embedded credential serialization",
                     }
                 cred_result = await self.verify_w3c_vc(
@@ -371,6 +393,7 @@ class RustCredentialVerifier:
                 if cred_result.get("signature_verified") is not True:
                     return {
                         "valid": False,
+                        "credential_proofs_valid": False,
                         "error": f"Credential verification failed: {cred_result.get('error')}",
                     }
                 verified_creds.append(cred_result)
@@ -394,6 +417,7 @@ class RustCredentialVerifier:
                     return {
                         "valid": False,
                         "cryptographic_valid": False,
+                        "presentation_structure_valid": False,
                         "error": _verification_errors(
                             structure_result,
                             "Presentation structure verification evidence was incomplete",
@@ -404,6 +428,7 @@ class RustCredentialVerifier:
                 return {
                     "valid": False,
                     "cryptographic_valid": False,
+                    "presentation_structure_valid": False,
                     "error": f"Presentation structure verification failed: {e}",
                 }
 
@@ -415,9 +440,6 @@ class RustCredentialVerifier:
                 "cryptographic_valid": False,
                 "credential_proofs_valid": True,
                 "presentation_structure_valid": True,
-                "presentation_constraints_checked": False,
-                "holder_binding_valid": False,
-                "transaction_binding_valid": False,
                 "decision_ready": False,
                 "trust_chain_valid": all(
                     cred.get("issuer_trusted") is True for cred in verified_creds
@@ -436,7 +458,7 @@ class RustCredentialVerifier:
 
         except Exception as e:
             logger.error(f"Presentation verification failed: {e}")
-            return {"valid": False, "error": str(e)}
+            return {"valid": False, "processing_error": True, "error": str(e)}
 
     async def verify_vds_nc(
         self,
@@ -464,7 +486,9 @@ class RustCredentialVerifier:
             payload: dict | None = None
             if payload_raw:
                 try:
-                    payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                    payload = (
+                        json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                    )
                 except (ValueError, TypeError):
                     payload = None
 
@@ -478,4 +502,9 @@ class RustCredentialVerifier:
             }
         except Exception as e:
             logger.error("VDS-NC verification failed: %s", e)
-            return {"valid": False, "error": str(e), "method": "vds_nc"}
+            return {
+                "valid": False,
+                "processing_error": True,
+                "error": str(e),
+                "method": "vds_nc",
+            }

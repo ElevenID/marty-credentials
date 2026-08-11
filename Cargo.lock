@@ -2942,8 +2942,8 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.39"
-source = "git+https://github.com/ElevenID/marty-core?rev=77789c591afe9859cbd1b948e437eb61f1c0bc2b#77789c591afe9859cbd1b948e437eb61f1c0bc2b"
+version = "0.1.46"
+source = "git+https://github.com/ElevenID/marty-core?rev=c8a028e803e7278f7842f5085855ac12a80b14ba#c8a028e803e7278f7842f5085855ac12a80b14ba"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2988,8 +2988,8 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.39"
-source = "git+https://github.com/ElevenID/marty-core?rev=77789c591afe9859cbd1b948e437eb61f1c0bc2b#77789c591afe9859cbd1b948e437eb61f1c0bc2b"
+version = "0.1.46"
+source = "git+https://github.com/ElevenID/marty-core?rev=c8a028e803e7278f7842f5085855ac12a80b14ba#c8a028e803e7278f7842f5085855ac12a80b14ba"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3063,8 +3063,8 @@ dependencies = [
 
 [[package]]
 name = "marty-status"
-version = "0.1.45"
-source = "git+https://github.com/ElevenID/marty-core?rev=c33ac3f5b95e86744dc3ee24e167ebb048431b7e#c33ac3f5b95e86744dc3ee24e167ebb048431b7e"
+version = "0.1.46"
+source = "git+https://github.com/ElevenID/marty-core?rev=c8a028e803e7278f7842f5085855ac12a80b14ba#c8a028e803e7278f7842f5085855ac12a80b14ba"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -3075,8 +3075,8 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.39"
-source = "git+https://github.com/ElevenID/marty-core?rev=77789c591afe9859cbd1b948e437eb61f1c0bc2b#77789c591afe9859cbd1b948e437eb61f1c0bc2b"
+version = "0.1.46"
+source = "git+https://github.com/ElevenID/marty-core?rev=c8a028e803e7278f7842f5085855ac12a80b14ba#c8a028e803e7278f7842f5085855ac12a80b14ba"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3097,6 +3097,7 @@ dependencies = [
  "isomdl",
  "ldap3",
  "marty-crypto",
+ "marty-oid4vci",
  "moka",
  "p256 0.13.2",
  "p384",
@@ -3104,6 +3105,7 @@ dependencies = [
  "pem-rfc7468 0.7.0",
  "pkcs8 0.10.2",
  "rand 0.8.7",
+ "regex",
  "reqwest",
  "rsa",
  "serde",
