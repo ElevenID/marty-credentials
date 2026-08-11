@@ -6,7 +6,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from mmf.infrastructure.database.base import Base
 from sqlalchemy import JSON, CheckConstraint, DateTime, Enum, Index, String, Text, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -20,6 +19,7 @@ from ...domain.entities import (
     VerificationSubmissionClaim,
 )
 from ...domain.ports import IVerificationRepository
+from .database import Base
 
 logger = logging.getLogger(__name__)
 

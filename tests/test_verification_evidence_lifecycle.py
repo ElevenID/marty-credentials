@@ -4,8 +4,6 @@ import asyncio
 import hashlib
 import json
 import os
-import sys
-import types
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -16,30 +14,6 @@ from alembic.config import Config
 from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.orm import declarative_base
-
-if "mmf.core.exceptions" not in sys.modules:
-    mmf_module = types.ModuleType("mmf")
-    mmf_core_module = types.ModuleType("mmf.core")
-    mmf_exceptions_module = types.ModuleType("mmf.core.exceptions")
-
-    class ValidationError(Exception):
-        pass
-
-    mmf_exceptions_module.ValidationError = ValidationError
-    sys.modules["mmf"] = mmf_module
-    sys.modules["mmf.core"] = mmf_core_module
-    sys.modules["mmf.core.exceptions"] = mmf_exceptions_module
-
-if "mmf.infrastructure.database.base" not in sys.modules:
-    infrastructure_module = types.ModuleType("mmf.infrastructure")
-    database_module = types.ModuleType("mmf.infrastructure.database")
-    database_base_module = types.ModuleType("mmf.infrastructure.database.base")
-    database_base_module.Base = declarative_base()
-    sys.modules["mmf.infrastructure"] = infrastructure_module
-    sys.modules["mmf.infrastructure.database"] = database_module
-    sys.modules["mmf.infrastructure.database.base"] = database_base_module
-
 from verification.application.canonical_result import pending_evidence
 from verification.application.governance import (
     SESSION_CREATE_PURPOSE,

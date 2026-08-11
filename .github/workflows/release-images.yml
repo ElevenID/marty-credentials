@@ -228,6 +228,16 @@ jobs:
           provenance: mode=max
           sbom: true
 
+      - name: Prove the verification image migrates and starts
+        if: matrix.service == 'verification'
+        env:
+          IMAGE: ghcr.io/elevenid/marty-credentials-verification@${{ steps.build.outputs.digest }}
+          POSTGRES_IMAGE: docker.io/library/postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+        run: |
+          python scripts/smoke_verification_image.py \
+            --image "$IMAGE" \
+            --postgres-image "$POSTGRES_IMAGE"
+
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}

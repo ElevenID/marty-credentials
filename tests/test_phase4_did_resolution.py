@@ -643,28 +643,6 @@ class TestVdsNcDidResolutionRoute:
 
     @pytest.mark.asyncio
     async def test_verification_routes_project_canonical_evidence(self, monkeypatch):
-        if "mmf.infrastructure.database.session" not in sys.modules:
-            mmf_module = types.ModuleType("mmf")
-            mmf_core_module = types.ModuleType("mmf.core")
-            mmf_exceptions_module = types.ModuleType("mmf.core.exceptions")
-            mmf_infra_module = types.ModuleType("mmf.infrastructure")
-            mmf_db_module = types.ModuleType("mmf.infrastructure.database")
-            mmf_session_module = types.ModuleType("mmf.infrastructure.database.session")
-
-            class ValidationError(Exception):
-                pass
-
-            mmf_exceptions_module.ValidationError = ValidationError
-            mmf_session_module.get_db_session = lambda: None
-            monkeypatch.setitem(sys.modules, "mmf", mmf_module)
-            monkeypatch.setitem(sys.modules, "mmf.core", mmf_core_module)
-            monkeypatch.setitem(sys.modules, "mmf.core.exceptions", mmf_exceptions_module)
-            monkeypatch.setitem(sys.modules, "mmf.infrastructure", mmf_infra_module)
-            monkeypatch.setitem(sys.modules, "mmf.infrastructure.database", mmf_db_module)
-            monkeypatch.setitem(
-                sys.modules, "mmf.infrastructure.database.session", mmf_session_module
-            )
-
         postgres_repo_module = types.ModuleType(
             "verification.infrastructure.persistence.postgres_repository"
         )
@@ -1028,19 +1006,6 @@ class TestVerificationServiceContextPropagation:
 
     @pytest.mark.asyncio
     async def test_direct_structured_presentation_passes_org_and_trusted_issuers(self, monkeypatch):
-        if "mmf.core.exceptions" not in sys.modules:
-            mmf_module = types.ModuleType("mmf")
-            mmf_core_module = types.ModuleType("mmf.core")
-            mmf_exceptions_module = types.ModuleType("mmf.core.exceptions")
-
-            class ValidationError(Exception):
-                pass
-
-            mmf_exceptions_module.ValidationError = ValidationError
-            monkeypatch.setitem(sys.modules, "mmf", mmf_module)
-            monkeypatch.setitem(sys.modules, "mmf.core", mmf_core_module)
-            monkeypatch.setitem(sys.modules, "mmf.core.exceptions", mmf_exceptions_module)
-
         from verification.application.governance import (
             DIRECT_VERIFY_PURPOSE,
             ComponentReference,

@@ -169,6 +169,18 @@ def test_versioned_image_tags_are_not_written_by_matrix_builds() -> None:
     assert "--method PATCH" not in matrix_job
 
 
+def test_verification_image_is_started_before_attestation_and_publication() -> None:
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+    build_position = matrix_job.index("- id: build")
+    smoke_position = matrix_job.index("python scripts/smoke_verification_image.py")
+    attest_position = matrix_job.index("- uses: actions/attest-build-provenance")
+
+    assert build_position < smoke_position < attest_position
+    assert "if: matrix.service == 'verification'" in matrix_job
+    assert "marty-credentials-verification@${{ steps.build.outputs.digest }}" in matrix_job
+    assert "docker.io/library/postgres@sha256:" in matrix_job
+
+
 def test_finalization_order_prevents_partial_release_publication() -> None:
     build_position = IMAGES.index("- id: build")
     finalize_position = IMAGES.index("  finalize-release:")

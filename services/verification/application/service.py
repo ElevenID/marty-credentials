@@ -6,8 +6,6 @@ import os
 import secrets
 from typing import Any
 
-from mmf.core.exceptions import ValidationError
-
 from ..domain.entities import (
     SubmissionClaimState,
     VerificationMethod,
@@ -32,23 +30,27 @@ MIN_SESSION_DURATION_SECONDS = 30
 MAX_SESSION_DURATION_SECONDS = 3600
 
 
-class VerificationSessionNotFoundError(ValidationError):
+class VerificationValidationError(ValueError):
+    """A verification request violates the application contract."""
+
+
+class VerificationSessionNotFoundError(VerificationValidationError):
     """The requested verification session does not exist."""
 
 
-class VerificationSessionExpiredError(ValidationError):
+class VerificationSessionExpiredError(VerificationValidationError):
     """The storage-authoritative session deadline elapsed."""
 
 
-class VerificationSessionBusyError(ValidationError):
+class VerificationSessionBusyError(VerificationValidationError):
     """The exact presentation is already being processed under a live lease."""
 
 
-class VerificationSessionConflictError(ValidationError):
+class VerificationSessionConflictError(VerificationValidationError):
     """A different presentation or stale worker attempted to use the session."""
 
 
-class UnsupportedSessionPresentationError(ValidationError):
+class UnsupportedSessionPresentationError(VerificationValidationError):
     """The presentation shape cannot be bound to the session nonce."""
 
 
@@ -139,7 +141,7 @@ class VerificationService:
             <= session_duration_seconds
             <= MAX_SESSION_DURATION_SECONDS
         ):
-            raise ValidationError(
+            raise VerificationValidationError(
                 "Verification session duration must be between "
                 f"{MIN_SESSION_DURATION_SECONDS} and {MAX_SESSION_DURATION_SECONDS} seconds"
             )
