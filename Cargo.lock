@@ -3026,7 +3026,6 @@ dependencies = [
  "coset 0.3.8",
  "coset 0.4.2",
  "ed25519-dalek 3.0.0",
- "flate2",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
  "isomdl",
@@ -3034,6 +3033,7 @@ dependencies = [
  "jsonwebtoken",
  "marty-crypto",
  "marty-oid4vci",
+ "marty-status",
  "marty-verification",
  "openssl",
  "p256 0.14.0",
@@ -3059,6 +3059,18 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+]
+
+[[package]]
+name = "marty-status"
+version = "0.1.45"
+source = "git+https://github.com/ElevenID/marty-core?rev=c33ac3f5b95e86744dc3ee24e167ebb048431b7e#c33ac3f5b95e86744dc3ee24e167ebb048431b7e"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
