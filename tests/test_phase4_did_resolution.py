@@ -723,7 +723,7 @@ class TestVdsNcDidResolutionRoute:
             ),
             component=ComponentReference(
                 "marty-credentials",
-                "0.1.51",
+                "0.1.52",
                 digest,
                 "verification-service",
                 "1.0.0",
@@ -850,7 +850,7 @@ class TestVdsNcDidResolutionRoute:
             ),
             component=ComponentReference(
                 "marty-credentials",
-                "0.1.51",
+                "0.1.52",
                 digest,
                 "verification-service",
                 "1.0.0",
@@ -1099,7 +1099,7 @@ class TestVerificationServiceContextPropagation:
             ),
             component=ComponentReference(
                 "marty-credentials",
-                "0.1.51",
+                "0.1.52",
                 digest,
                 "verification-service",
                 "1.0.0",
