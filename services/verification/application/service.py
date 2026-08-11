@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import secrets
-from datetime import UTC, datetime
 from typing import Any
 
 from mmf.core.exceptions import ValidationError
@@ -16,6 +15,15 @@ from ..domain.entities import (
     VerificationSubmissionClaim,
 )
 from ..domain.ports import ICredentialVerifier, IVerificationRepository
+from .canonical_result import build_canonical_result, pending_evidence
+from .governance import (
+    DIRECT_VERIFY_PURPOSE,
+    SESSION_CREATE_PURPOSE,
+    GovernanceConfigurationError,
+    GovernancePolicyMismatchError,
+    VerificationGovernanceContext,
+    load_governance,
+)
 
 DEFAULT_PROCESSING_LEASE_SECONDS = 60
 MIN_PROCESSING_LEASE_SECONDS = 5
@@ -92,43 +100,6 @@ def _require_finalized_or_terminal(
     raise VerificationSessionConflictError("Verification worker no longer owns the session")
 
 
-def reduce_verification_result(result: dict[str, Any]) -> dict[str, Any]:
-    """Derive the authorization result only from explicit required evidence."""
-    cryptographic_valid = result.get("cryptographic_valid", result.get("valid")) is True
-    trust_chain_valid = result.get("trust_chain_valid") is True
-    revocation_checked = result.get("revocation_checked") is True
-    revocation_status = str(result.get("revocation_status") or "SKIPPED").upper()
-    not_revoked = revocation_checked and revocation_status == "VALID"
-    valid = cryptographic_valid and trust_chain_valid and not_revoked
-
-    error = result.get("error")
-    if not error and not valid:
-        missing: list[str] = []
-        if not cryptographic_valid:
-            missing.append("cryptographic verification")
-        if not trust_chain_valid:
-            missing.append("issuer trust")
-        if not revocation_checked:
-            missing.append("revocation check")
-        elif not not_revoked:
-            missing.append(f"non-revoked status ({revocation_status})")
-        error = f"Required verification evidence unavailable or failed: {', '.join(missing)}"
-
-    return {
-        **result,
-        "valid": valid,
-        "overall_result": "PASS" if valid else "FAIL",
-        "cryptographic_valid": cryptographic_valid,
-        "trust_chain_valid": trust_chain_valid,
-        "revocation_checked": revocation_checked,
-        "revocation_status": revocation_status,
-        "error": error,
-        "verified_claims": (
-            result.get("claims", result.get("verified_claims", {})) if valid else {}
-        ),
-    }
-
-
 def _presentation_sha256(presentation: dict[str, Any] | str) -> str:
     """Return a deterministic digest without retaining credential-bearing input."""
     if isinstance(presentation, str):
@@ -143,25 +114,6 @@ def _presentation_sha256(presentation: dict[str, Any] | str) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _session_evidence(
-    result: dict[str, Any],
-    method: VerificationMethod,
-    presentation_digest: str,
-) -> dict[str, Any]:
-    """Build the claim-free, versioned decision record persisted with a session."""
-    return {
-        "schema_version": 1,
-        "overall_result": result.get("overall_result", "ERROR"),
-        "cryptographic_valid": result.get("cryptographic_valid") is True,
-        "trust_chain_valid": result.get("trust_chain_valid") is True,
-        "revocation_checked": result.get("revocation_checked") is True,
-        "revocation_status": str(result.get("revocation_status") or "SKIPPED").upper(),
-        "verification_method": method.value,
-        "presentation_sha256": presentation_digest,
-        "evaluated_at": datetime.now(UTC).isoformat(),
-    }
-
-
 class VerificationService:
     """Application service coordinating verification operations."""
 
@@ -171,14 +123,17 @@ class VerificationService:
 
     async def create_verification_session(
         self,
-        organization_id: str,
         verifier_did: str,
         presentation_definition: dict[str, Any],
-        required_credential_types: list[str] | None = None,
-        trusted_issuers: list[str] | None = None,
+        governance: VerificationGovernanceContext,
         session_duration_seconds: int = 600,
     ) -> VerificationSession:
         """Create a new verification session (OID4VP flow)."""
+        governance.require_purpose(SESSION_CREATE_PURPOSE)
+        governance.validate_request(
+            verifier_id=verifier_did,
+            presentation_definition=presentation_definition,
+        )
         if (
             not MIN_SESSION_DURATION_SECONDS
             <= session_duration_seconds
@@ -193,11 +148,11 @@ class VerificationService:
 
         session = VerificationSession(
             id=session_id,
-            organization_id=organization_id,
+            organization_id=governance.organization_id,
             verifier_did=verifier_did,
             presentation_definition=presentation_definition,
-            required_credential_types=required_credential_types or [],
-            trusted_issuers=trusted_issuers or [],
+            trusted_issuers=list(governance.trust_profile.trusted_issuers),
+            verification_evidence=pending_evidence(governance),
             nonce=nonce,
             request_uri=f"oid4vp://request?session_id={session_id}",
         )
@@ -206,13 +161,17 @@ class VerificationService:
 
     async def verify_presentation_direct(
         self,
-        organization_id: str,
         presentation: dict[str, Any] | str,
         presentation_definition: dict[str, Any],
         verifier_did: str,
-        trusted_issuers: list[str] | None = None,
+        governance: VerificationGovernanceContext,
     ) -> dict[str, Any]:
         """Verify a presentation directly without session (stateless)."""
+        governance.require_purpose(DIRECT_VERIFY_PURPOSE)
+        governance.validate_request(
+            verifier_id=verifier_did,
+            presentation_definition=presentation_definition,
+        )
         # Determine verification method
         if isinstance(presentation, str):
             # JWT VP
@@ -226,14 +185,22 @@ class VerificationService:
                 presentation=presentation,
                 presentation_definition=presentation_definition,
                 verifier_did=verifier_did,
-                trusted_issuers=trusted_issuers,
-                organization_id=organization_id,
+                trusted_issuers=list(governance.trust_profile.trusted_issuers),
+                organization_id=governance.organization_id,
+                allow_public_did_fallback=governance.trust_profile.allow_public_did_fallback,
             )
             method = VerificationMethod.W3C_VC
 
-        reduced = reduce_verification_result(result)
+        processing_status = "ERROR" if result.get("processing_error") is True else "COMPLETED"
         return {
-            **reduced,
+            "evidence": build_canonical_result(
+                governance=governance,
+                verification_id=f"verification:{secrets.token_urlsafe(24)}",
+                transaction_id=f"transaction:{secrets.token_urlsafe(24)}",
+                presentation=presentation,
+                adapter_result=result,
+                processing_status=processing_status,
+            ),
             "verification_method": method.value,
         }
 
@@ -267,43 +234,79 @@ class VerificationService:
         session = claim.session
 
         try:
-            result = await self.verifier.verify_jwt_vp(
-                presentation_jwt=presentation,
-                expected_audience=session.verifier_did,
-                expected_nonce=claim.verifier_nonce,
+            governance = load_governance().resume_session(
+                session.verification_evidence.get("governance")
+                if isinstance(session.verification_evidence, dict)
+                else None
             )
+            if governance.organization_id != session.organization_id:
+                raise GovernanceConfigurationError(
+                    "persisted governance organization does not match session"
+                )
+            governance.require_purpose(SESSION_CREATE_PURPOSE)
+            governance.validate_request(
+                verifier_id=session.verifier_did,
+                presentation_definition=session.presentation_definition,
+            )
+        except (GovernanceConfigurationError, GovernancePolicyMismatchError):
+            session.fail(
+                "Verification provenance unavailable",
+                method=method,
+                verification_evidence={
+                    "schema_version": 1,
+                    "legacy": True,
+                    "reason_code": "MISSING_GOVERNANCE_PROVENANCE",
+                    "presentation_sha256": presentation_digest,
+                },
+            )
+        else:
+            processing_status = "COMPLETED"
+            try:
+                result = await self.verifier.verify_jwt_vp(
+                    presentation_jwt=presentation,
+                    expected_audience=session.verifier_did,
+                    expected_nonce=claim.verifier_nonce,
+                )
+                if result.get("processing_error") is True:
+                    processing_status = "ERROR"
+            except Exception:
+                result = {}
+                processing_status = "ERROR"
 
-            reduced = reduce_verification_result(result)
-            evidence = _session_evidence(reduced, method, presentation_digest)
-            if reduced["valid"]:
-                session.verify(
-                    verified_claims=reduced["verified_claims"],
+            try:
+                evidence = build_canonical_result(
+                    governance=governance,
+                    verification_id=f"verification:{session.id}",
+                    transaction_id=session.id,
+                    presentation=presentation,
+                    adapter_result=result,
+                    processing_status=processing_status,
+                )
+            except Exception:
+                session.fail(
+                    "Canonical verification result unavailable",
                     method=method,
-                    verification_evidence=evidence,
+                    verification_evidence={
+                        "schema_version": 1,
+                        "legacy": True,
+                        "reason_code": "CANONICAL_RESULT_BUILD_FAILED",
+                        "presentation_sha256": presentation_digest,
+                    },
                 )
             else:
-                session.fail(
-                    "Verification failed",
-                    method=method,
-                    verification_evidence=evidence,
-                )
-
-        except Exception:
-            session.fail(
-                "Verification failed due to verifier error",
-                method=method,
-                verification_evidence=_session_evidence(
-                    {
-                        "overall_result": "ERROR",
-                        "cryptographic_valid": False,
-                        "trust_chain_valid": False,
-                        "revocation_checked": False,
-                        "revocation_status": "SKIPPED",
-                    },
-                    method,
-                    presentation_digest,
-                ),
-            )
+                canonical_result = evidence["canonical_result"]
+                if canonical_result["valid"] is True:
+                    session.verify(
+                        verified_claims={},
+                        method=method,
+                        verification_evidence=evidence,
+                    )
+                else:
+                    session.fail(
+                        "Verification did not produce a passing canonical decision",
+                        method=method,
+                        verification_evidence=evidence,
+                    )
 
         return _require_finalized_or_terminal(
             await self.repository.finalize_submission(

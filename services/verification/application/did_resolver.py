@@ -165,6 +165,91 @@ def _assert_jwk_algorithm(jwk: dict[str, Any], algorithm: str | None) -> None:
         raise ValueError("Resolved issuer key is not compatible with the requested algorithm")
 
 
+def _assert_public_asymmetric_jwk(jwk: dict[str, Any]) -> None:
+    """Reject private, symmetric, or structurally incomplete issuer keys."""
+    private_fields = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+    if private_fields.intersection(jwk):
+        raise ValueError("Resolved issuer key contains private or symmetric key material")
+    required_by_type = {
+        "EC": {"crv", "x", "y"},
+        "OKP": {"crv", "x"},
+        "RSA": {"n", "e"},
+    }
+    required = required_by_type.get(jwk.get("kty"))
+    if required is None or any(
+        not isinstance(jwk.get(field), str) or not jwk[field] for field in required
+    ):
+        raise ValueError("Resolved issuer key is not a supported public asymmetric JWK")
+
+
+def _validate_org_issuer_resolution(
+    resolved: Any,
+    *,
+    organization_id: str,
+    issuer_did: str,
+    verification_method_id: str | None,
+) -> dict[str, Any]:
+    """Bind an internal resolver response to the exact governed request."""
+    if not isinstance(resolved, dict) or resolved.get("ok") is not True:
+        raise ValueError("Org-scoped DID resolver returned an invalid response")
+    if resolved.get("organization_id") != organization_id:
+        raise ValueError("Org-scoped DID resolver returned a mismatched organization")
+    if resolved.get("issuer_did") != issuer_did:
+        raise ValueError("Org-scoped DID resolver returned a mismatched issuer DID")
+
+    resolved_method_id = normalize_verification_method_id(
+        issuer_did,
+        resolved.get("verification_method_id"),
+    )
+    requested_method_id = normalize_verification_method_id(issuer_did, verification_method_id)
+    if resolved_method_id is None or not resolved_method_id.startswith(f"{issuer_did}#"):
+        raise ValueError("Org-scoped DID resolver returned an unbound verification method")
+    if requested_method_id is not None and resolved_method_id != requested_method_id:
+        raise ValueError("Org-scoped DID resolver returned a mismatched verification method")
+
+    public_jwk = resolved.get("public_jwk")
+    if not isinstance(public_jwk, dict):
+        raise ValueError("Org-scoped DID resolver returned no public key")
+    _assert_public_asymmetric_jwk(public_jwk)
+    jwk_method_id = normalize_verification_method_id(issuer_did, public_jwk.get("kid"))
+    if jwk_method_id != resolved_method_id:
+        raise ValueError("Org-scoped DID resolver returned a JWK bound to another method")
+
+    did_document = resolved.get("did_document")
+    if not isinstance(did_document, dict) or did_document.get("id") != issuer_did:
+        raise ValueError("Org-scoped DID resolver returned a mismatched DID document")
+    document_methods = [
+        item
+        for item in did_document.get("verificationMethod", [])
+        if isinstance(item, dict)
+        and normalize_verification_method_id(issuer_did, item.get("id")) == resolved_method_id
+        and item.get("controller") == issuer_did
+    ]
+    if len(document_methods) != 1:
+        raise ValueError("Org-scoped DID resolver returned an unbound DID document method")
+    if resolved_method_id not in _verification_relationship_ids(
+        did_document,
+        "assertionMethod",
+    ):
+        raise ValueError("Org-scoped DID resolver method is not authorized for assertion")
+    method = resolved.get("verification_method")
+    if not isinstance(method, dict):
+        raise ValueError("Org-scoped DID resolver omitted verification method provenance")
+    if (
+        normalize_verification_method_id(issuer_did, method.get("id")) != resolved_method_id
+        or method.get("controller") != issuer_did
+    ):
+        raise ValueError("Org-scoped DID resolver returned mismatched method provenance")
+    resolver = resolved.get("resolver")
+    if (
+        not isinstance(resolver, dict)
+        or resolver.get("type") != "organization_issuer_profile"
+        or resolver.get("public_fallback_used") is not False
+    ):
+        raise ValueError("Org-scoped DID resolver returned invalid resolver provenance")
+    return resolved
+
+
 def _assertion_key_ids(did_document: dict[str, Any]) -> list[str]:
     did = str(did_document.get("id") or "")
     assertion_methods = _verification_relationship_ids(did_document, "assertionMethod")
@@ -202,10 +287,15 @@ def _internal_signing_base_url() -> str:
 
 
 def _internal_headers() -> dict[str, str]:
-    api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value(
-        "VERIFICATION_API_KEY"
-    )
-    return {"X-API-Key": api_key} if api_key else {}
+    api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY")
+    if not api_key:
+        raise ValueError("SIGNING_KEYS_INTERNAL_API_KEY is not configured")
+    return {"X-API-Key": api_key}
+
+
+def validate_internal_resolver_configuration() -> None:
+    """Fail startup when the verification workload cannot authenticate resolution."""
+    _internal_headers()
 
 
 def _response_error_detail(response: httpx.Response) -> str:
@@ -248,11 +338,12 @@ async def _resolve_issuer_did_via_org_registry(
     if algorithm:
         params["algorithm"] = algorithm
 
+    headers = _internal_headers()
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.get(
             f"{_internal_signing_base_url()}/resolve-issuer-did",
             params=params,
-            headers=_internal_headers(),
+            headers=headers,
         )
 
     if response.status_code >= 400:
@@ -293,6 +384,12 @@ async def resolve_issuer_did(
                 algorithm=algorithm,
                 timeout=timeout,
             )
+            resolved = _validate_org_issuer_resolution(
+                resolved,
+                organization_id=organization_id,
+                issuer_did=issuer_did,
+                verification_method_id=verification_method_id,
+            )
             public_jwk = (
                 resolved.get("public_jwk") if isinstance(resolved.get("public_jwk"), dict) else None
             )
@@ -304,6 +401,7 @@ async def resolve_issuer_did(
                 )
             if public_jwk is None:
                 raise ValueError(f"Org-scoped DID resolver returned no public key for {issuer_did}")
+            _assert_public_asymmetric_jwk(public_jwk)
             _assert_jwk_algorithm(public_jwk, algorithm)
             return {**resolved, "public_jwk": public_jwk}
         except ValueError:
@@ -327,6 +425,7 @@ async def resolve_issuer_did(
     public_jwk = extract_public_key_jwk(did_document, selected_verification_method)
     if public_jwk is None:
         raise ValueError(f"No public key matched issuer DID {issuer_did}")
+    _assert_public_asymmetric_jwk(public_jwk)
     _assert_jwk_algorithm(public_jwk, algorithm)
     normalized_vm = normalize_verification_method_id(issuer_did, selected_verification_method)
     return {

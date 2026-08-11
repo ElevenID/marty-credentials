@@ -1,14 +1,24 @@
 """API routes for verification service."""
 
-import hmac as _hmac
 import json
 import logging
-import os
+import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from mmf.infrastructure.database.session import get_db_session
 
+from ...application.canonical_result import build_canonical_result, canonical_result_from_evidence
 from ...application.did_resolver import resolve_issuer_did
+from ...application.governance import (
+    DIRECT_VERIFY_PURPOSE,
+    SESSION_CREATE_PURPOSE,
+    VDS_NC_VERIFY_PURPOSE,
+    GovernanceAuthorizationError,
+    GovernanceConfigurationError,
+    GovernancePolicyMismatchError,
+    VerificationGovernanceContext,
+    load_governance,
+)
 from ...application.rust_verifier import RustCredentialVerifier
 from ...application.service import (
     UnsupportedSessionPresentationError,
@@ -25,7 +35,6 @@ from .models import (
     PresentationDefinition,
     SessionResponse,
     SubmitPresentationRequest,
-    VdsNcVerificationResult,
     VerificationResult,
     VerifyDirectRequest,
     VerifyVdsNcRequest,
@@ -45,29 +54,103 @@ __all__ = [
     "VerificationResult",
     "VerifyDirectRequest",
     "VerifyVdsNcRequest",
-    "VdsNcVerificationResult",
     "verification_router",
 ]
 
 
 # ============================================================================
-# API Key Authentication
+# Purpose-scoped caller authentication
 # ============================================================================
 
-_VERIFICATION_API_KEY = os.environ.get("VERIFICATION_API_KEY", "")
 
-
-async def _verify_api_key(
+async def _authorize(
+    purpose: str,
     x_api_key: str | None = Header(None, alias="X-API-Key"),
-) -> str:
-    """Verify X-API-Key header for verification management endpoints."""
-    if not _VERIFICATION_API_KEY:
-        raise HTTPException(status_code=503, detail="VERIFICATION_API_KEY not configured on server")
+) -> VerificationGovernanceContext:
+    """Bind one caller credential to its organization and governed profiles."""
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-Key header is missing")
-    if not _hmac.compare_digest(x_api_key, _VERIFICATION_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    return x_api_key
+    try:
+        return load_governance().authorize(x_api_key, purpose)
+    except GovernanceConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Verification governance is unavailable",
+        ) from exc
+    except GovernanceAuthorizationError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or unauthorized API key") from exc
+
+
+async def _authorize_session_create(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> VerificationGovernanceContext:
+    return await _authorize(SESSION_CREATE_PURPOSE, x_api_key)
+
+
+async def _authorize_direct_verify(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> VerificationGovernanceContext:
+    return await _authorize(DIRECT_VERIFY_PURPOSE, x_api_key)
+
+
+async def _authorize_vds_nc_verify(
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> VerificationGovernanceContext:
+    return await _authorize(VDS_NC_VERIFY_PURPOSE, x_api_key)
+
+
+def _verification_result(
+    evidence: dict[str, object],
+    *,
+    verification_method: str | None,
+    error: str | None = None,
+) -> VerificationResult:
+    canonical = canonical_result_from_evidence(evidence)
+    if canonical is None:
+        return VerificationResult(
+            canonical_result=None,
+            processing_status="UNAVAILABLE",
+            decision="INDETERMINATE",
+            decision_code="PROCESSING_NOT_COMPLETED",
+            valid=False,
+            overall_result="INDETERMINATE",
+            verification_method=verification_method,
+            error=error or "Legacy verification evidence has no canonical provenance",
+        )
+
+    checks = {
+        check.get("check_id"): check
+        for check in canonical.get("checks", [])
+        if isinstance(check, dict)
+    }
+    trust_check = checks.get("issuer.trust", {})
+    status_check = checks.get("credential.status", {})
+    status_code = status_check.get("code")
+    if status_code == "CREDENTIAL_STATUS_VALID":
+        revocation_status = "VALID"
+    elif status_code == "CREDENTIAL_STATUS_REVOKED":
+        revocation_status = "REVOKED"
+    else:
+        revocation_status = "UNKNOWN"
+    decision = str(canonical.get("decision", "INDETERMINATE"))
+    valid = canonical.get("valid") is True and decision == "PASS"
+    return VerificationResult(
+        canonical_result=canonical,
+        processing_status=str(canonical.get("processing_status", "UNAVAILABLE")),
+        decision=decision,
+        decision_code=str(canonical.get("decision_code", "PROCESSING_NOT_COMPLETED")),
+        valid=valid,
+        overall_result=decision,
+        trust_chain_valid=trust_check.get("outcome") == "PASSED",
+        revocation_checked=status_check.get("outcome") in {"PASSED", "FAILED", "ERROR"},
+        revocation_status=revocation_status,
+        evaluated_at=canonical.get("evaluated_at"),
+        policy_id=(canonical.get("policy") or {}).get("id"),
+        verified_claims=None,
+        verification_method=verification_method,
+        error=None if valid else error or "Canonical verification did not pass",
+        verified_at=canonical.get("evaluated_at") if valid else None,
+    )
 
 
 # ============================================================================
@@ -99,20 +182,18 @@ def get_verification_service(
 # ============================================================================
 
 
-@verification_router.post(
-    "/sessions", response_model=SessionResponse, dependencies=[Depends(_verify_api_key)]
-)
+@verification_router.post("/sessions", response_model=SessionResponse)
 async def create_verification_session(
-    request: CreateSessionRequest, service: VerificationService = Depends(get_verification_service)
+    request: CreateSessionRequest,
+    service: VerificationService = Depends(get_verification_service),
+    governance: VerificationGovernanceContext = Depends(_authorize_session_create),  # noqa: B008
 ) -> SessionResponse:
     """Create a new verification session for OID4VP flow."""
     try:
         session = await service.create_verification_session(
-            organization_id=request.organization_id,
             verifier_did=request.verifier_did,
-            presentation_definition=request.presentation_definition.dict(),
-            required_credential_types=request.required_credential_types,
-            trusted_issuers=request.trusted_issuers,
+            presentation_definition=request.presentation_definition.model_dump(exclude_none=True),
+            governance=governance,
             session_duration_seconds=request.session_duration_seconds,
         )
 
@@ -127,6 +208,11 @@ async def create_verification_session(
             created_at=session.created_at.isoformat(),
         )
 
+    except GovernancePolicyMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Verification request does not match its governed policy",
+        ) from exc
     except Exception as e:
         logger.error(f"Failed to create verification session: {e}")
         raise HTTPException(
@@ -147,22 +233,12 @@ async def submit_presentation(
             session_id=session_id, presentation=request.presentation
         )
 
-        is_valid = session.status.value == "verified"
-        evidence = session.verification_evidence
-        return VerificationResult(
-            valid=is_valid,
-            overall_result="PASS" if is_valid else "FAIL",
-            trust_chain_valid=evidence.get("trust_chain_valid") is True,
-            revocation_checked=evidence.get("revocation_checked") is True,
-            revocation_status=evidence.get("revocation_status", "SKIPPED"),
-            evaluated_at=session.verified_at.isoformat() if session.verified_at else None,
-            verifier_nonce=session.nonce if hasattr(session, "nonce") else None,
-            verified_claims=session.verified_claims,
-            verification_method=session.verification_method.value
-            if session.verification_method
-            else None,
+        return _verification_result(
+            session.verification_evidence,
+            verification_method=(
+                session.verification_method.value if session.verification_method else None
+            ),
             error=session.error_message,
-            verified_at=session.verified_at.isoformat() if session.verified_at else None,
         )
 
     except VerificationSessionNotFoundError as exc:
@@ -219,34 +295,30 @@ async def get_session(
     )
 
 
-@verification_router.post(
-    "/verify", response_model=VerificationResult, dependencies=[Depends(_verify_api_key)]
-)
+@verification_router.post("/verify", response_model=VerificationResult)
 async def verify_presentation_direct(
-    request: VerifyDirectRequest, service: VerificationService = Depends(get_verification_service)
+    request: VerifyDirectRequest,
+    service: VerificationService = Depends(get_verification_service),
+    governance: VerificationGovernanceContext = Depends(_authorize_direct_verify),  # noqa: B008
 ) -> VerificationResult:
     """Verify a presentation directly without creating a session (stateless)."""
     try:
         result = await service.verify_presentation_direct(
-            organization_id=request.organization_id,
             presentation=request.presentation,
-            presentation_definition=request.presentation_definition.dict(),
+            presentation_definition=request.presentation_definition.model_dump(exclude_none=True),
             verifier_did=request.verifier_did,
-            trusted_issuers=request.trusted_issuers,
+            governance=governance,
         )
-
-        is_valid = result["valid"]
-        return VerificationResult(
-            valid=is_valid,
-            overall_result=result.get("overall_result", "FAIL"),
-            trust_chain_valid=result.get("trust_chain_valid") is True,
-            revocation_checked=result.get("revocation_checked") is True,
-            revocation_status=result.get("revocation_status", "SKIPPED"),
-            verified_claims=result.get("verified_claims") if is_valid else {},
+        return _verification_result(
+            result["evidence"],
             verification_method=result.get("verification_method"),
-            error=result.get("error"),
         )
 
+    except GovernancePolicyMismatchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Verification request does not match its governed policy",
+        ) from exc
     except Exception as e:
         logger.error(f"Direct verification failed: {e}")
         raise HTTPException(
@@ -262,57 +334,61 @@ async def health_check() -> dict[str, str]:
 
 @verification_router.post(
     "/verify/vds-nc",
-    response_model=VdsNcVerificationResult,
-    dependencies=[Depends(_verify_api_key)],
+    response_model=VerificationResult,
 )
 async def verify_vds_nc_barcode(
     request: VerifyVdsNcRequest,
     verifier: RustCredentialVerifier = Depends(get_credential_verifier),
-) -> VdsNcVerificationResult:
-    """Verify a VDS-NC barcode against issuer DID identity or a legacy issuer JWK.
+    governance: VerificationGovernanceContext = Depends(_authorize_vds_nc_verify),  # noqa: B008
+) -> VerificationResult:
+    """Verify a VDS-NC barcode under caller-bound governance.
 
     Validates the tilde-separated ``header~payload_json~signature_b64`` envelope
-    using the Rust ``vds_nc_verify`` binding. Prefer ``issuer_did`` plus
-    ``organization_id`` so remote KMS keys stay behind DID issuer identities.
+    using the Rust ``vds_nc_verify`` binding and projects only the canonical,
+    privacy-minimized decision result.
     """
     try:
-        issuer_jwk_json = request.issuer_jwk_json
-        if not issuer_jwk_json:
-            if not request.issuer_did:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="issuer_did is required when issuer_jwk_json is not provided",
-                )
-            issuer_resolution = await resolve_issuer_did(
-                request.issuer_did,
-                organization_id=request.organization_id,
-                verification_method_id=request.verification_method_id,
-                trusted_issuers=request.trusted_issuers,
-                credential_format=request.credential_format,
-                key_purpose=request.key_purpose,
-                algorithm=request.algorithm,
-                allow_public_fallback=request.allow_public_did_fallback,
+        governance.require_purpose(VDS_NC_VERIFY_PURPOSE)
+        issuer_resolution = await resolve_issuer_did(
+            request.issuer_did,
+            organization_id=governance.organization_id,
+            verification_method_id=request.verification_method_id,
+            trusted_issuers=list(governance.trust_profile.trusted_issuers),
+            credential_format="vds_nc",
+            key_purpose="vdsnc_signing",
+            algorithm=request.algorithm,
+            allow_public_fallback=governance.trust_profile.allow_public_did_fallback,
+        )
+        public_jwk = (
+            issuer_resolution.get("public_jwk") if isinstance(issuer_resolution, dict) else None
+        )
+        if not isinstance(public_jwk, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="issuer_did did not resolve to a usable public JWK",
             )
-            public_jwk = (
-                issuer_resolution.get("public_jwk") if isinstance(issuer_resolution, dict) else None
-            )
-            if not isinstance(public_jwk, dict):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="issuer_did did not resolve to a usable public JWK",
-                )
-            issuer_jwk_json = json.dumps(public_jwk)
 
         result = await verifier.verify_vds_nc(
             barcode=request.barcode,
-            issuer_jwk_json=issuer_jwk_json,
+            issuer_jwk_json=json.dumps(public_jwk),
         )
-        return VdsNcVerificationResult(
-            valid=result.get("valid", False),
-            country=result.get("country"),
-            payload=result.get("payload"),
-            signature_status=result.get("signature_status", "Unknown"),
-            errors=result.get("errors", []),
+        evidence = build_canonical_result(
+            governance=governance,
+            verification_id=f"verification:{secrets.token_urlsafe(24)}",
+            transaction_id=f"transaction:{secrets.token_urlsafe(24)}",
+            presentation=request.barcode,
+            adapter_result={
+                "credential_proofs_valid": result.get("valid") is True,
+                "trust_chain_valid": True,
+            },
+            processing_status=("ERROR" if result.get("processing_error") is True else "COMPLETED"),
+        )
+        return _verification_result(
+            evidence,
+            verification_method="vds_nc",
+            error=(
+                None if result.get("valid") is True else "VDS-NC credential proof did not verify"
+            ),
         )
     except HTTPException:
         raise

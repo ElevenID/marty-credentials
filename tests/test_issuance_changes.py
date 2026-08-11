@@ -2976,7 +2976,8 @@ class TestVerificationResponseModels:
     def test_verification_result_extended_defaults(self):
         """VerificationResult extended fields have correct defaults."""
         result = VerificationResult(valid=True)
-        assert result.overall_result == "FAIL"
+        assert result.valid is False
+        assert result.overall_result == "INDETERMINATE"
         assert result.trust_chain_valid is False
         assert result.revocation_checked is False
         assert result.claim_results == []
@@ -2995,6 +2996,12 @@ class TestVerificationResponseModels:
         result = VerificationResult(
             valid=True,
             overall_result="PASS",
+            canonical_result={
+                "valid": True,
+                "processing_status": "COMPLETED",
+                "decision": "PASS",
+                "decision_code": "ALL_REQUIRED_CHECKS_PASSED",
+            },
             trust_chain_valid=True,
             revocation_checked=True,
             revocation_status="VALID",
@@ -3017,6 +3024,12 @@ class TestVerificationResponseModels:
         result = VerificationResult(
             valid=False,
             overall_result="FAIL",
+            canonical_result={
+                "valid": False,
+                "processing_status": "COMPLETED",
+                "decision": "FAIL",
+                "decision_code": "REQUIRED_CHECK_FAILED",
+            },
             error="Signature verification failed",
         )
         assert result.valid is False

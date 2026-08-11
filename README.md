@@ -72,6 +72,13 @@ This package depends on [marty-core](https://github.com/ElevenID/marty-core) for
 - `marty-verification`: Trust chain verification
 - `marty-secure-storage`: Encrypted credential storage
 
+## Verification Governance
+
+Verification management endpoints require purpose-scoped, organization-bound
+governance rather than caller-selected organization or trust inputs. See
+[`services/verification/GOVERNANCE.md`](services/verification/GOVERNANCE.md)
+for the deployment schema, mandatory checks, digest rules, and rollout notes.
+
 ## Release Process
 
 Stable releases are tag-driven, fail closed, and use only commits already on

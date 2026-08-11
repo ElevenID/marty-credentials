@@ -1,46 +1,46 @@
 {
   "schema": "marty.release-dependencies/v1",
   "marty-rs": {
-    "version": "0.1.38",
+    "version": "0.1.46",
     "repository": "ElevenID/marty-core",
-    "tag": "v0.1.38",
-    "commit": "ef8421e7c545f5d54796a636e6ba4079cf2becc9",
-    "asset": "marty_rs-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    "sha256": "955400cffed222b5ef18f340f5c5a5c003b3b7cd25c14304bf432f235409e091",
+    "tag": "v0.1.46",
+    "commit": "c8a028e803e7278f7842f5085855ac12a80b14ba",
+    "asset": "marty_rs-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "d878bd702dc72ab247575978f15b0ce449a076394b323aae9d6b98d38e487c5b",
     "platform_assets": {
       "linux-x86_64": {
-        "asset": "marty_rs-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "sha256": "955400cffed222b5ef18f340f5c5a5c003b3b7cd25c14304bf432f235409e091"
+        "asset": "marty_rs-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "d878bd702dc72ab247575978f15b0ce449a076394b323aae9d6b98d38e487c5b"
       },
       "macos-arm64": {
-        "asset": "marty_rs-0.1.38-cp311-abi3-macosx_11_0_arm64.whl",
-        "sha256": "62178dfbf5d0b0c492ebf068641668aa74202c961e365b6783b0c76b9107185d"
+        "asset": "marty_rs-0.1.46-cp311-abi3-macosx_11_0_arm64.whl",
+        "sha256": "59de8745eeb1bc616649db8d4b6e00cd25146d6266e3915855c524817a76cc6c"
       },
       "windows-x86_64": {
-        "asset": "marty_rs-0.1.38-cp311-abi3-win_amd64.whl",
-        "sha256": "f63c512949af9b74efe9d1c8eb5d15982124f7fc39c907105a966cf31d25a08b"
+        "asset": "marty_rs-0.1.46-cp311-abi3-win_amd64.whl",
+        "sha256": "eb6cb35b919000b180a549805135c7fd9ca368f81914458d33b75c0dd34893b6"
       }
     }
   },
   "marty-verification": {
-    "version": "0.1.38",
+    "version": "0.1.46",
     "repository": "ElevenID/marty-core",
-    "tag": "v0.1.38",
-    "commit": "ef8421e7c545f5d54796a636e6ba4079cf2becc9",
-    "asset": "marty_verification_py-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-    "sha256": "07439c56aec820f1c45b5fa7c324e7c78c48be4bda5a3bb6fa4aa3505f37b18a",
+    "tag": "v0.1.46",
+    "commit": "c8a028e803e7278f7842f5085855ac12a80b14ba",
+    "asset": "marty_verification_py-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "sha256": "be0a949e05dcd91214abe8edba735f24632055e971d62438c17cd2f6b8776b75",
     "platform_assets": {
       "linux-x86_64": {
-        "asset": "marty_verification_py-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "sha256": "07439c56aec820f1c45b5fa7c324e7c78c48be4bda5a3bb6fa4aa3505f37b18a"
+        "asset": "marty_verification_py-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "sha256": "be0a949e05dcd91214abe8edba735f24632055e971d62438c17cd2f6b8776b75"
       },
       "macos-arm64": {
-        "asset": "marty_verification_py-0.1.38-cp311-abi3-macosx_11_0_arm64.whl",
-        "sha256": "fcbaf37d4bc6f678c03a87381e5bf8fd6418614ef7122b9f68905647c9c2f303"
+        "asset": "marty_verification_py-0.1.46-cp311-abi3-macosx_11_0_arm64.whl",
+        "sha256": "0fadfe0164152b0db47a1a197c8f87fa9cc2ddc50e80f723f4f1f0056bcd039f"
       },
       "windows-x86_64": {
-        "asset": "marty_verification_py-0.1.38-cp311-abi3-win_amd64.whl",
-        "sha256": "4213a97c64d0e8a0549706a081506963fa8509e93929766d54bca3e99a64e7bc"
+        "asset": "marty_verification_py-0.1.46-cp311-abi3-win_amd64.whl",
+        "sha256": "19bf6bd1c8a1c2b01adf96895fee0a13f802f5ac2be7a073d10b198f00ae5e3a"
       }
     }
   },

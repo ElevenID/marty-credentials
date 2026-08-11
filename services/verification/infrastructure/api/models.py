@@ -6,7 +6,7 @@ the mmf database infrastructure side-effects.
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ============================================================================
 # Request/Response Models
@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 class PresentationDefinition(BaseModel):
     """OID4VP Presentation Definition."""
 
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     input_descriptors: list[dict[str, Any]]
     format: dict[str, Any] | None = None
@@ -24,11 +26,10 @@ class PresentationDefinition(BaseModel):
 class CreateSessionRequest(BaseModel):
     """Request to create a verification session."""
 
-    organization_id: str
+    model_config = ConfigDict(extra="forbid")
+
     verifier_did: str
     presentation_definition: PresentationDefinition
-    required_credential_types: list[str] = Field(default_factory=list)
-    trusted_issuers: list[str] = Field(default_factory=list)
     session_duration_seconds: int = Field(default=600, ge=30, le=3600)
 
 
@@ -48,6 +49,8 @@ class SessionResponse(BaseModel):
 class SubmitPresentationRequest(BaseModel):
     """Request to submit a presentation."""
 
+    model_config = ConfigDict(extra="forbid")
+
     presentation: str
 
 
@@ -64,10 +67,14 @@ class ClaimResult(BaseModel):
 class VerificationResult(BaseModel):
     """MIP §26 — Verification result response (protocol-compliant shape)."""
 
-    # Legacy field retained for backward compatibility
+    canonical_result: dict[str, Any] | None = None
+    processing_status: str = "UNAVAILABLE"
+    decision: str = "INDETERMINATE"
+    decision_code: str = "PROCESSING_NOT_COMPLETED"
+    # Legacy projections are derived only from canonical_result.
     valid: bool
     # Protocol-conformant fields (MIP §26 VerificationResult)
-    overall_result: str = "FAIL"  # PASS | FAIL
+    overall_result: str = "INDETERMINATE"
     claim_results: list[ClaimResult] = Field(default_factory=list)
     trust_chain_valid: bool = False
     revocation_checked: bool = False
@@ -82,38 +89,42 @@ class VerificationResult(BaseModel):
     error: str | None = None
     verified_at: str | None = None
 
+    @model_validator(mode="after")
+    def derive_compatibility_projection(self) -> "VerificationResult":
+        """Prevent compatibility fields from claiming more than Core decided."""
+        if self.canonical_result is None:
+            self.processing_status = "UNAVAILABLE"
+            self.decision = "INDETERMINATE"
+            self.decision_code = "PROCESSING_NOT_COMPLETED"
+            self.valid = False
+            self.overall_result = "INDETERMINATE"
+            return self
+        self.processing_status = str(self.canonical_result.get("processing_status", "UNAVAILABLE"))
+        self.decision = str(self.canonical_result.get("decision", "INDETERMINATE"))
+        self.decision_code = str(
+            self.canonical_result.get("decision_code", "PROCESSING_NOT_COMPLETED")
+        )
+        self.valid = self.canonical_result.get("valid") is True and self.decision == "PASS"
+        self.overall_result = self.decision
+        return self
+
 
 class VerifyDirectRequest(BaseModel):
     """Request for direct (stateless) verification."""
 
-    organization_id: str
+    model_config = ConfigDict(extra="forbid")
+
     presentation: dict[str, Any] | str
     presentation_definition: PresentationDefinition
     verifier_did: str
-    trusted_issuers: list[str] = Field(default_factory=list)
 
 
 class VerifyVdsNcRequest(BaseModel):
     """Request to verify a VDS-NC barcode."""
 
+    model_config = ConfigDict(extra="forbid")
+
     barcode: str
-    issuer_jwk_json: str | None = None
-    issuer_did: str | None = None
-    organization_id: str | None = None
+    issuer_did: str
     verification_method_id: str | None = None
-    trusted_issuers: list[str] = Field(default_factory=list)
-    credential_format: str = "vds_nc"
-    key_purpose: str = "vdsnc_signing"
     algorithm: str | None = None
-    allow_public_did_fallback: bool = False
-
-
-class VdsNcVerificationResult(BaseModel):
-    """Result of VDS-NC barcode verification."""
-
-    valid: bool
-    country: str | None = None
-    payload: dict[str, Any] | None = None
-    signature_status: str = "Unknown"
-    errors: list[str] = Field(default_factory=list)
-    method: str = "vds_nc"
