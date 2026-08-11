@@ -4,19 +4,18 @@ import logging
 
 import uvicorn
 from fastapi import FastAPI
-from infrastructure.api.routes import verification_router
 from marty_credentials.native_backend import marty_rs_diagnostic
-from mmf.core.logging import setup_logging
-from mmf.infrastructure.database.postgres import PostgresAdapter
 from verification.application.did_resolver import validate_internal_resolver_configuration
 from verification.application.governance import load_governance
 from verification.application.rust_verifier import (
     REQUIRED_MARTY_RS_CAPABILITIES,
     validate_marty_rs_capabilities,
 )
+from verification.infrastructure.api.routes import verification_router
+from verification.infrastructure.persistence.database import close_database
 
-# Setup logging
-setup_logging()
+# Setup logging without relying on an optional framework namespace.
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create FastAPI application
@@ -25,10 +24,6 @@ app = FastAPI(
     description="OID4VP credential verification service",
     version="1.0.0",
 )
-
-# Initialize database
-postgres_adapter = PostgresAdapter()
-postgres_adapter.setup_middleware(app)
 
 # Include routes
 app.include_router(verification_router)
@@ -42,6 +37,12 @@ async def startup():
     validate_internal_resolver_configuration()
     logger.info("Starting verification-service...")
     # Database tables will be created by migrations
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Release service-owned database connections."""
+    await close_database()
 
 
 @app.get("/health")

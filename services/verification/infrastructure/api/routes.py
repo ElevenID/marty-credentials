@@ -5,7 +5,7 @@ import logging
 import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
-from mmf.infrastructure.database.session import get_db_session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...application.canonical_result import build_canonical_result, canonical_result_from_evidence
 from ...application.did_resolver import resolve_issuer_did
@@ -28,6 +28,7 @@ from ...application.service import (
     VerificationSessionExpiredError,
     VerificationSessionNotFoundError,
 )
+from ..persistence.database import get_db_session
 from ..persistence.postgres_repository import PostgresVerificationRepository
 from .models import (
     ClaimResult,
@@ -158,9 +159,10 @@ def _verification_result(
 # ============================================================================
 
 
-def get_verification_repository() -> PostgresVerificationRepository:
+def get_verification_repository(
+    session: AsyncSession = Depends(get_db_session),  # noqa: B008
+) -> PostgresVerificationRepository:
     """Get verification repository instance."""
-    session = get_db_session()
     return PostgresVerificationRepository(session)
 
 

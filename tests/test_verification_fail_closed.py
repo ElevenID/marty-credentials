@@ -1,26 +1,10 @@
 import base64
 import json
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-if "mmf.core.exceptions" not in sys.modules:
-    mmf_module = types.ModuleType("mmf")
-    mmf_core_module = types.ModuleType("mmf.core")
-    mmf_exceptions_module = types.ModuleType("mmf.core.exceptions")
-
-    class ValidationError(Exception):
-        pass
-
-    mmf_exceptions_module.ValidationError = ValidationError
-    sys.modules["mmf"] = mmf_module
-    sys.modules["mmf.core"] = mmf_core_module
-    sys.modules["mmf.core.exceptions"] = mmf_exceptions_module
-
-from verification.application.canonical_result import _mapped_check  # noqa: E402
-from verification.application.rust_verifier import RustCredentialVerifier  # noqa: E402
+from verification.application.canonical_result import _mapped_check
+from verification.application.rust_verifier import RustCredentialVerifier
 
 
 def test_adapter_mapping_does_not_invent_trust_or_status_from_valid() -> None:
