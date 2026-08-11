@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.54] - 2026-08-11
+
+### Fixed
+
+- Make the verification service image import and start from its packaged
+  `verification` namespace without relying on MMF modules that are absent from
+  the pinned framework wheel.
+- Provide service-owned asynchronous PostgreSQL sessions and declarative model
+  metadata while retaining the existing migration contract.
+
+### Security
+
+- Require the exact digest-built verification image to apply its migrations,
+  start against digest-pinned PostgreSQL, and report an available native
+  backend before provenance attestation or stable publication.
+
 ## [0.1.49] - 2026-08-09
 
 ### Changed
