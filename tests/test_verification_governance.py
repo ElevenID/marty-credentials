@@ -58,7 +58,7 @@ def _configuration() -> dict[str, object]:
     return {
         "component": {
             "component_id": "marty-credentials",
-            "version": "0.1.51",
+            "version": "0.1.52",
             "artifact_digest": ARTIFACT_DIGEST,
             "adapter_id": "verification-service",
             "adapter_version": "1.0.0",
@@ -250,7 +250,7 @@ def test_session_resume_requires_registered_profiles_and_uses_current_component(
     resumed = registry.resume_session(snapshot)
 
     assert resumed.component == registry.component
-    assert resumed.component.version == "0.1.51"
+    assert resumed.component.version == "0.1.52"
 
     snapshot["policy"]["content"]["verifier_id"] = "did:web:attacker.example"
     snapshot["policy"]["content_digest"] = canonical_digest(snapshot["policy"]["content"])
