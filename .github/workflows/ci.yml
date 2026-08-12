@@ -7,14 +7,45 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   MARTY_CORE_REVISION: 2996a196d05a70a84c842f62a6b79c33284e69e3
 
 jobs:
+  preflight:
+    name: Fast Rust Preflight
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: marty-credentials/rust/marty-rs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          components: rustfmt
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            marty-credentials/target
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-cargo-${{ hashFiles('marty-credentials/Cargo.lock') }}
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check the native feature set
+        run: cargo check --locked --no-default-features --features native
+
   test-rust:
     name: Rust Tests
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,8 +67,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            marty-credentials/target
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-cargo-${{ hashFiles('marty-credentials/Cargo.lock') }}
 
       - name: Run tests
         # Python and WASM bindings are exercised in their dedicated jobs. PyO3's
@@ -55,6 +86,7 @@ jobs:
 
   security:
     name: Security Audit
+    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -100,6 +132,7 @@ jobs:
 
   python-security:
     name: Python Security
+    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -142,6 +175,7 @@ jobs:
 
   canvas-portable-migration:
     name: Canvas PostgreSQL Migration Contract
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -197,6 +231,7 @@ jobs:
 
   issuance-idempotency-contract:
     name: Issuance Idempotency PostgreSQL Contract
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -259,27 +294,39 @@ jobs:
 
   build-core-python-wheels:
     name: Core Python Wheels
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Restore exact pinned Core wheels
+        id: core-wheel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: core-wheels
+          key: core-python-wheels-v1-${{ runner.os }}-${{ runner.arch }}-py311-rust1971-maturin1141-${{ env.MARTY_CORE_REVISION }}
+
+      - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-core
           ref: ${{ env.MARTY_CORE_REVISION }}
           path: marty-core
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
 
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
 
       - name: Cache Core build
+        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
@@ -289,6 +336,7 @@ jobs:
           key: ${{ runner.os }}-core-python-${{ env.MARTY_CORE_REVISION }}
 
       - name: Build exact pinned Core wheels
+        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         run: |
           python -m pip install --upgrade pip
           python -m pip install maturin==1.14.1
@@ -369,6 +417,7 @@ jobs:
 
   oid4vci-capability-postgres:
     name: OID4VCI Capability PostgreSQL Race
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -409,6 +458,7 @@ jobs:
 
   verification-session-postgres:
     name: Verification Session PostgreSQL Race
+    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -451,6 +501,7 @@ jobs:
 
   test-wasm:
     name: WASM Tests
+    needs: preflight
     runs-on: ubuntu-latest
     defaults:
       run:
