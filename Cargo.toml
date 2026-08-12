@@ -43,7 +43,7 @@ ciborium = { version = "0.2" }
 
 # Crypto
 bs58 = { version = "0.5" }
-base64 = { version = "0.22" }
+base64 = { version = "0.23" }
 rsa = { version = "0.9" }
 rand = { version = "0.10" }
 
