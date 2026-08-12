@@ -122,6 +122,7 @@ def test_native_extension_contract_requires_remote_jwt_prepare_and_assemble() ->
         "oid4vci_prepare_sd_jwt",
         "oid4vci_assemble_sd_jwt",
         "oid4vci_prepare_jwt_vc",
+        "oid4vci_prepare_open_badge_v3_jwt_vc",
         "oid4vci_assemble_jwt_vc",
     }.issubset(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
 
@@ -137,6 +138,23 @@ def test_native_extension_contract_requires_remote_jwt_prepare_and_assemble() ->
     for prohibited in ("hashlib", "secrets.token_bytes", "encoded_header", "encoded_payload"):
         assert prohibited not in sd_jwt_body
         assert prohibited not in jwt_vc_body
+
+
+def test_native_extension_contract_rejects_pre_profile_jwt_binding(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    required = "oid4vci_prepare_open_badge_v3_jwt_vc"
+    incomplete_module = SimpleNamespace(
+        **{
+            capability: (lambda: None)
+            for capability in rust_integration.REQUIRED_MARTY_RS_CAPABILITIES
+            if capability != required
+        }
+    )
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: incomplete_module)
+
+    with pytest.raises(RuntimeError, match=required):
+        rust_integration.validate_marty_rs_capabilities()
 
 
 @pytest.mark.asyncio

@@ -3310,6 +3310,64 @@ class TestRustIntegrationOrgIdValidation:
         assert decoded["vc"]["validFrom"].endswith("Z")
         assert decoded["vc"]["validUntil"].endswith("Z")
 
+    async def test_remote_jwt_vc_delegates_open_badge_profile_to_native_binding(
+        self, monkeypatch
+    ):
+        from issuance.application import rust_integration
+
+        captured: list[object] = []
+
+        class Prepared:
+            signing_input = "header.payload"
+
+        class Binding:
+            @staticmethod
+            def oid4vci_prepare_open_badge_v3_jwt_vc(*args, **kwargs):
+                captured.extend(args)
+                captured.append(kwargs)
+                return Prepared()
+
+            @staticmethod
+            def oid4vci_assemble_jwt_vc(_prepared, _signature):
+                return "header.payload.AQID", "urn:uuid:credential"
+
+        monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Binding())
+
+        async def fake_remote_sign(payload: bytes, algorithm: str | None):
+            assert payload == b"header.payload"
+            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+
+        credential, credential_id = await rust_integration.create_jwt_vc_with_remote_signing(
+            issuer_did="did:web:issuer.example",
+            remote_sign=fake_remote_sign,
+            subject_id="did:key:z6MkHolder",
+            credential_type="open_badge",
+            claims_json=json.dumps(
+                {
+                    "achievement_name": "Member Badge",
+                    "achievement_description": "Verified member",
+                }
+            ),
+            algorithm="ES256",
+            verification_method_id="did:web:issuer.example#key-1",
+            credential_profile="open_badge_v3",
+            achievement_id="https://issuer.example/credentials/member-badge",
+        )
+
+        assert credential == "header.payload.AQID"
+        assert credential_id == "urn:uuid:credential"
+        assert captured[-1] == {
+            "achievement_id": "https://issuer.example/credentials/member-badge"
+        }
+
+    def test_jwt_vc_native_profile_only_routes_open_badge_aliases(self):
+        from issuance.infrastructure.api.routes import _jwt_vc_native_profile
+
+        assert _jwt_vc_native_profile("open_badge") == "open_badge_v3"
+        assert _jwt_vc_native_profile("open_badge_v3") == "open_badge_v3"
+        assert _jwt_vc_native_profile("OpenBadgeCredential") == "open_badge_v3"
+        assert _jwt_vc_native_profile("EmployeeCredential") is None
+
     async def test_remote_jwt_vc_preserves_multiple_credential_subjects(self):
         from issuance.application.rust_integration import (
             base64url_decode,
