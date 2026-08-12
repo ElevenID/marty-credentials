@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.55] - 2026-08-12
+
+### Changed
+
+- Route Open Badges 3.0 JWT-VC preparation through the dedicated canonical
+  Marty Core binding while preserving the credential-service API and custom
+  subject claims.
+- Pin Rust source dependencies and production native wheels to Marty Core
+  0.1.48 for canonical Open Badges construction and credential-format routing.
+
+### Security
+
+- Require the dedicated Open Badges native capability during startup and fail
+  closed when an older or unavailable native backend cannot provide it.
+- Remove caller-side Open Badges context, type, achievement, and subject-shape
+  decisions so a single Rust implementation owns the security-sensitive
+  profile.
+
 ## [0.1.54] - 2026-08-11
 
 ### Fixed
