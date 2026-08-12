@@ -361,6 +361,18 @@ _JWT_VC_PAYLOAD_FORMATS = {
     "w3c_vcdm_v2_jwt",
     "w3c_vcdm_v2_jwt_vc",
 }
+
+_OPEN_BADGE_V3_CREDENTIAL_TYPES = frozenset(
+    {"open_badge", "open_badge_v3", "openbadgecredential"}
+)
+
+
+def _jwt_vc_native_profile(credential_type: str | None) -> str | None:
+    """Select a protocol profile without constructing its credential shape."""
+    normalized = (credential_type or "").strip().lower()
+    if normalized in _OPEN_BADGE_V3_CREDENTIAL_TYPES:
+        return "open_badge_v3"
+    return None
 _DATA_INTEGRITY_PAYLOAD_FORMATS = {
     "json_ld",
     "ldp_vc",
@@ -4906,9 +4918,12 @@ async def issue_credential(
                 profile_sign=_issuer_profile_mdoc_sign,
             )
         elif signing_format == "jwt_vc_json":
+            credential_profile = _jwt_vc_native_profile(tx.credential_type)
             jwt_credential, signed_credential_id = await create_jwt_vc_with_remote_signing(
                 credential_type=tx.credential_type or "VerifiableCredential",
                 credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
+                credential_profile=credential_profile,
+                achievement_id=vct_for_signing if credential_profile else None,
                 **signing_arguments,
             )
         elif signing_format == "ldp_vc":

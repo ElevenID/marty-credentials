@@ -90,6 +90,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_prepare_sd_jwt",
         "oid4vci_assemble_sd_jwt",
         "oid4vci_prepare_jwt_vc",
+        "oid4vci_prepare_open_badge_v3_jwt_vc",
         "oid4vci_assemble_jwt_vc",
         "oid4vci_create_authorization_response",
         "oid4vci_create_credential_offer",
@@ -216,6 +217,8 @@ async def create_jwt_vc_with_remote_signing(
     algorithm: str | None = None,
     verification_method_id: str,
     credential_id: str | None = None,
+    credential_profile: str | None = None,
+    achievement_id: str | None = None,
 ) -> tuple[str, str]:
     """Create a VCDM v2 JWT VC using the selected issuer profile's DID signer.
 
@@ -237,7 +240,7 @@ async def create_jwt_vc_with_remote_signing(
     expected_algorithm = algorithm or "ES256"
     binding = get_marty_rs()
     try:
-        prepared = binding.oid4vci_prepare_jwt_vc(
+        prepare_args = (
             issuer_did,
             verification_method_id,
             expected_algorithm,
@@ -248,6 +251,21 @@ async def create_jwt_vc_with_remote_signing(
             credential_id,
             json.dumps(credential_subject) if credential_subject is not None else None,
         )
+        if credential_profile is None and achievement_id is None:
+            prepared = binding.oid4vci_prepare_jwt_vc(*prepare_args)
+        elif credential_profile == "open_badge_v3" and achievement_id:
+            prepared = binding.oid4vci_prepare_open_badge_v3_jwt_vc(
+                *prepare_args,
+                achievement_id=achievement_id,
+            )
+        elif credential_profile == "open_badge_v3":
+            raise ValueError("open_badge_v3 profile requires achievement_id")
+        elif credential_profile is None:
+            raise ValueError(
+                "achievement_id is only valid with the open_badge_v3 profile"
+            )
+        else:
+            raise ValueError(f"Unsupported JWT-VC credential profile: {credential_profile}")
     except (RuntimeError, TypeError, ValueError) as exc:
         raise NativeOperationError(f"Native JWT-VC preparation failed: {exc}") from exc
 
