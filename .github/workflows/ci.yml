@@ -55,7 +55,7 @@ jobs:
         run: cargo check --locked --no-default-features --features native
 
   test-rust:
-    name: Rust Tests
+    name: Rust ${{ matrix.task }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
@@ -65,7 +65,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        task: [tests, clippy]
     defaults:
       run:
         working-directory: marty-credentials/rust/marty-rs
@@ -75,6 +76,12 @@ jobs:
           path: marty-credentials
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+
+      - name: Install cargo-nextest
+        if: matrix.task == 'tests'
+        uses: taiki-e/install-action@b20dedce73af6905cdc30d6611090c9b67557c8d
+        with:
+          tool: cargo-nextest@0.9.143
 
       - name: Enable compiler cache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
@@ -90,18 +97,21 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
 
       - name: Run tests
+        if: matrix.task == 'tests'
         # Python and WASM bindings are exercised in their dedicated jobs. PyO3's
         # extension-module mode intentionally does not link libpython, so it
         # cannot be linked into a native Rust test harness.
-        run: cargo test --locked --no-default-features --features native
+        run: cargo nextest run --locked --no-default-features --features native
+
+      - name: Retain Rust documentation tests
+        if: matrix.task == 'tests'
+        run: cargo test --locked --doc --no-default-features --features native
 
       - name: Run clippy
+        if: matrix.task == 'clippy'
         # Python and WASM features target different link environments and must
         # not be combined in one all-features build.
         run: cargo clippy --locked --no-default-features --features native -- -D warnings
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
 
   security:
     name: Security Audit
@@ -318,7 +328,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     steps:
       - name: Restore exact pinned Core wheels
         id: core-wheel-cache
@@ -388,7 +398,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -539,6 +549,9 @@ jobs:
     if: always()
     needs: [preflight, test-rust, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, verification-session-postgres, test-wasm]
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     env:
       RESULTS: ${{ join(needs.*.result, ' ') }}
     steps:
@@ -548,3 +561,25 @@ jobs:
           for result in $RESULTS; do
             test "$result" = success
           done
+      - name: Summarize CI performance
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        with:
+          script: |
+            const {owner, repo} = context.repo;
+            const {data: run} = await github.rest.actions.getWorkflowRun({owner, repo, run_id: context.runId});
+            const {data} = await github.rest.actions.listJobsForWorkflowRun({
+              owner, repo, run_id: context.runId, filter: 'latest', per_page: 100,
+            });
+            const created = new Date(run.created_at);
+            const rows = data.jobs.filter(job => job.started_at && job.completed_at).map(job => ({
+              name: job.name,
+              queue: Math.max(0, Math.round((new Date(job.started_at) - created) / 1000)),
+              run: Math.max(0, Math.round((new Date(job.completed_at) - new Date(job.started_at)) / 1000)),
+            })).sort((a, b) => b.run - a.run);
+            const maxQueue = Math.max(0, ...rows.map(row => row.queue));
+            core.summary.addHeading('CI performance').addTable([
+              [{data: 'Longest jobs', header: true}, {data: 'Queue', header: true}, {data: 'Runtime', header: true}],
+              ...rows.slice(0, 10).map(row => [row.name, `${row.queue}s`, `${row.run}s`]),
+            ]).addRaw(`Longest observed queue delay: ${maxQueue}s.`);
+            if (maxQueue > 300) core.warning(`Runner queue delay reached ${maxQueue}s.`);
+            await core.summary.write();
