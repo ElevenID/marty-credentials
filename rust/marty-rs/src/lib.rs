@@ -102,12 +102,9 @@ mod python_bindings {
     /// Generates a new P-256 key and returns (did, jwk_json) - preferred for OID4VCI
     #[pyfunction]
     pub fn generate_p256_key() -> PyResult<(String, String)> {
-        let jwk = JWK::generate_p256();
-        let jwk_str = serde_json::to_string(&jwk)
+        let material = marty_oid4vci::generate_p256_did_jwk_holder_key()
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_str.as_bytes());
-        let did = format!("did:jwk:{}", encoded);
-        Ok((did, jwk_str))
+        Ok((material.kid, material.private_jwk))
     }
 
     /// Generates a new P-384 key and returns (did, jwk_json) - for ES384
@@ -455,6 +452,27 @@ mod python_bindings {
         // marty-verification-py package. Install both packages to access all functionality.
 
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn p256_binding_keeps_private_key_out_of_did_jwk() {
+            let (did, private_jwk) = generate_p256_key().unwrap();
+            let encoded = did.strip_prefix("did:jwk:").unwrap();
+            let public_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(encoded)
+                .unwrap();
+            let public: serde_json::Value = serde_json::from_slice(&public_bytes).unwrap();
+            let private: serde_json::Value = serde_json::from_str(&private_jwk).unwrap();
+
+            assert!(public.get("d").is_none());
+            assert!(private.get("d").is_some());
+            assert_eq!(public["x"], private["x"]);
+            assert_eq!(public["y"], private["y"]);
+        }
     }
 } // End of python_bindings module
 

@@ -17,6 +17,8 @@ pub fn init_panic_hook() {
     console_error_panic_hook::set_once();
 }
 
+// Core's structured verification APIs intentionally box this large error.
+#[allow(clippy::boxed_local)]
 fn verification_error_to_js(err: Box<VerificationError>) -> JsValue {
     let report = err.to_structured();
     let payload = serde_json::json!({
@@ -37,21 +39,17 @@ fn verification_error_to_js(err: Box<VerificationError>) -> JsValue {
 /// Returns JSON: { "did": "did:jwk:...", "jwk": {...}, "keyId": "..." }
 #[wasm_bindgen]
 pub fn generate_p256_key() -> Result<String, JsValue> {
-    use ssi_jwk::JWK;
-
-    let jwk = JWK::generate_p256();
-    let jwk_str = serde_json::to_string(&jwk)
-        .map_err(|e| JsValue::from_str(&format!("Failed to serialize JWK: {}", e)))?;
-
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_str.as_bytes());
-    let did = format!("did:jwk:{}", encoded);
+    let material = marty_oid4vci::generate_p256_did_jwk_holder_key()
+        .map_err(|e| JsValue::from_str(&format!("P-256 holder key generation failed: {e}")))?;
+    let jwk: serde_json::Value = serde_json::from_str(&material.private_jwk)
+        .map_err(|e| JsValue::from_str(&format!("Generated private JWK parse failed: {e}")))?;
     let key_id = format!(
         "key_{}",
         &uuid::Uuid::new_v4().to_string().replace("-", "")[..16]
     );
 
     let result = serde_json::json!({
-        "did": did,
+        "did": material.kid,
         "jwk": jwk,
         "keyId": key_id
     });
