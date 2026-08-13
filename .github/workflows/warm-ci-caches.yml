@@ -1,0 +1,152 @@
+name: Warm CI Caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ci.yml
+      - .github/workflows/warm-ci-caches.yml
+      - Cargo.lock
+      - pyproject.toml
+      - '**/Cargo.toml'
+      - '**/*.rs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-ci-caches-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MARTY_CORE_REVISION: 33ba56069bf6cc201f6595caa7700da567e6a6ce
+
+jobs:
+  core-python-wheels:
+    name: Warm Core Python wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_WRITE
+    steps:
+      - name: Restore exact pinned Core wheels
+        id: core-wheel-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: core-wheels
+          key: core-python-wheels-v1-${{ runner.os }}-${{ runner.arch }}-py311-rust1971-maturin1141-${{ env.MARTY_CORE_REVISION }}
+      - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-core
+          ref: ${{ env.MARTY_CORE_REVISION }}
+          path: marty-core
+          persist-credentials: false
+      - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
+      - name: Enable compiler cache
+        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Cache Core build inputs
+        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-core-python-inputs-${{ env.MARTY_CORE_REVISION }}
+      - name: Build exact pinned Core wheels
+        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin==1.14.1
+          maturin build --release --compatibility off --manifest-path marty-core/marty-bindings/Cargo.toml --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core/marty-verification/Cargo.toml --out core-wheels
+      - name: Require both native distributions
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find core-wheels -maxdepth 1 -name 'marty_rs-*.whl' | wc -l)" -eq 1
+          test "$(find core-wheels -maxdepth 1 -name 'marty_verification_py-*.whl' | wc -l)" -eq 1
+
+  rust:
+    name: Warm Rust cache (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: 'true'
+      SCCACHE_GHA_RW_MODE: READ_WRITE
+    defaults:
+      run:
+        working-directory: rust/marty-rs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+      - name: Cache Cargo inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('Cargo.lock') }}
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Compile native test targets
+        run: cargo test --locked --no-default-features --features native --no-run
+      - name: Warm clippy cache
+        run: cargo clippy --locked --no-default-features --features native -- -D warnings
+      - name: Report compiler cache effectiveness
+        if: always()
+        run: sccache --show-stats
+
+  python:
+    name: Warm Python cache (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Populate the dependency download cache
+        shell: bash
+        run: |
+          python -m pip download --disable-pip-version-check \
+            --dest "$RUNNER_TEMP/marty-credentials-wheelhouse" \
+            '.[dev]' pytest pytest-asyncio
