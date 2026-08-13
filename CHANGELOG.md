@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Remove the duplicate in-process Python status-list package; issuance keeps
+  its compatibility injection port while deployed status behavior is owned by
+  the canonical Rust revocation service and `marty-status` kernel.
+- Preserve integration-secret ciphertext compatibility while routing AES-GCM
+  and random nonce generation through the fail-closed Marty Core binding.
+
+### Security
+
+- Prevent production packaging from including a Python revocation fallback and
+  add a source-boundary guard against reintroducing one.
+
 ## [0.1.55] - 2026-08-12
 
 ### Changed

@@ -91,7 +91,7 @@ source = "vcs"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/marty_credentials", "python/status_list"]
+packages = ["python/marty_credentials"]
 
 [tool.hatch.build.targets.sdist]
 include = [

@@ -8,7 +8,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -24,14 +24,6 @@ _SERVICES = os.path.join(_REPO_ROOT, "services")
 
 if _SERVICES not in sys.path:
     sys.path.insert(0, _SERVICES)
-
-for _module_name in (
-    "status_list",
-    "status_list.infrastructure",
-    "status_list.infrastructure.security",
-    "status_list.infrastructure.security.encryption",
-):
-    sys.modules.setdefault(_module_name, MagicMock())
 
 from issuance.application import canvas_evidence_revisions
 from issuance.application.canvas_sync_jobs import complete_canvas_sync_job
