@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -58,6 +59,16 @@ def test_stable_tag_requires_exact_main_gate_evidence() -> None:
     assert "scripts/stable_tag_gate.py validate-release" in STABLE
     assert "gh run download" in STABLE
     assert "actions: read" in STABLE
+
+
+def test_stable_tag_push_gates_run_on_main() -> None:
+    policy = json.loads((ROOT / ".github" / "stable-tag-policy.json").read_text(encoding="utf-8"))
+    for requirement in policy["required_workflows"]:
+        path = requirement["path"]
+        if requirement["event"] != "push" or not path.startswith(".github/workflows/"):
+            continue
+        workflow = (ROOT / path).read_text(encoding="utf-8")
+        assert "on:\n  push:\n    branches: [main]" in workflow, path
 
 
 def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
