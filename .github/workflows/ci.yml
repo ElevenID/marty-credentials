@@ -536,3 +536,18 @@ jobs:
 
       - name: Test WASM
         run: wasm-pack test --node --no-default-features --features wasm
+
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [preflight, test-rust, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, verification-session-postgres, test-wasm]
+    runs-on: ubuntu-latest
+    env:
+      RESULTS: ${{ join(needs.*.result, ' ') }}
+    steps:
+      - name: Require every CI lane
+        shell: bash
+        run: |
+          for result in $RESULTS; do
+            test "$result" = success
+          done
