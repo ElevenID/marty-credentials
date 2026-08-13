@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.56] - 2026-08-13
+
 ### Changed
 
 - Remove the duplicate in-process Python status-list package; issuance keeps
@@ -14,11 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the canonical Rust revocation service and `marty-status` kernel.
 - Preserve integration-secret ciphertext compatibility while routing AES-GCM
   and random nonce generation through the fail-closed Marty Core binding.
+- Pin Rust source dependencies and production native wheels to Marty Core
+  0.1.54, including the corrected ISO 18013-5 issuance implementation.
+
+### Fixed
+
+- Emit mobile documents whose MSO value digests authenticate the complete
+  tagged `IssuerSignedItemBytes` values delivered to wallets in both direct and
+  externally signed issuance paths.
 
 ### Security
 
 - Prevent production packaging from including a Python revocation fallback and
   add a source-boundary guard against reintroducing one.
+- Keep issuer-signed item salts CSPRNG-generated and bind each digest to the
+  exact encoded disclosure, preserving independent-wallet issuer authentication.
 
 ## [0.1.55] - 2026-08-12
 
