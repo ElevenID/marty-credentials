@@ -27,6 +27,7 @@ jobs:
       CARGO_INCREMENTAL: 0
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
     defaults:
       run:
         working-directory: marty-credentials/rust/marty-rs
@@ -55,12 +56,12 @@ jobs:
 
   test-rust:
     name: Rust Tests
-    needs: preflight
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
     strategy:
       fail-fast: false
       matrix:
@@ -104,7 +105,6 @@ jobs:
 
   security:
     name: Security Audit
-    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -150,7 +150,6 @@ jobs:
 
   python-security:
     name: Python Security
-    needs: preflight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -193,7 +192,6 @@ jobs:
 
   canvas-portable-migration:
     name: Canvas PostgreSQL Migration Contract
-    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -249,7 +247,6 @@ jobs:
 
   issuance-idempotency-contract:
     name: Issuance Idempotency PostgreSQL Contract
-    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -312,12 +309,12 @@ jobs:
 
   build-core-python-wheels:
     name: Core Python Wheels
-    needs: preflight
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
     strategy:
       fail-fast: false
       matrix:
@@ -429,7 +426,6 @@ jobs:
 
   oid4vci-capability-postgres:
     name: OID4VCI Capability PostgreSQL Race
-    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -470,7 +466,6 @@ jobs:
 
   verification-session-postgres:
     name: Verification Session PostgreSQL Race
-    needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -513,7 +508,6 @@ jobs:
 
   test-wasm:
     name: WASM Tests
-    needs: preflight
     runs-on: ubuntu-latest
     defaults:
       run:
