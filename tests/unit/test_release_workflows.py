@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+PYTHON_CI = (ROOT / "scripts" / "run-python-ci.sh").read_text(encoding="utf-8")
 STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
 PREPARE_STABLE = (ROOT / ".github" / "workflows" / "prepare-stable-tag.yml").read_text(
     encoding="utf-8"
@@ -117,12 +118,10 @@ def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
 
 
 def test_ci_installs_exact_source_built_core_artifacts() -> None:
-    install_step = CI.split("      - name: Install dependencies", 1)[1].split(
-        "\n      - name: Install Python package", 1
-    )[0]
-    assert "release-deps" in install_step
-    assert "len(wheels) == 2" in install_step
-    assert "install_pinned_core.py" not in install_step
+    assert CI.count("run: bash scripts/run-python-ci.sh") == 2
+    assert "release-deps" in PYTHON_CI
+    assert "len(wheels) == 2" in PYTHON_CI
+    assert "install_pinned_core.py" not in PYTHON_CI
     assert "ref: ${{ env.MARTY_CORE_REVISION }}" in CI
     assert "marty-core/marty-bindings/Cargo.toml" in CI
     assert "marty-core/marty-verification/Cargo.toml" in CI

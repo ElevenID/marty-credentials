@@ -1,14 +1,17 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -20,6 +23,10 @@ jobs:
   preflight:
     name: Fast Rust Preflight
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     defaults:
       run:
         working-directory: marty-credentials/rust/marty-rs
@@ -30,14 +37,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
       - name: Cache cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            marty-credentials/target
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-cargo-${{ hashFiles('marty-credentials/Cargo.lock') }}
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check the native feature set
@@ -47,6 +57,10 @@ jobs:
     name: Rust Tests
     needs: preflight
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -61,14 +75,18 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+
       - name: Cache cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            marty-credentials/target
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-cargo-${{ hashFiles('marty-credentials/Cargo.lock') }}
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
 
       - name: Run tests
         # Python and WASM bindings are exercised in their dedicated jobs. PyO3's
@@ -296,6 +314,10 @@ jobs:
     name: Core Python Wheels
     needs: preflight
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
     strategy:
       fail-fast: false
       matrix:
@@ -325,15 +347,20 @@ jobs:
         with:
           toolchain: 1.97.1
 
+      - name: Enable compiler cache
+        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+
       - name: Cache Core build
         if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            marty-core/target
-          key: ${{ runner.os }}-core-python-${{ env.MARTY_CORE_REVISION }}
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-core-python-inputs-${{ env.MARTY_CORE_REVISION }}
 
       - name: Build exact pinned Core wheels
         if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
@@ -365,55 +392,40 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.11', '3.12']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: ${{ matrix.python-version }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: core-python-${{ runner.os }}
           path: marty-credentials/release-deps
 
-      - name: Install dependencies
+      - name: Set up Python 3.11
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: marty-credentials/pyproject.toml
+      - name: Run Python 3.11 quality suite
         working-directory: marty-credentials
-        run: |
-          pip install --upgrade pip
-          pip install pytest pytest-asyncio
-          python -c "import pathlib, subprocess, sys; wheels = sorted(map(str, pathlib.Path('release-deps').glob('*.whl'))); assert len(wheels) == 2, wheels; subprocess.run([sys.executable, '-m', 'pip', 'install', *wheels], check=True)"
-
-      - name: Install Python package
-        working-directory: marty-credentials
-        run: pip install -e .[dev]
-
-      - name: Enforce native verification backend contract
-        working-directory: marty-credentials
+        shell: bash
         env:
           PYTHONPATH: ${{ github.workspace }}/marty-credentials/services
-        run: >-
-          python -c "from issuance.application.rust_integration import
-          validate_marty_rs_capabilities as validate_issuance;
-          from verification.application.rust_verifier import
-          validate_marty_rs_capabilities as validate_verification;
-          validate_issuance(); validate_verification()"
-
-      - name: Verify issuance migration graph has one head
-        working-directory: marty-credentials/services/issuance/infrastructure/migrations
-        run: python -m alembic -c alembic.ini heads
-
-      - name: Verify verification migration graph has one head
-        working-directory: marty-credentials/services/verification/infrastructure/migrations
-        run: python -m alembic -c alembic.ini heads
-
-      - name: Run Python tests
+        run: bash scripts/run-python-ci.sh
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: marty-credentials/pyproject.toml
+      - name: Run Python 3.12 quality suite
         working-directory: marty-credentials
-        run: pytest tests/ packages/tests/ -v
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/marty-credentials/services
+        run: bash scripts/run-python-ci.sh
 
   oid4vci-capability-postgres:
     name: OID4VCI Capability PostgreSQL Race
@@ -527,3 +539,18 @@ jobs:
 
       - name: Test WASM
         run: wasm-pack test --node --no-default-features --features wasm
+
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [preflight, test-rust, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, verification-session-postgres, test-wasm]
+    runs-on: ubuntu-latest
+    env:
+      RESULTS: ${{ join(needs.*.result, ' ') }}
+    steps:
+      - name: Require every CI lane
+        shell: bash
+        run: |
+          for result in $RESULTS; do
+            test "$result" = success
+          done
