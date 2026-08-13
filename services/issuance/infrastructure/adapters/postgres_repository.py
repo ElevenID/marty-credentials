@@ -122,10 +122,10 @@ def _get_integration_secret_encryption():
     global _integration_secret_encryption
     if _integration_secret_encryption is None:
         try:
-            from status_list.infrastructure.security.encryption import SymmetricEncryption
+            from issuance.infrastructure.security.encryption import SymmetricEncryption
         except ImportError as exc:  # pragma: no cover - deployment packaging guard
             raise RuntimeError(
-                "status_list encryption package is required for integration secrets"
+                "issuance encryption adapter is required for integration secrets"
             ) from exc
         env_name = os.environ.get(
             "INTEGRATION_SECRET_MASTER_KEY_ENV", "INTEGRATION_SECRET_MASTER_KEY"

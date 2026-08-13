@@ -1,16 +1,108 @@
 # Behave test environment setup
-import os
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
+from uuid import uuid4
 
 # Add python package to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "python"))
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
 from marty_credentials.adapters.persistence.models import Base
-from unittest.mock import AsyncMock, MagicMock
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+class StatusPurpose(str, Enum):
+    REVOCATION = "revocation"
+    SUSPENSION = "suspension"
+
+
+class StatusCode(int, Enum):
+    VALID = 0
+    ACTIVE = 0
+    INVALID = 1
+    REVOKED = 1
+    SUSPENDED = 2
+
+
+@dataclass
+class BitstringStatusListEntry:
+    id: str
+    status_purpose: StatusPurpose
+    status_list_index: int
+    status_list_credential: str
+
+    @classmethod
+    def create(cls, base_url, issuer_id, purpose, shard_index, list_index):
+        credential = f"{base_url}/v3/status/{issuer_id}/{purpose.value}/{shard_index}"
+        return cls(f"{credential}#{list_index}", purpose, list_index, credential)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "type": "BitstringStatusListEntry",
+            "statusPurpose": self.status_purpose.value,
+            "statusListIndex": str(self.status_list_index),
+            "statusListCredential": self.status_list_credential,
+        }
+
+
+@dataclass
+class StatusList:
+    id: str
+    issuer_id: str
+    purpose: StatusPurpose
+
+
+@dataclass
+class StatusEntry:
+    credential_id: str
+    issuer_id: str
+    purpose: StatusPurpose
+    bit_index: int
+    shard_index: int = 0
+    status: StatusCode = StatusCode.VALID
+
+
+class FakeCanonicalStatusClient:
+    """Test double for the separately contracted Rust revocation service."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.lists = {}
+        self.entries = {}
+
+    async def create_status_list(self, issuer_id, purpose):
+        status_list = StatusList(str(uuid4()), issuer_id, purpose)
+        self.lists[(issuer_id, purpose)] = status_list
+        return status_list
+
+    async def allocate_status_entry(self, credential_id, issuer_id, purpose):
+        key = (credential_id, purpose)
+        if key not in self.entries:
+            self.entries[key] = StatusEntry(
+                credential_id,
+                issuer_id,
+                purpose,
+                sum(entry.purpose == purpose for entry in self.entries.values()),
+            )
+        return self.entries[key]
+
+    async def update_status(self, credential_id, purpose, status, reason=None):
+        del reason
+        entry = self.entries.get((credential_id, purpose))
+        if entry is None:
+            return False
+        entry.status = status
+        return True
+
+    async def check_status(self, credential_id, purpose):
+        entry = self.entries.get((credential_id, purpose))
+        return entry.status if entry else None
 
 
 def before_all(context):
@@ -41,84 +133,13 @@ def before_all(context):
     # Always use direct service calls for business logic testing
     context.use_gateway = False
     
-    # Setup status list services with mocked repositories
-    from unittest.mock import AsyncMock
-    from status_list.application.services.status_list_service import StatusListService
-    from status_list.application.services.credential_status_service import CredentialStatusService
-    from status_list.domain.value_objects import ShardConfig, StatusPurpose, BitstringStatusListEntry
-    from status_list.domain.entities import StatusList, StatusEntry, Shard
-    
-    # Create mock repositories
-    mock_status_list_repo = AsyncMock()
-    mock_status_entry_repo = AsyncMock()
-    mock_event_publisher = AsyncMock()
-    
-    # Configure default shard config
-    default_shard_config = ShardConfig(
-        size_bits=131072,  # 16KB list
-        cache_ttl_seconds=300,
-        flush_interval_seconds=30,
-    )
-    
-    # Initialize real StatusListService with mocked repos
-    context.status_list_service = StatusListService(
-        status_list_repository=mock_status_list_repo,
-        status_entry_repository=mock_status_entry_repo,
-        event_publisher=mock_event_publisher,
-        default_config=default_shard_config,
-    )
-    
-    # Initialize CredentialStatusService
-    context.credential_status_service = CredentialStatusService(
-        status_list_service=context.status_list_service,
-        base_url="https://api.test.marty.dev",
-    )
-    
-    # Store mocks for test manipulation
-    context.mock_status_list_repo = mock_status_list_repo
-    context.mock_status_entry_repo = mock_status_entry_repo
-    
-    # Setup default repository behaviors
-    # By default, no existing status lists or entries
-    mock_status_list_repo.get.return_value = None
-    mock_status_list_repo.get_by_id.return_value = None
-    mock_status_list_repo.list_by_issuer.return_value = []
-    mock_status_entry_repo.get_by_credential.return_value = None
-    mock_status_entry_repo.get_all_for_credential.return_value = []
-    mock_status_entry_repo.list_by_shard.return_value = []
-    
-    # Create in-memory storage for status lists and entries (for testing)
-    context.status_lists = {}  # issuer_id -> {purpose -> StatusList}
-    context.status_entries = {}  # credential_id -> {purpose -> StatusEntry}
-    
-    # Setup repository save methods to store in-memory
-    async def save_status_list(status_list: StatusList):
-        if status_list.issuer_id not in context.status_lists:
-            context.status_lists[status_list.issuer_id] = {}
-        context.status_lists[status_list.issuer_id][status_list.purpose] = status_list
-    
-    async def save_status_entry(entry: StatusEntry):
-        if entry.credential_id not in context.status_entries:
-            context.status_entries[entry.credential_id] = {}
-        context.status_entries[entry.credential_id][entry.purpose] = entry
-    
-    async def get_status_list(issuer_id: str, purpose: StatusPurpose):
-        if issuer_id in context.status_lists and purpose in context.status_lists[issuer_id]:
-            return context.status_lists[issuer_id][purpose]
-        return None
-    
-    async def get_status_entry(credential_id: str, purpose: StatusPurpose):
-        if credential_id in context.status_entries and purpose in context.status_entries[credential_id]:
-            return context.status_entries[credential_id][purpose]
-        return None
-    
-    mock_status_list_repo.save.side_effect = save_status_list
-    mock_status_entry_repo.save.side_effect = save_status_entry
-    mock_status_list_repo.get.side_effect = get_status_list
-    mock_status_entry_repo.get_by_credential.side_effect = get_status_entry
-    
-    # Inject credential status service into issuance service
-    # Keep old mock for backward compatibility during migration
+    # The deployed status implementation is the Rust revocation service. These
+    # legacy Behave scenarios use a transport-level test double instead of
+    # carrying another status-list algorithm in Python.
+    context.status_list_service = FakeCanonicalStatusClient()
+    context.StatusPurpose = StatusPurpose
+    context.StatusCode = StatusCode
+
     class MockCredentialStatusService:
         async def allocate_credential_status(self, credential_id, issuer_id, include_revocation=True, include_suspension=True):
             entries = []
@@ -171,6 +192,4 @@ def after_scenario(context, scenario):
     context.db_session.rollback()
     # Clear test data
     context.test_data.clear()
-    # Clear in-memory status lists and entries
-    context.status_lists.clear()
-    context.status_entries.clear()
+    context.status_list_service.reset()

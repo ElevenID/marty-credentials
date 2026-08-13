@@ -2,7 +2,7 @@
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
 
 from sqlalchemy.orm import Session
 
@@ -22,13 +22,21 @@ from marty_credentials.native_backend import (
     require_marty_verification,
 )
 
-# Optional status list service
-try:
-    from status_list.application.services.credential_status_service import CredentialStatusService
-    STATUS_LIST_AVAILABLE = True
-except ImportError:
-    CredentialStatusService = None
-    STATUS_LIST_AVAILABLE = False
+
+class CredentialStatusService(Protocol):
+    """Compatibility port for canonical revocation-profile orchestration."""
+
+    async def allocate_credential_status(
+        self,
+        credential_id: str,
+        issuer_id: str,
+        include_revocation: bool = True,
+        include_suspension: bool = True,
+    ) -> list[Any]: ...
+
+    def build_credential_status_field(
+        self, entries: list[Any]
+    ) -> list[dict[str, Any]] | dict[str, Any]: ...
 
 _marty_rs = require_marty_rs(
     (

@@ -1372,17 +1372,15 @@ def step_create_revocation_profile(context, profile_name):
     org_id = context.test_data.get('organization_id', 'org-123')
     issuer_id = f"{org_id}::{profile_name}"  # Composite issuer ID
     
-    from status_list.domain.value_objects import StatusPurpose
-    
     # Create revocation and suspension status lists (wrapped async call)
     revocation_list = run_async(context.status_list_service.create_status_list(
         issuer_id=issuer_id,
-        purpose=StatusPurpose.REVOCATION,
+        purpose=context.StatusPurpose.REVOCATION,
     ))
     
     suspension_list = run_async(context.status_list_service.create_status_list(
         issuer_id=issuer_id,
-        purpose=StatusPurpose.SUSPENSION,
+        purpose=context.StatusPurpose.SUSPENSION,
     ))
     
     # Store profile data
@@ -1418,13 +1416,11 @@ def step_revoke_credential_via_profile(context):
     """Revoke a credential via RevocationProfile"""
     credential_id = context.test_data.get('credential_id', 'cred-123')
     
-    from status_list.domain.value_objects import StatusPurpose, StatusCode
-    
     # Update the credential's status to revoked (wrapped async call)
     success = run_async(context.status_list_service.update_status(
         credential_id=credential_id,
-        purpose=StatusPurpose.REVOCATION,
-        status=StatusCode.REVOKED,  # StatusCode.REVOKED = 1
+        purpose=context.StatusPurpose.REVOCATION,
+        status=context.StatusCode.REVOKED,
     ))
     
     assert success, f"Failed to revoke credential {credential_id}"
@@ -1442,13 +1438,11 @@ def step_allocate_status_index(context, credential_format):
     issuer_id = context.test_data['issuer_id']
     credential_id = f"cred-{credential_format}-test"
     
-    from status_list.domain.value_objects import StatusPurpose
-    
     # Allocate entry for revocation (wrapped async call)
     entry = run_async(context.status_list_service.allocate_status_entry(
         credential_id=credential_id,
         issuer_id=issuer_id,
-        purpose=StatusPurpose.REVOCATION,
+        purpose=context.StatusPurpose.REVOCATION,
     ))
     
     context.test_data['status_list_index'] = entry.bit_index
@@ -1490,15 +1484,13 @@ def step_then_credential_revoked(context):
     # Verify by checking status (wrapped async call)
     credential_id = result['credential_id']
     
-    from status_list.domain.value_objects import StatusPurpose, StatusCode
-    
     status = run_async(context.status_list_service.check_status(
         credential_id=credential_id,
-        purpose=StatusPurpose.REVOCATION,
+        purpose=context.StatusPurpose.REVOCATION,
     ))
     
     assert status is not None, f"No status entry found for credential {credential_id}"
-    assert status == StatusCode.REVOKED, f"Expected status {StatusCode.REVOKED}, got {status}"
+    assert status == context.StatusCode.REVOKED, f"Expected revoked status, got {status}"
 
 
 # =============================================================================

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sys
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -15,14 +14,6 @@ _SERVICES = os.path.join(_REPO_ROOT, "services")
 
 if _SERVICES not in sys.path:
     sys.path.insert(0, _SERVICES)
-
-for _module_name in (
-    "status_list",
-    "status_list.infrastructure",
-    "status_list.infrastructure.security",
-    "status_list.infrastructure.security.encryption",
-):
-    sys.modules.setdefault(_module_name, MagicMock())
 
 from issuance.application import canvas_lti_services
 from issuance.domain.entities import ApplicationTemplate

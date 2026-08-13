@@ -8,32 +8,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_status_list_package_has_no_local_issuer_key_adapter() -> None:
-    """Status-list code must receive a signer, never load issuer keys itself."""
+def test_duplicate_python_status_list_package_is_absent() -> None:
+    """Status decisions live in canonical Rust and cannot return to Python."""
 
-    status_list = ROOT / "python" / "status_list"
-    production_source = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(status_list.rglob("*.py"))
-        if "tests" not in path.parts
-    )
-
-    assert "jwk_private_encrypted" not in production_source
-    assert "subscription.models" not in production_source
-    assert "register_issuer(" not in production_source
-    assert '"private_key": private_key' not in production_source
+    status_package = ROOT / "python" / "status_list"
+    assert not status_package.exists() or not any(status_package.rglob("*.py"))
+    binding = (ROOT / "rust" / "marty-rs" / "src" / "status_list.rs").read_text(encoding="utf-8")
+    assert "marty_status::BitstringStatusList" in binding
+    assert "marty_status::TokenStatusList" in binding
 
 
-def test_status_list_adapter_surface_exposes_no_signer() -> None:
-    """Callers cannot select the removed process-local signing implementation."""
+def test_integration_secret_crypto_delegates_to_rust() -> None:
+    """The retained storage adapter cannot implement AES-GCM in Python."""
 
-    adapter_surface = (
-        ROOT / "python" / "status_list" / "infrastructure" / "adapters" / "__init__.py"
+    adapter = (
+        ROOT / "services" / "issuance" / "infrastructure" / "security" / "encryption.py"
     ).read_text(encoding="utf-8")
 
-    assert '"StatusListRouter"' in adapter_surface
-    assert "RustSigningAdapter" not in adapter_surface
-    assert "signing_adapter" not in adapter_surface
+    assert "require_marty_verification" in adapter
+    assert '"aes_gcm_encrypt"' in adapter
+    assert '"aes_gcm_decrypt"' in adapter
+    assert "cryptography" not in adapter
+    assert "AESGCM" not in adapter
 
 
 def test_issuance_service_has_no_database_or_process_local_issuer_signer() -> None:
@@ -58,11 +54,12 @@ def test_legacy_key_migration_fails_closed_before_dropping_storage(monkeypatch) 
     """The destructive schema step cannot silently discard an issuer key."""
 
     migration = import_module(
-        "issuance.infrastructure.migrations.versions."
-        "20260807_1000_drop_legacy_issuer_signing_keys"
+        "issuance.infrastructure.migrations.versions.20260807_1000_drop_legacy_issuer_signing_keys"
     )
     statements: list[str] = []
-    monkeypatch.setattr(migration.op, "execute", lambda statement: statements.append(str(statement)))
+    monkeypatch.setattr(
+        migration.op, "execute", lambda statement: statements.append(str(statement))
+    )
 
     migration.upgrade()
 
