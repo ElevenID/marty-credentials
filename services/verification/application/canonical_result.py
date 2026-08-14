@@ -75,9 +75,9 @@ def adapter_processing_status(result: dict[str, Any]) -> str:
     """
     if result.get("processing_error") is True:
         return "ERROR"
-    processing_status = result.get("processing_status")
-    if processing_status is None:
+    if "processing_status" not in result:
         return "COMPLETED"
+    processing_status = result["processing_status"]
     if isinstance(processing_status, str) and processing_status in CANONICAL_PROCESSING_STATUSES:
         return processing_status
     return "ERROR"

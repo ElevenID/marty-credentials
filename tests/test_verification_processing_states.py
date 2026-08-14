@@ -28,7 +28,7 @@ def test_adapter_processing_status_keeps_legacy_completed_default() -> None:
     assert adapter_processing_status({"valid": False}) == "COMPLETED"
 
 
-@pytest.mark.parametrize("processing_status", ["completed", "UNKNOWN", True, 1, []])
+@pytest.mark.parametrize("processing_status", [None, "completed", "UNKNOWN", True, 1, []])
 def test_adapter_processing_status_rejects_malformed_state(processing_status: object) -> None:
     assert adapter_processing_status({"processing_status": processing_status}) == "ERROR"
 
