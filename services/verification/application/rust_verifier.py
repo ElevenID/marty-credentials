@@ -160,6 +160,7 @@ class RustCredentialVerifier:
             # resolved by the product's organization-scoped DID resolver.
             signature_verified = False
             sig_error = None
+            processing_status = None
             try:
                 result_json = self.marty_rs.verify_vcdm_data_integrity(
                     json.dumps(
@@ -185,6 +186,7 @@ class RustCredentialVerifier:
                     sig_error = _verification_errors(sig_result, "Signature invalid")
             except AttributeError:
                 sig_error = "Rust verify_vcdm_data_integrity binding not available"
+                processing_status = "UNAVAILABLE"
                 logger.warning(
                     "W3C VC signature verification failed closed — "
                     "Rust binding not available for issuer %s",
@@ -199,7 +201,7 @@ class RustCredentialVerifier:
                 )
 
             if not signature_verified:
-                return {
+                failed_result = {
                     "valid": False,
                     "error": sig_error or "Signature invalid",
                     "signature_verified": False,
@@ -211,6 +213,9 @@ class RustCredentialVerifier:
                     "issuer_resolution": issuer_resolution,
                     "method": "w3c_vc",
                 }
+                if processing_status is not None:
+                    failed_result["processing_status"] = processing_status
+                return failed_result
 
             issuer_trusted = bool(
                 issuer_resolution
@@ -250,7 +255,12 @@ class RustCredentialVerifier:
 
         except Exception as e:
             logger.error(f"W3C VC verification failed: {e}")
-            return {"valid": False, "processing_error": True, "error": str(e)}
+            return {
+                "valid": False,
+                "processing_status": "ERROR",
+                "processing_error": True,
+                "error": str(e),
+            }
 
     async def verify_jwt_vp(
         self, presentation_jwt: str, expected_audience: str, expected_nonce: str | None = None
@@ -324,7 +334,12 @@ class RustCredentialVerifier:
 
         except Exception as e:
             logger.error(f"JWT VP verification failed: {e}")
-            return {"valid": False, "processing_error": True, "error": str(e)}
+            return {
+                "valid": False,
+                "processing_status": "ERROR",
+                "processing_error": True,
+                "error": str(e),
+            }
 
     async def verify_presentation(
         self,
@@ -379,6 +394,7 @@ class RustCredentialVerifier:
                 if not isinstance(cred, dict):
                     return {
                         "valid": False,
+                        "processing_status": "UNSUPPORTED",
                         "cryptographic_valid": False,
                         "credential_proofs_valid": False,
                         "error": "Unsupported embedded credential serialization",
@@ -458,7 +474,12 @@ class RustCredentialVerifier:
 
         except Exception as e:
             logger.error(f"Presentation verification failed: {e}")
-            return {"valid": False, "processing_error": True, "error": str(e)}
+            return {
+                "valid": False,
+                "processing_status": "ERROR",
+                "processing_error": True,
+                "error": str(e),
+            }
 
     async def verify_vds_nc(
         self,
@@ -504,6 +525,7 @@ class RustCredentialVerifier:
             logger.error("VDS-NC verification failed: %s", e)
             return {
                 "valid": False,
+                "processing_status": "ERROR",
                 "processing_error": True,
                 "error": str(e),
                 "method": "vds_nc",

@@ -17,6 +17,7 @@ from .governance import (
 )
 
 CANONICAL_EVIDENCE_SCHEMA_VERSION = 2
+CANONICAL_PROCESSING_STATUSES = frozenset({"COMPLETED", "UNSUPPORTED", "UNAVAILABLE", "ERROR"})
 
 _CHECK_DEFINITIONS: dict[str, tuple[str, str, str, str]] = {
     "presentation.structure": (
@@ -62,6 +63,24 @@ _CHECK_DEFINITIONS: dict[str, tuple[str, str, str, str]] = {
         "CLAIM_CONSTRAINTS_FAILED",
     ),
 }
+
+
+def adapter_processing_status(result: dict[str, Any]) -> str:
+    """Preserve a trusted adapter's canonical state without allowing ambiguity.
+
+    Older adapters omit ``processing_status`` and therefore retain the
+    compatibility default of ``COMPLETED``. An explicit processing error or
+    malformed state always becomes ``ERROR`` rather than being collapsed into
+    a completed verification decision.
+    """
+    if result.get("processing_error") is True:
+        return "ERROR"
+    if "processing_status" not in result:
+        return "COMPLETED"
+    processing_status = result["processing_status"]
+    if isinstance(processing_status, str) and processing_status in CANONICAL_PROCESSING_STATUSES:
+        return processing_status
+    return "ERROR"
 
 
 def _timestamp() -> str:

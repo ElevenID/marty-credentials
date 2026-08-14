@@ -13,7 +13,11 @@ from ..domain.entities import (
     VerificationSubmissionClaim,
 )
 from ..domain.ports import ICredentialVerifier, IVerificationRepository
-from .canonical_result import build_canonical_result, pending_evidence
+from .canonical_result import (
+    adapter_processing_status,
+    build_canonical_result,
+    pending_evidence,
+)
 from .governance import (
     DIRECT_VERIFY_PURPOSE,
     SESSION_CREATE_PURPOSE,
@@ -193,7 +197,7 @@ class VerificationService:
             )
             method = VerificationMethod.W3C_VC
 
-        processing_status = "ERROR" if result.get("processing_error") is True else "COMPLETED"
+        processing_status = adapter_processing_status(result)
         return {
             "evidence": build_canonical_result(
                 governance=governance,
@@ -262,18 +266,16 @@ class VerificationService:
                 },
             )
         else:
-            processing_status = "COMPLETED"
             try:
                 result = await self.verifier.verify_jwt_vp(
                     presentation_jwt=presentation,
                     expected_audience=session.verifier_did,
                     expected_nonce=claim.verifier_nonce,
                 )
-                if result.get("processing_error") is True:
-                    processing_status = "ERROR"
             except Exception:
-                result = {}
-                processing_status = "ERROR"
+                result = {"processing_status": "ERROR"}
+
+            processing_status = adapter_processing_status(result)
 
             try:
                 evidence = build_canonical_result(

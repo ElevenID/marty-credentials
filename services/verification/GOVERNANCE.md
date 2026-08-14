@@ -121,6 +121,12 @@ remain `NOT_PERFORMED` and reduce to a non-pass result. Do not advertise them as
 positive verification capabilities until each missing layer is implemented and
 tested through the same canonical builder.
 
+The service preserves all four canonical processing states at the adapter
+boundary: `COMPLETED`, `UNSUPPORTED`, `UNAVAILABLE`, and `ERROR`. Unsupported
+input or an unavailable required native capability must remain distinguishable
+from a completed negative check. A malformed adapter state, or an explicit
+processing error, maps to `ERROR`; it never falls back to `COMPLETED`.
+
 VDS-NC is narrower: its purpose policy requires only `credential.proof` and
 `issuer.trust`. It can pass after the issuer resolves through the caller-bound
 allowlist, the internal resolver response binds exactly to the requested
