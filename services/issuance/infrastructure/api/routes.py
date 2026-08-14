@@ -365,9 +365,7 @@ _JWT_VC_PAYLOAD_FORMATS = {
     "w3c_vcdm_v2_jwt_vc",
 }
 
-_OPEN_BADGE_V3_CREDENTIAL_TYPES = frozenset(
-    {"open_badge", "open_badge_v3", "openbadgecredential"}
-)
+_OPEN_BADGE_V3_CREDENTIAL_TYPES = frozenset({"open_badge", "open_badge_v3", "openbadgecredential"})
 
 
 def _jwt_vc_native_profile(credential_type: str | None) -> str | None:
@@ -376,6 +374,8 @@ def _jwt_vc_native_profile(credential_type: str | None) -> str | None:
     if normalized in _OPEN_BADGE_V3_CREDENTIAL_TYPES:
         return "open_badge_v3"
     return None
+
+
 _DATA_INTEGRITY_PAYLOAD_FORMATS = {
     "json_ld",
     "ldp_vc",
@@ -626,9 +626,9 @@ async def apply_remote_issuer_context(
         return None
 
     resolved_issuer_did = context.get("issuer_did")
-    resolved_algorithm = context.get("algorithm") or (
-        context.get("issuer_profile") or {}
-    ).get("algorithm")
+    resolved_algorithm = context.get("algorithm") or (context.get("issuer_profile") or {}).get(
+        "algorithm"
+    )
     resolved_service_id = context.get("signing_service_id")
     resolved_profile_id = context.get("issuer_profile_id") or (
         context.get("issuer_profile") or {}
@@ -639,9 +639,7 @@ async def apply_remote_issuer_context(
     if not tx.issuer_did_override or resolved_issuer_did != tx.issuer_did_override:
         raise RuntimeError("Resolved issuer DID does not match the requested issuer DID")
     if not tx.issuer_algorithm or resolved_algorithm != tx.issuer_algorithm:
-        raise RuntimeError(
-            "Resolved issuer algorithm does not match the credential template"
-        )
+        raise RuntimeError("Resolved issuer algorithm does not match the credential template")
     if resolved_profile_id and resolved_profile_id != tx.issuer_profile_id:
         tx.issuer_profile_id = str(resolved_profile_id)
     if resolved_issuer_mode:
@@ -704,9 +702,7 @@ async def apply_required_remote_issuer_context(
     if tx.issuer_did_override != str(required["issuer_did"]):
         raise RuntimeError("Resolved issuer DID was not attached to the issuance transaction")
     if tx.issuer_algorithm != str(required["issuer_algorithm"]):
-        raise RuntimeError(
-            "Resolved issuer algorithm was not attached to the issuance transaction"
-        )
+        raise RuntimeError("Resolved issuer algorithm was not attached to the issuance transaction")
     if tx.signing_service_id != str(required["signing_service_id"]):
         raise RuntimeError("Resolved signing service was not attached to the issuance transaction")
     return context
@@ -733,6 +729,7 @@ resource_owner_router = APIRouter(
     prefix="/internal/v1/resource-owners",
     tags=["internal-resource-owners"],
 )
+
 
 # ---------------------------------------------------------------------------
 # Authenticated, TLS-aware gRPC channel helper
@@ -4263,14 +4260,13 @@ async def issue_credential(
             )
             template_identity = display_metadata.get(bare_ctype) or {}
             issuer_did = str(template_identity.get("issuer_did") or "").strip()
-            issuer_algorithm = str(
-                template_identity.get("issuer_algorithm") or ""
-            ).strip()
-            if (
-                not issuer_did.startswith("did:")
-                or issuer_algorithm
-                not in {"ES256", "ES384", "RS256", "EdDSA"}
-            ):
+            issuer_algorithm = str(template_identity.get("issuer_algorithm") or "").strip()
+            if not issuer_did.startswith("did:") or issuer_algorithm not in {
+                "ES256",
+                "ES384",
+                "RS256",
+                "EdDSA",
+            }:
                 raise HTTPException(
                     status_code=503,
                     detail=(
@@ -4370,9 +4366,7 @@ async def issue_credential(
     if request.credential_configuration_id is not None:
         cred_type_base = tx.credential_type or "default"
         if auth_session:
-            valid_config_ids = set(
-                getattr(auth_session, "credential_configuration_ids", []) or []
-            )
+            valid_config_ids = set(getattr(auth_session, "credential_configuration_ids", []) or [])
         else:
             valid_config_ids = {
                 _credential_configuration_id_for_format(
@@ -4383,9 +4377,7 @@ async def issue_credential(
                 variant = wallet_config.get("format_variant")
                 if isinstance(variant, str) and variant:
                     valid_config_ids.add(
-                        _credential_configuration_id_for_format(
-                            cred_type_base, variant
-                        )
+                        _credential_configuration_id_for_format(cred_type_base, variant)
                     )
         selected_configuration = request.credential_configuration_id
         if selected_configuration not in valid_config_ids:
@@ -4422,18 +4414,16 @@ async def issue_credential(
     # algorithm from the selected active configuration; custody routing still
     # comes exclusively from the live organization-scoped DID resolver.
     if auth_session and not (tx.issuer_did_override and tx.issuer_algorithm):
-        display_metadata = await repo.get_credential_display_metadata_for_org(
-            tx.organization_id
-        )
+        display_metadata = await repo.get_credential_display_metadata_for_org(tx.organization_id)
         template_identity = display_metadata.get(tx.credential_type or "") or {}
         issuer_did = str(template_identity.get("issuer_did") or "").strip()
-        issuer_algorithm = str(
-            template_identity.get("issuer_algorithm") or ""
-        ).strip()
-        if (
-            not issuer_did.startswith("did:")
-            or issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}
-        ):
+        issuer_algorithm = str(template_identity.get("issuer_algorithm") or "").strip()
+        if not issuer_did.startswith("did:") or issuer_algorithm not in {
+            "ES256",
+            "ES384",
+            "RS256",
+            "EdDSA",
+        }:
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -4890,9 +4880,7 @@ async def issue_credential(
 
             async def _issuer_profile_mdoc_sign(tbs_data: bytes, algorithm: str) -> bytes:
                 if algorithm != signing_algorithm:
-                    raise RuntimeError(
-                        "mdoc builder requested a different issuer algorithm"
-                    )
+                    raise RuntimeError("mdoc builder requested a different issuer algorithm")
                 result = await sign_payload_with_issuer_did(
                     organization_id=tx.organization_id,
                     issuer_did=effective_issuer_did,
@@ -5652,17 +5640,27 @@ async def revoke_transaction(
         hide_resource=True,
     )
 
-    if tx.status == IssuanceStatus.REVOKED:
-        # Idempotent — already revoked, return current state
-        return {
-            "id": tx.id,
-            "status": tx.status.value,
-            "revoked_at": tx.revoked_at.isoformat() if tx.revoked_at else None,
-            "revocation_reason": tx.revocation_reason,
-        }
+    credential = await repo.get_credential_by_transaction_id(tx.id)
+    if credential is not None:
+        if credential.organization_id != tx.organization_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Issued credential organization does not match its transaction",
+            )
+        # Reconcile the canonical status list even when a previous attempt
+        # persisted only part of the lifecycle transition. The Rust operation
+        # is idempotent for an already-set status bit.
+        await _apply_credential_revocation(
+            credential,
+            reason=request.reason,
+            repo=repo,
+        )
 
-    tx.revoke(reason=request.reason)
-    await repo.save_transaction(tx)
+    if tx.status != IssuanceStatus.REVOKED:
+        # The transaction is committed only after the credential's canonical
+        # Rust status-list mutation and local credential record both succeed.
+        tx.revoke(reason=request.reason)
+        await repo.save_transaction(tx)
 
     logger.info(f"Revoked issuance transaction {tx_id}: {request.reason}")
     return {
@@ -5774,9 +5772,42 @@ async def _delegate_to_revocation_profile(
             status_code=503,
             detail="Credential has no active credential-status profile binding",
         )
-    status_list_index = _revocation_index_from_credential(credential) if credential else None
-    if status_list_index is None:
+    revocation_entry: dict[str, Any] | None = None
+    for entry in credential.status_list_entries if credential else []:
+        if not isinstance(entry, dict):
+            continue
+        purpose = str(entry.get("status_purpose") or entry.get("statusPurpose") or "revocation")
+        if purpose == "revocation":
+            revocation_entry = entry
+            break
+    if revocation_entry is None:
         raise HTTPException(status_code=503, detail="Credential has no allocated status-list entry")
+
+    entry_profile_id = str(
+        revocation_entry.get("status_list_id")
+        or revocation_entry.get("revocation_profile_id")
+        or ""
+    ).strip()
+    if not entry_profile_id or entry_profile_id != profile_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Credential status-list entry does not match its revocation profile",
+        )
+    try:
+        status_list_index = int(revocation_entry["index"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Credential has an invalid allocated status-list entry",
+        ) from exc
+    if status_list_index < 0:
+        raise HTTPException(
+            status_code=503,
+            detail="Credential has an invalid allocated status-list entry",
+        )
+
+    entry_type = str(revocation_entry.get("type") or "").lower()
+    credential_format = "mdoc" if "tokenstatuslist" in entry_type else "sd_jwt_vc"
 
     status_value = {
         "revoke": "revoked",
@@ -5793,17 +5824,63 @@ async def _delegate_to_revocation_profile(
                     "credential_id": credential_id,
                     "index": status_list_index,
                     "status": status_value,
-                    "credential_format": "sd_jwt",
+                    "credential_format": credential_format,
                     "reason": reason,
                 },
                 headers=service_token_headers(),
                 timeout=10.0,
             )
             response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as e:
             logger.error(f"RevocationProfile service error: {e}")
-            raise HTTPException(status_code=503, detail="Revocation service unavailable")
+            raise HTTPException(status_code=503, detail="Revocation service unavailable") from e
+
+    if (
+        not isinstance(payload, dict)
+        or payload.get("success") is not True
+        or payload.get("organization_id") != credential.organization_id
+        or payload.get("index") != status_list_index
+        or not isinstance(payload.get("status_list_url"), str)
+        or not payload["status_list_url"]
+    ):
+        logger.error(
+            "RevocationProfile service returned an invalid result for credential %s",
+            credential_id,
+        )
+        raise HTTPException(status_code=503, detail="Revocation service rejected the status change")
+    return payload
+
+
+async def _apply_credential_revocation(
+    credential: IssuedCredential,
+    *,
+    reason: str | None,
+    repo: IIssuanceRepository,
+) -> None:
+    """Apply canonical revocation, then persist the local lifecycle projection."""
+    await _delegate_to_revocation_profile(
+        credential_id=credential.id,
+        action="revoke",
+        reason=reason,
+        credential=credential,
+    )
+
+    if credential.status == CredentialStatus.REVOKED:
+        return
+
+    credential.status = CredentialStatus.REVOKED
+    credential.status_updated_at = datetime.now(UTC)
+    credential.revoked = True
+    credential.revoked_at = credential.status_updated_at
+    credential.revocation_reason = reason
+    await repo.save_credential(credential)
+    await _sync_canvas_lifecycle_delivery_records(
+        credential,
+        repo,
+        lifecycle_action="revoke",
+        reason=reason,
+    )
 
 
 @issuance_router.post(
@@ -5833,25 +5910,7 @@ async def revoke_credential(
 
     # Status changes fail closed: local state must never diverge from the
     # credential's published status-list profile.
-    await _delegate_to_revocation_profile(
-        credential_id=credential_id,
-        action="revoke",
-        reason=request.reason,
-        credential=cred,
-    )
-
-    cred.status = CredentialStatus.REVOKED
-    cred.status_updated_at = datetime.now(UTC)
-    cred.revoked = True
-    cred.revoked_at = cred.status_updated_at
-    cred.revocation_reason = request.reason
-    await repo.save_credential(cred)
-    await _sync_canvas_lifecycle_delivery_records(
-        cred,
-        repo,
-        lifecycle_action="revoke",
-        reason=request.reason,
-    )
+    await _apply_credential_revocation(cred, reason=request.reason, repo=repo)
 
     logger.info(f"Revoked credential {credential_id}: {request.reason}")
 
