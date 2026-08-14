@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.58] - 2026-08-13
+
+### Changed
+
+- Pin the service-image framework dependency to immutable marty-msf v1.0.2
+  and its independently audited release-wheel digest.
+
+### Security
+
+- Replace the quarantined mutable marty-msf v1.0.0 dependency; v1.0.1 is
+  intentionally unused after its workflow-created tag could not dispatch a
+  release.
+
 ## [0.1.57] - 2026-08-13
 
 ### Changed
