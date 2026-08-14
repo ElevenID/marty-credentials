@@ -55,6 +55,12 @@ def read_service_token() -> str:
     return token
 
 
+def service_token_headers() -> dict[str, str]:
+    """Authenticate an outbound internal HTTP call with the service token."""
+    token = read_service_token()
+    return {_SERVICE_TOKEN_HEADER: token} if token else {}
+
+
 class ServiceTokenClientInterceptor(
     grpc_aio.UnaryUnaryClientInterceptor,
     grpc_aio.UnaryStreamClientInterceptor,
