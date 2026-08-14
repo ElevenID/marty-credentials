@@ -7,7 +7,11 @@ import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...application.canonical_result import build_canonical_result, canonical_result_from_evidence
+from ...application.canonical_result import (
+    adapter_processing_status,
+    build_canonical_result,
+    canonical_result_from_evidence,
+)
 from ...application.did_resolver import resolve_issuer_did
 from ...application.governance import (
     DIRECT_VERIFY_PURPOSE,
@@ -383,7 +387,7 @@ async def verify_vds_nc_barcode(
                 "credential_proofs_valid": result.get("valid") is True,
                 "trust_chain_valid": True,
             },
-            processing_status=("ERROR" if result.get("processing_error") is True else "COMPLETED"),
+            processing_status=adapter_processing_status(result),
         )
         return _verification_result(
             evidence,
