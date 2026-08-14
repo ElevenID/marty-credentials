@@ -83,6 +83,8 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "didcomm_pack_credential",
         "didcomm_resolve_did",
         "didcomm_unpack_message",
+        "evidence_reconciliation_plan",
+        "evidence_reconciliation_stale_reasons",
         "lti_verify_launch_jwt",
         # mDoc issuance never loads an issuer private key into this service.
         # It requires the authoritative marty-core prepare/sign/assemble split

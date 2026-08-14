@@ -18,7 +18,13 @@ from verification.application.governance import (
     parse_governance,
 )
 
-_native = require_marty_rs(("verification_behavior_fixture",))
+_native = require_marty_rs(
+    (
+        "evidence_reconciliation_plan",
+        "evidence_reconciliation_stale_reasons",
+        "verification_behavior_fixture",
+    )
+)
 
 
 def _fixture(name: str) -> dict:
@@ -57,29 +63,20 @@ def test_evidence_policy_adapter_matches_native_behavior_fixture() -> None:
 
         assert decision.allowed is case["allowed"], case["name"]
         assert decision.engine == case["engine"], case["name"]
-        assert (
-            decision.context["required_evidence_count"] == case["required_count"]
-        ), case["name"]
-        assert (
-            decision.context["satisfied_requirement_count"]
-            == case["satisfied_count"]
-        ), case["name"]
-        assert (
-            decision.context["evidence_scope_matched"] is case["scope_matched"]
-        ), case["name"]
+        assert decision.context["required_evidence_count"] == case["required_count"], case["name"]
+        assert decision.context["satisfied_requirement_count"] == case["satisfied_count"], case[
+            "name"
+        ]
+        assert decision.context["evidence_scope_matched"] is case["scope_matched"], case["name"]
 
 
 def test_vcdm_adapter_matches_native_behavior_fixture() -> None:
     for case in _fixture("vcdm_issuance")["document_cases"]:
         if case["expected_error"] is None:
-            validate_credential_document(
-                case["credential"], issuer_did=case["issuer_did"]
-            )
+            validate_credential_document(case["credential"], issuer_did=case["issuer_did"])
             continue
         with pytest.raises(VcdmValidationError) as failure:
-            validate_credential_document(
-                case["credential"], issuer_did=case["issuer_did"]
-            )
+            validate_credential_document(case["credential"], issuer_did=case["issuer_did"])
         assert failure.value.code == case["expected_error"], case["name"]
 
 
@@ -94,3 +91,16 @@ def test_governance_adapter_matches_native_authorization_fixture() -> None:
         with pytest.raises(GovernanceAuthorizationError) as failure:
             registry.authorize(case["api_key"], case["purpose"])
         assert case["expected_error"] in str(failure.value), case["name"]
+
+
+def test_reconciliation_binding_matches_language_neutral_fixture() -> None:
+    fixture = _fixture("evidence_reconciliation")
+    for case in fixture["plan_cases"]:
+        request = {**fixture["plan_base"], **case["patch"]}
+        result = json.loads(_native.evidence_reconciliation_plan(json.dumps(request)))
+        assert result == case["expected"], case["name"]
+    for case in fixture["stale_cases"]:
+        result = json.loads(
+            _native.evidence_reconciliation_stale_reasons(json.dumps(case["request"]))
+        )
+        assert result == case["expected"], case["name"]
