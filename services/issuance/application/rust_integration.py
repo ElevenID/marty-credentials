@@ -105,6 +105,10 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_verify_compact_jwt",
         "oid4vci_verify_detached_signature",
         "prepare_vcdm_data_integrity_credential",
+        "validate_vcdm_issuance_document",
+        "validate_vcdm_related_resource_digests",
+        "current_evidence_heads",
+        "evaluate_application_evidence_policy",
     }
 )
 
