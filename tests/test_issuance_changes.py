@@ -1384,12 +1384,13 @@ class TestStatusListAllocationOrganizationScope:
             async def __aexit__(self, *_args):
                 return None
 
-            async def post(self, url, json):
-                captured.update({"url": url, "json": json})
+            async def post(self, url, json, headers):
+                captured.update({"url": url, "json": json, "headers": headers})
                 return FakeResponse()
 
         monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
         monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
 
         profile_id, entries = await routes._allocate_credential_status_list_entries(
             credential_id="credential-1",
@@ -1403,6 +1404,7 @@ class TestStatusListAllocationOrganizationScope:
             "credential_format": "sd_jwt_vc",
         }
         assert captured["url"].endswith("/internal/revocation-profiles/profile-1/allocate-index")
+        assert captured["headers"] == {"x-service-token": "s" * 48}
         assert profile_id == "profile-1"
         assert entries[0]["index"] == 42
 
@@ -1427,7 +1429,7 @@ class TestStatusListAllocationOrganizationScope:
             async def __aexit__(self, *_args):
                 return None
 
-            async def post(self, _url, json):
+            async def post(self, _url, json, headers):
                 return FakeResponse()
 
         monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
@@ -1442,6 +1444,55 @@ class TestStatusListAllocationOrganizationScope:
             )
 
         assert exc_info.value.status_code == 503
+
+    async def test_lifecycle_delegation_authenticates_revocation_service(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        captured = {}
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"success": True}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, url, json, headers, timeout):
+                captured.update(
+                    {"url": url, "json": json, "headers": headers, "timeout": timeout}
+                )
+                return FakeResponse()
+
+        credential = _make_credential(
+            id="credential-1",
+            revocation_profile_id="profile-1",
+            status_list_entries=[{"status_purpose": "revocation", "index": 42}],
+        )
+        monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+        monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
+
+        result = await routes._delegate_to_revocation_profile(
+            credential.id,
+            "revoke",
+            reason="superseded",
+            credential=credential,
+        )
+
+        assert result == {"success": True}
+        assert captured["url"].endswith(
+            "/internal/revocation-profiles/profile-1/process-revocation"
+        )
+        assert captured["headers"] == {"x-service-token": "s" * 48}
+        assert captured["json"]["organization_id"] == "org-1"
+        assert captured["json"]["index"] == 42
 
 
 class TestDeliveryRecords:

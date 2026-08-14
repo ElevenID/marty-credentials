@@ -104,7 +104,10 @@ from issuance.infrastructure.api.signing_context import (
     resolve_remote_issuer_context,
     sign_payload_with_issuer_did,
 )
-from issuance.infrastructure.grpc_security import create_service_channel
+from issuance.infrastructure.grpc_security import (
+    create_service_channel,
+    service_token_headers,
+)
 from marty_credentials.native_backend import NativeOperationError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -1767,6 +1770,7 @@ async def _allocate_credential_status_list_entries(
                     "organization_id": organization_id,
                     "credential_format": credential_format,
                 },
+                headers=service_token_headers(),
             )
             response.raise_for_status()
             payload = response.json()
@@ -5792,6 +5796,7 @@ async def _delegate_to_revocation_profile(
                     "credential_format": "sd_jwt",
                     "reason": reason,
                 },
+                headers=service_token_headers(),
                 timeout=10.0,
             )
             response.raise_for_status()

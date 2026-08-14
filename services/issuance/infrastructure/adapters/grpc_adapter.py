@@ -30,7 +30,10 @@ from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
 )
-from issuance.infrastructure.grpc_security import create_service_channel
+from issuance.infrastructure.grpc_security import (
+    create_service_channel,
+    service_token_headers,
+)
 from marty_proto.v1 import (
     issuance_service_pb2 as pb2,
 )
@@ -1318,6 +1321,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                                 "credential_format": "sd_jwt",
                                 "reason": reason or None,
                             },
+                            headers=service_token_headers(),
                         )
             except Exception as http_e:
                 logger.warning(f"RevocationProfile HTTP also unavailable for {action}: {http_e}")

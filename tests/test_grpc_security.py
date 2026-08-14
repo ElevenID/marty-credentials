@@ -14,6 +14,7 @@ from issuance.infrastructure.grpc_security import (
     create_service_channel,
     read_service_token,
     server_interceptors,
+    service_token_headers,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +77,17 @@ def test_environment_and_file_are_mutually_exclusive(monkeypatch, tmp_path):
 
     with pytest.raises(RuntimeError, match="Both GRPC_SERVICE_TOKEN"):
         read_service_token()
+
+
+def test_service_token_headers_authenticate_internal_http(monkeypatch):
+    token = "h" * 48
+    monkeypatch.setenv("GRPC_SERVICE_TOKEN", token)
+
+    assert service_token_headers() == {"x-service-token": token}
+
+
+def test_service_token_headers_are_empty_only_in_tokenless_test_mode():
+    assert service_token_headers() == {}
 
 
 def test_client_interceptor_covers_every_rpc_cardinality():
