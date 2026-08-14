@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.57] - 2026-08-13
+
+### Changed
+
+- Pin Rust source dependencies, production native wheels, and CI cache inputs
+  to the immutable Marty Core 0.1.55 release.
+
+### Fixed
+
+- Consume the corrected ISO 18013-5 MSO digest calculation so each value digest
+  authenticates the inner encoded `IssuerSignedItem` carried by the tagged
+  `IssuerSignedItemBytes` disclosure.
+
 ## [0.1.56] - 2026-08-13
 
 ### Changed
