@@ -1455,7 +1455,12 @@ class TestStatusListAllocationOrganizationScope:
                 return None
 
             def json(self):
-                return {"success": True}
+                return {
+                    "success": True,
+                    "organization_id": "org-1",
+                    "index": 42,
+                    "status_list_url": "https://issuer.example/status/1",
+                }
 
         class FakeClient:
             async def __aenter__(self):
@@ -1465,15 +1470,20 @@ class TestStatusListAllocationOrganizationScope:
                 return None
 
             async def post(self, url, json, headers, timeout):
-                captured.update(
-                    {"url": url, "json": json, "headers": headers, "timeout": timeout}
-                )
+                captured.update({"url": url, "json": json, "headers": headers, "timeout": timeout})
                 return FakeResponse()
 
         credential = _make_credential(
             id="credential-1",
             revocation_profile_id="profile-1",
-            status_list_entries=[{"status_purpose": "revocation", "index": 42}],
+            status_list_entries=[
+                {
+                    "status_list_id": "profile-1",
+                    "status_purpose": "revocation",
+                    "index": 42,
+                    "type": "BitstringStatusListEntry",
+                }
+            ],
         )
         monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
         monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
@@ -1486,13 +1496,218 @@ class TestStatusListAllocationOrganizationScope:
             credential=credential,
         )
 
-        assert result == {"success": True}
+        assert result["success"] is True
         assert captured["url"].endswith(
             "/internal/revocation-profiles/profile-1/process-revocation"
         )
         assert captured["headers"] == {"x-service-token": "s" * 48}
         assert captured["json"]["organization_id"] == "org-1"
         assert captured["json"]["index"] == 42
+        assert captured["json"]["credential_format"] == "sd_jwt_vc"
+
+    async def test_lifecycle_delegation_rejects_http_200_failure(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"success": False, "error": "profile is inactive"}
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def post(self, *_args, **_kwargs):
+                return FakeResponse()
+
+        credential = _make_credential(
+            id="credential-1",
+            revocation_profile_id="profile-1",
+            status_list_entries=[
+                {
+                    "status_list_id": "profile-1",
+                    "status_purpose": "revocation",
+                    "index": 42,
+                }
+            ],
+        )
+        monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+        monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes._delegate_to_revocation_profile(
+                credential.id,
+                "revoke",
+                credential=credential,
+            )
+
+        assert exc_info.value.status_code == 503
+        assert exc_info.value.detail == "Revocation service rejected the status change"
+
+    @pytest.mark.parametrize(
+        "status_list_entries",
+        [
+            [],
+            [{"status_list_id": "wrong-profile", "status_purpose": "revocation", "index": 42}],
+            [{"status_list_id": "profile-1", "status_purpose": "revocation", "index": "bad"}],
+        ],
+    )
+    async def test_lifecycle_delegation_rejects_untrusted_status_metadata(
+        self, monkeypatch, status_list_entries
+    ):
+        from issuance.infrastructure.api import routes
+
+        credential = _make_credential(
+            id="credential-1",
+            revocation_profile_id="profile-1",
+            status_list_entries=status_list_entries,
+        )
+        monkeypatch.setenv("REVOCATION_PROFILE_SERVICE_URL", "http://revocation-profile:8013")
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes._delegate_to_revocation_profile(
+                credential.id,
+                "revoke",
+                credential=credential,
+            )
+
+        assert exc_info.value.status_code == 503
+
+
+class TestTransactionRevocationPropagation:
+    @staticmethod
+    def _request():
+        return types.SimpleNamespace(headers={"X-Organization-ID": "org-1"})
+
+    @staticmethod
+    def _credential(**overrides):
+        return _make_credential(
+            revocation_profile_id="profile-1",
+            status_list_entries=[
+                {
+                    "status_list_id": "profile-1",
+                    "status_purpose": "revocation",
+                    "index": 42,
+                    "type": "BitstringStatusListEntry",
+                }
+            ],
+            **overrides,
+        )
+
+    async def test_public_transaction_revoke_updates_canonical_and_local_status(
+        self, repo, monkeypatch
+    ):
+        from issuance.infrastructure.api import routes
+
+        transaction = _make_transaction(status=IssuanceStatus.ISSUED)
+        credential = self._credential()
+        await repo.save_transaction(transaction)
+        await repo.save_credential(credential)
+        delegated: list[tuple[str, str]] = []
+
+        async def fake_delegate(*, credential_id, action, reason, credential):
+            delegated.append((credential_id, action))
+            return {
+                "success": True,
+                "organization_id": credential.organization_id,
+                "index": 42,
+                "status_list_url": "https://issuer.example/status/1",
+            }
+
+        monkeypatch.setattr(routes, "_delegate_to_revocation_profile", fake_delegate)
+
+        result = await routes.revoke_transaction(
+            transaction.id,
+            routes.TransactionRevokeRequest(reason="holder request"),
+            self._request(),
+            repo,
+        )
+
+        updated_transaction = await repo.get_transaction(transaction.id)
+        updated_credential = await repo.get_credential(credential.id)
+        assert delegated == [(credential.id, "revoke")]
+        assert result["status"] == "revoked"
+        assert updated_transaction.status == IssuanceStatus.REVOKED
+        assert updated_credential.status == CredentialStatus.REVOKED
+        assert updated_credential.revocation_reason == "holder request"
+
+    async def test_public_transaction_revoke_fails_closed_before_local_mutation(
+        self, repo, monkeypatch
+    ):
+        from issuance.infrastructure.api import routes
+
+        transaction = _make_transaction(status=IssuanceStatus.ISSUED)
+        credential = self._credential()
+        await repo.save_transaction(transaction)
+        await repo.save_credential(credential)
+
+        async def rejected_delegate(**_kwargs):
+            raise routes.HTTPException(
+                status_code=503,
+                detail="Revocation service rejected the status change",
+            )
+
+        monkeypatch.setattr(routes, "_delegate_to_revocation_profile", rejected_delegate)
+
+        with pytest.raises(routes.HTTPException) as exc_info:
+            await routes.revoke_transaction(
+                transaction.id,
+                routes.TransactionRevokeRequest(reason="holder request"),
+                self._request(),
+                repo,
+            )
+
+        updated_transaction = await repo.get_transaction(transaction.id)
+        updated_credential = await repo.get_credential(credential.id)
+        assert exc_info.value.status_code == 503
+        assert updated_transaction.status == IssuanceStatus.ISSUED
+        assert updated_credential.status == CredentialStatus.ACTIVE
+        assert updated_credential.revoked is False
+
+    async def test_retry_reconciles_canonical_status_for_already_revoked_records(
+        self, repo, monkeypatch
+    ):
+        from issuance.infrastructure.api import routes
+
+        transaction = _make_transaction(status=IssuanceStatus.ISSUED)
+        transaction.revoke(reason="holder request")
+        credential = self._credential(
+            status=CredentialStatus.REVOKED,
+            revoked=True,
+            revoked_at=datetime.now(UTC),
+            revocation_reason="holder request",
+        )
+        await repo.save_transaction(transaction)
+        await repo.save_credential(credential)
+        calls = 0
+
+        async def fake_delegate(**_kwargs):
+            nonlocal calls
+            calls += 1
+            return {
+                "success": True,
+                "organization_id": "org-1",
+                "index": 42,
+                "status_list_url": "https://issuer.example/status/1",
+            }
+
+        monkeypatch.setattr(routes, "_delegate_to_revocation_profile", fake_delegate)
+
+        result = await routes.revoke_transaction(
+            transaction.id,
+            routes.TransactionRevokeRequest(reason="retry"),
+            self._request(),
+            repo,
+        )
+
+        assert calls == 1
+        assert result["status"] == "revoked"
+        assert result["revocation_reason"] == "holder request"
 
 
 class TestDeliveryRecords:
@@ -3361,9 +3576,7 @@ class TestRustIntegrationOrgIdValidation:
         assert decoded["vc"]["validFrom"].endswith("Z")
         assert decoded["vc"]["validUntil"].endswith("Z")
 
-    async def test_remote_jwt_vc_delegates_open_badge_profile_to_native_binding(
-        self, monkeypatch
-    ):
+    async def test_remote_jwt_vc_delegates_open_badge_profile_to_native_binding(self, monkeypatch):
         from issuance.application import rust_integration
 
         captured: list[object] = []
@@ -3407,9 +3620,7 @@ class TestRustIntegrationOrgIdValidation:
 
         assert credential == "header.payload.AQID"
         assert credential_id == "urn:uuid:credential"
-        assert captured[-1] == {
-            "achievement_id": "https://issuer.example/credentials/member-badge"
-        }
+        assert captured[-1] == {"achievement_id": "https://issuer.example/credentials/member-badge"}
 
     def test_jwt_vc_native_profile_only_routes_open_badge_aliases(self):
         from issuance.infrastructure.api.routes import _jwt_vc_native_profile
