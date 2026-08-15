@@ -83,6 +83,8 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "didcomm_pack_credential",
         "didcomm_resolve_did",
         "didcomm_unpack_message",
+        "evidence_reconciliation_plan",
+        "evidence_reconciliation_stale_reasons",
         "lti_verify_launch_jwt",
         # mDoc issuance never loads an issuer private key into this service.
         # It requires the authoritative marty-core prepare/sign/assemble split
@@ -105,6 +107,10 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "oid4vci_verify_compact_jwt",
         "oid4vci_verify_detached_signature",
         "prepare_vcdm_data_integrity_credential",
+        "validate_vcdm_issuance_document",
+        "validate_vcdm_related_resource_digests",
+        "current_evidence_heads",
+        "evaluate_application_evidence_policy",
     }
 )
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from issuance.application.application_approval import (
@@ -27,13 +28,21 @@ from issuance.domain.entities import (
     EventType,
     EvidenceFact,
     IssuanceEvent,
-    IssuanceStatus,
 )
 from issuance.domain.ports import IIssuanceRepository
+from marty_credentials.native_backend import require_marty_rs
 
-
-_DEFAULT_CANVAS_REQUIREMENTS = ["canvas.course_completion"]
 _RECONCILIATION_REVIEWER_ID = "canvas:evidence-reconciliation"
+_native = require_marty_rs(
+    (
+        "evidence_reconciliation_plan",
+        "evidence_reconciliation_stale_reasons",
+    )
+)
+
+
+def _native_json(operation: Any, request: dict[str, Any]) -> Any:
+    return json.loads(operation(json.dumps(request, separators=(",", ":"))))
 
 
 @dataclass(frozen=True)
@@ -89,7 +98,7 @@ class EvidenceReconciliationResult:
     metrics: dict[str, int]
     records: list[EvidenceReconciliationRecord]
     stale_receipts: list[StaleCanvasEvidenceReceipt]
-    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -116,10 +125,6 @@ def _policy_context(app: Application) -> dict[str, Any] | None:
     return policy if isinstance(policy, dict) else None
 
 
-def _policy_allowed(policy: dict[str, Any] | None) -> bool:
-    return bool(policy and policy.get("allowed") is True)
-
-
 def _effective_requirements(
     *,
     binding: Any | None,
@@ -129,21 +134,17 @@ def _effective_requirements(
     if binding_requirements:
         return binding_requirements
     template_requirements = list(getattr(template, "evidence_requirements", None) or [])
-    if template_requirements:
-        return template_requirements
-    return list(_DEFAULT_CANVAS_REQUIREMENTS)
+    return template_requirements or ["canvas.course_completion"]
 
 
 def _canvas_account_id_from_fact(fact: EvidenceFact) -> str | None:
     scope_account = (fact.scope or {}).get("canvas_account_id")
     if scope_account:
         return str(scope_account)
-    source = fact.source or {}
-    mip_receipt = source.get("mip_receipt")
-    if isinstance(mip_receipt, dict):
-        mip_source = mip_receipt.get("source")
-        if isinstance(mip_source, dict) and mip_source.get("provider_account_id"):
-            return str(mip_source["provider_account_id"])
+    mip_receipt = (fact.source or {}).get("mip_receipt")
+    mip_source = mip_receipt.get("source") if isinstance(mip_receipt, dict) else None
+    if isinstance(mip_source, dict) and mip_source.get("provider_account_id"):
+        return str(mip_source["provider_account_id"])
     return None
 
 
@@ -195,9 +196,8 @@ async def _load_approval_policy_set(
     template: Any | None,
     binding: Any | None = None,
 ) -> ApprovalPolicySet | None:
-    policy_set_id = (
-        getattr(binding, "approval_policy_set_id", None)
-        or (getattr(template, "approval_policy_set_id", None) if template else None)
+    policy_set_id = getattr(binding, "approval_policy_set_id", None) or (
+        getattr(template, "approval_policy_set_id", None) if template else None
     )
     if not policy_set_id:
         return None
@@ -217,7 +217,7 @@ def _with_reconciliation_metadata(
     context["evidence_reconciliation"] = {
         "last_action": action,
         "last_errors": list(errors or []),
-        "last_reconciled_at": datetime.now(timezone.utc).isoformat(),
+        "last_reconciled_at": datetime.now(UTC).isoformat(),
     }
     return context
 
@@ -253,7 +253,9 @@ async def _evaluate_policy(
     binding: Any | None,
     facts: list[EvidenceFact],
 ) -> EvidencePolicyDecision:
-    policy_set = await _load_approval_policy_set(repo=repo, app=app, template=template, binding=binding)
+    policy_set = await _load_approval_policy_set(
+        repo=repo, app=app, template=template, binding=binding
+    )
     return evaluate_application_evidence_policy(
         app=app,
         template=template,
@@ -319,10 +321,8 @@ async def _reconcile_application(
             errors=["Canvas evidence reconciliation requires a Canvas program binding"],
         )
 
-    existing_policy = _policy_context(app)
-    policy = existing_policy
-    action = "policy_decision_already_recorded"
-
+    policy = _policy_context(app)
+    policy_freshly_evaluated = False
     if policy is None:
         decision = await _evaluate_policy(
             repo=repo,
@@ -332,19 +332,45 @@ async def _reconcile_application(
             facts=canvas_facts,
         )
         policy = decision.to_dict()
-        metrics["evaluated_policies"] += 1
-        action = "policy_evaluated"
-        if decision.allowed:
-            metrics["policy_permits"] += 1
-            event_type = EventType.EVIDENCE_POLICY_PERMITTED
-        else:
-            metrics["policy_denies"] += 1
-            event_type = EventType.EVIDENCE_POLICY_DENIED
+        policy_freshly_evaluated = True
+
+    existing_tx = None
+    if app.issuance_transaction_id:
+        existing_tx = await repo.get_transaction(app.issuance_transaction_id)
+    transaction = (
+        {
+            "id": existing_tx.id,
+            "status": getattr(existing_tx.status, "value", str(existing_tx.status)),
+            "is_expired": existing_tx.is_expired,
+        }
+        if existing_tx is not None
+        else None
+    )
+    plan = _native_json(
+        _native.evidence_reconciliation_plan,
+        {
+            "policy": policy,
+            "policy_freshly_evaluated": policy_freshly_evaluated,
+            "issuance_transaction": transaction,
+            "application_issuance_transaction_id": app.issuance_transaction_id,
+            "issue_on_permit": issue_on_permit,
+            "dry_run": dry_run,
+        },
+    )
+    for name, increment in plan["metric_increments"].items():
+        metrics[name] += int(increment)
+
+    if plan["policy_event"] is not None:
+        event_type = (
+            EventType.EVIDENCE_POLICY_PERMITTED
+            if plan["policy_event"] == "permitted"
+            else EventType.EVIDENCE_POLICY_DENIED
+        )
         if not dry_run:
             app.integration_context = _with_reconciliation_metadata(
                 app=app,
                 policy_decision=policy,
-                action=action,
+                action="policy_evaluated",
             )
             await repo.save_application(app)
             await record_evidence_policy_audit_event(
@@ -358,52 +384,16 @@ async def _reconcile_application(
                 },
             )
 
-    if not _policy_allowed(policy):
+    if plan["next"] == "complete":
         return EvidenceReconciliationRecord(
             application_id=app.id,
             status_before=status_before,
             status_after=_status_value(app),
-            action="policy_denied",
+            action=plan["action"],
             fact_count=len(canvas_facts),
             policy_decision=policy,
-            issuance_transaction_id=app.issuance_transaction_id,
-            errors=list((policy or {}).get("errors") or []),
-        )
-
-    existing_tx = None
-    if app.issuance_transaction_id:
-        existing_tx = await repo.get_transaction(app.issuance_transaction_id)
-    if existing_tx is not None and existing_tx.status == IssuanceStatus.PENDING and not existing_tx.is_expired:
-        return EvidenceReconciliationRecord(
-            application_id=app.id,
-            status_before=status_before,
-            status_after=_status_value(app),
-            action="issuance_transaction_already_pending",
-            fact_count=len(canvas_facts),
-            policy_decision=policy,
-            issuance_transaction_id=existing_tx.id,
-        )
-
-    if not issue_on_permit:
-        return EvidenceReconciliationRecord(
-            application_id=app.id,
-            status_before=status_before,
-            status_after=_status_value(app),
-            action="policy_permitted_issue_disabled",
-            fact_count=len(canvas_facts),
-            policy_decision=policy,
-            issuance_transaction_id=app.issuance_transaction_id,
-        )
-
-    if dry_run:
-        return EvidenceReconciliationRecord(
-            application_id=app.id,
-            status_before=status_before,
-            status_after=status_before,
-            action="would_create_or_refresh_issuance_transaction",
-            fact_count=len(canvas_facts),
-            policy_decision=policy,
-            issuance_transaction_id=app.issuance_transaction_id,
+            issuance_transaction_id=plan["issuance_transaction_id"],
+            errors=list(plan["errors"]),
         )
 
     try:
@@ -463,9 +453,7 @@ async def _reconcile_application(
         application_id=app.id,
         status_before=status_before,
         status_after=_status_value(app),
-        action="approval_issuance_succeeded"
-        if action == "policy_evaluated"
-        else "approval_issuance_recovered_from_policy_permit",
+        action=plan["action"],
         fact_count=len(canvas_facts),
         policy_decision=policy,
         issuance_transaction_id=tx.id,
@@ -509,28 +497,24 @@ async def _receipt_stale_reasons(
     repo: IIssuanceRepository,
     receipt: CanvasEventReceipt,
 ) -> list[str]:
-    reasons: list[str] = []
     response = receipt.issuance_response if isinstance(receipt.issuance_response, dict) else {}
     app_id = response.get("application_id")
-    if not app_id:
-        reasons.append("receipt_missing_application_id")
-        return reasons
-
-    app = await repo.get_application(str(app_id))
-    if app is None:
-        reasons.append("receipt_application_missing")
-        return reasons
-
-    if not response.get("evidence_facts"):
-        reasons.append("receipt_without_evidence_fact_metadata")
-    policy = response.get("policy_decision")
-    if not isinstance(policy, dict):
-        policy = _policy_context(app)
-    if not isinstance(policy, dict):
-        reasons.append("receipt_without_policy_decision")
-    elif policy.get("allowed") is True and not receipt.issuance_transaction_id and not app.issuance_transaction_id:
-        reasons.append("policy_permit_without_issuance_transaction")
-    return reasons
+    app = await repo.get_application(str(app_id)) if app_id else None
+    return _native_json(
+        _native.evidence_reconciliation_stale_reasons,
+        {
+            "issuance_response": response,
+            "receipt_issuance_transaction_id": receipt.issuance_transaction_id,
+            "application": (
+                {
+                    "policy": _policy_context(app),
+                    "issuance_transaction_id": app.issuance_transaction_id,
+                }
+                if app is not None
+                else None
+            ),
+        },
+    )
 
 
 async def reconcile_canvas_evidence_transitions(

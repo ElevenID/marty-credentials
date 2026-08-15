@@ -24,6 +24,13 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "verify_vcdm_data_integrity",
         "verify_vcdm_jwt",
         "verification_build_decision_result",
+        "governance_authorize",
+        "governance_canonical_digest",
+        "governance_from_snapshot",
+        "governance_require_purpose",
+        "governance_resume",
+        "governance_validate",
+        "governance_validate_request",
     }
 )
 

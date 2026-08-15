@@ -3,6 +3,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+WARM_CACHES = (ROOT / ".github" / "workflows" / "warm-ci-caches.yml").read_text(
+    encoding="utf-8"
+)
 PYTHON_CI = (ROOT / "scripts" / "run-python-ci.sh").read_text(encoding="utf-8")
 STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
 PREPARE_STABLE = (ROOT / ".github" / "workflows" / "prepare-stable-tag.yml").read_text(
@@ -136,6 +139,18 @@ def test_ci_installs_exact_source_built_core_artifacts() -> None:
     assert "ref: ${{ env.MARTY_CORE_REVISION }}" in CI
     assert "marty-core/marty-bindings/Cargo.toml" in CI
     assert "marty-core/marty-verification/Cargo.toml" in CI
+    full_verification_features = (
+        "--features pyo3/extension-module,python,csca,eudi,cert-builder"
+    )
+    assert full_verification_features in CI
+    assert full_verification_features in WARM_CACHES
+
+    verification_lane = CI.split("  verification-session-postgres:", 1)[1].split(
+        "\n  test-wasm:", 1
+    )[0]
+    assert "needs: build-core-python-wheels" in verification_lane
+    assert "name: core-python-${{ runner.os }}" in verification_lane
+    assert "python -m pip install release-deps/*.whl" in verification_lane
 
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:
