@@ -225,6 +225,85 @@ def test_configured_authcrypt_resolves_and_binds_the_sender(
     anoncrypt.assert_not_called()
 
 
+def test_prepared_authcrypt_context_is_validated_once_and_frozen_for_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    issuer_did = "did:web:issuer.example"
+    private_key = bytes(range(32))
+    policy_path = Path(
+        _write_encryption_policy(
+            tmp_path,
+            {
+                issuer_did: {
+                    "mode": "authcrypt",
+                    "sender_x25519_private_key": rust_integration.base64url_encode(
+                        private_key
+                    ),
+                }
+            },
+        )
+    )
+    monkeypatch.setenv("DIDCOMM_ENCRYPTION_POLICY_FILE", str(policy_path))
+    sender_document = {
+        "id": issuer_did,
+        "keyAgreement": [f"{issuer_did}#didcomm-authcrypt-x25519"],
+    }
+    recipient_document = {
+        "id": "did:peer:holder",
+        "keyAgreement": ["did:peer:holder#key-1"],
+    }
+    monkeypatch.setattr(
+        rust_integration,
+        "didcomm_resolve_did",
+        Mock(return_value=sender_document),
+    )
+    calls: list[tuple[str, str, bytes, str]] = []
+
+    class Binding:
+        @staticmethod
+        def didcomm_encrypt_authcrypt(
+            plaintext: str,
+            sender_document_json: str,
+            sender_private_key: bytes,
+            recipient_document_json: str,
+        ) -> str:
+            calls.append(
+                (
+                    plaintext,
+                    sender_document_json,
+                    sender_private_key,
+                    recipient_document_json,
+                )
+            )
+            return "authenticated"
+
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Binding())
+
+    prepared = rust_integration.prepare_didcomm_delivery_encryption(
+        issuer_did,
+        recipient_document,
+    )
+    policy_path.write_text(
+        json.dumps({"version": 1, "issuers": {issuer_did: {"mode": "anoncrypt"}}}),
+        encoding="utf-8",
+    )
+
+    assert (
+        rust_integration.didcomm_encrypt_prepared_delivery(
+            "signed-message",
+            prepared,
+        )
+        == "authenticated"
+    )
+    assert len(calls) == 2
+    assert json.loads(calls[0][0])["body"] == {"preflight": True}
+    assert calls[1][0] == "signed-message"
+    assert json.loads(calls[1][1]) == sender_document
+    assert calls[1][2] == private_key
+    assert json.loads(calls[1][3]) == recipient_document
+
+
 def test_configured_policy_requires_an_exact_active_issuer_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -528,23 +607,22 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
         "apply_remote_issuer_context",
         AsyncMock(return_value=remote_context),
     )
+    allocate_status = AsyncMock(return_value=(None, []))
+    sign_credential = AsyncMock(
+        return_value=("signed-credential", "urn:uuid:credential-a")
+    )
+    pack_credential = Mock(return_value=json.dumps({"id": "message-a"}))
     monkeypatch.setattr(
         routes,
         "_allocate_credential_status_list_entries",
-        AsyncMock(return_value=(None, [])),
+        allocate_status,
     )
     monkeypatch.setattr(
         routes,
         "create_sd_jwt_vc_with_remote_signing",
-        AsyncMock(return_value=("signed-credential", "urn:uuid:credential-a")),
+        sign_credential,
     )
-    packed: dict = {}
-
-    def pack(**kwargs) -> str:
-        packed.update(kwargs)
-        return json.dumps({"id": "message-a"})
-
-    monkeypatch.setattr(routes, "didcomm_pack_credential", pack)
+    monkeypatch.setattr(routes, "didcomm_pack_credential", pack_credential)
     monkeypatch.setattr(
         routes,
         "didcomm_resolve_did",
@@ -562,8 +640,8 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
     )
     monkeypatch.setattr(
         routes,
-        "didcomm_encrypt_delivery",
-        lambda *_args: (_ for _ in ()).throw(encryption_error),
+        "prepare_didcomm_delivery_encryption",
+        Mock(side_effect=encryption_error),
     )
 
     with pytest.raises(HTTPException, match=expected_detail) as exc:
@@ -574,7 +652,57 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
         )
 
     assert exc.value.status_code == expected_status
-    assert packed["thread_id"] == "tx-a"
+    allocate_status.assert_not_awaited()
+    sign_credential.assert_not_awaited()
+    pack_credential.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delivery_validates_holder_endpoint_before_context_or_status_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = IssuanceTransaction(
+        id="tx-a",
+        organization_id="org-a",
+        credential_template_id="template-a",
+        issuer_profile_id="profile-a",
+        issuer_did_override="did:web:issuer.example",
+        claims={"given_name": "Alice"},
+    )
+    apply_context = AsyncMock()
+    allocate_status = AsyncMock()
+    validate_endpoint = AsyncMock(
+        side_effect=HTTPException(status_code=422, detail="endpoint denied")
+    )
+    monkeypatch.setattr(
+        routes,
+        "didcomm_resolve_did",
+        lambda _did: {"id": "did:peer:holder"},
+    )
+    monkeypatch.setattr(
+        routes,
+        "didcomm_extract_endpoint",
+        lambda _doc: "https://127.0.0.1/inbox",
+    )
+    monkeypatch.setattr(routes, "_validated_didcomm_delivery_endpoint", validate_endpoint)
+    monkeypatch.setattr(routes, "apply_remote_issuer_context", apply_context)
+    monkeypatch.setattr(
+        routes,
+        "_allocate_credential_status_list_entries",
+        allocate_status,
+    )
+
+    with pytest.raises(HTTPException, match="endpoint denied") as exc:
+        await routes._didcomm_sign_and_deliver(
+            transaction,
+            "did:peer:holder",
+            SimpleNamespace(save_transaction=AsyncMock()),
+        )
+
+    assert exc.value.status_code == 422
+    validate_endpoint.assert_awaited_once_with("https://127.0.0.1/inbox")
+    apply_context.assert_not_awaited()
+    allocate_status.assert_not_awaited()
 
 
 @pytest.mark.asyncio

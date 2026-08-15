@@ -1,28 +1,32 @@
 status: complete
 search_scope:
-  - current issuance DIDComm resolver wrapper and capability contract
-  - marty-core DID resolver and Python bindings at the pinned release
-  - deployment configuration and owned DIDComm boundary tests
-  - sibling Marty UI managed did:web publication topology
+  - current DIDComm sign-and-deliver orchestration and status-list allocation order
+  - existing exhaustive issuer encryption policy loader and Rust DIDComm bindings
+  - holder DID resolution, endpoint validation, and owned boundary tests
+  - revocation-profile status allocation API and available rollback or idempotency contracts
 search_queries:
-  - didcomm_resolve_did_with_metadata
-  - DIDCOMM_UNIVERSAL_RESOLVER_URL and did:web internal base URLs
-  - configured_internal_resolver provenance
-  - managed issuer did:web authcrypt resolution
+  - _didcomm_sign_and_deliver allocation signing holder resolution encryption
+  - didcomm_encrypt_delivery authcrypt sender private public key binding
+  - allocate-index deallocate release rollback idempotency
+  - prepared DIDComm delivery encryption context
 candidate_implementations:
   - path: services/issuance/application/rust_integration.py
-    disposition: extend the existing deployment-only resolver wrapper
-  - path: ElevenID/marty-core@marty-bindings/src/lib.rs
-    disposition: reuse the released didcomm_resolve_did_with_metadata binding
-  - path: ElevenID/marty-core@marty-didcomm/src/did_resolver.rs
-    disposition: reuse native internal-base URL construction, egress policy, and DID identity validation
+    disposition: extend existing policy loader and canonical Rust encryption delegation
+  - path: services/issuance/infrastructure/api/routes.py
+    disposition: reorder existing product-owned orchestration before irreversible allocation
+  - path: services/issuance/infrastructure/api/routes.py#_allocate_credential_status_list_entries
+    disposition: no rollback or idempotency contract exists; retain as a documented residual
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: ElevenID/marty-core@marty-didcomm/src/did_resolver.rs
-  language: Rust
+  path: services/issuance/application/rust_integration.py
+  language: Python delegation to released Rust binding
 rust_disposition: reuse_existing_rust_owner
-non_rust_rationale: Python reads deployment configuration and delegates URL construction, resolution, provenance, bounds, and DID identity validation to released Rust.
+non_rust_rationale: >-
+  Python owns transaction orchestration and freezes one attempt-scoped delivery
+  context, while recipient key compatibility and authcrypt private/public binding
+  are validated by the existing canonical Rust encryption implementation. No
+  cryptographic algorithm, DID resolver, or policy parser is duplicated.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
