@@ -6,7 +6,7 @@ import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -941,6 +941,17 @@ class _DidcommIssuerEncryptionPolicy:
     sender_x25519_private_key: bytes | None = None
 
 
+@dataclass(frozen=True)
+class DidcommDeliveryEncryptionContext:
+    """Validated, attempt-scoped inputs for one DIDComm delivery."""
+
+    issuer_did: str
+    mode: Literal["anoncrypt", "authcrypt"]
+    recipient_did_document_json: str = field(repr=False)
+    sender_did_document_json: str | None = field(default=None, repr=False)
+    sender_x25519_private_key: bytes | None = field(default=None, repr=False)
+
+
 _DIDCOMM_POLICY_MAX_BYTES = 64 * 1024
 _DIDCOMM_POLICY_MAX_ISSUERS = 1000
 _DIDCOMM_POLICY_FIELDS = frozenset({"version", "issuers"})
@@ -1074,6 +1085,84 @@ def _load_didcomm_issuer_encryption_policy(
     return issuer_policy
 
 
+def _didcomm_preflight_plaintext(
+    issuer_did: str,
+    recipient_did_document: dict,
+) -> str:
+    recipient_did = recipient_did_document.get("id")
+    if not isinstance(recipient_did, str) or not recipient_did.startswith("did:"):
+        raise ValueError("DIDComm recipient document has no valid DID identifier")
+    return json.dumps(
+        {
+            "id": "urn:uuid:00000000-0000-4000-8000-000000000000",
+            "type": "https://didcomm.org/basicmessage/2.0/message",
+            "from": issuer_did,
+            "to": [recipient_did],
+            "body": {"preflight": True},
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def prepare_didcomm_delivery_encryption(
+    issuer_did: str,
+    recipient_did_document: dict,
+) -> DidcommDeliveryEncryptionContext:
+    """Validate and freeze deterministic encryption inputs before allocation."""
+
+    policy = _load_didcomm_issuer_encryption_policy(issuer_did)
+    recipient_document_json = json.dumps(
+        recipient_did_document,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    preflight_plaintext = _didcomm_preflight_plaintext(
+        issuer_did,
+        recipient_did_document,
+    )
+    marty_rs = get_marty_rs()
+
+    if policy.mode == "anoncrypt":
+        marty_rs.didcomm_encrypt(preflight_plaintext, recipient_document_json)
+        return DidcommDeliveryEncryptionContext(
+            issuer_did=issuer_did,
+            mode="anoncrypt",
+            recipient_did_document_json=recipient_document_json,
+        )
+
+    try:
+        sender_did_document = didcomm_resolve_did(issuer_did)
+        if policy.sender_x25519_private_key is None:  # Defensive invariant.
+            raise DidcommEncryptionPolicyError(
+                "DIDComm authcrypt policy is missing sender key material"
+            )
+        sender_document_json = json.dumps(
+            sender_did_document,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        marty_rs.didcomm_encrypt_authcrypt(
+            preflight_plaintext,
+            sender_document_json,
+            policy.sender_x25519_private_key,
+            recipient_document_json,
+        )
+        return DidcommDeliveryEncryptionContext(
+            issuer_did=issuer_did,
+            mode="authcrypt",
+            recipient_did_document_json=recipient_document_json,
+            sender_did_document_json=sender_document_json,
+            sender_x25519_private_key=policy.sender_x25519_private_key,
+        )
+    except DidcommEncryptionPolicyError:
+        raise
+    except Exception as exc:
+        raise DidcommAuthcryptError(
+            "DIDComm authcrypt encryption preflight failed without fallback"
+        ) from exc
+
+
 def didcomm_encrypt_delivery(
     plaintext_json: str,
     issuer_did: str,
@@ -1099,6 +1188,38 @@ def didcomm_encrypt_delivery(
         )
     except DidcommEncryptionPolicyError:
         raise
+    except Exception as exc:
+        raise DidcommAuthcryptError(
+            "DIDComm authcrypt encryption failed without fallback"
+        ) from exc
+
+
+def didcomm_encrypt_prepared_delivery(
+    plaintext_json: str,
+    prepared_context: DidcommDeliveryEncryptionContext,
+) -> str:
+    """Encrypt using only the immutable inputs accepted by preflight."""
+
+    marty_rs = get_marty_rs()
+    if prepared_context.mode == "anoncrypt":
+        return marty_rs.didcomm_encrypt(
+            plaintext_json,
+            prepared_context.recipient_did_document_json,
+        )
+    if (
+        prepared_context.sender_did_document_json is None
+        or prepared_context.sender_x25519_private_key is None
+    ):
+        raise DidcommEncryptionPolicyError(
+            "Prepared DIDComm authcrypt context is incomplete"
+        )
+    try:
+        return marty_rs.didcomm_encrypt_authcrypt(
+            plaintext_json,
+            prepared_context.sender_did_document_json,
+            prepared_context.sender_x25519_private_key,
+            prepared_context.recipient_did_document_json,
+        )
     except Exception as exc:
         raise DidcommAuthcryptError(
             "DIDComm authcrypt encryption failed without fallback"

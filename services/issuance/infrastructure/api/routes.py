@@ -57,7 +57,7 @@ from issuance.application.rust_integration import (
     create_mdoc_credential_with_issuer_profile_signing,
     create_sd_jwt_vc_with_remote_signing,
     create_vcdm_data_integrity_with_remote_signing,
-    didcomm_encrypt_delivery,
+    didcomm_encrypt_prepared_delivery,
     didcomm_extract_endpoint,
     didcomm_pack_credential,
     didcomm_resolve_did,
@@ -66,6 +66,7 @@ from issuance.application.rust_integration import (
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
     oid4vci_exchange_auth_code_for_token,
+    prepare_didcomm_delivery_encryption,
     verify_compact_jwt,
     verify_key_attestation_bound_proof_jwt,
     verify_proof_jwt,
@@ -5057,10 +5058,10 @@ async def _didcomm_sign_and_deliver(
 ) -> DidcommDeliveryResponse:
     """Sign a credential and deliver it to the holder via DIDComm v2.
 
-    1. Sign the credential using the same Rust signer as OID4VCI.
-    2. Pack the signed credential into a DIDComm v2 issue-credential/3.0 message.
-    3. Resolve the holder's DID Document to find their DIDComm service endpoint.
-    4. POST the DIDComm message to that endpoint.
+    1. Resolve and validate all deterministic DIDComm delivery prerequisites.
+    2. Sign the credential using the same Rust signer as OID4VCI.
+    3. Pack the signed credential into a DIDComm v2 issue-credential/3.0 message.
+    4. Encrypt with the prepared context and POST to the holder endpoint.
     """
     credential_type = tx.credential_type or "VerifiableCredential"
     _INTERNAL_CLAIM_FIELDS = {
@@ -5121,6 +5122,18 @@ async def _didcomm_sign_and_deliver(
                 signing_format, remote_credential_format
             ),
         )
+
+    # Resolve and validate the holder endpoint before any irreversible status
+    # allocation or signing work. Freeze the recipient DID Document used by
+    # this attempt so later encryption cannot silently switch recipient keys.
+    did_doc = didcomm_resolve_did(holder_did)
+    service_endpoint = didcomm_extract_endpoint(did_doc)
+    if not service_endpoint:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Holder DID {holder_did} has no DIDComm service endpoint",
+        )
+    service_endpoint = await _validated_didcomm_delivery_endpoint(service_endpoint)
 
     remote_context: dict[str, Any] | None = None
 
@@ -5200,6 +5213,27 @@ async def _didcomm_sign_and_deliver(
     )
     effective_issuer_did_dc = tx.issuer_did_override
 
+    # Load the exhaustive issuer policy and validate recipient key agreement,
+    # sender DID resolution, and authcrypt private/public binding through the
+    # canonical Rust implementation before allocating a status-list entry.
+    try:
+        delivery_encryption_context = prepare_didcomm_delivery_encryption(
+            effective_issuer_did_dc,
+            did_doc,
+        )
+    except (DidcommEncryptionPolicyError, DidcommAuthcryptError) as enc_err:
+        logger.error("DIDComm sender-authenticated encryption is unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="DIDComm sender-authentication configuration is unavailable",
+        ) from enc_err
+    except Exception as enc_err:
+        logger.warning("DIDComm encryption preflight failed for holder DID %s", holder_did)
+        raise HTTPException(
+            status_code=422,
+            detail="Holder DID does not provide a compatible DIDComm key agreement method",
+        ) from enc_err
+
     async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
         if algorithm and algorithm != signing_algorithm:
             raise RuntimeError("Credential builder requested a different issuer algorithm")
@@ -5260,24 +5294,12 @@ async def _didcomm_sign_and_deliver(
     didcomm_msg = json.loads(didcomm_message_json)
     didcomm_message_id = didcomm_msg.get("id", "")
 
-    # Step 3: Resolve holder DID → service endpoint
-    did_doc = didcomm_resolve_did(holder_did)
-    service_endpoint = didcomm_extract_endpoint(did_doc)
-    if not service_endpoint:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Holder DID {holder_did} has no DIDComm service endpoint",
-        )
-
-    service_endpoint = await _validated_didcomm_delivery_endpoint(service_endpoint)
-
-    # Step 3b: Encryption is mandatory. A deployment can opt an issuer into
-    # authcrypt, but a configured policy must never downgrade to anoncrypt.
+    # Step 3: Encryption is mandatory. Reuse the exact preflight context so a
+    # policy or DID-document change cannot downgrade or retarget this attempt.
     try:
-        delivery_content = didcomm_encrypt_delivery(
+        delivery_content = didcomm_encrypt_prepared_delivery(
             didcomm_message_json,
-            effective_issuer_did_dc,
-            did_doc,
+            delivery_encryption_context,
         )
     except (DidcommEncryptionPolicyError, DidcommAuthcryptError) as enc_err:
         logger.error("DIDComm sender-authenticated encryption is unavailable")
