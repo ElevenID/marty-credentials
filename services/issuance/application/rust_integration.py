@@ -81,7 +81,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "didcomm_encrypt_authcrypt",
         "didcomm_extract_endpoint",
         "didcomm_pack_credential",
-        "didcomm_resolve_did",
+        "didcomm_resolve_did_with_metadata",
         "didcomm_unpack_message",
         "evidence_reconciliation_plan",
         "evidence_reconciliation_stale_reasons",
@@ -836,8 +836,22 @@ def didcomm_resolve_did(did: str) -> dict:
         or os.environ.get("UNIVERSAL_RESOLVER_URL", "").strip()
         or None
     )
-    doc_json = marty_rs.didcomm_resolve_did(did, resolver_url)
-    return json.loads(doc_json)
+    internal_base_url = (
+        os.environ.get("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", "").strip() or None
+    )
+    resolution_json = marty_rs.didcomm_resolve_did_with_metadata(
+        did,
+        universal_resolver_url=resolver_url,
+        did_web_internal_base_urls=(
+            [internal_base_url] if internal_base_url is not None else None
+        ),
+        did_web_allowed_hosts=None,
+    )
+    resolution = json.loads(resolution_json)
+    document = resolution.get("document") if isinstance(resolution, dict) else None
+    if not isinstance(document, dict) or document.get("id") != did:
+        raise RuntimeError("DID resolution returned a mismatched document")
+    return document
 
 
 def didcomm_extract_endpoint(did_document: dict) -> str | None:
