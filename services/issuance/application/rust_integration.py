@@ -86,6 +86,11 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "evidence_reconciliation_plan",
         "evidence_reconciliation_stale_reasons",
         "lti_verify_launch_jwt",
+        "key_attestation_policy",
+        "key_attestation_route_proof",
+        "key_attestation_validate",
+        "key_attestation_validate_status_reference",
+        "key_attestation_validate_status_token",
         # mDoc issuance never loads an issuer private key into this service.
         # It requires the authoritative marty-core prepare/sign/assemble split
         # so the KMS signs the exact COSE payload remotely.
