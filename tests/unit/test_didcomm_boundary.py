@@ -49,17 +49,30 @@ def test_delivery_contract_rejects_caller_selected_resolver() -> None:
 def test_resolver_uses_only_deployment_managed_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None]] = []
+    calls: list[tuple[str, dict[str, object]]] = []
 
     class Binding:
         @staticmethod
-        def didcomm_resolve_did(did: str, resolver_url: str | None) -> str:
-            calls.append((did, resolver_url))
-            return json.dumps({"id": did})
+        def didcomm_resolve_did_with_metadata(
+            did: str, **configuration: object
+        ) -> str:
+            calls.append((did, configuration))
+            return json.dumps(
+                {
+                    "document": {"id": did},
+                    "source": "configured_internal_resolver",
+                    "retrieved_at": "2026-08-15T00:00:00Z",
+                    "content_sha256": "0" * 64,
+                }
+            )
 
     monkeypatch.setenv(
         "DIDCOMM_UNIVERSAL_RESOLVER_URL",
         "https://resolver.internal.example/1.0/identifiers",
+    )
+    monkeypatch.setenv(
+        "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+        "http://gateway:8000",
     )
     monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Binding())
 
@@ -69,7 +82,13 @@ def test_resolver_uses_only_deployment_managed_configuration(
     assert calls == [
         (
             "did:example:holder",
-            "https://resolver.internal.example/1.0/identifiers",
+            {
+                "universal_resolver_url": (
+                    "https://resolver.internal.example/1.0/identifiers"
+                ),
+                "did_web_internal_base_urls": ["http://gateway:8000"],
+                "did_web_allowed_hosts": None,
+            },
         )
     ]
     with pytest.raises(TypeError):
@@ -77,6 +96,30 @@ def test_resolver_uses_only_deployment_managed_configuration(
             "did:example:holder",
             "https://attacker.example/resolve",
         )
+
+
+def test_resolver_rejects_a_mismatched_native_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Binding:
+        @staticmethod
+        def didcomm_resolve_did_with_metadata(
+            did: str, **configuration: object
+        ) -> str:
+            del did, configuration
+            return json.dumps(
+                {
+                    "document": {"id": "did:web:other.example"},
+                    "source": "configured_internal_resolver",
+                    "retrieved_at": "2026-08-15T00:00:00Z",
+                    "content_sha256": "0" * 64,
+                }
+            )
+
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Binding())
+
+    with pytest.raises(RuntimeError, match="mismatched document"):
+        rust_integration.didcomm_resolve_did("did:web:issuer.example")
 
 
 def test_authcrypt_binding_delegates_all_crypto_to_rust(

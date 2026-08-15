@@ -1,27 +1,29 @@
 status: complete
 search_scope:
-  - latest marty-credentials release preparation commits
-  - stable tag preparation and release workflows
-  - release source and version-contract scripts
+  - current issuance DIDComm resolver wrapper and capability contract
+  - marty-core DID resolver and Python bindings at the pinned release
+  - deployment configuration and owned DIDComm boundary tests
+  - sibling Marty UI managed did:web publication topology
 search_queries:
-  - release prepare marty-credentials
-  - prepare-stable-tag and release-stable
-  - validate-source package version
+  - didcomm_resolve_did_with_metadata
+  - DIDCOMM_UNIVERSAL_RESOLVER_URL and did:web internal base URLs
+  - configured_internal_resolver provenance
+  - managed issuer did:web authcrypt resolution
 candidate_implementations:
-  - path: Cargo.toml and Cargo.lock
-    disposition: reuse the established two-file version preparation
-  - path: .github/workflows/prepare-stable-tag.yml
-    disposition: reuse unchanged after merge
-  - path: .github/workflows/release-stable.yml
-    disposition: reuse unchanged from the immutable prepared tag
+  - path: services/issuance/application/rust_integration.py
+    disposition: extend the existing deployment-only resolver wrapper
+  - path: ElevenID/marty-core@marty-bindings/src/lib.rs
+    disposition: reuse the released didcomm_resolve_did_with_metadata binding
+  - path: ElevenID/marty-core@marty-didcomm/src/did_resolver.rs
+    disposition: reuse native internal-base URL construction, egress policy, and DID identity validation
 no_match_statement: ""
-decision: reuse_existing_release_process
+decision: reuse_existing
 canonical_implementation:
-  path: .github/workflows/prepare-stable-tag.yml
-  language: YAML
-rust_disposition: not_applicable_release_metadata_only
-non_rust_rationale: The release PR changes package metadata only and delegates publication to existing governed workflows.
-non_rust_exception_approval: not_required
+  path: ElevenID/marty-core@marty-didcomm/src/did_resolver.rs
+  language: Rust
+rust_disposition: reuse_existing_rust_owner
+non_rust_rationale: Python reads deployment configuration and delegates URL construction, resolution, provenance, bounds, and DID identity validation to released Rust.
+non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
   divergence_owner: ""

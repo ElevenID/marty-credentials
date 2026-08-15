@@ -88,6 +88,11 @@ DIDCOMM_TLS_CA_FILE=/run/secrets/didcomm-root-ca.pem
 # this to true for an HTTPS agent reached through a private test network.
 DIDCOMM_ALLOW_PRIVATE_IPS=false
 
+# Optional deployment-owned HTTP(S) base that serves the standard did:web
+# document paths for locally managed issuer DIDs. This is tried before any
+# direct did:web or Universal Resolver path and is never caller-selectable.
+DIDCOMM_DID_WEB_INTERNAL_BASE_URL=http://gateway:8000
+
 # Optional path to a deployment-mounted JSON secret that selects anoncrypt or
 # authcrypt for every active issuer. When configured, omitted issuers fail
 # closed. Keep the file outside the image and restrict filesystem access to
@@ -100,9 +105,13 @@ publicly routable HTTPS service endpoint in production. Resolver, key, KMS,
 and signing-service selectors are deployment or issuer-profile concerns and
 are not part of the public delivery request. If
 `DIDCOMM_UNIVERSAL_RESOLVER_URL` is unset, `UNIVERSAL_RESOLVER_URL` is used as
-the managed fallback. `DIDCOMM_TLS_CA_FILE` is read only from deployment
-configuration. An invalid or unreadable bundle fails delivery closed without
-disclosing its path.
+the managed fallback. `DIDCOMM_DID_WEB_INTERNAL_BASE_URL` lets a deployment
+resolve its own managed `did:web` issuers through an internal service base
+without public egress; the native resolver constructs the standard DID path
+and still verifies that the returned document has the requested DID. It is
+not accepted from delivery requests. `DIDCOMM_TLS_CA_FILE` is read only from
+deployment configuration. An invalid or unreadable bundle fails delivery
+closed without disclosing its path.
 
 If `DIDCOMM_ENCRYPTION_POLICY_FILE` is unset, delivery uses mandatory
 anoncrypt, preserving the existing deployment behavior. If it is set, the
