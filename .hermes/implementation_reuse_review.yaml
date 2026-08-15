@@ -1,27 +1,26 @@
 status: complete
 search_scope:
-  - marty-core DIDComm encrypted-envelope implementation and Python bindings
-  - marty-credentials DIDComm wrappers, delivery route, and custody boundaries
-  - marty-ui issuer signing-key service and supported managed-custody algorithms
-  - OpenBao Transit and AWS KMS key-agreement capabilities
+  - latest marty-credentials release preparation commits
+  - stable tag preparation and release workflows
+  - release source and version-contract scripts
 search_queries:
-  - didcomm_encrypt_authcrypt
-  - didcomm_encrypt and didcomm_decrypt
-  - X25519 keyAgreement issuer signing custody
+  - release prepare marty-credentials
+  - prepare-stable-tag and release-stable
+  - validate-source package version
 candidate_implementations:
-  - path: marty-core/marty-didcomm/src/encrypted_envelope.rs
-    disposition: reuse through the released marty_rs binding
-  - path: services/issuance/application/rust_integration.py
-    disposition: extend the existing thin DIDComm binding boundary
-  - path: marty-ui signing-key service
-    disposition: not reusable because its managed signing algorithms do not provide X25519 key agreement
+  - path: Cargo.toml and Cargo.lock
+    disposition: reuse the established two-file version preparation
+  - path: .github/workflows/prepare-stable-tag.yml
+    disposition: reuse unchanged after merge
+  - path: .github/workflows/release-stable.yml
+    disposition: reuse unchanged from the immutable prepared tag
 no_match_statement: ""
-decision: extend_existing
+decision: reuse_existing_release_process
 canonical_implementation:
-  path: marty-core/marty-didcomm/src/encrypted_envelope.rs
-  language: Rust
-rust_disposition: thin_binding_to_rust
-non_rust_rationale: Python only validates deployment policy and orchestrates DID resolution before calling canonical Rust cryptography.
+  path: .github/workflows/prepare-stable-tag.yml
+  language: YAML
+rust_disposition: not_applicable_release_metadata_only
+non_rust_rationale: The release PR changes package metadata only and delegates publication to existing governed workflows.
 non_rust_exception_approval: not_required
 intentional_duplicate_exception:
   rationale: ""
