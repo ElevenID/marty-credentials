@@ -51,11 +51,13 @@ from issuance.application.oid4vci_client_auth import (
     normalize_public_client_jwks,
 )
 from issuance.application.rust_integration import (
+    DidcommAuthcryptError,
+    DidcommEncryptionPolicyError,
     create_jwt_vc_with_remote_signing,
     create_mdoc_credential_with_issuer_profile_signing,
     create_sd_jwt_vc_with_remote_signing,
     create_vcdm_data_integrity_with_remote_signing,
-    didcomm_encrypt,
+    didcomm_encrypt_delivery,
     didcomm_extract_endpoint,
     didcomm_pack_credential,
     didcomm_resolve_did,
@@ -5269,12 +5271,20 @@ async def _didcomm_sign_and_deliver(
 
     service_endpoint = await _validated_didcomm_delivery_endpoint(service_endpoint)
 
-    # Step 3b: Encryption is mandatory. A delivery must never silently
-    # downgrade a credential-bearing DIDComm message to plaintext.
-    # (anoncrypt: X25519 + ECDH-ES+A256KW + the required
-    # A256CBC-HS512 content-encryption profile from DIDComm Messaging 2.1)
+    # Step 3b: Encryption is mandatory. A deployment can opt an issuer into
+    # authcrypt, but a configured policy must never downgrade to anoncrypt.
     try:
-        delivery_content = didcomm_encrypt(didcomm_message_json, did_doc)
+        delivery_content = didcomm_encrypt_delivery(
+            didcomm_message_json,
+            effective_issuer_did_dc,
+            did_doc,
+        )
+    except (DidcommEncryptionPolicyError, DidcommAuthcryptError) as enc_err:
+        logger.error("DIDComm sender-authenticated encryption is unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="DIDComm sender-authentication configuration is unavailable",
+        ) from enc_err
     except Exception as enc_err:
         logger.warning("DIDComm encryption failed for holder DID %s", holder_did)
         raise HTTPException(

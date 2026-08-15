@@ -87,6 +87,12 @@ DIDCOMM_TLS_CA_FILE=/run/secrets/didcomm-root-ca.pem
 # Keep false in production. Isolated interoperability environments may set
 # this to true for an HTTPS agent reached through a private test network.
 DIDCOMM_ALLOW_PRIVATE_IPS=false
+
+# Optional path to a deployment-mounted JSON secret that selects anoncrypt or
+# authcrypt for every active issuer. When configured, omitted issuers fail
+# closed. Keep the file outside the image and restrict filesystem access to
+# the issuance-service identity.
+DIDCOMM_ENCRYPTION_POLICY_FILE=/run/secrets/didcomm-encryption-policy.json
 ```
 
 DIDComm credential delivery always encrypts the message and requires a
@@ -97,6 +103,35 @@ are not part of the public delivery request. If
 the managed fallback. `DIDCOMM_TLS_CA_FILE` is read only from deployment
 configuration. An invalid or unreadable bundle fails delivery closed without
 disclosing its path.
+
+If `DIDCOMM_ENCRYPTION_POLICY_FILE` is unset, delivery uses mandatory
+anoncrypt, preserving the existing deployment behavior. If it is set, the
+file must be UTF-8 JSON no larger than 64 KiB, contain at most 1,000 issuers,
+and use this exact schema:
+
+```json
+{
+  "version": 1,
+  "issuers": {
+    "did:web:issuer.example": {
+      "mode": "authcrypt",
+      "sender_x25519_private_key": "BASE64URL_UNPADDED_32_BYTE_KEY"
+    },
+    "did:web:legacy-issuer.example": {
+      "mode": "anoncrypt"
+    }
+  }
+}
+```
+
+Every active issuer must have an exact entry once the file is configured.
+Unknown fields, duplicate JSON members, unsupported modes, missing issuers,
+noncanonical key encodings, and cross-issuer private-key reuse fail delivery
+closed. Authcrypt also resolves the sender DID document and delegates key
+authorization plus message
+`from`/`to` binding to canonical marty-core Rust. Resolution, key mismatch,
+or encryption failure never falls back to anoncrypt. Rotate the mounted
+secret and matching public `keyAgreement` entry together.
 
 ### Feature Flags
 
