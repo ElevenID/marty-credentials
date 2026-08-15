@@ -6,8 +6,10 @@ import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 
@@ -76,6 +78,7 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "complete_vcdm_data_integrity_credential",
         "didcomm_decrypt",
         "didcomm_encrypt",
+        "didcomm_encrypt_authcrypt",
         "didcomm_extract_endpoint",
         "didcomm_pack_credential",
         "didcomm_resolve_did",
@@ -880,6 +883,201 @@ def didcomm_encrypt(plaintext_json: str, recipient_did_document: dict) -> str:
     """
     marty_rs = get_marty_rs()
     return marty_rs.didcomm_encrypt(plaintext_json, json.dumps(recipient_did_document))
+
+
+def didcomm_encrypt_authcrypt(
+    plaintext_json: str,
+    sender_did_document: dict,
+    sender_x25519_private_key: bytes,
+    recipient_did_document: dict,
+) -> str:
+    """Encrypt and authenticate a DIDComm message through canonical Rust."""
+
+    marty_rs = get_marty_rs()
+    return marty_rs.didcomm_encrypt_authcrypt(
+        plaintext_json,
+        json.dumps(sender_did_document),
+        sender_x25519_private_key,
+        json.dumps(recipient_did_document),
+    )
+
+
+class DidcommEncryptionPolicyError(RuntimeError):
+    """The deployment-managed DIDComm encryption policy is unusable."""
+
+
+class DidcommAuthcryptError(RuntimeError):
+    """Configured authcrypt delivery could not be completed safely."""
+
+
+@dataclass(frozen=True)
+class _DidcommIssuerEncryptionPolicy:
+    mode: Literal["anoncrypt", "authcrypt"]
+    sender_x25519_private_key: bytes | None = None
+
+
+_DIDCOMM_POLICY_MAX_BYTES = 64 * 1024
+_DIDCOMM_POLICY_MAX_ISSUERS = 1000
+_DIDCOMM_POLICY_FIELDS = frozenset({"version", "issuers"})
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, member in pairs:
+        if key in value:
+            raise DidcommEncryptionPolicyError(
+                "DIDComm encryption policy contains a duplicate JSON member"
+            )
+        value[key] = member
+    return value
+
+
+def _decode_x25519_private_key(value: Any) -> bytes:
+    if not isinstance(value, str) or not value or "=" in value:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm authcrypt private key must be canonical unpadded base64url"
+        )
+    try:
+        encoded = value.encode("ascii")
+        padding = b"=" * ((4 - len(encoded) % 4) % 4)
+        private_key = base64.b64decode(
+            encoded + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm authcrypt private key must be canonical unpadded base64url"
+        ) from exc
+    if len(private_key) != 32 or base64url_encode(private_key) != value:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm authcrypt private key must encode exactly 32 bytes"
+        )
+    return private_key
+
+
+def _parse_didcomm_issuer_encryption_policy(
+    issuer_policy: Any,
+) -> _DidcommIssuerEncryptionPolicy:
+    if not isinstance(issuer_policy, dict):
+        raise DidcommEncryptionPolicyError(
+            "DIDComm encryption policy issuer entry must be an object"
+        )
+    mode = issuer_policy.get("mode")
+    if mode == "anoncrypt" and set(issuer_policy) == {"mode"}:
+        return _DidcommIssuerEncryptionPolicy(mode="anoncrypt")
+    if mode == "authcrypt" and set(issuer_policy) == {
+        "mode",
+        "sender_x25519_private_key",
+    }:
+        return _DidcommIssuerEncryptionPolicy(
+            mode="authcrypt",
+            sender_x25519_private_key=_decode_x25519_private_key(
+                issuer_policy["sender_x25519_private_key"]
+            ),
+        )
+    raise DidcommEncryptionPolicyError(
+        "DIDComm encryption policy entry has invalid fields or mode"
+    )
+
+
+def _load_didcomm_issuer_encryption_policy(
+    issuer_did: str,
+) -> _DidcommIssuerEncryptionPolicy:
+    policy_path = os.environ.get("DIDCOMM_ENCRYPTION_POLICY_FILE", "").strip()
+    if not policy_path:
+        return _DidcommIssuerEncryptionPolicy(mode="anoncrypt")
+
+    try:
+        with Path(policy_path).open("rb") as policy_file:
+            encoded_policy = policy_file.read(_DIDCOMM_POLICY_MAX_BYTES + 1)
+    except OSError as exc:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm encryption policy could not be loaded"
+        ) from exc
+    if len(encoded_policy) > _DIDCOMM_POLICY_MAX_BYTES:
+        raise DidcommEncryptionPolicyError("DIDComm encryption policy exceeds the size limit")
+
+    try:
+        policy = json.loads(
+            encoded_policy.decode("utf-8"),
+            object_pairs_hook=_strict_json_object,
+        )
+    except DidcommEncryptionPolicyError:
+        raise
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm encryption policy is not valid JSON"
+        ) from exc
+
+    if not isinstance(policy, dict) or set(policy) != _DIDCOMM_POLICY_FIELDS:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm encryption policy must contain exactly version and issuers"
+        )
+    if type(policy["version"]) is not int or policy["version"] != 1:
+        raise DidcommEncryptionPolicyError("DIDComm encryption policy version is unsupported")
+    issuers = policy["issuers"]
+    if not isinstance(issuers, dict) or len(issuers) > _DIDCOMM_POLICY_MAX_ISSUERS:
+        raise DidcommEncryptionPolicyError("DIDComm encryption policy issuers are invalid")
+    if any(
+        not isinstance(configured_did, str)
+        or not configured_did.startswith("did:")
+        or len(configured_did) > 2048
+        for configured_did in issuers
+    ):
+        raise DidcommEncryptionPolicyError(
+            "DIDComm encryption policy contains an invalid issuer DID"
+        )
+
+    resolved_policies: dict[str, _DidcommIssuerEncryptionPolicy] = {}
+    authcrypt_keys: set[bytes] = set()
+    for configured_did, configured_policy in issuers.items():
+        resolved_policy = _parse_didcomm_issuer_encryption_policy(configured_policy)
+        if resolved_policy.sender_x25519_private_key is not None:
+            if resolved_policy.sender_x25519_private_key in authcrypt_keys:
+                raise DidcommEncryptionPolicyError(
+                    "DIDComm authcrypt private keys must not be reused across issuers"
+                )
+            authcrypt_keys.add(resolved_policy.sender_x25519_private_key)
+        resolved_policies[configured_did] = resolved_policy
+
+    issuer_policy = resolved_policies.get(issuer_did)
+    if issuer_policy is None:
+        raise DidcommEncryptionPolicyError(
+            "DIDComm encryption policy has no entry for the active issuer"
+        )
+    return issuer_policy
+
+
+def didcomm_encrypt_delivery(
+    plaintext_json: str,
+    issuer_did: str,
+    recipient_did_document: dict,
+) -> str:
+    """Apply the deployment's exhaustive per-issuer encryption policy."""
+
+    policy = _load_didcomm_issuer_encryption_policy(issuer_did)
+    if policy.mode == "anoncrypt":
+        return didcomm_encrypt(plaintext_json, recipient_did_document)
+
+    try:
+        sender_did_document = didcomm_resolve_did(issuer_did)
+        if policy.sender_x25519_private_key is None:  # Defensive invariant.
+            raise DidcommEncryptionPolicyError(
+                "DIDComm authcrypt policy is missing sender key material"
+            )
+        return didcomm_encrypt_authcrypt(
+            plaintext_json,
+            sender_did_document,
+            policy.sender_x25519_private_key,
+            recipient_did_document,
+        )
+    except DidcommEncryptionPolicyError:
+        raise
+    except Exception as exc:
+        raise DidcommAuthcryptError(
+            "DIDComm authcrypt encryption failed without fallback"
+        ) from exc
 
 
 def didcomm_decrypt(jwe_json: str, recipient_x25519_private_key: bytes) -> dict:

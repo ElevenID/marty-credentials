@@ -11,13 +11,13 @@ repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "36212c03ad9ea0479922707e1a6f24746e7f886d", features = ["sod-builder"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "36212c03ad9ea0479922707e1a6f24746e7f886d", default-features = false }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "36212c03ad9ea0479922707e1a6f24746e7f886d" }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", features = ["sod-builder"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "36212c03ad9ea0479922707e1a6f24746e7f886d" }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }

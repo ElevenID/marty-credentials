@@ -1,0 +1,32 @@
+status: complete
+search_scope:
+  - marty-core DIDComm encrypted-envelope implementation and Python bindings
+  - marty-credentials DIDComm wrappers, delivery route, and custody boundaries
+  - marty-ui issuer signing-key service and supported managed-custody algorithms
+  - OpenBao Transit and AWS KMS key-agreement capabilities
+search_queries:
+  - didcomm_encrypt_authcrypt
+  - didcomm_encrypt and didcomm_decrypt
+  - X25519 keyAgreement issuer signing custody
+candidate_implementations:
+  - path: marty-core/marty-didcomm/src/encrypted_envelope.rs
+    disposition: reuse through the released marty_rs binding
+  - path: services/issuance/application/rust_integration.py
+    disposition: extend the existing thin DIDComm binding boundary
+  - path: marty-ui signing-key service
+    disposition: not reusable because its managed signing algorithms do not provide X25519 key agreement
+no_match_statement: ""
+decision: extend_existing
+canonical_implementation:
+  path: marty-core/marty-didcomm/src/encrypted_envelope.rs
+  language: Rust
+rust_disposition: thin_binding_to_rust
+non_rust_rationale: Python only validates deployment policy and orchestrates DID resolution before calling canonical Rust cryptography.
+non_rust_exception_approval: not_required
+intentional_duplicate_exception:
+  rationale: ""
+  divergence_owner: ""
+  synchronization_or_compatibility_strategy: ""
+  retirement_or_convergence_plan: ""
+  architecture_decision_ref: ""
+  human_approval: ""
