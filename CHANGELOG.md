@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pin Rust source dependencies, production native wheels, and CI cache inputs
+  to the independently audited Marty Core 0.1.58 release.
+
+### Fixed
+
+- Consume standards-compliant `did:web` resolution for percent-encoded ports
+  while preserving exact non-default-port allowlisting and managed resolver
+  pinning.
+
 ## [0.1.61] - 2026-08-14
 
 ### Changed
