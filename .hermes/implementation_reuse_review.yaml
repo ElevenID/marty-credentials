@@ -1,32 +1,31 @@
 status: complete
 search_scope:
-  - current DIDComm sign-and-deliver orchestration and status-list allocation order
-  - existing exhaustive issuer encryption policy loader and Rust DIDComm bindings
-  - holder DID resolution, endpoint validation, and owned boundary tests
-  - revocation-profile status allocation API and available rollback or idempotency contracts
+  - current Marty Core source revisions in Cargo manifests and lockfiles
+  - production wheel pins and digests in the release dependency manifest
+  - CI and cache workflow revisions used to build native Core bindings
+  - existing local did:web resolver or port-normalization implementations
 search_queries:
-  - _didcomm_sign_and_deliver allocation signing holder resolution encryption
-  - didcomm_encrypt_delivery authcrypt sender private public key binding
-  - allocate-index deallocate release rollback idempotency
-  - prepared DIDComm delivery encryption context
+  - marty-core revision Cargo.toml Cargo.lock
+  - MARTY_CORE_REVISION ci warm cache
+  - release dependencies marty-rs marty-verification sha256
+  - did:web percent encoded port resolver
 candidate_implementations:
-  - path: services/issuance/application/rust_integration.py
-    disposition: extend existing policy loader and canonical Rust encryption delegation
-  - path: services/issuance/infrastructure/api/routes.py
-    disposition: reorder existing product-owned orchestration before irreversible allocation
-  - path: services/issuance/infrastructure/api/routes.py#_allocate_credential_status_list_entries
-    disposition: no rollback or idempotency contract exists; retain as a documented residual
+  - path: Cargo.toml
+    disposition: reuse the audited upstream Marty Core implementation by exact commit
+  - path: release/dependencies.json
+    disposition: reuse immutable upstream release wheels by exact asset digest
+  - path: .github/workflows/ci.yml
+    disposition: keep native test builds pinned to the same audited upstream commit
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: services/issuance/application/rust_integration.py
-  language: Python delegation to released Rust binding
+  path: Cargo.toml
+  language: Rust workspace dependency delegation
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  Python owns transaction orchestration and freezes one attempt-scoped delivery
-  context, while recipient key compatibility and authcrypt private/public binding
-  are validated by the existing canonical Rust encryption implementation. No
-  cryptographic algorithm, DID resolver, or policy parser is duplicated.
+  This change introduces no local algorithm or resolver. Credentials consumes
+  the audited Marty Core release by exact source commit and immutable wheel
+  digests, while CI and cache workflows build from that same commit.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
