@@ -177,6 +177,23 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def finalize_direct_credential_issuance(
+        self,
+        tx: IssuanceTransaction,
+        credential: IssuedCredential,
+    ) -> bool:
+        """Atomically persist one direct-transport credential and mark it issued.
+
+        This path is for trusted push or synchronous service delivery that
+        starts from ``PENDING`` or ``AUTHORIZED`` rather than the HTTP OID4VCI
+        signing claim. Implementations must require the transaction-derived
+        stable credential ID. Return ``True`` only for the caller that creates
+        the canonical credential; an identical concurrent retry returns
+        ``False``.
+        """
+        pass
+
+    @abstractmethod
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
         """Get transaction by ID."""
         pass

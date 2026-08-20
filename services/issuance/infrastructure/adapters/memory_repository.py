@@ -46,6 +46,7 @@ from issuance.domain.entities import (
     Oid4vciRegisteredClient,
     OrganizationIntegrationSecret,
     issuance_save_predecessors,
+    stable_issuance_credential_id,
 )
 from issuance.domain.ports import (
     CanvasEvidenceAtomicCommit,
@@ -220,57 +221,95 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 raise ValueError("Issuance transaction is not reserved for signing")
             if stored.reserved_credential_id != credential.id or credential.transaction_id != tx.id:
                 raise ValueError("Issued credential does not match the signing reservation")
-            duplicate = next(
+            await self._commit_credential_locked(stored, credential)
+
+    async def finalize_direct_credential_issuance(
+        self,
+        tx: IssuanceTransaction,
+        credential: IssuedCredential,
+    ) -> bool:
+        expected_credential_id = stable_issuance_credential_id(tx.id)
+        if credential.id != expected_credential_id or credential.transaction_id != tx.id:
+            raise ValueError("Delivered credential does not match its stable transaction identity")
+        lock = self._transaction_locks.setdefault(tx.id, asyncio.Lock())
+        async with lock:
+            stored = self._transactions.get(tx.id)
+            existing = next(
                 (item for item in self._credentials.values() if item.transaction_id == tx.id),
                 None,
             )
-            if duplicate is not None:
+            if stored is not None and stored.status == IssuanceStatus.ISSUED:
+                if existing is not None and existing.id == credential.id:
+                    return False
+                raise ValueError("Issued transaction has no matching canonical credential")
+            if stored is None or stored.status not in {
+                IssuanceStatus.PENDING,
+                IssuanceStatus.AUTHORIZED,
+            }:
+                raise ValueError("Issuance transaction is not eligible for push finalization")
+            if existing is not None:
                 raise ValueError("Issuance transaction already has a credential")
-            application_lock = self._application_issuance_locks.setdefault(
-                tx.application_id or f"transaction:{tx.id}",
-                asyncio.Lock(),
-            )
-            async with application_lock:
-                app = self._applications.get(tx.application_id or "")
-                candidate = None
-                if app is not None and self._canvas_context(app) is not None:
-                    if app.organization_id != credential.organization_id:
-                        raise ValueError(
-                            "Canvas credential organization does not match application"
-                        )
-                    if app.credential_id not in (None, credential.id):
-                        raise ValueError("Canvas application already has a different credential")
-                    candidate_id = str(
-                        self._canvas_context(app).get("canvas_award_candidate_id") or ""
-                    ).strip()
-                    if candidate_id:
-                        candidate = self._canvas_award_candidates.get(candidate_id)
-                        if candidate is not None:
-                            if (
-                                candidate.organization_id != app.organization_id
-                                or candidate.application_id != app.id
-                            ):
-                                raise ValueError(
-                                    "Canvas award candidate does not match application"
-                                )
-                            if candidate.claimed_credential_id not in (None, credential.id):
-                                raise ValueError(
-                                    "Canvas award candidate already has a different credential"
-                                )
+            await self._commit_credential_locked(stored, credential)
+            return True
 
-                finalized = copy.deepcopy(tx)
-                finalized.status = IssuanceStatus.ISSUED
-                finalized.nonce = None
-                finalized.issued_at = credential.issued_at
-                self._credentials[credential.id] = copy.deepcopy(credential)
-                self._transactions[tx.id] = finalized
-                if app is not None and self._canvas_context(app) is not None:
-                    app.credential_id = credential.id
-                    app.updated_at = credential.issued_at
+    async def _commit_credential_locked(
+        self,
+        stored: IssuanceTransaction,
+        credential: IssuedCredential,
+    ) -> None:
+        if (
+            credential.transaction_id != stored.id
+            or credential.organization_id != stored.organization_id
+            or credential.credential_template_id != stored.credential_template_id
+        ):
+            raise ValueError("Issued credential does not match its issuance transaction")
+        duplicate = next(
+            (item for item in self._credentials.values() if item.transaction_id == stored.id),
+            None,
+        )
+        if duplicate is not None:
+            raise ValueError("Issuance transaction already has a credential")
+        application_lock = self._application_issuance_locks.setdefault(
+            stored.application_id or f"transaction:{stored.id}",
+            asyncio.Lock(),
+        )
+        async with application_lock:
+            app = self._applications.get(stored.application_id or "")
+            candidate = None
+            if app is not None and self._canvas_context(app) is not None:
+                if app.organization_id != credential.organization_id:
+                    raise ValueError("Canvas credential organization does not match application")
+                if app.credential_id not in (None, credential.id):
+                    raise ValueError("Canvas application already has a different credential")
+                candidate_id = str(
+                    self._canvas_context(app).get("canvas_award_candidate_id") or ""
+                ).strip()
+                if candidate_id:
+                    candidate = self._canvas_award_candidates.get(candidate_id)
                     if candidate is not None:
-                        candidate.state = CanvasAwardCandidateState.CLAIMED
-                        candidate.claimed_credential_id = credential.id
-                        candidate.updated_at = credential.issued_at
+                        if (
+                            candidate.organization_id != app.organization_id
+                            or candidate.application_id != app.id
+                        ):
+                            raise ValueError("Canvas award candidate does not match application")
+                        if candidate.claimed_credential_id not in (None, credential.id):
+                            raise ValueError(
+                                "Canvas award candidate already has a different credential"
+                            )
+
+            finalized = copy.deepcopy(stored)
+            finalized.status = IssuanceStatus.ISSUED
+            finalized.nonce = None
+            finalized.issued_at = credential.issued_at
+            self._credentials[credential.id] = copy.deepcopy(credential)
+            self._transactions[stored.id] = finalized
+            if app is not None and self._canvas_context(app) is not None:
+                app.credential_id = credential.id
+                app.updated_at = credential.issued_at
+                if candidate is not None:
+                    candidate.state = CanvasAwardCandidateState.CLAIMED
+                    candidate.claimed_credential_id = credential.id
+                    candidate.updated_at = credential.issued_at
 
     async def get_transaction(self, tx_id: str) -> IssuanceTransaction | None:
         tx = self._transactions.get(tx_id)

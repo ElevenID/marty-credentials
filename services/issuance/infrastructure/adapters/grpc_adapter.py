@@ -125,9 +125,7 @@ async def _resolve_remote_signing_context_for_tx(
     issuer_profile_id = context.get("issuer_profile_id") or (
         context.get("issuer_profile") or {}
     ).get("id")
-    algorithm = context.get("algorithm") or (
-        context.get("issuer_profile") or {}
-    ).get("algorithm")
+    algorithm = context.get("algorithm") or (context.get("issuer_profile") or {}).get("algorithm")
     if (
         not issuer_profile_id
         or not tx.issuer_did_override
@@ -152,6 +150,7 @@ async def _resolve_remote_signing_context_for_tx(
 async def _create_remote_signed_sd_jwt_for_tx(
     tx: Any,
     *,
+    credential_id: str,
     subject_id: str | None,
     holder_jwk: dict[str, Any] | None = None,
     credential_type: str,
@@ -184,7 +183,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
             expected_verification_method_id=verification_method_id,
         )
 
-    credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+    credential, signed_credential_id = await create_sd_jwt_vc_with_remote_signing(
         issuer_did=tx.issuer_did_override,
         remote_sign=_remote_sign,
         subject_id=subject_id,
@@ -196,8 +195,11 @@ async def _create_remote_signed_sd_jwt_for_tx(
         algorithm=algorithm,
         verification_method_id=verification_method_id,
         credential_format=credential_format,
+        credential_id=credential_id,
         issuer_certificate_chain=(remote_context.get("issuer_x5c")),
     )
+    if signed_credential_id != credential_id:
+        raise RuntimeError("gRPC credential builder changed the stable credential ID")
     return credential, credential_id, remote_context
 
 
@@ -903,6 +905,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 IssuanceStatus,
                 IssuanceTransaction,
                 IssuedCredential,
+                stable_issuance_credential_id,
             )
             from issuance.infrastructure.adapters.delivery_records import (
                 record_post_issuance_deliveries,
@@ -1050,8 +1053,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 return pb2.IssueCredentialResponse()
 
             try:
+                credential_id = stable_issuance_credential_id(tx.id)
                 jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
                     tx,
+                    credential_id=credential_id,
                     subject_id=holder_did or tx.subject_did,
                     holder_jwk=holder_jwk,
                     credential_type=signing_credential_type,
@@ -1072,10 +1077,8 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
 
             response_format = fmt or signing_format or "vc+sd-jwt"
             if tx.status == IssuanceStatus.AUTHORIZED:
-                tx.nonce = None
-                tx.complete()
-                await repo.save_transaction(tx)
-                expires_at = (tx.issued_at or datetime.now(timezone.utc)) + timedelta(days=365)
+                issued_at = datetime.now(timezone.utc)
+                expires_at = issued_at + timedelta(days=365)
                 issued_credential = IssuedCredential(
                     id=credential_id,
                     transaction_id=tx.id,
@@ -1087,31 +1090,50 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     credential_jwt=jwt_credential,
                     credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
                     status=CredentialStatus.ACTIVE,
-                    issued_at=tx.issued_at or datetime.now(timezone.utc),
+                    issued_at=issued_at,
                     expires_at=expires_at,
                 )
-                await repo.save_credential(issued_credential)
-                await repo.save_event(
-                    IssuanceEvent(
-                        transaction_id=tx.id,
-                        application_id=tx.application_id,
-                        event_type=EventType.CREDENTIAL_ISSUED,
-                        metadata={
-                            "credential_id": credential_id,
-                            "credential_type": credential_type,
+                created = await repo.finalize_direct_credential_issuance(tx, issued_credential)
+                if created:
+                    tx.nonce = None
+                    tx.status = IssuanceStatus.ISSUED
+                    tx.issued_at = issued_at
+                    await repo.save_event(
+                        IssuanceEvent(
+                            transaction_id=tx.id,
+                            application_id=tx.application_id,
+                            event_type=EventType.CREDENTIAL_ISSUED,
+                            metadata={
+                                "credential_id": credential_id,
+                                "credential_type": credential_type,
+                            },
+                        )
+                    )
+                    await record_post_issuance_deliveries(
+                        repo,
+                        tx,
+                        issued_credential,
+                        delivered_target=DeliveryTarget.WALLET,
+                        delivery_metadata={
+                            "protocol": "grpc",
+                            "requested_format": response_format,
                         },
                     )
-                )
-                await record_post_issuance_deliveries(
-                    repo,
-                    tx,
-                    issued_credential,
-                    delivered_target=DeliveryTarget.WALLET,
-                    delivery_metadata={
-                        "protocol": "grpc",
-                        "requested_format": response_format,
-                    },
-                )
+                    await self._emit_credential_event(
+                        "issued",
+                        credential_id=credential_id,
+                        transaction_id=tx.id,
+                        organization_id=tx.organization_id,
+                        credential_template_id=tx.credential_template_id or "",
+                        status="issued",
+                    )
+                else:
+                    canonical = await repo.get_credential_by_transaction_id(tx.id)
+                    if canonical is None or canonical.id != credential_id:
+                        raise RuntimeError(
+                            "Concurrent gRPC finalization returned no canonical credential"
+                        )
+                    jwt_credential = canonical.credential_jwt
 
             import uuid as _uuid
 
@@ -1120,15 +1142,6 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     pb2.CredentialEntry(format=response_format, credential=jwt_credential)
                 ],
                 notification_id=str(_uuid.uuid4()),
-            )
-
-            await self._emit_credential_event(
-                "issued",
-                credential_id=credential_id if credential_id else "",
-                transaction_id=tx.id,
-                organization_id=tx.organization_id,
-                credential_template_id=tx.credential_template_id or "",
-                status="issued",
             )
 
             return response

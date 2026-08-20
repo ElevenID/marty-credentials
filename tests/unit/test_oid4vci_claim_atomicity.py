@@ -17,6 +17,7 @@ from issuance.domain.entities import (
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
+    stable_issuance_credential_id,
 )
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
@@ -512,6 +513,30 @@ async def test_repository_claim_is_a_single_winner_and_finalization_is_atomic() 
 
 
 @pytest.mark.asyncio
+async def test_push_finalization_is_atomic_idempotent_and_uses_stable_identity() -> None:
+    repo = InMemoryIssuanceRepository()
+    pending = _transaction(status=IssuanceStatus.PENDING, nonce=None)
+    await repo.save_transaction(pending)
+    credential_id = stable_issuance_credential_id(pending.id)
+    credential = _credential(pending, credential_id)
+
+    results = await asyncio.gather(
+        *(repo.finalize_direct_credential_issuance(pending, credential) for _ in range(64))
+    )
+
+    assert sum(results) == 1
+    stored = await repo.get_transaction(pending.id)
+    assert stored is not None
+    assert stored.status == IssuanceStatus.ISSUED
+    assert stored.issued_at == credential.issued_at
+    assert (await repo.get_credential_by_transaction_id(pending.id)).id == credential_id
+
+    wrong = _credential(pending, "urn:uuid:wrong")
+    with pytest.raises(ValueError, match="stable transaction identity"):
+        await repo.finalize_direct_credential_issuance(pending, wrong)
+
+
+@pytest.mark.asyncio
 async def test_stale_authorized_save_cannot_reopen_a_signing_transaction() -> None:
     repo = InMemoryIssuanceRepository()
     authorized = _transaction()
@@ -532,6 +557,24 @@ async def test_stale_authorized_save_cannot_reopen_a_signing_transaction() -> No
     assert stored.status == IssuanceStatus.SIGNING
     assert stored.reserved_credential_id == "urn:uuid:reserved"
     assert stored.nonce == "wallet-nonce"
+
+
+@pytest.mark.asyncio
+async def test_generic_save_cannot_bypass_atomic_credential_finalization() -> None:
+    repo = InMemoryIssuanceRepository()
+    authorized = _transaction()
+    await repo.save_transaction(authorized)
+    unauthorized_finalization = await repo.get_transaction(authorized.id)
+    assert unauthorized_finalization is not None
+    unauthorized_finalization.complete()
+
+    with pytest.raises(ValueError, match="Stale issuance transaction transition"):
+        await repo.save_transaction(unauthorized_finalization)
+
+    stored = await repo.get_transaction(authorized.id)
+    assert stored is not None
+    assert stored.status == IssuanceStatus.AUTHORIZED
+    assert await repo.get_credential_by_transaction_id(authorized.id) is None
 
 
 @pytest.mark.asyncio
@@ -606,7 +649,7 @@ async def test_postgres_claim_and_finalize_use_cas_and_one_database_transaction(
     issued = _credential(claimed, credential_id)
     finalize_session = _Session(
         [
-            _Result(SimpleNamespace(status="signing", reserved_credential_id=credential_id)),
+            _Result(_transaction_row(claimed)),
             _Result(None),
             _Result(None),
             _Result(),
@@ -626,6 +669,66 @@ async def test_postgres_claim_and_finalize_use_cas_and_one_database_transaction(
     assert "INSERT INTO ISSUANCE_SERVICE.ISSUED_CREDENTIALS" in finalize_sql[3]
     assert "UPDATE ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in finalize_sql[4]
     assert "RESERVED_CREDENTIAL_ID" in finalize_sql[4]
+    assert issued.issued_at in finalize_session.statements[4].compile().params.values()
+
+
+@pytest.mark.asyncio
+async def test_postgres_push_finalization_is_one_transaction_and_retry_safe() -> None:
+    pending = _transaction(status=IssuanceStatus.PENDING, nonce=None)
+    credential = _credential(pending, stable_issuance_credential_id(pending.id))
+    winner_session = _Session(
+        [
+            _Result(_transaction_row(pending)),
+            _Result(None),
+            _Result(None),
+            _Result(),
+            _Result(rowcount=1),
+        ]
+    )
+    winner_repo = PostgresIssuanceRepository(_SessionFactory(winner_session))
+
+    assert await winner_repo.finalize_direct_credential_issuance(pending, credential) is True
+    assert winner_session.committed is True
+    assert all(winner_session.transaction_states)
+    winner_sql = [str(statement).upper() for statement in winner_session.statements]
+    assert "FOR UPDATE" in winner_sql[0]
+    assert "INSERT INTO ISSUANCE_SERVICE.ISSUED_CREDENTIALS" in winner_sql[3]
+    assert "UPDATE ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in winner_sql[4]
+    assert "RESERVED_CREDENTIAL_ID" not in winner_sql[4]
+    assert credential.issued_at in winner_session.statements[4].compile().params.values()
+
+    retry_session = _Session(
+        [
+            _Result(_transaction_row(_transaction(status=IssuanceStatus.ISSUED, nonce=None))),
+            _Result(SimpleNamespace(id=credential.id)),
+        ]
+    )
+    retry_repo = PostgresIssuanceRepository(_SessionFactory(retry_session))
+
+    assert await retry_repo.finalize_direct_credential_issuance(pending, credential) is False
+    assert retry_session.committed is True
+    assert len(retry_session.statements) == 2
+
+
+@pytest.mark.asyncio
+async def test_postgres_direct_finalization_binds_the_authoritative_scope() -> None:
+    authoritative = _transaction(status=IssuanceStatus.PENDING, nonce=None)
+    forged = _transaction(
+        status=IssuanceStatus.PENDING,
+        nonce=None,
+        organization_id="org-forged",
+        credential_template_id="template-forged",
+    )
+    credential = _credential(forged, stable_issuance_credential_id(forged.id))
+    session = _Session([_Result(_transaction_row(authoritative))])
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    with pytest.raises(ValueError, match="authoritative issuance transaction"):
+        await repo.finalize_direct_credential_issuance(forged, credential)
+
+    assert session.committed is False
+    assert session.rolled_back is True
+    assert all(session.transaction_states)
 
 
 @pytest.mark.asyncio
@@ -725,12 +828,7 @@ async def test_postgres_canvas_claim_projection_is_in_finalization_transaction()
     )
     session = _Session(
         [
-            _Result(
-                SimpleNamespace(
-                    status=IssuanceStatus.SIGNING.value,
-                    reserved_credential_id=credential_id,
-                )
-            ),
+            _Result(_transaction_row(claimed)),
             _Result(None),
             _Result(_application_row(application)),
             _Result(),
@@ -878,6 +976,90 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     credentials = await repo.list_credentials_by_org("org-1")
     assert len(credentials) == 1
     assert credentials[0].id == stored.reserved_credential_id
+
+
+@pytest.mark.asyncio
+async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeypatch) -> None:
+    from issuance.infrastructure.adapters import delivery_records, grpc_adapter
+    from marty_proto.v1 import issuance_service_pb2 as pb2
+
+    repo = InMemoryIssuanceRepository()
+    transaction = _transaction()
+    await repo.save_transaction(transaction)
+    stable_id = stable_issuance_credential_id(transaction.id)
+    remote_context = {
+        "issuer_profile_id": "issuer-profile-1",
+        "issuer_did": transaction.issuer_did_override,
+        "algorithm": "ES256",
+        "verification_method_id": "did:web:issuer.example#badge-key",
+        "service": {"algorithm": "ES256"},
+    }
+    signing_arrivals = 0
+    both_signing = asyncio.Event()
+
+    async def resolve_context(_tx, **_kwargs):
+        return remote_context
+
+    async def verify_proof(*_args, **_kwargs):
+        return True, "did:key:learner", {"kty": "EC"}, None
+
+    async def build_credential(_tx, *, credential_id, **_kwargs):
+        nonlocal signing_arrivals
+        signing_arrivals += 1
+        attempt = signing_arrivals
+        if signing_arrivals == 2:
+            both_signing.set()
+        await asyncio.wait_for(both_signing.wait(), timeout=2)
+        return f"signed-credential-{attempt}", credential_id, remote_context
+
+    delivery_calls = 0
+
+    async def record_delivery(*_args, **_kwargs):
+        nonlocal delivery_calls
+        delivery_calls += 1
+
+    async def no_op_event(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(grpc_adapter, "_resolve_remote_signing_context_for_tx", resolve_context)
+    monkeypatch.setattr(grpc_adapter, "verify_oid4vci_proof_with_issuer_policy", verify_proof)
+    monkeypatch.setattr(grpc_adapter, "_create_remote_signed_sd_jwt_for_tx", build_credential)
+    monkeypatch.setattr(delivery_records, "record_post_issuance_deliveries", record_delivery)
+
+    service = grpc_adapter.IssuanceServiceGrpc(lambda: repo)
+    monkeypatch.setattr(service, "_emit_credential_event", no_op_event)
+    request = pb2.IssueCredentialRequest(
+        access_token=transaction.access_token,
+        format="vc+sd-jwt",
+        proofs=[pb2.ProofJwt(proof_type="jwt", jwt=_proof_jwt())],
+    )
+
+    class Context:
+        code = None
+        details = None
+
+        def set_code(self, code):
+            self.code = code
+
+        def set_details(self, details):
+            self.details = details
+
+    contexts = [Context(), Context()]
+    responses = await asyncio.gather(
+        service.IssueCredential(request, contexts[0]),
+        service.IssueCredential(request, contexts[1]),
+    )
+
+    assert signing_arrivals == 2
+    assert all(context.code is None for context in contexts)
+    assert len({response.credentials[0].credential for response in responses}) == 1
+    credentials = await repo.list_credentials_by_org(transaction.organization_id)
+    assert len(credentials) == 1
+    assert credentials[0].id == stable_id
+    stored = await repo.get_transaction(transaction.id)
+    assert stored is not None and stored.status == IssuanceStatus.ISSUED
+    assert len(await repo.list_events_for_application(transaction.application_id)) == 1
+    assert delivery_calls == 1
 
 
 @pytest.mark.asyncio

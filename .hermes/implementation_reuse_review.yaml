@@ -1,29 +1,50 @@
 status: complete
 search_scope:
-  - current SSI dependency declarations and exact patch revisions
-  - locked serde_with and ssi-jwt dependency graph
-  - upstream spruceid/ssi remediation status
-  - repository dependency-health tracking issue and security evidence
+  - current issuance transaction and credential repositories
+  - generic issuance transaction transition guards
+  - OID4VCI signing claim and atomic finalization lifecycle
+  - DIDComm signing, encryption, delivery, and persistence lifecycle
+  - gRPC direct issuance signing and persistence lifecycle
+  - revocation-profile HTTP and Pact contracts
+  - PostgreSQL issuance idempotency contract runner
+  - registered sibling marty-ui revocation-profile service
 search_queries:
-  - ssi-jwt patch revision Cargo.toml Cargo.lock
-  - serde_with versions Cargo.lock
-  - spruceid ssi pull 706 status
-  - marty-credentials issue 17 dependency health
+  - claim_transaction_for_signing finalize_credential_issuance reserved_credential_id
+  - save_transaction issued atomic credential finalization bypass
+  - DIDComm signing delivery failed retry credential identity
+  - gRPC IssueCredential credential transaction atomic finalization
+  - allocate-index reserve-index status list credential id
+  - issuance idempotency PostgreSQL race contract
+  - issued_credentials unique transaction id
 candidate_implementations:
-  - path: Cargo.toml
-    disposition: retain the existing exact-revision ssi-jwt security patch
-  - path: dependency-health.yml
-    disposition: renew the governed review record with current primary-source evidence
-no_match_statement: ""
-decision: reuse_existing
+  - path: services/issuance/infrastructure/adapters/postgres_repository.py
+    disposition: extend_existing_atomic_issuance_finalization
+  - path: services/issuance/domain/entities.py
+    disposition: restrict_issued_transition_to_atomic_repository_finalizers
+  - path: services/issuance/infrastructure/adapters/memory_repository.py
+    disposition: preserve_repository_contract_parity
+  - path: services/issuance/infrastructure/api/routes.py
+    disposition: reuse_stable_transaction_identity_for_all_delivery_attempts
+  - path: services/issuance/infrastructure/adapters/grpc_adapter.py
+    disposition: reuse_atomic_direct_finalization_for_synchronous_delivery
+  - path: ../marty-ui/rust/services/revocation-profile/src/postgres.rs
+    disposition: delegate_allocation_atomicity_to_canonical_sibling_owner
+  - path: tests/issuance-idempotency-contract/run_contract.py
+    disposition: extend_existing_real_postgresql_race_evidence
+no_match_statement: >-
+  No existing direct-delivery atomic credential finalizer was found; the
+  released DIDComm and gRPC paths used independent transaction and credential
+  repository commits.
+decision: extend_existing
 canonical_implementation:
-  path: Cargo.toml
-  language: Rust workspace dependency patch
+  path: services/issuance/infrastructure/adapters/postgres_repository.py
+  language: Python_SQLAlchemy_PostgreSQL
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  This governance-only change introduces no implementation. It retains the
-  exact reviewed Rust dependency patch because upstream remediation remains
-  open and records the next monthly review date.
+  Status-list allocation policy, counters, and cross-scope ownership remain in
+  the Rust revocation-profile service. Credentials owns only its transaction
+  lifecycle, stable credential identity, transport ordering, and atomic local
+  credential/issued-state commit.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

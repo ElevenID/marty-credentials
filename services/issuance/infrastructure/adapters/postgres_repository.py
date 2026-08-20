@@ -52,6 +52,7 @@ from issuance.domain.entities import (
     OrganizationIntegrationSecret,
     canvas_evidence_requirements_to_json,
     issuance_save_predecessors,
+    stable_issuance_credential_id,
 )
 from issuance.domain.ports import (
     CanvasEvidenceAtomicCommit,
@@ -1011,8 +1012,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .returning(
                     oid4vci_ephemeral_capabilities_table.c.payload,
                     (
-                        oid4vci_ephemeral_capabilities_table.c.expires_at
-                        > func.clock_timestamp()
+                        oid4vci_ephemeral_capabilities_table.c.expires_at > func.clock_timestamp()
                     ).label("is_live"),
                 )
             )
@@ -2538,6 +2538,48 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         if tx.reserved_credential_id != credential.id or credential.transaction_id != tx.id:
             raise ValueError("Issued credential does not match the signing reservation")
 
+        await self._finalize_credential_transaction(
+            tx,
+            credential,
+            allowed_statuses=frozenset({IssuanceStatus.SIGNING}),
+            require_reservation=True,
+            idempotent=False,
+        )
+
+    async def finalize_direct_credential_issuance(
+        self,
+        tx: IssuanceTransaction,
+        credential: IssuedCredential,
+    ) -> bool:
+        if (
+            credential.id != stable_issuance_credential_id(tx.id)
+            or credential.transaction_id != tx.id
+        ):
+            raise ValueError("Delivered credential does not match its stable transaction identity")
+        return await self._finalize_credential_transaction(
+            tx,
+            credential,
+            allowed_statuses=frozenset({IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED}),
+            require_reservation=False,
+            idempotent=True,
+        )
+
+    async def _finalize_credential_transaction(
+        self,
+        tx: IssuanceTransaction,
+        credential: IssuedCredential,
+        *,
+        allowed_statuses: frozenset[IssuanceStatus],
+        require_reservation: bool,
+        idempotent: bool,
+    ) -> bool:
+        if (
+            credential.transaction_id != tx.id
+            or credential.organization_id != tx.organization_id
+            or credential.credential_template_id != tx.credential_template_id
+        ):
+            raise ValueError("Issued credential does not match its issuance transaction")
+
         cred_data = {
             "id": credential.id,
             "transaction_id": credential.transaction_id,
@@ -2568,17 +2610,31 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .with_for_update()
             )
             row = locked.first()
-            if row is None or row.status != IssuanceStatus.SIGNING.value:
-                raise ValueError("Issuance transaction is not reserved for signing")
-            if row.reserved_credential_id != credential.id:
-                raise ValueError("Issuance credential reservation changed")
-
+            if row is None:
+                raise ValueError("Issuance transaction is not eligible for finalization")
+            if (
+                credential.organization_id != row.organization_id
+                or credential.credential_template_id != row.credential_template_id
+            ):
+                raise ValueError(
+                    "Issued credential does not match the authoritative issuance transaction"
+                )
             existing = await session.execute(
                 select(issued_credentials_table.c.id).where(
                     issued_credentials_table.c.transaction_id == tx.id
                 )
             )
-            if existing.first() is not None:
+            existing_row = existing.first()
+            if row is not None and row.status == IssuanceStatus.ISSUED.value:
+                if idempotent and existing_row is not None and existing_row.id == credential.id:
+                    return False
+                raise ValueError("Issued transaction has no matching canonical credential")
+            allowed_values = {status.value for status in allowed_statuses}
+            if row.status not in allowed_values:
+                raise ValueError("Issuance transaction is not eligible for finalization")
+            if require_reservation and row.reserved_credential_id != credential.id:
+                raise ValueError("Issuance credential reservation changed")
+            if existing_row is not None:
                 raise ValueError("Issuance transaction already has a credential")
 
             canvas_app_row = None
@@ -2607,21 +2663,24 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     credential_id=credential.id,
                     projected_at=credential.issued_at,
                 )
-            finalized = await session.execute(
-                update(issuance_transactions_table)
-                .where(
-                    issuance_transactions_table.c.id == tx.id,
-                    issuance_transactions_table.c.status == IssuanceStatus.SIGNING.value,
-                    issuance_transactions_table.c.reserved_credential_id == credential.id,
+            finalize_statement = update(issuance_transactions_table).where(
+                issuance_transactions_table.c.id == tx.id,
+                issuance_transactions_table.c.status.in_(allowed_values),
+            )
+            if require_reservation:
+                finalize_statement = finalize_statement.where(
+                    issuance_transactions_table.c.reserved_credential_id == credential.id
                 )
-                .values(
+            finalized = await session.execute(
+                finalize_statement.values(
                     status=IssuanceStatus.ISSUED.value,
                     c_nonce=None,
-                    issued_at=tx.issued_at,
+                    issued_at=credential.issued_at,
                 )
             )
             if finalized.rowcount != 1:
                 raise ValueError("Issuance transaction finalization lost its reservation")
+            return True
 
     async def patch_canvas_platform_validation_state(
         self,

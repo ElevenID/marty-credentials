@@ -31,13 +31,14 @@ from pact import match
 # Pact Gateway Provider
 # =============================================================================
 
+
 class PactGatewayProvider:
     """
     Manages Pact mock server lifecycle for gateway testing.
-    
+
     Wraps the Pact v3 library to provide a clean interface for behave tests.
     """
-    
+
     def __init__(
         self,
         consumer_name: str = "BehaveCredentialTests",
@@ -48,7 +49,7 @@ class PactGatewayProvider:
         self._pact: Pact | None = None
         self._server = None
         self._url: str | None = None
-    
+
     def setup(self) -> None:
         """Initialize Pact and start mock server."""
         self._pact = Pact(
@@ -58,7 +59,7 @@ class PactGatewayProvider:
         self._server = self._pact.serve().__enter__()
         # Convert yarl.URL to string for httpx compatibility
         self._url = str(self._server.url)
-    
+
     def teardown(self, write_pact: bool = True) -> None:
         """Stop mock server and optionally write pact file."""
         if self._server:
@@ -68,32 +69,32 @@ class PactGatewayProvider:
         self._pact = None
         self._server = None
         self._url = None
-    
+
     @property
     def url(self) -> str:
         """Get the mock server URL."""
         if not self._url:
             raise RuntimeError("Pact provider not started. Call setup() first.")
         return self._url
-    
+
     @property
     def pact(self) -> Pact:
         """Get the Pact instance for adding interactions."""
         if not self._pact:
             raise RuntimeError("Pact provider not started. Call setup() first.")
         return self._pact
-    
+
     def add_interaction(self, interaction: "PactInteraction") -> "PactGatewayProvider":
         """Add an interaction to the pact."""
         # Note: Pact v3 has a different API - interactions are defined differently
         # For now, we accept the interaction but actual mocking happens via HTTP client
         # This is a simplified wrapper that stores interaction metadata
         return self
-    
+
     def verify(self) -> None:
         """Verify all interactions were called as expected."""
         # Check if there were any mismatches
-        if hasattr(self._server, 'mismatches'):
+        if hasattr(self._server, "mismatches"):
             mismatches = self._server.mismatches  # It's a property, not a method
             if mismatches:
                 raise AssertionError(f"Pact verification failed: {mismatches}")
@@ -103,10 +104,11 @@ class PactGatewayProvider:
 # Pact Interaction Data Class
 # =============================================================================
 
+
 @dataclass
 class PactInteraction:
     """Represents a single Pact interaction (request/response pair)."""
-    
+
     description: str
     provider_state: str
     method: str
@@ -115,13 +117,16 @@ class PactInteraction:
     request_headers: dict[str, str] = field(default_factory=dict)
     request_body: Any = None
     query: dict[str, str] | None = None
-    response_headers: dict[str, str] = field(default_factory=lambda: {"Content-Type": "application/json"})
+    response_headers: dict[str, str] = field(
+        default_factory=lambda: {"Content-Type": "application/json"}
+    )
     response_body: Any = None
 
 
 # =============================================================================
 # Common Headers
 # =============================================================================
+
 
 def auth_headers(token: str = "test-bearer-token") -> dict[str, str]:
     """Standard auth headers for authenticated requests."""
@@ -140,9 +145,10 @@ def json_headers() -> dict[str, str]:
 # Interaction Factories - Authentication
 # =============================================================================
 
+
 class AuthInteractions:
     """Authentication-related Pact interactions."""
-    
+
     @staticmethod
     def login(email: str = "test@example.com") -> PactInteraction:
         """Login interaction."""
@@ -163,7 +169,7 @@ class AuthInteractions:
                 "expires_in": match.like(3600),
             },
         )
-    
+
     @staticmethod
     def validate_token(token: str = "test-bearer-token") -> PactInteraction:
         """Token validation interaction."""
@@ -186,9 +192,10 @@ class AuthInteractions:
 # Interaction Factories - Organizations
 # =============================================================================
 
+
 class OrganizationInteractions:
     """Organization-related Pact interactions."""
-    
+
     @staticmethod
     def get_organization(org_id: str) -> PactInteraction:
         """Get organization by ID."""
@@ -213,9 +220,10 @@ class OrganizationInteractions:
 # Interaction Factories - Credential Templates
 # =============================================================================
 
+
 class CredentialTemplateInteractions:
     """Credential Template Pact interactions."""
-    
+
     @staticmethod
     def create_template(
         org_id: str,
@@ -246,7 +254,7 @@ class CredentialTemplateInteractions:
                 "updated_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def get_template(template_id: str) -> PactInteraction:
         """Get credential template by ID."""
@@ -273,9 +281,10 @@ class CredentialTemplateInteractions:
 # Interaction Factories - Issuance
 # =============================================================================
 
+
 class IssuanceInteractions:
     """Issuance-related Pact interactions."""
-    
+
     @staticmethod
     def issue_w3c_vc(
         issuer_did: str,
@@ -299,16 +308,18 @@ class IssuanceInteractions:
             response_status=201,
             response_body={
                 "credential_id": match.like(str(uuid4())),
-                "credential": match.like({
-                    "@context": ["https://www.w3.org/2018/credentials/v1"],
-                    "type": ["VerifiableCredential", credential_type],
-                    "issuer": issuer_did,
-                    "credentialSubject": match.like({"id": subject_did}),
-                }),
+                "credential": match.like(
+                    {
+                        "@context": ["https://www.w3.org/2018/credentials/v1"],
+                        "type": ["VerifiableCredential", credential_type],
+                        "issuer": issuer_did,
+                        "credentialSubject": match.like({"id": subject_did}),
+                    }
+                ),
                 "format": "jwt_vc",
             },
         )
-    
+
     @staticmethod
     def issue_sd_jwt(
         issuer_did: str,
@@ -337,7 +348,7 @@ class IssuanceInteractions:
                 "disclosures": match.each_like("WyJzYWx0IiwibmFtZSIsIkpvaG4gRG9lIl0"),
             },
         )
-    
+
     @staticmethod
     def issue_mdoc(
         issuer_did: str,
@@ -356,7 +367,8 @@ class IssuanceInteractions:
                 "issuer_did": issuer_did,
                 "subject_did": subject_did,
                 "doc_type": doc_type,
-                "namespaces": namespaces or match.like({"org.iso.18013.5.1": {"given_name": "John"}}),
+                "namespaces": namespaces
+                or match.like({"org.iso.18013.5.1": {"given_name": "John"}}),
             },
             response_status=201,
             response_body={
@@ -371,9 +383,10 @@ class IssuanceInteractions:
 # Interaction Factories - Verification
 # =============================================================================
 
+
 class VerificationInteractions:
     """Verification-related Pact interactions."""
-    
+
     @staticmethod
     def verify_credential(
         credential: str,
@@ -399,7 +412,7 @@ class VerificationInteractions:
                 "verified_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def verify_presentation(
         presentation: str,
@@ -432,9 +445,10 @@ class VerificationInteractions:
 # Interaction Factories - ZK Proofs
 # =============================================================================
 
+
 class ZKProofInteractions:
     """Zero-Knowledge Proof Pact interactions."""
-    
+
     @staticmethod
     def create_zk_challenge(
         doctype: str = "org.iso.18013.5.1.mDL",
@@ -459,7 +473,7 @@ class ZKProofInteractions:
                 "predicate_type": predicate_type,
             },
         )
-    
+
     @staticmethod
     def verify_zk_proof(
         session_id: str,
@@ -485,7 +499,7 @@ class ZKProofInteractions:
                 "verified_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def verify_zk_proof_invalid() -> PactInteraction:
         """Verify ZK proof - invalid case."""
@@ -512,9 +526,10 @@ class ZKProofInteractions:
 # Interaction Factories - Flows
 # =============================================================================
 
+
 class FlowInteractions:
     """Flow orchestration Pact interactions."""
-    
+
     @staticmethod
     def create_issuance_flow(
         org_id: str,
@@ -544,7 +559,7 @@ class FlowInteractions:
                 "created_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def create_verification_flow(
         org_id: str,
@@ -574,7 +589,7 @@ class FlowInteractions:
                 "created_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def execute_flow(flow_id: str) -> PactInteraction:
         """Execute a flow."""
@@ -598,9 +613,10 @@ class FlowInteractions:
 # Interaction Factories - RevocationProfiles
 # =============================================================================
 
+
 class RevocationProfileInteractions:
     """RevocationProfile Pact interactions."""
-    
+
     @staticmethod
     def create_profile(
         org_id: str,
@@ -646,7 +662,7 @@ class RevocationProfileInteractions:
                 "updated_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def get_profile(profile_id: str) -> PactInteraction:
         """Get revocation profile by ID."""
@@ -669,7 +685,7 @@ class RevocationProfileInteractions:
                 "updated_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def list_profiles(org_id: str) -> PactInteraction:
         """List revocation profiles for organization."""
@@ -681,14 +697,16 @@ class RevocationProfileInteractions:
             query={"organization_id": org_id},
             request_headers=auth_headers(),
             response_status=200,
-            response_body=match.each_like({
-                "id": match.like(str(uuid4())),
-                "organization_id": org_id,
-                "name": match.like("Profile Name"),
-                "status": match.like("active"),
-            }),
+            response_body=match.each_like(
+                {
+                    "id": match.like(str(uuid4())),
+                    "organization_id": org_id,
+                    "name": match.like("Profile Name"),
+                    "status": match.like("active"),
+                }
+            ),
         )
-    
+
     @staticmethod
     def activate_profile(profile_id: str) -> PactInteraction:
         """Activate a revocation profile."""
@@ -705,7 +723,7 @@ class RevocationProfileInteractions:
                 "updated_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def process_revocation(
         profile_id: str,
@@ -738,23 +756,25 @@ class RevocationProfileInteractions:
                 "index": index,
             },
         )
-    
+
     @staticmethod
-    def allocate_index(
+    def reserve_index(
         profile_id: str,
         organization_id: str,
+        credential_id: str,
         credential_format: str = "sd_jwt_vc",
     ) -> PactInteraction:
-        """Internal endpoint: allocate a status list index."""
+        """Internal endpoint: idempotently reserve a status list index."""
         return PactInteraction(
-            description=f"a request to allocate status list index for {credential_format}",
+            description=f"a request to reserve status list index for {credential_format}",
             provider_state=f"revocation profile {profile_id} is active",
             method="POST",
-            path=f"/internal/revocation-profiles/{profile_id}/allocate-index",
+            path=f"/internal/revocation-profiles/{profile_id}/reserve-index",
             request_headers=auth_headers(),
             request_body={
                 "organization_id": organization_id,
                 "credential_format": credential_format,
+                "credential_id": credential_id,
             },
             response_status=200,
             response_body={
@@ -769,9 +789,10 @@ class RevocationProfileInteractions:
 # Interaction Factories - Presentation Policies
 # =============================================================================
 
+
 class PresentationPolicyInteractions:
     """Presentation Policy Pact interactions."""
-    
+
     @staticmethod
     def create_policy(
         org_id: str,
@@ -788,9 +809,16 @@ class PresentationPolicyInteractions:
             request_body={
                 "organization_id": org_id,
                 "name": policy_name,
-                "required_claims": required_claims or match.like([
-                    {"claim_name": "age_over_21", "credential_type": "mDL", "accept_predicate": True}
-                ]),
+                "required_claims": required_claims
+                or match.like(
+                    [
+                        {
+                            "claim_name": "age_over_21",
+                            "credential_type": "mDL",
+                            "accept_predicate": True,
+                        }
+                    ]
+                ),
                 "prefer_predicates": True,
             },
             response_status=201,
@@ -802,7 +830,7 @@ class PresentationPolicyInteractions:
                 "created_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def create_policy_with_zk_predicate_specs(
         org_id: str,
@@ -828,15 +856,17 @@ class PresentationPolicyInteractions:
                 "organization_id": org_id,
                 "name": policy_name,
                 "status": "active",
-                "zk_predicate_specs": match.each_like({
-                    "predicate_type": match.like("range_proof"),
-                    "handling_policy": match.like("require_predicate"),
-                    "acceptable_circuits": match.each_like("ligero_age_over_18"),
-                }),
+                "zk_predicate_specs": match.each_like(
+                    {
+                        "predicate_type": match.like("range_proof"),
+                        "handling_policy": match.like("require_predicate"),
+                        "acceptable_circuits": match.each_like("ligero_age_over_18"),
+                    }
+                ),
                 "created_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def create_policy_with_predicate_spec(
         org_id: str,
@@ -873,7 +903,7 @@ class PresentationPolicyInteractions:
                 "created_at": match.like("2025-01-01T00:00:00Z"),
             },
         )
-    
+
     @staticmethod
     def get_policy(policy_id: str) -> PactInteraction:
         """Get presentation policy by ID."""
@@ -888,11 +918,13 @@ class PresentationPolicyInteractions:
                 "id": policy_id,
                 "organization_id": match.like("org-123"),
                 "name": match.like("Age Verification Policy"),
-                "required_claims": match.each_like({
-                    "claim_name": "age_over_21",
-                    "credential_type": "mDL",
-                    "accept_predicate": True,
-                }),
+                "required_claims": match.each_like(
+                    {
+                        "claim_name": "age_over_21",
+                        "credential_type": "mDL",
+                        "accept_predicate": True,
+                    }
+                ),
                 "prefer_predicates": True,
                 "status": "active",
                 "created_at": match.like("2025-01-01T00:00:00Z"),
@@ -904,18 +936,19 @@ class PresentationPolicyInteractions:
 # Convenience Aggregation
 # =============================================================================
 
+
 class Interactions:
     """
     Aggregates all interaction factories for easy access.
-    
+
     Usage:
         from pact_interactions import Interactions
-        
+
         interaction = Interactions.Auth.login()
         interaction = Interactions.Issuance.issue_w3c_vc(...)
         interaction = Interactions.ZK.create_zk_challenge(...)
     """
-    
+
     Auth = AuthInteractions
     Organization = OrganizationInteractions
     CredentialTemplate = CredentialTemplateInteractions
@@ -925,4 +958,3 @@ class Interactions:
     Flow = FlowInteractions
     PresentationPolicy = PresentationPolicyInteractions
     RevocationProfile = RevocationProfileInteractions
-
