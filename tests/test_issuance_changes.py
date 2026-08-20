@@ -56,6 +56,7 @@ from issuance.domain.entities import (
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
+    stable_issuance_credential_id,
 )
 from issuance.infrastructure.adapters.memory_repository import (
     InMemoryIssuanceRepository,
@@ -610,7 +611,6 @@ class TestRemoteIssuerFailureDetail:
             credential_payload_format="mso_mdoc",
             issuer_algorithm="ES256",
         )
-
         context = await routes.apply_remote_issuer_context(tx, credential_format="mso_mdoc")
 
         assert context["signing_service_id"] == "svc-mdoc"
@@ -1402,8 +1402,9 @@ class TestStatusListAllocationOrganizationScope:
         assert captured["json"] == {
             "organization_id": "org-1",
             "credential_format": "sd_jwt_vc",
+            "credential_id": "credential-1",
         }
-        assert captured["url"].endswith("/internal/revocation-profiles/profile-1/allocate-index")
+        assert captured["url"].endswith("/internal/revocation-profiles/profile-1/reserve-index")
         assert captured["headers"] == {"x-service-token": "s" * 48}
         assert profile_id == "profile-1"
         assert entries[0]["index"] == 42
@@ -4190,6 +4191,7 @@ class TestRustIntegrationOrgIdValidation:
             issuer_mode="org_managed",
             issuer_algorithm="ES256",
         )
+        expected_credential_id = stable_issuance_credential_id(tx.id)
 
         (
             credential,
@@ -4197,6 +4199,7 @@ class TestRustIntegrationOrgIdValidation:
             remote_context,
         ) = await grpc_adapter._create_remote_signed_sd_jwt_for_tx(
             tx,
+            credential_id=expected_credential_id,
             subject_id="did:key:z6Mk_subject",
             credential_type="https://beta.elevenidllc.com/credentials/access_badge",
             claims_json=json.dumps({"name": "Alice"}),
@@ -4228,7 +4231,7 @@ class TestRustIntegrationOrgIdValidation:
         assert "issuer_profile_id" not in captured["sign"]
         assert "signing_service_id" not in captured["sign"]
         assert "signing_key_reference" not in captured["sign"]
-        assert credential_id.startswith("urn:uuid:")
+        assert credential_id == expected_credential_id
 
 
 # ============================================================================

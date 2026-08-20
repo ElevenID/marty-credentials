@@ -113,6 +113,17 @@ not accepted from delivery requests. `DIDCOMM_TLS_CA_FILE` is read only from
 deployment configuration. An invalid or unreadable bundle fails delivery
 closed without disclosing its path.
 
+DIDComm issuance derives one stable credential ID from the issuance transaction
+and reserves its revocation index through the credential-aware revocation-profile
+API. Signing failures and failed or ambiguous transport attempts leave the
+transaction in its prior `pending` or `authorized` state; retrying returns the
+same status-list index. A successful transport atomically stores the credential
+and transitions the transaction to `issued`. If a process crashes after an
+ambiguous network response, a retry can redeliver the same credential identity,
+but it cannot allocate a second status entry or create a second local credential.
+Generic transaction persistence cannot perform the `issued` transition; only
+the repository's atomic credential finalizers can establish that state.
+
 If `DIDCOMM_ENCRYPTION_POLICY_FILE` is unset, delivery uses mandatory
 anoncrypt, preserving the existing deployment behavior. If it is set, the
 file must be UTF-8 JSON no larger than 64 KiB, contain at most 1,000 issuers,

@@ -86,6 +86,7 @@ from issuance.domain.entities import (
     IssuanceTransaction,
     IssuedCredential,
     Oid4vciRegisteredClient,
+    stable_issuance_credential_id,
 )
 from issuance.domain.ports import IIssuanceRepository
 from issuance.domain.vcdm_validation import (
@@ -1765,10 +1766,11 @@ async def _allocate_credential_status_list_entries(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                f"{service_url}/internal/revocation-profiles/{profile_id}/allocate-index",
+                f"{service_url}/internal/revocation-profiles/{profile_id}/reserve-index",
                 json={
                     "organization_id": organization_id,
                     "credential_format": credential_format,
+                    "credential_id": credential_id,
                 },
                 headers=service_token_headers(),
             )
@@ -4816,7 +4818,7 @@ async def issue_credential(
         credential_id = (
             tx.reserved_credential_id
             or requested_credential_id
-            or (f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, f'marty:issuance:{tx.id}')}")
+            or stable_issuance_credential_id(tx.id)
         )
         signing_tx = await repo.claim_transaction_for_signing(tx, credential_id)
         if signing_tx is None:
@@ -5247,7 +5249,7 @@ async def _didcomm_sign_and_deliver(
             expected_verification_method_id=verification_method_id,
         )
 
-    credential_id = f"urn:uuid:{uuid.uuid4()}"
+    credential_id = stable_issuance_credential_id(tx.id)
     revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
         credential_id=credential_id,
         organization_id=tx.organization_id,
@@ -5265,7 +5267,7 @@ async def _didcomm_sign_and_deliver(
         effective_request_format,
         effective_request_format,
     )
-    jwt_credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
+    jwt_credential, signed_credential_id = await create_sd_jwt_vc_with_remote_signing(
         issuer_did=effective_issuer_did_dc,
         remote_sign=_remote_sign,
         subject_id=holder_did,
@@ -5281,6 +5283,8 @@ async def _didcomm_sign_and_deliver(
             remote_context.get("issuer_x5c") if isinstance(remote_context, dict) else None
         ),
     )
+    if signed_credential_id != credential_id:
+        raise RuntimeError("DIDComm credential builder changed the stable credential ID")
 
     # Step 2: Pack into DIDComm v2 envelope
     didcomm_message_json = didcomm_pack_credential(
@@ -5336,12 +5340,12 @@ async def _didcomm_sign_and_deliver(
         delivery_status = "delivery_failed"
         delivery_error = str(e)
 
-    # Update transaction state
+    # Commit the credential and issued state atomically only after transport
+    # succeeds. Signing or delivery failure leaves the original transaction
+    # state retryable; the stable credential ID reuses the same status index.
     if delivery_status == "delivered" and tx.status != IssuanceStatus.ISSUED:
-        tx.nonce = None
-        tx.complete()
-        await repo.save_transaction(tx)
-        expires_at = (tx.issued_at or datetime.now(UTC)) + timedelta(days=tx.validity_days)
+        issued_at = datetime.now(UTC)
+        expires_at = issued_at + timedelta(days=tx.validity_days)
         issued_credential = IssuedCredential(
             id=credential_id,
             transaction_id=tx.id,
@@ -5356,40 +5360,44 @@ async def _didcomm_sign_and_deliver(
             credential_jwt=jwt_credential,
             credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
             status=CredentialStatus.ACTIVE,
-            issued_at=tx.issued_at or datetime.now(UTC),
+            issued_at=issued_at,
             expires_at=expires_at,
         )
-        await repo.save_credential(issued_credential)
-        await record_canvas_credential_claim(
-            repo=repo,
-            application_id=tx.application_id,
-            credential_id=issued_credential.id,
-        )
-        await _finalize_credential_renewal(tx, issued_credential, repo)
-        await repo.save_event(
-            IssuanceEvent(
-                transaction_id=tx.id,
+        created = await repo.finalize_direct_credential_issuance(tx, issued_credential)
+        if created:
+            tx.nonce = None
+            tx.status = IssuanceStatus.ISSUED
+            tx.issued_at = issued_at
+            await record_canvas_credential_claim(
+                repo=repo,
                 application_id=tx.application_id,
-                event_type=EventType.CREDENTIAL_ISSUED,
-                metadata={
-                    "credential_id": credential_id,
-                    "credential_type": credential_type,
-                    "delivery_protocol": "didcomm_v2",
+                credential_id=issued_credential.id,
+            )
+            await _finalize_credential_renewal(tx, issued_credential, repo)
+            await repo.save_event(
+                IssuanceEvent(
+                    transaction_id=tx.id,
+                    application_id=tx.application_id,
+                    event_type=EventType.CREDENTIAL_ISSUED,
+                    metadata={
+                        "credential_id": credential_id,
+                        "credential_type": credential_type,
+                        "delivery_protocol": "didcomm_v2",
+                        "service_endpoint": service_endpoint,
+                    },
+                )
+            )
+            await record_post_issuance_deliveries(
+                repo,
+                tx,
+                issued_credential,
+                delivered_target=DeliveryTarget.DIDCOMM_V2,
+                delivery_metadata={
+                    "protocol": "didcomm_v2",
                     "service_endpoint": service_endpoint,
+                    "didcomm_message_id": didcomm_message_id,
                 },
             )
-        )
-        await record_post_issuance_deliveries(
-            repo,
-            tx,
-            issued_credential,
-            delivered_target=DeliveryTarget.DIDCOMM_V2,
-            delivery_metadata={
-                "protocol": "didcomm_v2",
-                "service_endpoint": service_endpoint,
-                "didcomm_message_id": didcomm_message_id,
-            },
-        )
 
     return DidcommDeliveryResponse(
         transaction_id=tx.id,

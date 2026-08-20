@@ -5,14 +5,19 @@ import hashlib
 import json
 import os
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
 from alembic import command
 from alembic.config import Config
 from issuance.domain.entities import (
+    CredentialStatus,
     IssuanceIdempotencyConflictError,
+    IssuanceStatus,
     IssuanceTransaction,
+    IssuedCredential,
+    stable_issuance_credential_id,
 )
 from issuance.infrastructure.adapters.postgres_repository import (
     PostgresIssuanceRepository,
@@ -65,7 +70,7 @@ def _transaction(*, request_hash: str = REQUEST_HASH) -> IssuanceTransaction:
 
 
 async def _exercise_production_repository() -> tuple[
-    list[tuple[IssuanceTransaction, bool]], bool, bool
+    list[tuple[IssuanceTransaction, bool]], list[bool], bool, bool
 ]:
     async_database_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     engine = create_async_engine(async_database_url)
@@ -101,21 +106,51 @@ async def _exercise_production_repository() -> tuple[
         except IssuanceIdempotencyConflictError:
             changed_semantics_rejected = True
         assert changed_semantics_rejected
-        return list(results), changed_semantics_rejected, early_recovery_exercised
+
+        issued_at = datetime.now(UTC)
+        credential = IssuedCredential(
+            id=stable_issuance_credential_id(committed.id),
+            transaction_id=committed.id,
+            organization_id=committed.organization_id,
+            credential_template_id=committed.credential_template_id,
+            credential_jwt="contract-signed-credential",
+            credential_hash=hashlib.sha256(b"contract-signed-credential").hexdigest(),
+            status=CredentialStatus.ACTIVE,
+            issued_at=issued_at,
+        )
+        finalization_results = await asyncio.gather(
+            repository.finalize_direct_credential_issuance(committed, credential),
+            repository.finalize_direct_credential_issuance(committed, credential),
+        )
+        finalized = await repository.get_transaction(committed.id)
+        assert finalized is not None
+        assert finalized.status == IssuanceStatus.ISSUED
+        assert finalized.issued_at == issued_at
+        assert (await repository.get_credential_by_transaction_id(committed.id)).id == credential.id
+        return (
+            list(results),
+            list(finalization_results),
+            changed_semantics_rejected,
+            early_recovery_exercised,
+        )
     finally:
         await engine.dispose()
 
 
 def main() -> None:
     _upgrade()
-    results, changed_semantics_rejected, early_recovery_exercised = asyncio.run(
-        _exercise_production_repository()
-    )
+    (
+        results,
+        finalization_results,
+        changed_semantics_rejected,
+        early_recovery_exercised,
+    ) = asyncio.run(_exercise_production_repository())
 
     assert sorted(created for _, created in results) == [False, True]
     assert len({transaction.id for transaction, _ in results}) == 1
     assert len({transaction.pre_auth_code for transaction, _ in results}) == 1
     assert all(transaction.idempotency_request_hash == REQUEST_HASH for transaction, _ in results)
+    assert sorted(finalization_results) == [False, True]
 
     with psycopg.connect(DATABASE_URL) as connection:
         count, stored_key_hash, stored_request_hash = connection.execute(
@@ -128,6 +163,18 @@ def main() -> None:
         assert count == 1
         assert stored_key_hash == KEY_HASH
         assert stored_request_hash == REQUEST_HASH
+        issued_count, issued_transaction_count = connection.execute(
+            """
+            SELECT
+                (SELECT count(*) FROM issuance_service.issued_credentials
+                 WHERE transaction_id = %s),
+                (SELECT count(*) FROM issuance_service.issuance_transactions
+                 WHERE id = %s AND status = 'issued' AND issued_at IS NOT NULL)
+            """,
+            (results[0][0].id, results[0][0].id),
+        ).fetchone()
+        assert issued_count == 1
+        assert issued_transaction_count == 1
         raw_key_persisted = connection.execute(
             """
             SELECT EXISTS (
@@ -165,6 +212,9 @@ def main() -> None:
                 "production_repository_exercised": True,
                 "changed_semantics_rejected": changed_semantics_rejected,
                 "early_recovery_exercised": early_recovery_exercised,
+                "delivered_finalization_winner_count": sum(finalization_results),
+                "issued_credential_count": issued_count,
+                "issued_transaction_count": issued_transaction_count,
             },
             indent=2,
             sort_keys=True,

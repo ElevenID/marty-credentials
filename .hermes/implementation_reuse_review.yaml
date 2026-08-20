@@ -1,31 +1,50 @@
 status: complete
 search_scope:
-  - current Marty Core source revisions in Cargo manifests and lockfiles
-  - production wheel pins and digests in the release dependency manifest
-  - CI and cache workflow revisions used to build native Core bindings
-  - existing local did:web resolver or port-normalization implementations
+  - current issuance transaction and credential repositories
+  - generic issuance transaction transition guards
+  - OID4VCI signing claim and atomic finalization lifecycle
+  - DIDComm signing, encryption, delivery, and persistence lifecycle
+  - gRPC direct issuance signing and persistence lifecycle
+  - revocation-profile HTTP and Pact contracts
+  - PostgreSQL issuance idempotency contract runner
+  - registered sibling marty-ui revocation-profile service
 search_queries:
-  - marty-core revision Cargo.toml Cargo.lock
-  - MARTY_CORE_REVISION ci warm cache
-  - release dependencies marty-rs marty-verification sha256
-  - did:web percent encoded port resolver
+  - claim_transaction_for_signing finalize_credential_issuance reserved_credential_id
+  - save_transaction issued atomic credential finalization bypass
+  - DIDComm signing delivery failed retry credential identity
+  - gRPC IssueCredential credential transaction atomic finalization
+  - allocate-index reserve-index status list credential id
+  - issuance idempotency PostgreSQL race contract
+  - issued_credentials unique transaction id
 candidate_implementations:
-  - path: Cargo.toml
-    disposition: reuse the audited upstream Marty Core implementation by exact commit
-  - path: release/dependencies.json
-    disposition: reuse immutable upstream release wheels by exact asset digest
-  - path: .github/workflows/ci.yml
-    disposition: keep native test builds pinned to the same audited upstream commit
-no_match_statement: ""
-decision: reuse_existing
+  - path: services/issuance/infrastructure/adapters/postgres_repository.py
+    disposition: extend_existing_atomic_issuance_finalization
+  - path: services/issuance/domain/entities.py
+    disposition: restrict_issued_transition_to_atomic_repository_finalizers
+  - path: services/issuance/infrastructure/adapters/memory_repository.py
+    disposition: preserve_repository_contract_parity
+  - path: services/issuance/infrastructure/api/routes.py
+    disposition: reuse_stable_transaction_identity_for_all_delivery_attempts
+  - path: services/issuance/infrastructure/adapters/grpc_adapter.py
+    disposition: reuse_atomic_direct_finalization_for_synchronous_delivery
+  - path: ../marty-ui/rust/services/revocation-profile/src/postgres.rs
+    disposition: delegate_allocation_atomicity_to_canonical_sibling_owner
+  - path: tests/issuance-idempotency-contract/run_contract.py
+    disposition: extend_existing_real_postgresql_race_evidence
+no_match_statement: >-
+  No existing direct-delivery atomic credential finalizer was found; the
+  released DIDComm and gRPC paths used independent transaction and credential
+  repository commits.
+decision: extend_existing
 canonical_implementation:
-  path: Cargo.toml
-  language: Rust workspace dependency delegation
+  path: services/issuance/infrastructure/adapters/postgres_repository.py
+  language: Python_SQLAlchemy_PostgreSQL
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  This change introduces no local algorithm or resolver. Credentials consumes
-  the audited Marty Core release by exact source commit and immutable wheel
-  digests, while CI and cache workflows build from that same commit.
+  Status-list allocation policy, counters, and cross-scope ownership remain in
+  the Rust revocation-profile service. Credentials owns only its transaction
+  lifecycle, stable credential identity, transport ordering, and atomic local
+  credential/issued-state commit.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

@@ -303,6 +303,9 @@ jobs:
           test "$(jq -r '.production_repository_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.changed_semantics_rejected' tests/artifacts/issuance-idempotency/contract-result.json)" = true
           test "$(jq -r '.early_recovery_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
+          test "$(jq -r '.delivered_finalization_winner_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.issued_credential_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.issued_transaction_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
           test "$(jq -r '.source_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$ISSUANCE_IDEMPOTENCY_SOURCE_REVISION"
 
       - name: Upload issuance idempotency evidence

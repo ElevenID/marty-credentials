@@ -33,19 +33,19 @@ class IssuanceIdempotencyConflictError(ValueError):
     """An idempotency key was reused for different issuance semantics."""
 
 
+def stable_issuance_credential_id(transaction_id: str) -> str:
+    """Return the globally stable credential identity owned by a transaction."""
+
+    return f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, f'marty:issuance:{transaction_id}')}"
+
+
 _ISSUANCE_SAVE_PREDECESSORS: dict[IssuanceStatus, frozenset[IssuanceStatus]] = {
     IssuanceStatus.PENDING: frozenset({IssuanceStatus.PENDING}),
     IssuanceStatus.AUTHORIZED: frozenset({IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED}),
     # AUTHORIZED -> SIGNING is reserved for the repository compare-and-set.
     IssuanceStatus.SIGNING: frozenset({IssuanceStatus.SIGNING}),
-    # Legacy DIDComm/gRPC delivery still completes through save_transaction.
-    IssuanceStatus.ISSUED: frozenset(
-        {
-            IssuanceStatus.PENDING,
-            IssuanceStatus.AUTHORIZED,
-            IssuanceStatus.ISSUED,
-        }
-    ),
+    # DIDComm, gRPC, and OID4VCI finalization use dedicated atomic repository methods.
+    IssuanceStatus.ISSUED: frozenset({IssuanceStatus.ISSUED}),
     IssuanceStatus.FAILED: frozenset(
         {
             IssuanceStatus.PENDING,

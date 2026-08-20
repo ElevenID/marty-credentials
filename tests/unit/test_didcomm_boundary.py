@@ -9,7 +9,12 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi import HTTPException
 from issuance.application import rust_integration
-from issuance.domain.entities import IssuanceTransaction
+from issuance.domain.entities import (
+    IssuanceStatus,
+    IssuanceTransaction,
+    stable_issuance_credential_id,
+)
+from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api import routes
 from pydantic import ValidationError
 from starlette.requests import Request
@@ -53,9 +58,7 @@ def test_resolver_uses_only_deployment_managed_configuration(
 
     class Binding:
         @staticmethod
-        def didcomm_resolve_did_with_metadata(
-            did: str, **configuration: object
-        ) -> str:
+        def didcomm_resolve_did_with_metadata(did: str, **configuration: object) -> str:
             calls.append((did, configuration))
             return json.dumps(
                 {
@@ -83,9 +86,7 @@ def test_resolver_uses_only_deployment_managed_configuration(
         (
             "did:example:holder",
             {
-                "universal_resolver_url": (
-                    "https://resolver.internal.example/1.0/identifiers"
-                ),
+                "universal_resolver_url": ("https://resolver.internal.example/1.0/identifiers"),
                 "did_web_internal_base_urls": ["http://gateway:8000"],
                 "did_web_allowed_hosts": None,
             },
@@ -103,9 +104,7 @@ def test_resolver_rejects_a_mismatched_native_document(
 ) -> None:
     class Binding:
         @staticmethod
-        def didcomm_resolve_did_with_metadata(
-            did: str, **configuration: object
-        ) -> str:
+        def didcomm_resolve_did_with_metadata(did: str, **configuration: object) -> str:
             del did, configuration
             return json.dumps(
                 {
@@ -191,9 +190,7 @@ def test_configured_authcrypt_resolves_and_binds_the_sender(
             {
                 "did:web:issuer.example": {
                     "mode": "authcrypt",
-                    "sender_x25519_private_key": rust_integration.base64url_encode(
-                        private_key
-                    ),
+                    "sender_x25519_private_key": rust_integration.base64url_encode(private_key),
                 }
             },
         ),
@@ -237,9 +234,7 @@ def test_prepared_authcrypt_context_is_validated_once_and_frozen_for_delivery(
             {
                 issuer_did: {
                     "mode": "authcrypt",
-                    "sender_x25519_private_key": rust_integration.base64url_encode(
-                        private_key
-                    ),
+                    "sender_x25519_private_key": rust_integration.base64url_encode(private_key),
                 }
             },
         )
@@ -474,9 +469,7 @@ def test_delivery_adds_operator_ca_to_default_trust(
 
     assert routes._didcomm_tls_verifier() is context
     create_default_context.assert_called_once_with()
-    context.load_verify_locations.assert_called_once_with(
-        cafile="/run/secrets/didcomm-root-ca.pem"
-    )
+    context.load_verify_locations.assert_called_once_with(cafile="/run/secrets/didcomm-root-ca.pem")
 
 
 def test_delivery_fails_closed_when_operator_ca_is_unavailable(
@@ -608,9 +601,7 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
         AsyncMock(return_value=remote_context),
     )
     allocate_status = AsyncMock(return_value=(None, []))
-    sign_credential = AsyncMock(
-        return_value=("signed-credential", "urn:uuid:credential-a")
-    )
+    sign_credential = AsyncMock(return_value=("signed-credential", "urn:uuid:credential-a"))
     pack_credential = Mock(return_value=json.dumps({"id": "message-a"}))
     monkeypatch.setattr(
         routes,
@@ -706,20 +697,150 @@ async def test_delivery_validates_holder_endpoint_before_context_or_status_mutat
 
 
 @pytest.mark.asyncio
+async def test_signing_and_delivery_failures_retry_one_stable_status_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transaction = IssuanceTransaction(
+        id="tx-didcomm-retry",
+        organization_id="org-a",
+        credential_template_id="template-a",
+        revocation_profile_id="profile-a",
+        issuer_profile_id="issuer-profile-a",
+        issuer_did_override="did:web:issuer.example",
+        issuer_algorithm="ES256",
+        claims={"given_name": "Alice"},
+        credential_type="EmployeeCredential",
+        status=IssuanceStatus.PENDING,
+    )
+    repo = InMemoryIssuanceRepository()
+    await repo.save_transaction(transaction)
+    stable_id = stable_issuance_credential_id(transaction.id)
+    remote_context = {
+        "issuer_did": transaction.issuer_did_override,
+        "issuer_profile_id": transaction.issuer_profile_id,
+        "algorithm": transaction.issuer_algorithm,
+        "verification_method_id": "did:web:issuer.example#key-1",
+        "service": {"algorithm": "ES256"},
+    }
+    allocation = AsyncMock(
+        return_value=(
+            transaction.revocation_profile_id,
+            [
+                {
+                    "status_list_id": transaction.revocation_profile_id,
+                    "index": 9,
+                    "status_list_uri": "https://issuer.example/status/1",
+                }
+            ],
+        )
+    )
+    signing_attempts = 0
+
+    async def sign_credential(**kwargs):
+        nonlocal signing_attempts
+        signing_attempts += 1
+        if signing_attempts == 1:
+            raise RuntimeError("simulated signing outage")
+        return "signed-credential", kwargs["credential_id"]
+
+    delivery_statuses = [500, 200]
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+            self.text = "wallet response"
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            return FakeResponse(delivery_statuses.pop(0))
+
+    monkeypatch.setattr(routes, "didcomm_resolve_did", lambda _did: {"id": "did:peer:holder"})
+    monkeypatch.setattr(
+        routes,
+        "didcomm_extract_endpoint",
+        lambda _doc: "https://wallet.example/inbox",
+    )
+    monkeypatch.setattr(
+        routes,
+        "_validated_didcomm_delivery_endpoint",
+        AsyncMock(return_value="https://wallet.example/inbox"),
+    )
+    monkeypatch.setattr(
+        routes,
+        "apply_remote_issuer_context",
+        AsyncMock(return_value=remote_context),
+    )
+    monkeypatch.setattr(routes, "prepare_didcomm_delivery_encryption", Mock(return_value=object()))
+    monkeypatch.setattr(routes, "_allocate_credential_status_list_entries", allocation)
+    monkeypatch.setattr(routes, "create_sd_jwt_vc_with_remote_signing", sign_credential)
+    monkeypatch.setattr(
+        routes,
+        "didcomm_pack_credential",
+        Mock(return_value=json.dumps({"id": "message-a"})),
+    )
+    monkeypatch.setattr(routes, "didcomm_encrypt_prepared_delivery", Mock(return_value=b"packed"))
+    monkeypatch.setattr(routes, "_didcomm_tls_verifier", Mock(return_value=True))
+    monkeypatch.setattr(routes.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(routes, "record_canvas_credential_claim", AsyncMock())
+    monkeypatch.setattr(routes, "_finalize_credential_renewal", AsyncMock())
+    monkeypatch.setattr(routes, "record_post_issuance_deliveries", AsyncMock())
+
+    with pytest.raises(RuntimeError, match="signing outage"):
+        await routes._didcomm_sign_and_deliver(transaction, "did:peer:holder", repo)
+    after_signing_failure = await repo.get_transaction(transaction.id)
+    assert after_signing_failure is not None
+    assert after_signing_failure.status == IssuanceStatus.PENDING
+    assert await repo.get_credential_by_transaction_id(transaction.id) is None
+
+    failed_delivery = await routes._didcomm_sign_and_deliver(
+        after_signing_failure,
+        "did:peer:holder",
+        repo,
+    )
+    assert failed_delivery.status == "delivery_failed"
+    after_delivery_failure = await repo.get_transaction(transaction.id)
+    assert after_delivery_failure is not None
+    assert after_delivery_failure.status == IssuanceStatus.PENDING
+    assert await repo.get_credential_by_transaction_id(transaction.id) is None
+
+    delivered = await routes._didcomm_sign_and_deliver(
+        after_delivery_failure,
+        "did:peer:holder",
+        repo,
+    )
+    assert delivered.status == "delivered"
+    assert delivered.credential_id == stable_id
+    finalized = await repo.get_transaction(transaction.id)
+    assert finalized is not None
+    assert finalized.status == IssuanceStatus.ISSUED
+    assert (await repo.get_credential_by_transaction_id(transaction.id)).id == stable_id
+    assert [call.kwargs["credential_id"] for call in allocation.await_args_list] == [
+        stable_id,
+        stable_id,
+        stable_id,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_private_test_agent_still_requires_https(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
 
     assert (
-        await routes._validated_didcomm_delivery_endpoint(
-            "https://127.0.0.1:18444/inbox"
-        )
+        await routes._validated_didcomm_delivery_endpoint("https://127.0.0.1:18444/inbox")
         == "https://127.0.0.1:18444/inbox"
     )
     with pytest.raises(HTTPException, match="must use HTTPS") as exc:
-        await routes._validated_didcomm_delivery_endpoint(
-            "http://127.0.0.1:18444/inbox"
-        )
+        await routes._validated_didcomm_delivery_endpoint("http://127.0.0.1:18444/inbox")
 
     assert exc.value.status_code == 422
