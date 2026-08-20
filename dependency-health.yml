@@ -10,8 +10,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-08-17
-    rationale: The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; ssi-jwt is temporarily patched by exact revision pending spruceid/ssi#706.
+    review-after: 2026-09-20
+    rationale: Re-reviewed 2026-08-20. The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; spruceid/ssi#706 remains open, so ssi-jwt stays pinned to the verified exact ElevenID revision that removes the unused vulnerable serde_with dependency. The lock contains only serde_with 3.x and the repository security audit remains green.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID
