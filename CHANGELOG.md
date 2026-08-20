@@ -10,7 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Pin Rust source dependencies, production native wheels, and CI cache inputs
-  to the independently audited Marty Core 0.1.58 release.
+  to the independently audited Marty Core 0.1.59 release, whose verifier wheel
+  excludes authority-only certificate and SOD construction features. Build the
+  CI verifier wheel with that same released feature profile.
 
 ### Fixed
 

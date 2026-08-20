@@ -131,7 +131,7 @@ def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
     assert "- os: ubuntu-latest\n            target: aarch64" in wheel_matrix
 
 
-def test_ci_installs_exact_source_built_core_artifacts() -> None:
+def test_ci_installs_exact_source_built_core_artifacts_with_released_features() -> None:
     assert CI.count("run: bash scripts/run-python-ci.sh") == 2
     assert "release-deps" in PYTHON_CI
     assert "len(wheels) == 2" in PYTHON_CI
@@ -139,11 +139,13 @@ def test_ci_installs_exact_source_built_core_artifacts() -> None:
     assert "ref: ${{ env.MARTY_CORE_REVISION }}" in CI
     assert "marty-core/marty-bindings/Cargo.toml" in CI
     assert "marty-core/marty-verification/Cargo.toml" in CI
-    full_verification_features = (
-        "--features pyo3/extension-module,python,csca,eudi,cert-builder"
-    )
-    assert full_verification_features in CI
-    assert full_verification_features in WARM_CACHES
+    released_verification_features = "--features pyo3/extension-module,python,csca,eudi"
+    assert released_verification_features in CI
+    assert released_verification_features in WARM_CACHES
+    assert "cert-builder" not in CI
+    assert "cert-builder" not in WARM_CACHES
+    assert "authority-issuance" not in CI
+    assert "authority-issuance" not in WARM_CACHES
 
     verification_lane = CI.split("  verification-session-postgres:", 1)[1].split(
         "\n  test-wasm:", 1
