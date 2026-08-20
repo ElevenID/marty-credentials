@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: 9f706477c725f92d18ee8b989ce84431178d1b01
+  MARTY_CORE_REVISION: 0f32429d3a9977df939dcb3fc5f31a325c6c98f8
 
 jobs:
   preflight:
@@ -380,7 +380,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install maturin==1.14.1
           maturin build --release --compatibility off --manifest-path marty-core/marty-bindings/Cargo.toml --features pyo3/extension-module --out core-wheels
-          maturin build --release --compatibility off --manifest-path marty-core/marty-verification/Cargo.toml --features pyo3/extension-module,python,csca,eudi,cert-builder --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core/marty-verification/Cargo.toml --features pyo3/extension-module,python,csca,eudi --out core-wheels
 
       - name: Require both native distributions
         shell: bash

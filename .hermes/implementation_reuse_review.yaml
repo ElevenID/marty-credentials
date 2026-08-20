@@ -1,33 +1,35 @@
 status: complete
 search_scope:
-  - workspace package version and locked marty-rs package version
-  - stable-tag preparation and immutable release workflows
-  - existing release contract validation
+  - current Marty Core source revisions in Cargo manifests and lockfiles
+  - production wheel pins and digests in the release dependency manifest
+  - CI and cache workflow revisions used to build native Core bindings
+  - current Credentials issuance and verification feature requirements
 search_queries:
-  - workspace.package.version Cargo.toml
-  - marty-rs package version Cargo.lock
-  - prepare-stable-tag release-stable exact protected main
-  - release_contract workspace_version locked_marty_rs_version
+  - marty-core revision Cargo.toml Cargo.lock
+  - MARTY_CORE_REVISION ci warm cache
+  - release dependencies marty-rs marty-verification sha256
+  - sod-builder cert-builder CscaAuthority marty_verification imports
 candidate_implementations:
   - path: Cargo.toml
-    disposition: update_existing_workspace_release_version
-  - path: Cargo.lock
-    disposition: update_existing_locked_workspace_package_version
-  - path: .github/workflows/prepare-stable-tag.yml
-    disposition: reuse_existing_exact_main_annotated_tag_handoff
-  - path: scripts/release_contract.py
-    disposition: reuse_existing_release_artifact_contract
+    disposition: reuse the audited upstream Marty Core implementation by exact commit
+  - path: release/dependencies.json
+    disposition: reuse immutable upstream release wheels by exact asset digest
+  - path: .github/workflows/ci.yml
+    disposition: keep native test builds pinned to the same audited upstream commit and released verifier feature profile
+  - path: rust/marty-rs/src/emrtd/issuance.rs
+    disposition: retain the explicit issuance-only certificate and SOD builder requirement
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: .github/workflows/prepare-stable-tag.yml
-  language: GitHub_Actions
+  path: Cargo.toml
+  language: Rust workspace dependency delegation
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  This release task introduces no implementation. It advances the existing
-  Rust workspace and lockfile version for the already-merged crash-safe
-  issuance change and reuses the repository's exact-main stable-tag and
-  immutable publication contracts unchanged.
+  This change introduces no local verification or authority algorithm.
+  Credentials consumes the audited Core release by exact source commit and
+  immutable wheel digests. The released verifier wheel remains free of
+  authority-only builders; Credentials retains its explicit Rust issuance
+  builder feature only where eMRTD issuance actually constructs CSCA/DSC/SOD.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
