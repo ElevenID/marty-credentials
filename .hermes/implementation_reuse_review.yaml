@@ -1,31 +1,29 @@
 status: complete
 search_scope:
-  - current Marty Core source revisions in Cargo manifests and lockfiles
-  - production wheel pins and digests in the release dependency manifest
-  - CI and cache workflow revisions used to build native Core bindings
-  - existing local did:web resolver or port-normalization implementations
+  - current SSI dependency declarations and exact patch revisions
+  - locked serde_with and ssi-jwt dependency graph
+  - upstream spruceid/ssi remediation status
+  - repository dependency-health tracking issue and security evidence
 search_queries:
-  - marty-core revision Cargo.toml Cargo.lock
-  - MARTY_CORE_REVISION ci warm cache
-  - release dependencies marty-rs marty-verification sha256
-  - did:web percent encoded port resolver
+  - ssi-jwt patch revision Cargo.toml Cargo.lock
+  - serde_with versions Cargo.lock
+  - spruceid ssi pull 706 status
+  - marty-credentials issue 17 dependency health
 candidate_implementations:
   - path: Cargo.toml
-    disposition: reuse the audited upstream Marty Core implementation by exact commit
-  - path: release/dependencies.json
-    disposition: reuse immutable upstream release wheels by exact asset digest
-  - path: .github/workflows/ci.yml
-    disposition: keep native test builds pinned to the same audited upstream commit
+    disposition: retain the existing exact-revision ssi-jwt security patch
+  - path: dependency-health.yml
+    disposition: renew the governed review record with current primary-source evidence
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
   path: Cargo.toml
-  language: Rust workspace dependency delegation
+  language: Rust workspace dependency patch
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  This change introduces no local algorithm or resolver. Credentials consumes
-  the audited Marty Core release by exact source commit and immutable wheel
-  digests, while CI and cache workflows build from that same commit.
+  This governance-only change introduces no implementation. It retains the
+  exact reviewed Rust dependency patch because upstream remediation remains
+  open and records the next monthly review date.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
