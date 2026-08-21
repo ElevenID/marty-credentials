@@ -34,7 +34,7 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "9244ec551ac56bb4fa7d3a87e50f59b2f36d1925" }
 
 # JWT
-jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -43,7 +43,7 @@ ciborium = { version = "0.2" }
 
 # Crypto
 bs58 = { version = "0.5" }
-base64 = { version = "0.22" }
+base64 = { version = "0.23" }
 rsa = { version = "0.9" }
 rand = { version = "0.10" }
 
