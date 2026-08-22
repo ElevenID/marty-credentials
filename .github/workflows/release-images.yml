@@ -199,7 +199,7 @@ jobs:
             echo "marty_common_sha256=$(jq -r '.["marty-common"].sha256' release/dependencies.json)"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
@@ -516,7 +516,7 @@ jobs:
             --json release-complete.json --release-id "$RELEASE_ID" --tag "$TAG" \
             --commit "$COMMIT" --phase complete-draft
 
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
