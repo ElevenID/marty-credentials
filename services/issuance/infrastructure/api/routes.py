@@ -743,6 +743,14 @@ def _create_grpc_channel(target: str):
     return create_service_channel(target)
 
 
+async def _fetch_credential_template_http(template_id: str) -> httpx.Response:
+    """Fetch a template over the authenticated internal HTTP fallback."""
+    encoded_template_id = quote(template_id, safe="")
+    url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{encoded_template_id}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        return await client.get(url, headers=service_token_headers())
+
+
 # ---------------------------------------------------------------------------
 # In-memory rate limiter for OAuth endpoints (token, authorize)
 # ---------------------------------------------------------------------------
@@ -3358,10 +3366,8 @@ async def initiate_issuance(
 
         # HTTP fallback
         if not _tmpl_resolved:
-            url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{request.credential_template_id}"
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(url)
+                resp = await _fetch_credential_template_http(request.credential_template_id)
                 if resp.status_code == 404:
                     raise HTTPException(
                         status_code=404,
