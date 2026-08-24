@@ -745,7 +745,8 @@ def _create_grpc_channel(target: str):
 
 async def _fetch_credential_template_http(template_id: str) -> httpx.Response:
     """Fetch a template over the authenticated internal HTTP fallback."""
-    url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{template_id}"
+    encoded_template_id = quote(template_id, safe="")
+    url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{encoded_template_id}"
     async with httpx.AsyncClient(timeout=10.0) as client:
         return await client.get(url, headers=service_token_headers())
 

@@ -1434,11 +1434,48 @@ class TestStatusListAllocationOrganizationScope:
         )
         monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
 
-        result = await routes._fetch_credential_template_http("template-1")
+        result = await routes._fetch_credential_template_http("template/one")
 
         assert result is response
         assert captured == {
-            "url": "http://credential-template:8003/v1/credential-templates/template-1",
+            "url": "http://credential-template:8003/v1/credential-templates/template%2Fone",
+            "headers": {"x-service-token": "s" * 48},
+        }
+
+    async def test_grpc_template_http_fallback_uses_service_auth(self, monkeypatch):
+        from issuance.infrastructure.adapters import grpc_adapter
+
+        captured = {}
+        response = object()
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, url, headers):
+                captured.update({"url": url, "headers": headers})
+                return response
+
+        monkeypatch.setattr(
+            grpc_adapter.httpx,
+            "AsyncClient",
+            lambda *args, **kwargs: FakeClient(),
+        )
+        monkeypatch.setattr(
+            grpc_adapter,
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+            "http://credential-template:8003",
+        )
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
+
+        result = await grpc_adapter._fetch_credential_template_http("template/one")
+
+        assert result is response
+        assert captured == {
+            "url": "http://credential-template:8003/v1/credential-templates/template%2Fone",
             "headers": {"x-service-token": "s" * 48},
         }
 

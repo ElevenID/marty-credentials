@@ -18,6 +18,7 @@ from typing import Any
 from urllib.parse import quote
 
 import grpc
+import httpx
 from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.issuance_idempotency import (
     canonical_issuance_request,
@@ -61,6 +62,14 @@ _SD_JWT_PAYLOAD_FORMATS = {
     "vc+sd-jwt",
     "dc+sd-jwt",
 }
+
+
+async def _fetch_credential_template_http(template_id: str) -> httpx.Response:
+    """Fetch a template over the authenticated internal HTTP fallback."""
+    encoded_template_id = quote(template_id, safe="")
+    url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{encoded_template_id}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        return await client.get(url, headers=service_token_headers())
 
 
 def _org_issuer_url(org_id: str) -> str:
@@ -497,12 +506,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         return pb2.IssuanceResponse()
                     logger.warning(f"gRPC template fetch failed, falling back to HTTP: {e}")
                     # HTTP fallback
-                    import httpx
-
-                    url = f"{CREDENTIAL_TEMPLATE_SERVICE_URL}/v1/credential-templates/{request.credential_template_id}"
                     try:
-                        async with httpx.AsyncClient(timeout=10.0) as client:
-                            resp = await client.get(url)
+                        resp = await _fetch_credential_template_http(
+                            request.credential_template_id
+                        )
                         if resp.status_code == 404:
                             context.set_code(grpc.StatusCode.NOT_FOUND)
                             context.set_details(
