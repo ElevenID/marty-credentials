@@ -179,7 +179,8 @@ def test_deprecated_mutable_release_workflows_are_removed() -> None:
 def test_docker_actions_use_verified_node24_commits() -> None:
     assert "8d2750c68a42422c14e847fe6c8ac0403b4cbd6f" not in IMAGES
     assert "c94ce9fb468520275223c153574b00df6fe4bcc9" not in IMAGES
-    assert IMAGES.count("docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c") == 2
+    assert "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c" not in IMAGES
+    assert IMAGES.count("docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e") == 2
     assert IMAGES.count("docker/login-action@dbcb813823bdd20940b903addbd779551569679f") == 2
 
 
