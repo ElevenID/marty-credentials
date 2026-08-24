@@ -121,7 +121,8 @@ def test_release_tool_installs_are_version_pinned() -> None:
         "python scripts/install_pinned_core.py --repository . --destination release-deps" in STABLE
     )
     assert "python -m pip install pytest==9.1.1" in STABLE
-    assert "hatchling==1.31.0" in PYPROJECT
+    assert "hatchling==1.31.0" not in PYPROJECT
+    assert "hatchling==1.32.0" in PYPROJECT
     assert "hatch-vcs==0.5.0" in PYPROJECT
     assert "maturin==1.14.1" in PYPROJECT
 
