@@ -1409,6 +1409,39 @@ class TestStatusListAllocationOrganizationScope:
         assert profile_id == "profile-1"
         assert entries[0]["index"] == 42
 
+    async def test_credential_template_http_fallback_uses_service_auth(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        captured = {}
+        response = object()
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+            async def get(self, url, headers):
+                captured.update({"url": url, "headers": headers})
+                return response
+
+        monkeypatch.setattr(routes.httpx, "AsyncClient", lambda *args, **kwargs: FakeClient())
+        monkeypatch.setattr(
+            routes,
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+            "http://credential-template:8003",
+        )
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
+
+        result = await routes._fetch_credential_template_http("template-1")
+
+        assert result is response
+        assert captured == {
+            "url": "http://credential-template:8003/v1/credential-templates/template-1",
+            "headers": {"x-service-token": "s" * 48},
+        }
+
     async def test_rejects_mismatched_allocation_response(self, monkeypatch):
         from issuance.infrastructure.api import routes
 
