@@ -197,7 +197,7 @@ jobs:
               for dependency in report["dependencies"]
               if dependency.get("skip_reason")
           }
-          expected_github_release_dependencies = {"marty-common", "marty-msf"}
+          expected_github_release_dependencies = {"marty-common"}
           if skipped != expected_github_release_dependencies:
               raise SystemExit(f"Unexpected unaudited Python dependencies: {sorted(skipped)}")
           PY

@@ -10,17 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_module(monkeypatch):
-    migration = types.ModuleType("mmf.framework.infrastructure.migration")
+    migration = types.ModuleType("marty_common.migration")
     migration.AlembicMigrationAdapter = object
     migration.MigrationError = RuntimeError
-    monkeypatch.setitem(sys.modules, "mmf", types.ModuleType("mmf"))
-    monkeypatch.setitem(sys.modules, "mmf.framework", types.ModuleType("mmf.framework"))
-    monkeypatch.setitem(
-        sys.modules,
-        "mmf.framework.infrastructure",
-        types.ModuleType("mmf.framework.infrastructure"),
-    )
-    monkeypatch.setitem(sys.modules, "mmf.framework.infrastructure.migration", migration)
+    monkeypatch.setitem(sys.modules, "marty_common", types.ModuleType("marty_common"))
+    monkeypatch.setitem(sys.modules, "marty_common.migration", migration)
 
     models = types.ModuleType("services.issuance.infrastructure.models")
     models.mapper_registry = types.SimpleNamespace(metadata=MetaData())
