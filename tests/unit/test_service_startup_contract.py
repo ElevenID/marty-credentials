@@ -339,6 +339,14 @@ def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:
         assert "import mmf" not in source, path
 
 
+def test_fastapi_form_parser_is_an_explicit_runtime_dependency() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert any(
+        dependency.startswith("python-multipart>=") for dependency in project["dependencies"]
+    )
+
+
 def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 

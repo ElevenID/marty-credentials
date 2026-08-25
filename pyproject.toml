@@ -34,6 +34,9 @@ dependencies = [
     "cryptography>=44.0.0",
     "fastapi>=0.104.0",
     "prometheus-client>=0.19.0",
+    # FastAPI form endpoints import this parser at route-registration time.
+    # Keep it explicit instead of relying on an unrelated framework wheel.
+    "python-multipart>=0.0.6",
     "python-json-logger>=2.0",
     "redis>=5.0",
     "cbor2>=5.6.0",
