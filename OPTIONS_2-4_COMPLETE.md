@@ -475,3 +475,8 @@ stats = kong.get_stats()
 3. Configure Kong with rate limiting and authentication
 4. Integrate auto-registration on service startup
 5. Add observability (Prometheus metrics, distributed tracing)
+> [!IMPORTANT]
+> Historical implementation record only. The Python MMF examples and imports
+> below are retired and are not supported runtime or deployment instructions.
+> Current services use the shared Rust `mmf-*` crates and repository-local
+> Rust-backed adapters; do not reintroduce `marty-msf` or `mmf.*` imports.
