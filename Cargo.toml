@@ -11,7 +11,7 @@ repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "0f32429d3a9977df939dcb3fc5f31a325c6c98f8", features = ["sod-builder"] }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "0f32429d3a9977df939dcb3fc5f31a325c6c98f8" }
 marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "0f32429d3a9977df939dcb3fc5f31a325c6c98f8", default-features = false }
 marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "0f32429d3a9977df939dcb3fc5f31a325c6c98f8" }
 
