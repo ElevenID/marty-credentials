@@ -57,6 +57,7 @@ python = [
 wasm = [
     "dep:marty-crypto",
     "dep:marty-verification",
+    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "wasm-bindgen",
     "wasm-bindgen-futures",
