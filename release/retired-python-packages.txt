@@ -1,0 +1,2 @@
+# Normalized Python distribution names that release images must not contain.
+marty-msf

@@ -391,3 +391,38 @@ def test_package_tag_validation_supports_idempotent_promotion() -> None:
         release_contract.validate_package_tag(
             matched, "v0.1.7", f"sha256:{'2' * 64}", allow_absent=True
         )
+
+
+def test_spdx_package_denylist_accepts_unrelated_packages(tmp_path: Path) -> None:
+    denylist = tmp_path / "retired.txt"
+    denylist.write_text("# retired framework\nmarty-msf\n", encoding="utf-8")
+
+    release_contract.validate_spdx_package_denylist(
+        {"packages": [{"name": "marty-common"}, {"name": "python-multipart"}]},
+        denylist,
+    )
+
+
+@pytest.mark.parametrize("name", ["marty-msf", "Marty_Msf", "marty.msf"])
+def test_spdx_package_denylist_normalizes_and_rejects_retired_package(
+    tmp_path: Path, name: str
+) -> None:
+    denylist = tmp_path / "retired.txt"
+    denylist.write_text("marty-msf\n", encoding="utf-8")
+
+    with pytest.raises(release_contract.ReleaseContractError, match="retired Python"):
+        release_contract.validate_spdx_package_denylist({"packages": [{"name": name}]}, denylist)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, {}, {"packages": "invalid"}, {"packages": [None]}, {"packages": [{}]}],
+)
+def test_spdx_package_denylist_fails_closed_on_malformed_inventory(
+    tmp_path: Path, payload: object
+) -> None:
+    denylist = tmp_path / "retired.txt"
+    denylist.write_text("marty-msf\n", encoding="utf-8")
+
+    with pytest.raises(release_contract.ReleaseContractError, match="SPDX package"):
+        release_contract.validate_spdx_package_denylist(payload, denylist)

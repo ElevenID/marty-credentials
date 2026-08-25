@@ -1,15 +1,15 @@
 """
 Issuance Service Migration Management
 
-This module provides migration management for the issuance service using
-the MMF framework's migration infrastructure.
+This module provides migration management for the issuance service using the
+shared Marty Alembic adapter.
 """
 
 import os
 import sys
 from pathlib import Path
 
-from mmf.framework.infrastructure.migration import (
+from marty_common.migration import (
     AlembicMigrationAdapter,
     MigrationError,
 )

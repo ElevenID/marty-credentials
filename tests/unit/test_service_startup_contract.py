@@ -129,9 +129,9 @@ def test_native_extension_contract_requires_remote_jwt_prepare_and_assemble() ->
     source = (ROOT / "services/issuance/application/rust_integration.py").read_text(
         encoding="utf-8"
     )
-    sd_jwt_body = source.split(
-        "async def create_sd_jwt_vc_with_remote_signing", 1
-    )[1].split("async def create_jwt_vc_with_remote_signing", 1)[0]
+    sd_jwt_body = source.split("async def create_sd_jwt_vc_with_remote_signing", 1)[1].split(
+        "async def create_jwt_vc_with_remote_signing", 1
+    )[0]
     jwt_vc_body = source.split("async def create_jwt_vc_with_remote_signing", 1)[1].split(
         "_PRIVATE_JWK_MEMBERS", 1
     )[0]
@@ -293,9 +293,7 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     source_revision = core_revisions.pop()
     assert len(source_revision) == 40
 
-    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert f"MARTY_CORE_REVISION: {source_revision}" in ci_workflow
     assert "maturin build --release --compatibility off" in ci_workflow
     assert "name: core-python-${{ runner.os }}" in ci_workflow
@@ -307,7 +305,7 @@ def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
         encoding="utf-8"
     )
 
-    dependency_loop = "for dependency in marty-rs marty-verification marty-msf marty-common; do"
+    dependency_loop = "for dependency in marty-rs marty-verification marty-common; do"
     assert dependency_loop in workflow
     assert "draft-release.json" not in workflow
     assert "Draft must contain exactly one Linux x86_64 marty-rs wheel" not in workflow
@@ -318,6 +316,35 @@ def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
     assert "ARG MARTY_VERIFICATION_WHEEL" in verification_image
     assert "ARG MARTY_VERIFICATION_SHA256" in verification_image
     assert "validate_marty_rs_capabilities()" in verification_image
+
+
+def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text(encoding="utf-8"))
+    runtime_inputs = [
+        ROOT / "services" / "Dockerfile",
+        ROOT / "services" / "verification" / "Dockerfile",
+        ROOT / "services" / "issuance" / "manage_migrations.py",
+        ROOT / ".github" / "workflows" / "ci.yml",
+        ROOT / ".github" / "workflows" / "release-images.yml",
+    ]
+
+    assert not any("marty-msf" in dependency.lower() for dependency in project["dependencies"])
+    assert "marty-msf" not in dependencies
+    for path in runtime_inputs:
+        source = path.read_text(encoding="utf-8").lower()
+        assert "marty_msf" not in source, path
+        assert "marty-msf" not in source, path
+        assert "from mmf" not in source, path
+        assert "import mmf" not in source, path
+
+
+def test_fastapi_form_parser_is_an_explicit_runtime_dependency() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert any(
+        dependency.startswith("python-multipart>=") for dependency in project["dependencies"]
+    )
 
 
 def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:

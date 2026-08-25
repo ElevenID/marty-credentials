@@ -1,4 +1,13 @@
+<!-- markdownlint-disable-file -->
+<!-- cspell:disable -->
+
 # Issuance Service Migration Summary
+
+> **Historical record:** This report describes an earlier Python MMF migration
+> and is not a supported architecture or runbook. Issuance
+> behavior now belongs to the Rust service plane in `marty-ui`, with shared
+> protocol and platform behavior in `marty-core` and the `mmf-*` crates. Do not
+> restore the Python framework imports, mounts, or build contexts shown below.
 
 ## Completed: Service Consolidation to marty-credentials
 

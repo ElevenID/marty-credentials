@@ -1,4 +1,13 @@
+<!-- markdownlint-disable-file -->
+<!-- cspell:disable -->
+
 # Options 2-4 Completion Report
+
+> **Historical record:** This February 2026 report describes retired Python
+> MMF prototypes and is not a supported build, dependency, or operations
+> guide. Current production behavior is implemented by the Rust service plane
+> in `marty-ui` and shared `marty-core` and `mmf-*` crates. Do not restore the
+> Python `mmf.*` imports or framework build contexts shown below.
 
 **Date:** February 4, 2026  
 **Status:** ✅ All Options Complete
@@ -475,3 +484,8 @@ stats = kong.get_stats()
 3. Configure Kong with rate limiting and authentication
 4. Integrate auto-registration on service startup
 5. Add observability (Prometheus metrics, distributed tracing)
+> [!IMPORTANT]
+> Historical implementation record only. The Python MMF examples and imports
+> below are retired and are not supported runtime or deployment instructions.
+> Current services use the shared Rust `mmf-*` crates and repository-local
+> Rust-backed adapters; do not reintroduce `marty-msf` or `mmf.*` imports.

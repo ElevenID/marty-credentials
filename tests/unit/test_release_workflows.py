@@ -3,9 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-WARM_CACHES = (ROOT / ".github" / "workflows" / "warm-ci-caches.yml").read_text(
-    encoding="utf-8"
-)
+WARM_CACHES = (ROOT / ".github" / "workflows" / "warm-ci-caches.yml").read_text(encoding="utf-8")
 PYTHON_CI = (ROOT / "scripts" / "run-python-ci.sh").read_text(encoding="utf-8")
 STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
 PREPARE_STABLE = (ROOT / ".github" / "workflows" / "prepare-stable-tag.yml").read_text(
@@ -100,6 +98,8 @@ def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
     assert ".digest == $digest" in IMAGES
     assert "cmp --silent" in IMAGES
     assert "docker buildx imagetools create" in IMAGES
+    assert "validate-spdx-package-denylist" in IMAGES
+    assert "release/retired-python-packages.txt" in IMAGES
     assert "--method PATCH" in IMAGES
     assert "-F draft=false" in IMAGES
     assert "softprops/action-gh-release" not in IMAGES
@@ -109,6 +109,15 @@ def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
         IMAGES.count("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8")
         == 2
     )
+
+
+def test_release_image_sbom_is_checked_before_evidence_upload() -> None:
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+    sbom_position = matrix_job.index("anchore/sbom-action@")
+    denylist_position = matrix_job.index("validate-spdx-package-denylist")
+    upload_position = matrix_job.index("actions/upload-artifact@")
+
+    assert sbom_position < denylist_position < upload_position
 
 
 def test_release_tool_installs_are_version_pinned() -> None:
