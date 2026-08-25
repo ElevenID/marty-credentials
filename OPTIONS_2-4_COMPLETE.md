@@ -1,4 +1,13 @@
+<!-- markdownlint-disable-file -->
+<!-- cspell:disable -->
+
 # Options 2-4 Completion Report
+
+> **Historical record:** This February 2026 report describes retired Python
+> MMF prototypes and is not a supported build, dependency, or operations
+> guide. Current production behavior is implemented by the Rust service plane
+> in `marty-ui` and shared `marty-core` and `mmf-*` crates. Do not restore the
+> Python `mmf.*` imports or framework build contexts shown below.
 
 **Date:** February 4, 2026  
 **Status:** ✅ All Options Complete
