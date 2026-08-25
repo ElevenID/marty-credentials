@@ -3393,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "marty-rs"
-version = "0.1.68"
+version = "0.1.69"
 dependencies = [
  "base64 0.22.1",
  "bs58 0.5.1",
@@ -3402,6 +3402,7 @@ dependencies = [
  "console_error_panic_hook",
  "coset 0.3.8",
  "coset 0.4.2",
+ "der 0.7.10",
  "ed25519-dalek 3.0.0",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
@@ -3436,6 +3437,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "x509-cert",
 ]
 
 [[package]]

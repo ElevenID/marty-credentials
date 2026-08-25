@@ -25,9 +25,9 @@ canonical_implementation:
 rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
   This release task introduces no implementation. It advances the existing
-  Rust workspace and lockfile version for the merged, audited Marty Core
-  v0.1.59 dependency boundary and reuses the repository's exact-main stable-tag
-  and immutable publication contracts unchanged.
+  Rust workspace and lockfile version for the merged Python MMF retirement on
+  the audited Marty Core v0.1.59 dependency boundary and reuses the repository's
+  exact-main stable-tag and immutable publication contracts unchanged.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

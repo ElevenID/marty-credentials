@@ -23,6 +23,7 @@ native = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "marty-verification/default",
+    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "sd-jwt-rs",
     "jsonwebtoken",
@@ -34,6 +35,7 @@ python = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "marty-verification/default",
+    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "tokio",
     "isomdl",
@@ -55,6 +57,7 @@ python = [
 wasm = [
     "dep:marty-crypto",
     "dep:marty-verification",
+    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "wasm-bindgen",
     "wasm-bindgen-futures",
@@ -127,6 +130,10 @@ marty-oid4vci = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
+
+[dev-dependencies]
+der = "0.7"
+x509-cert = "0.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # UUID 1.24 uses getrandom 0.4, which requires an explicit browser backend.
