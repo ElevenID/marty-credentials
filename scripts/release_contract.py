@@ -18,6 +18,7 @@ from typing import Any
 
 TAG_PATTERN = re.compile(r"^v(?P<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+PACKAGE_NAME_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
 SERVICES = ("issuance", "verification")
 
 
@@ -452,6 +453,41 @@ def _json_file(path: Path) -> Any:
         raise ReleaseContractError(f"cannot read JSON file {path}") from error
 
 
+def _normalized_package_name(value: str) -> str:
+    return PACKAGE_NAME_SEPARATOR_PATTERN.sub("-", value.strip().lower())
+
+
+def _package_denylist(path: Path) -> set[str]:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise ReleaseContractError(f"cannot read package denylist {path}") from error
+    denied = {
+        _normalized_package_name(line)
+        for line in lines
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    if not denied or "" in denied:
+        raise ReleaseContractError("package denylist must contain a package name")
+    return denied
+
+
+def validate_spdx_package_denylist(payload: Any, denylist: Path) -> None:
+    if not isinstance(payload, dict) or not isinstance(payload.get("packages"), list):
+        raise ReleaseContractError("SPDX package inventory is invalid")
+    installed: set[str] = set()
+    for package in payload["packages"]:
+        if not isinstance(package, dict):
+            raise ReleaseContractError("SPDX package entry is invalid")
+        name = package.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ReleaseContractError("SPDX package name is invalid")
+        installed.add(_normalized_package_name(name))
+    forbidden = sorted(installed & _package_denylist(denylist))
+    if forbidden:
+        raise ReleaseContractError(f"release image contains retired Python packages: {forbidden!r}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -501,6 +537,10 @@ def build_parser() -> argparse.ArgumentParser:
     package_tag.add_argument("--tag", required=True)
     package_tag.add_argument("--digest", required=True)
     package_tag.add_argument("--allow-absent", action="store_true")
+
+    spdx_denylist = subparsers.add_parser("validate-spdx-package-denylist")
+    spdx_denylist.add_argument("--json", type=Path, required=True)
+    spdx_denylist.add_argument("--denylist", type=Path, required=True)
     return parser
 
 
@@ -544,6 +584,8 @@ def main(argv: list[str] | None = None) -> int:
                     allow_absent=args.allow_absent,
                 )
             )
+        elif args.command == "validate-spdx-package-denylist":
+            validate_spdx_package_denylist(_json_file(args.json), args.denylist)
     except ReleaseContractError as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1

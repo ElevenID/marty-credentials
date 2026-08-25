@@ -250,6 +250,11 @@ jobs:
           image: ghcr.io/elevenid/marty-credentials-${{ matrix.service }}@${{ steps.build.outputs.digest }}
           format: spdx-json
           output-file: marty-credentials-${{ matrix.service }}.spdx.json
+      - name: Reject retired Python packages from release image
+        run: >-
+          python scripts/release_contract.py validate-spdx-package-denylist
+          --json marty-credentials-${{ matrix.service }}.spdx.json
+          --denylist release/retired-python-packages.txt
       - name: Record immutable image digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
