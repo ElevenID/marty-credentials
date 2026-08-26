@@ -57,7 +57,15 @@ pub fn issue_emrtd_passport(
 pub fn issue_emrtd_passport_self_signed(
     request: &EmrtdIssuanceRequest,
 ) -> Result<EmrtdCredential, Box<dyn std::error::Error + Send + Sync>> {
-    let csca = CscaAuthority::new(&request.country_code, &request.organization, 3650)?;
+    let csca = match request.csca_key_algorithm {
+        Some(algorithm) => CscaAuthority::new_with_algorithm(
+            &request.country_code,
+            &request.organization,
+            3650,
+            algorithm,
+        )?,
+        None => CscaAuthority::new(&request.country_code, &request.organization, 3650)?,
+    };
     issue_with_authority(request, &csca)
 }
 
@@ -95,6 +103,7 @@ fn issue_with_authority(
 mod tests {
     use std::collections::HashMap;
 
+    use crate::emrtd::CscaKeyAlgorithm;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine as _;
     use der::Decode;
@@ -147,6 +156,27 @@ mod tests {
         let credential = issue_emrtd_passport_self_signed(&request).unwrap();
 
         assert_round_trip_and_tamper_rejection(&request, &credential);
+    }
+
+    #[test]
+    fn self_signed_consumer_routes_every_supported_csca_algorithm() {
+        for algorithm in CscaKeyAlgorithm::ALL {
+            let mut request = request();
+            request.csca_key_algorithm = Some(algorithm);
+            let serialized = serde_json::to_value(&request).unwrap();
+            assert_eq!(serialized["csca_key_algorithm"], algorithm.as_str());
+            let decoded: EmrtdIssuanceRequest = serde_json::from_value(serialized).unwrap();
+            assert_eq!(decoded.csca_key_algorithm, Some(algorithm));
+
+            let credential = issue_emrtd_passport_self_signed(&decoded).unwrap();
+            assert_round_trip_and_tamper_rejection(&decoded, &credential);
+        }
+    }
+
+    #[test]
+    fn omitted_csca_algorithm_preserves_the_existing_request_shape() {
+        let serialized = serde_json::to_value(request()).unwrap();
+        assert!(serialized.get("csca_key_algorithm").is_none());
     }
 
     #[test]
