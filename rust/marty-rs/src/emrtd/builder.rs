@@ -1,6 +1,7 @@
 //! Fluent builder for constructing [`EmrtdIssuanceRequest`]s.
 
 use super::types::{EmrtdDataGroup, EmrtdIssuanceRequest};
+use marty_verification::issuance::CscaKeyAlgorithm;
 
 /// Fluent builder for an [`EmrtdIssuanceRequest`].
 ///
@@ -15,6 +16,7 @@ use super::types::{EmrtdDataGroup, EmrtdIssuanceRequest};
 pub struct EmrtdPassportBuilder {
     country_code: String,
     organization: String,
+    csca_key_algorithm: Option<CscaKeyAlgorithm>,
     data_groups: Vec<EmrtdDataGroup>,
 }
 
@@ -24,8 +26,15 @@ impl EmrtdPassportBuilder {
         Self {
             country_code: country_code.into(),
             organization: organization.into(),
+            csca_key_algorithm: None,
             data_groups: Vec::new(),
         }
+    }
+
+    /// Select the offline/bootstrap CSCA key algorithm.
+    pub fn csca_key_algorithm(mut self, algorithm: CscaKeyAlgorithm) -> Self {
+        self.csca_key_algorithm = Some(algorithm);
+        self
     }
 
     /// Set DG1 (MRZ data).
@@ -59,6 +68,7 @@ impl EmrtdPassportBuilder {
         EmrtdIssuanceRequest {
             country_code: self.country_code,
             organization: self.organization,
+            csca_key_algorithm: self.csca_key_algorithm,
             data_groups: self.data_groups,
         }
     }

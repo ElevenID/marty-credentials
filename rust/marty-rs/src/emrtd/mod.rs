@@ -18,6 +18,7 @@ pub mod bindings;
 
 pub use builder::EmrtdPassportBuilder;
 pub use issuance::{issue_emrtd_passport, issue_emrtd_passport_self_signed};
+pub use marty_verification::issuance::CscaKeyAlgorithm;
 pub use types::{EmrtdCredential, EmrtdDataGroup, EmrtdIssuanceRequest};
 
 #[cfg(feature = "python")]

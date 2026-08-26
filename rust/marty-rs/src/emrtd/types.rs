@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use marty_verification::issuance::CscaKeyAlgorithm;
+
 // ============================================================================
 // Data group representation
 // ============================================================================
@@ -33,6 +35,10 @@ pub struct EmrtdIssuanceRequest {
     pub country_code: String,
     /// Organisation name for the Document Signer Certificate subject.
     pub organization: String,
+    /// Optional algorithm for offline/self-signed CSCA bootstrap generation.
+    /// Omission preserves the existing ECDSA P-256 consumer behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub csca_key_algorithm: Option<CscaKeyAlgorithm>,
     /// Data groups to include in the Security Object and credential.
     pub data_groups: Vec<EmrtdDataGroup>,
 }
@@ -43,6 +49,7 @@ impl EmrtdIssuanceRequest {
         Self {
             country_code: country_code.into(),
             organization: org.into(),
+            csca_key_algorithm: None,
             data_groups: vec![EmrtdDataGroup {
                 number: 1,
                 content: dg1,
