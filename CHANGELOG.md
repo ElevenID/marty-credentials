@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.70] - 2026-08-25
+
 ### Changed
 
 - Remove the legacy Python `marty-msf` runtime and release-artifact dependency.
@@ -17,15 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a transitive dependency of `marty-msf`. Fail image publication if the
   generated SPDX inventory contains a retired Python distribution.
 - Pin Rust source dependencies, production native wheels, and CI cache inputs
-  to the independently audited Marty Core 0.1.59 release, whose verifier wheel
+  to the independently audited Marty Core 0.1.60 release, whose verifier wheel
   excludes authority-only certificate and SOD construction features. Build the
   CI verifier wheel with that same released feature profile.
+- Preserve explicit CSCA authority selection for RSA-2048, RSA-3072, RSA-4096,
+  ECDSA P-256, P-384, and P-521 eMRTD issuance. Omitted algorithm selection
+  retains the existing P-256 behavior for backward compatibility.
 
 ### Fixed
 
 - Consume standards-compliant `did:web` resolution for percent-encoded ports
   while preserving exact non-default-port allowlisting and managed resolver
   pinning.
+- Consume parameter-aware RSA-PSS X.509 verification so issuer-specified hash,
+  MGF1 hash, salt length, and trailer parameters are enforced instead of being
+  silently treated as fixed defaults.
 
 ## [0.1.61] - 2026-08-14
 
