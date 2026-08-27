@@ -112,6 +112,60 @@ async def test_create_is_draft_and_uses_only_canonical_fields() -> None:
         _create_request(auto_approval_rules=[])
 
 
+async def test_select_options_preserve_structured_labels_and_legacy_strings() -> None:
+    repo = InMemoryIssuanceRepository()
+    form_fields = [
+        {
+            "field_id": "clearance_status",
+            "label": "Clearance status",
+            "field_type": "SELECT",
+            "required": True,
+            "claim_mapping": "clearance_status",
+            "options": ["PENDING", {"label": "Cleared", "value": "CLEARED"}],
+        }
+    ]
+
+    response = await application_routes.create_application_template(
+        _create_request(form_fields=form_fields),
+        repo=repo,
+    )
+
+    assert response.form_fields[0]["options"] == [
+        "PENDING",
+        {"label": "Cleared", "value": "CLEARED"},
+    ]
+    patch = ApplicationTemplatePatch(form_fields=form_fields)
+    assert patch.model_dump(exclude_none=True)["form_fields"][0]["options"] == [
+        "PENDING",
+        {"label": "Cleared", "value": "CLEARED"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        {"label": "", "value": "CLEARED"},
+        {"label": "Cleared", "value": ""},
+        {"label": "Cleared", "value": "CLEARED", "secret": "not-public"},
+    ],
+)
+def test_structured_select_options_reject_invalid_public_shapes(
+    option: dict[str, str],
+) -> None:
+    with pytest.raises(ValidationError):
+        _create_request(
+            form_fields=[
+                {
+                    "field_id": "clearance_status",
+                    "label": "Clearance status",
+                    "field_type": "SELECT",
+                    "required": True,
+                    "options": [option],
+                }
+            ]
+        )
+
+
 def test_evidence_requirement_rejects_removed_auto_approval_alias() -> None:
     evidence = {
         "evidence_id": "membership-proof",
