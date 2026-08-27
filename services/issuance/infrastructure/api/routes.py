@@ -1124,6 +1124,15 @@ class CredentialResponse(BaseModel):
     notification_id: str | None = None
 
 
+class ApplicationFieldOption(BaseModel):
+    """A stable value with a human-readable label for select fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=256)
+    value: str = Field(min_length=1, max_length=256)
+
+
 class ApplicationFormField(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1144,7 +1153,7 @@ class ApplicationFormField(BaseModel):
     required: bool
     claim_mapping: str | None = None
     validation_pattern: str | None = None
-    options: list[str] | None = None
+    options: list[str | ApplicationFieldOption] | None = None
     minimum: float | None = None
     maximum: float | None = None
     placeholder: str | None = None
