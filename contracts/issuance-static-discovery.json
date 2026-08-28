@@ -6,6 +6,106 @@
     "organization_id": "org-a",
     "credential_type": "access_badge"
   },
+  "transport": {
+    "request_id": {
+      "request_header": "x-request-id",
+      "response_header": "x-request-id",
+      "propagated_value": "contract-request-id",
+      "generated_pattern": "^[0-9a-f]{8}$",
+      "empty_value_generates": true
+    },
+    "cors": {
+      "environment_variable": "CORS_ALLOWED_ORIGINS",
+      "default_allowed_origins": [
+        "http://localhost:3000"
+      ],
+      "allowed_methods": [
+        "DELETE",
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "PATCH",
+        "POST",
+        "PUT"
+      ],
+      "allowed_origin": "https://wallet.example",
+      "simple_response_headers": {
+        "access-control-allow-credentials": "true",
+        "access-control-allow-origin": "https://wallet.example",
+        "vary": "Origin"
+      },
+      "wildcard_simple_request": {
+        "configured_origin": "*",
+        "request_origin": "https://any-wallet.example",
+        "response_headers": {
+          "access-control-allow-credentials": "true",
+          "access-control-allow-origin": "https://any-wallet.example",
+          "vary": "Origin"
+        }
+      },
+      "preflight": {
+        "method": "OPTIONS",
+        "path": "/.well-known/oauth-authorization-server",
+        "request_headers": {
+          "origin": "https://wallet.example",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "X-Wallet-Test",
+          "x-request-id": "preflight-request"
+        },
+        "status_code": 200,
+        "response_headers": {
+          "vary": "Origin",
+          "access-control-allow-methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+          "access-control-max-age": "600",
+          "access-control-allow-credentials": "true",
+          "access-control-allow-origin": "https://wallet.example",
+          "access-control-allow-headers": "X-Wallet-Test",
+          "content-type": "text/plain; charset=utf-8",
+          "x-request-id": "preflight-request"
+        },
+        "body": "OK"
+      },
+      "denied_preflight": {
+        "method": "OPTIONS",
+        "path": "/.well-known/oauth-authorization-server",
+        "request_headers": {
+          "origin": "https://evil.example",
+          "access-control-request-method": "GET",
+          "x-request-id": "denied-request"
+        },
+        "status_code": 400,
+        "response_headers": {
+          "vary": "Origin",
+          "access-control-allow-methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+          "access-control-max-age": "600",
+          "access-control-allow-credentials": "true",
+          "content-type": "text/plain; charset=utf-8",
+          "x-request-id": "denied-request"
+        },
+        "body": "Disallowed CORS origin"
+      },
+      "denied_method_preflight": {
+        "method": "OPTIONS",
+        "path": "/.well-known/oauth-authorization-server",
+        "request_headers": {
+          "origin": "https://wallet.example",
+          "access-control-request-method": "TRACE",
+          "x-request-id": "denied-method-request"
+        },
+        "status_code": 400,
+        "response_headers": {
+          "vary": "Origin",
+          "access-control-allow-methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+          "access-control-max-age": "600",
+          "access-control-allow-credentials": "true",
+          "access-control-allow-origin": "https://wallet.example",
+          "content-type": "text/plain; charset=utf-8",
+          "x-request-id": "denied-method-request"
+        },
+        "body": "Disallowed CORS method"
+      }
+    }
+  },
   "cases": [
     {
       "operation": "get_issuer_metadata_root",
