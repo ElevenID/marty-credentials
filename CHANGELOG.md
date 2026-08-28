@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.71] - 2026-08-27
+
+### Fixed
+
+- Preserve structured application-field options with distinct labels and
+  values through create, patch, validation, persistence, and response paths,
+  while retaining backward compatibility with legacy string-only options.
+
 ## [0.1.70] - 2026-08-25
 
 ### Changed
