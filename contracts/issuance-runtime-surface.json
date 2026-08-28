@@ -1,0 +1,1769 @@
+{
+  "configuration": {
+    "dynamic_lookups": [
+      {
+        "line": 9,
+        "source": "services/issuance/application/canvas_feature_flags.py"
+      },
+      {
+        "line": 89,
+        "source": "services/issuance/application/canvas_issuance_guard.py"
+      },
+      {
+        "line": 134,
+        "source": "services/issuance/application/canvas_readiness.py"
+      },
+      {
+        "line": 334,
+        "source": "services/issuance/application/external_evidence_api.py"
+      },
+      {
+        "line": 146,
+        "source": "services/issuance/application/rust_integration.py"
+      },
+      {
+        "line": 216,
+        "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
+      },
+      {
+        "line": 219,
+        "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
+      },
+      {
+        "line": 253,
+        "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
+      },
+      {
+        "line": 305,
+        "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
+      },
+      {
+        "line": 594,
+        "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
+      },
+      {
+        "line": 98,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 102,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 134,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 135,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 139,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 2727,
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 2740,
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 12,
+        "source": "services/issuance/infrastructure/api/signing_context.py"
+      },
+      {
+        "line": 15,
+        "source": "services/issuance/infrastructure/api/signing_context.py"
+      },
+      {
+        "line": 27,
+        "source": "services/issuance/infrastructure/security/encryption.py"
+      }
+    ],
+    "environment_variable_count": 89,
+    "environment_variables": [
+      "ALLOWED_REDIRECT_URIS",
+      "APP_ENV",
+      "CANVAS_ADMIN_API_TOKEN",
+      "CANVAS_ADMIN_API_TOKEN_FILE",
+      "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK",
+      "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+      "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+      "CANVAS_CREDENTIALS_API_BASE_URL",
+      "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+      "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+      "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+      "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
+      "CANVAS_CREDENTIALS_PUBLISH_URL",
+      "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
+      "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
+      "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+      "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+      "CANVAS_CREDENTIALS_VALIDATE_URL_TEMPLATE",
+      "CANVAS_LTI_DEEP_LINKING_ISSUER",
+      "CANVAS_LTI_EXPERIENCE_BASE_URL",
+      "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
+      "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
+      "CANVAS_LTI_JWKS_TTL_MINUTES",
+      "CANVAS_LTI_STATE_TTL_MINUTES",
+      "CANVAS_LTI_TOOL_ISSUER_DID",
+      "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
+      "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
+      "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
+      "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
+      "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+      "CANVAS_OAUTH_REVOCATION_BATCH_SIZE",
+      "CANVAS_PILOT_ORGANIZATION_IDS",
+      "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
+      "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
+      "CANVAS_SYNC_PROCESSOR",
+      "CANVAS_SYNC_SCHEDULE_LIMIT",
+      "CANVAS_SYNC_WORKER_BATCH_SIZE",
+      "CANVAS_SYNC_WORKER_ID",
+      "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+      "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+      "CANVAS_SYNC_WORKER_POLL_SECONDS",
+      "CORS_ALLOWED_ORIGINS",
+      "CREDENTIAL_TEMPLATE_SERVICE_URL",
+      "CT_GRPC_TARGET",
+      "DATABASE_URL",
+      "DIDCOMM_ALLOW_PRIVATE_IPS",
+      "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+      "DIDCOMM_ENCRYPTION_POLICY_FILE",
+      "DIDCOMM_TLS_CA_FILE",
+      "DIDCOMM_UNIVERSAL_RESOLVER_URL",
+      "DOCUMENT_SIGNER_GRPC_TARGET",
+      "ENVIRONMENT",
+      "GRPC_CA_CERT",
+      "GRPC_SERVICE_TOKEN",
+      "GRPC_SERVICE_TOKEN_FILE",
+      "GRPC_TLS_CA_CERT",
+      "ICAO_DOCUMENT_SIGNER_API_KEY",
+      "ICAO_DOCUMENT_SIGNER_URL",
+      "INTEGRATION_SECRET_MASTER_KEY_ENV",
+      "ISSUANCE_API_KEY",
+      "ISSUANCE_APPROVAL_POLICY_CACHE_SECONDS",
+      "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
+      "ISSUANCE_GRPC_ENABLED",
+      "ISSUANCE_GRPC_PORT",
+      "ISSUANCE_OFFER_TTL_MINUTES",
+      "ISSUANCE_SERVICE_PORT",
+      "ISSUER_BASE_URL",
+      "ISSUER_DISPLAY_NAME",
+      "LOG_LEVEL",
+      "MARTY_DEFAULT_REVOCATION_PROFILE_ID",
+      "ORG_GRPC_TARGET",
+      "PERSONALIZATION_BUREAU_API_KEY",
+      "PERSONALIZATION_BUREAU_URL",
+      "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+      "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+      "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+      "REVOCATION_PROFILE_ID",
+      "REVOCATION_PROFILE_SERVICE_URL",
+      "RP_GRPC_TARGET",
+      "SIGNING_KEYS_INTERNAL_API_KEY",
+      "SIGNING_KEYS_INTERNAL_URL",
+      "TOKEN_RATE_LIMIT",
+      "TOKEN_RATE_WINDOW",
+      "UI_BASE_URL",
+      "UNIVERSAL_RESOLVER_URL",
+      "VCDM_RELATED_RESOURCE_MAX_BYTES",
+      "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS",
+      "VCDM_RELATED_RESOURCE_URLS",
+      "VDSNC_RUST_ENABLED"
+    ]
+  },
+  "grpc": {
+    "method_count": 12,
+    "methods": [
+      {
+        "implementation_line": 709,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 44,
+        "method": "ExchangeToken",
+        "path": "/marty.ui.issuance.v1.IssuanceService/ExchangeToken",
+        "request": "issuance__service__pb2.ExchangeTokenRequest.SerializeToString",
+        "response": "issuance__service__pb2.TokenResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1403,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 84,
+        "method": "GetCredentialStatus",
+        "path": "/marty.ui.issuance.v1.IssuanceService/GetCredentialStatus",
+        "request": "issuance__service__pb2.GetCredentialStatusRequest.SerializeToString",
+        "response": "issuance__service__pb2.CredentialStatusResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1165,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 54,
+        "method": "GetOffer",
+        "path": "/marty.ui.issuance.v1.IssuanceService/GetOffer",
+        "request": "issuance__service__pb2.GetOfferRequest.SerializeToString",
+        "response": "issuance__service__pb2.OfferResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1230,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 64,
+        "method": "GetTransaction",
+        "path": "/marty.ui.issuance.v1.IssuanceService/GetTransaction",
+        "request": "issuance__service__pb2.GetTransactionRequest.SerializeToString",
+        "response": "issuance__service__pb2.TransactionResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1492,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 94,
+        "method": "HealthCheck",
+        "path": "/marty.ui.issuance.v1.IssuanceService/HealthCheck",
+        "request": "issuance__service__pb2.HealthCheckRequest.SerializeToString",
+        "response": "issuance__service__pb2.HealthCheckResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 303,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 39,
+        "method": "InitiateIssuance",
+        "path": "/marty.ui.issuance.v1.IssuanceService/InitiateIssuance",
+        "request": "issuance__service__pb2.InitiateIssuanceRequest.SerializeToString",
+        "response": "issuance__service__pb2.IssuanceResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 900,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 49,
+        "method": "IssueCredential",
+        "path": "/marty.ui.issuance.v1.IssuanceService/IssueCredential",
+        "request": "issuance__service__pb2.IssueCredentialRequest.SerializeToString",
+        "response": "issuance__service__pb2.IssueCredentialResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1199,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 59,
+        "method": "ListTransactions",
+        "path": "/marty.ui.issuance.v1.IssuanceService/ListTransactions",
+        "request": "issuance__service__pb2.ListTransactionsRequest.SerializeToString",
+        "response": "issuance__service__pb2.ListTransactionsResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1392,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 79,
+        "method": "ReinstateCredential",
+        "path": "/marty.ui.issuance.v1.IssuanceService/ReinstateCredential",
+        "request": "issuance__service__pb2.CredentialLifecycleRequest.SerializeToString",
+        "response": "issuance__service__pb2.CredentialStatusResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1370,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 69,
+        "method": "RevokeCredential",
+        "path": "/marty.ui.issuance.v1.IssuanceService/RevokeCredential",
+        "request": "issuance__service__pb2.CredentialLifecycleRequest.SerializeToString",
+        "response": "issuance__service__pb2.CredentialStatusResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      },
+      {
+        "implementation_line": 1458,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 89,
+        "method": "StreamCredentialEvents",
+        "path": "/marty.ui.issuance.v1.IssuanceService/StreamCredentialEvents",
+        "request": "issuance__service__pb2.StreamCredentialEventsRequest.SerializeToString",
+        "response": "issuance__service__pb2.CredentialEvent.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_stream"
+      },
+      {
+        "implementation_line": 1381,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
+        "line": 74,
+        "method": "SuspendCredential",
+        "path": "/marty.ui.issuance.v1.IssuanceService/SuspendCredential",
+        "request": "issuance__service__pb2.CredentialLifecycleRequest.SerializeToString",
+        "response": "issuance__service__pb2.CredentialStatusResponse.FromString",
+        "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
+        "transport": "unary_unary"
+      }
+    ]
+  },
+  "http": {
+    "route_count": 131,
+    "routes": [
+      {
+        "line": 930,
+        "method": "GET",
+        "operation": "get_as_metadata",
+        "path": "/.well-known/oauth-authorization-server",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 906,
+        "method": "GET",
+        "operation": "get_org_as_metadata",
+        "path": "/.well-known/oauth-authorization-server/org/{org_id}",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 875,
+        "method": "GET",
+        "operation": "get_org_apple_wallet_as_metadata",
+        "path": "/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 844,
+        "method": "GET",
+        "operation": "get_org_credential_manager_as_metadata",
+        "path": "/.well-known/oauth-authorization-server/org/{org_id}/credential-manager",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 727,
+        "method": "GET",
+        "operation": "get_issuer_metadata_root",
+        "path": "/.well-known/openid-credential-issuer",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 565,
+        "method": "GET",
+        "operation": "get_org_issuer_metadata",
+        "path": "/.well-known/openid-credential-issuer/org/{org_id}",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 495,
+        "method": "GET",
+        "operation": "get_org_issuer_metadata_apple_wallet",
+        "path": "/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 432,
+        "method": "GET",
+        "operation": "get_org_issuer_metadata_credential_manager",
+        "path": "/.well-known/openid-credential-issuer/org/{org_id}/credential-manager",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 814,
+        "method": "GET",
+        "operation": "get_sd_jwt_vc_type_metadata",
+        "path": "/credentials/{credential_type:path}",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 417,
+        "method": "GET",
+        "operation": "health_check",
+        "path": "/health",
+        "router": "app",
+        "source": "services/issuance/main.py"
+      },
+      {
+        "line": 780,
+        "method": "GET",
+        "operation": "list_applications",
+        "path": "/internal/applications",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 727,
+        "method": "POST",
+        "operation": "create_application",
+        "path": "/internal/applications",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 997,
+        "method": "POST",
+        "operation": "reconcile_application_evidence",
+        "path": "/internal/applications/evidence/reconcile",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1027,
+        "method": "GET",
+        "operation": "get_application_evidence_reconciliation_report",
+        "path": "/internal/applications/evidence/reconciliation-report",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 821,
+        "method": "GET",
+        "operation": "get_application",
+        "path": "/internal/applications/{application_id}",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1091,
+        "method": "POST",
+        "operation": "approve_application",
+        "path": "/internal/applications/{application_id}/approve",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 852,
+        "method": "GET",
+        "operation": "list_application_evidence_facts",
+        "path": "/internal/applications/{application_id}/evidence-facts",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 869,
+        "method": "GET",
+        "operation": "get_application_evidence_summary",
+        "path": "/internal/applications/{application_id}/evidence-summary",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 899,
+        "method": "POST",
+        "operation": "run_external_evidence_api_check",
+        "path": "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1711,
+        "method": "GET",
+        "operation": "list_issuance_events",
+        "path": "/internal/applications/{application_id}/issuance-events",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1610,
+        "method": "GET",
+        "operation": "get_issuance_offer",
+        "path": "/internal/applications/{application_id}/issuance-offer",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1511,
+        "method": "POST",
+        "operation": "generate_issuance_offer",
+        "path": "/internal/applications/{application_id}/issuance-offer",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1204,
+        "method": "POST",
+        "operation": "reject_application",
+        "path": "/internal/applications/{application_id}/reject",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1047,
+        "method": "POST",
+        "operation": "submit_evidence",
+        "path": "/internal/applications/{application_id}/submit-evidence",
+        "router": "internal_application_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 1056,
+        "method": "GET",
+        "operation": "get_application_template_owner",
+        "path": "/internal/v1/resource-owners/application-templates/{template_id}",
+        "router": "resource_owner_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 1020,
+        "method": "GET",
+        "operation": "get_issuance_transaction_owner",
+        "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
+        "router": "resource_owner_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 1038,
+        "method": "GET",
+        "operation": "get_issued_credential_owner",
+        "path": "/internal/v1/resource-owners/issued-credentials/{credential_id}",
+        "router": "resource_owner_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 605,
+        "method": "GET",
+        "operation": "list_application_templates",
+        "path": "/v1/application-templates",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 576,
+        "method": "POST",
+        "operation": "create_application_template",
+        "path": "/v1/application-templates",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 709,
+        "method": "DELETE",
+        "operation": "delete_application_template",
+        "path": "/v1/application-templates/{template_id}",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 616,
+        "method": "GET",
+        "operation": "get_application_template",
+        "path": "/v1/application-templates/{template_id}",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 629,
+        "method": "PATCH",
+        "operation": "update_application_template",
+        "path": "/v1/application-templates/{template_id}",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 671,
+        "method": "POST",
+        "operation": "activate_application_template",
+        "path": "/v1/application-templates/{template_id}/activate",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 693,
+        "method": "POST",
+        "operation": "deprecate_application_template",
+        "path": "/v1/application-templates/{template_id}/deprecate",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 659,
+        "method": "POST",
+        "operation": "validate_application_template",
+        "path": "/v1/application-templates/{template_id}/validate",
+        "router": "application_template_router",
+        "source": "services/issuance/infrastructure/api/application_routes.py"
+      },
+      {
+        "line": 6766,
+        "method": "POST",
+        "operation": "process_canvas_ags_score_event_route",
+        "path": "/v1/integrations/canvas/ags/score-events",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3704,
+        "method": "POST",
+        "operation": "approve_canvas_application",
+        "path": "/v1/integrations/canvas/applications/{application_id}/approve",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 266,
+        "method": "POST",
+        "operation": "enqueue_canvas_application_sync_route",
+        "path": "/v1/integrations/canvas/applications/{application_id}/canvas-sync",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 393,
+        "method": "GET",
+        "operation": "list_canvas_award_candidates_route",
+        "path": "/v1/integrations/canvas/canvas-award-candidates",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 5218,
+        "method": "POST",
+        "operation": "validate_canvas_credentials_provider",
+        "path": "/v1/integrations/canvas/canvas-credentials/validate",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 291,
+        "method": "GET",
+        "operation": "list_canvas_sync_jobs_route",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 324,
+        "method": "GET",
+        "operation": "get_canvas_sync_job_route",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 368,
+        "method": "POST",
+        "operation": "resolve_canvas_sync_job_route",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/resolve",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 342,
+        "method": "POST",
+        "operation": "retry_canvas_sync_job_route",
+        "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/retry",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 6737,
+        "method": "POST",
+        "operation": "process_canvas_evidence_event_route",
+        "path": "/v1/integrations/canvas/evidence-events",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6822,
+        "method": "GET",
+        "operation": "get_canvas_evidence_event_status",
+        "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 422,
+        "method": "GET",
+        "operation": "list_evidence_policy_reviews_route",
+        "path": "/v1/integrations/canvas/evidence-policy-reviews",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 449,
+        "method": "POST",
+        "operation": "resolve_evidence_policy_review_route",
+        "path": "/v1/integrations/canvas/evidence-policy-reviews/{review_id}/resolve",
+        "router": "canvas_operations_router",
+        "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
+      },
+      {
+        "line": 5283,
+        "method": "GET",
+        "operation": "list_canvas_integration_secrets",
+        "path": "/v1/integrations/canvas/integration-secrets",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 5250,
+        "method": "POST",
+        "operation": "create_canvas_integration_secret",
+        "path": "/v1/integrations/canvas/integration-secrets",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 5333,
+        "method": "DELETE",
+        "operation": "delete_canvas_integration_secret",
+        "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 5300,
+        "method": "PUT",
+        "operation": "update_canvas_integration_secret",
+        "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3795,
+        "method": "GET",
+        "operation": "get_public_canvas_lti_config",
+        "path": "/v1/integrations/canvas/lti/config/{token}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 7031,
+        "method": "GET",
+        "operation": "get_canvas_lti_experience_session_route",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 7078,
+        "method": "POST",
+        "operation": "bootstrap_canvas_lti_experience_application_route",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 7140,
+        "method": "POST",
+        "operation": "create_canvas_lti_deep_linking_response_route",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6713,
+        "method": "GET",
+        "operation": "get_canvas_lti_evidence_status",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6675,
+        "method": "POST",
+        "operation": "sync_canvas_lti_evidence",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6975,
+        "method": "POST",
+        "operation": "exchange_canvas_lti_experience_code_route",
+        "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3787,
+        "method": "GET",
+        "operation": "get_canvas_lti_tool_jwks",
+        "path": "/v1/integrations/canvas/lti/jwks",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6916,
+        "method": "POST",
+        "operation": "launch_canvas_lti_experience_route",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6881,
+        "method": "POST",
+        "operation": "initiate_canvas_lti_experience_login_route",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6898,
+        "method": "POST",
+        "operation": "verify_canvas_lti_launch_route",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6864,
+        "method": "POST",
+        "operation": "initiate_canvas_lti_login_route",
+        "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 6794,
+        "method": "POST",
+        "operation": "process_canvas_nrps_membership_event_route",
+        "path": "/v1/integrations/canvas/nrps/membership-events",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4046,
+        "method": "GET",
+        "operation": "complete_canvas_oauth_connection",
+        "path": "/v1/integrations/canvas/oauth/callback",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4473,
+        "method": "GET",
+        "operation": "list_canvas_platforms",
+        "path": "/v1/integrations/canvas/platforms",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4456,
+        "method": "POST",
+        "operation": "create_canvas_platform",
+        "path": "/v1/integrations/canvas/platforms",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4541,
+        "method": "DELETE",
+        "operation": "delete_canvas_platform",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4493,
+        "method": "GET",
+        "operation": "get_canvas_platform",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4512,
+        "method": "PUT",
+        "operation": "update_canvas_platform",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4812,
+        "method": "GET",
+        "operation": "get_canvas_catalog",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4681,
+        "method": "POST",
+        "operation": "refresh_canvas_platform_jwks",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3842,
+        "method": "PUT",
+        "operation": "update_canvas_lti_installation",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4344,
+        "method": "DELETE",
+        "operation": "disconnect_canvas_oauth_connection",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3955,
+        "method": "POST",
+        "operation": "start_canvas_oauth_connection",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4846,
+        "method": "POST",
+        "operation": "create_canvas_program_binding",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3901,
+        "method": "GET",
+        "operation": "get_canvas_platform_readiness",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3821,
+        "method": "GET",
+        "operation": "get_canvas_lti_registration_config",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4645,
+        "method": "POST",
+        "operation": "probe_canvas_platform_sandbox",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4705,
+        "method": "POST",
+        "operation": "discover_canvas_scope",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4872,
+        "method": "GET",
+        "operation": "list_canvas_program_bindings",
+        "path": "/v1/integrations/canvas/program-bindings",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4963,
+        "method": "DELETE",
+        "operation": "delete_canvas_program_binding",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4905,
+        "method": "GET",
+        "operation": "get_canvas_program_binding",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 4929,
+        "method": "PUT",
+        "operation": "update_canvas_program_binding",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 5073,
+        "method": "POST",
+        "operation": "activate_canvas_program_binding",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 5187,
+        "method": "POST",
+        "operation": "deactivate_canvas_program_binding",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 5054,
+        "method": "POST",
+        "operation": "validate_canvas_program_binding",
+        "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
+        "router": "canvas_integration_router",
+        "source": "services/issuance/infrastructure/api/canvas_routes.py"
+      },
+      {
+        "line": 3605,
+        "method": "GET",
+        "operation": "authorize",
+        "path": "/v1/issuance/authorize",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 4238,
+        "method": "POST",
+        "operation": "issue_credential",
+        "path": "/v1/issuance/credential",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6117,
+        "method": "GET",
+        "operation": "list_credentials",
+        "path": "/v1/issuance/credentials",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6033,
+        "method": "POST",
+        "operation": "reinstate_credential",
+        "path": "/v1/issuance/credentials/{credential_id}/reinstate",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5941,
+        "method": "POST",
+        "operation": "revoke_credential",
+        "path": "/v1/issuance/credentials/{credential_id}/revoke",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6088,
+        "method": "GET",
+        "operation": "get_credential_status",
+        "path": "/v1/issuance/credentials/{credential_id}/status",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5981,
+        "method": "POST",
+        "operation": "suspend_credential",
+        "path": "/v1/issuance/credentials/{credential_id}/suspend",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5469,
+        "method": "POST",
+        "operation": "deferred_credential",
+        "path": "/v1/issuance/deferred-credential",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6240,
+        "method": "POST",
+        "operation": "process_pending_canvas_mirror_deliveries",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6259,
+        "method": "POST",
+        "operation": "process_failed_canvas_mirror_status_syncs",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6432,
+        "method": "GET",
+        "operation": "get_canvas_mirror_provenance",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6276,
+        "method": "POST",
+        "operation": "run_canvas_mirror_automation_cycle_endpoint",
+        "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5428,
+        "method": "POST",
+        "operation": "didcomm_deliver",
+        "path": "/v1/issuance/didcomm/deliver",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 3198,
+        "method": "POST",
+        "operation": "initiate_issuance",
+        "path": "/v1/issuance/initiate",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 4206,
+        "method": "POST",
+        "operation": "nonce_endpoint",
+        "path": "/v1/issuance/nonce",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5536,
+        "method": "POST",
+        "operation": "notification_endpoint",
+        "path": "/v1/issuance/notification",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5557,
+        "method": "GET",
+        "operation": "get_credential_offer",
+        "path": "/v1/issuance/offers/{tx_id}",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 3076,
+        "method": "PUT",
+        "operation": "put_oid4vci_registered_client",
+        "path": "/v1/issuance/oid4vci-clients",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6295,
+        "method": "GET",
+        "operation": "get_canvas_mirror_health",
+        "path": "/v1/issuance/organizations/{organization_id}/canvas-mirror-health",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5729,
+        "method": "GET",
+        "operation": "get_organization_retention_summary",
+        "path": "/v1/issuance/organizations/{organization_id}/retention",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5750,
+        "method": "POST",
+        "operation": "purge_organization_retention_data",
+        "path": "/v1/issuance/organizations/{organization_id}/retention/purge",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 3814,
+        "method": "POST",
+        "operation": "pushed_authorization_request",
+        "path": "/v1/issuance/par",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 3941,
+        "method": "POST",
+        "operation": "exchange_token",
+        "path": "/v1/issuance/token",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5582,
+        "method": "GET",
+        "operation": "list_transactions",
+        "path": "/v1/issuance/transactions",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5610,
+        "method": "GET",
+        "operation": "get_transaction",
+        "path": "/v1/issuance/transactions/{tx_id}",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5773,
+        "method": "GET",
+        "operation": "get_transaction_revocation_status",
+        "path": "/v1/issuance/transactions/{tx_id}/revocation-status",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 5679,
+        "method": "POST",
+        "operation": "revoke_transaction",
+        "path": "/v1/issuance/transactions/{tx_id}/revoke",
+        "router": "issuance_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6149,
+        "method": "GET",
+        "operation": "list_issued_credentials",
+        "path": "/v1/issued-credentials",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6169,
+        "method": "GET",
+        "operation": "get_issued_credential",
+        "path": "/v1/issued-credentials/{credential_id}",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6190,
+        "method": "POST",
+        "operation": "publish_issued_credential_canvas_mirror",
+        "path": "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6531,
+        "method": "POST",
+        "operation": "reinstate_issued_credential",
+        "path": "/v1/issued-credentials/{credential_id}/reinstate",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6562,
+        "method": "POST",
+        "operation": "renew_issued_credential",
+        "path": "/v1/issued-credentials/{credential_id}/renew",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6469,
+        "method": "POST",
+        "operation": "revoke_issued_credential",
+        "path": "/v1/issued-credentials/{credential_id}/revoke",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 6500,
+        "method": "POST",
+        "operation": "suspend_issued_credential",
+        "path": "/v1/issued-credentials/{credential_id}/suspend",
+        "router": "issued_credential_router",
+        "source": "services/issuance/infrastructure/api/routes.py"
+      },
+      {
+        "line": 188,
+        "method": "POST",
+        "operation": "create_passport_application",
+        "path": "/v1/passport/applications",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 321,
+        "method": "POST",
+        "operation": "activate_passport",
+        "path": "/v1/passport/applications/{application_id}/activate",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 239,
+        "method": "POST",
+        "operation": "generate_passport_data_groups",
+        "path": "/v1/passport/applications/{application_id}/generate-data-groups",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 225,
+        "method": "POST",
+        "operation": "generate_passport_sod",
+        "path": "/v1/passport/applications/{application_id}/generate-sod",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 282,
+        "method": "GET",
+        "operation": "get_passport_production_status",
+        "path": "/v1/passport/applications/{application_id}/production-status",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 297,
+        "method": "POST",
+        "operation": "record_passport_quality_result",
+        "path": "/v1/passport/applications/{application_id}/quality-verify",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 250,
+        "method": "POST",
+        "operation": "submit_passport_personalization",
+        "path": "/v1/passport/applications/{application_id}/submit-personalization",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 171,
+        "method": "GET",
+        "operation": "get_physical_document_capabilities",
+        "path": "/v1/passport/capabilities",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      },
+      {
+        "line": 335,
+        "method": "POST",
+        "operation": "personalization_webhook",
+        "path": "/v1/passport/webhooks/personalization",
+        "router": "physical_document_router",
+        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
+      }
+    ]
+  },
+  "migrations": {
+    "heads": [
+      "merge_issuance_heads"
+    ],
+    "revision_count": 44,
+    "revisions": [
+      {
+        "down_revisions": [],
+        "line": 13,
+        "revision": "735160618517",
+        "source": "services/issuance/infrastructure/migrations/versions/20260203_0225_735160618517_initial_issuance_schema.py"
+      },
+      {
+        "down_revisions": [
+          "735160618517"
+        ],
+        "line": 13,
+        "revision": "add_application_tables",
+        "source": "services/issuance/infrastructure/migrations/versions/20260204_0030_add_application_tables.py"
+      },
+      {
+        "down_revisions": [
+          "add_application_tables"
+        ],
+        "line": 13,
+        "revision": "add_application_id",
+        "source": "services/issuance/infrastructure/migrations/versions/20260204_0100_add_application_id_to_issuance_transactions.py"
+      },
+      {
+        "down_revisions": [
+          "add_application_id"
+        ],
+        "line": 13,
+        "revision": "add_credential_type",
+        "source": "services/issuance/infrastructure/migrations/versions/20260205_0200_add_credential_type_to_issuance_transactions.py"
+      },
+      {
+        "down_revisions": [
+          "add_credential_type"
+        ],
+        "line": 14,
+        "revision": "add_missing_application_columns",
+        "source": "services/issuance/infrastructure/migrations/versions/20260205_0300_add_missing_application_columns.py"
+      },
+      {
+        "down_revisions": [
+          "add_missing_application_columns"
+        ],
+        "line": 13,
+        "revision": "add_required_checks_to_templates",
+        "source": "services/issuance/infrastructure/migrations/versions/20260206_0100_add_required_checks_to_application_templates.py"
+      },
+      {
+        "down_revisions": [
+          "add_required_checks_to_templates"
+        ],
+        "line": 19,
+        "revision": "add_issuance_events_table",
+        "source": "services/issuance/infrastructure/migrations/versions/20260218_0100_add_issuance_events_table.py"
+      },
+      {
+        "down_revisions": [
+          "add_issuance_events_table"
+        ],
+        "line": 16,
+        "revision": "add_authorization_sessions_table",
+        "source": "services/issuance/infrastructure/migrations/versions/20260221_0100_add_authorization_sessions_table.py"
+      },
+      {
+        "down_revisions": [
+          "add_authorization_sessions_table"
+        ],
+        "line": 12,
+        "revision": "add_zk_predicate_claims",
+        "source": "services/issuance/infrastructure/migrations/versions/20260223_0100_add_zk_predicate_claims_to_issuance_transactions.py"
+      },
+      {
+        "down_revisions": [
+          "add_zk_predicate_claims"
+        ],
+        "line": 12,
+        "revision": "add_credential_payload_format",
+        "source": "services/issuance/infrastructure/migrations/versions/20260224_0100_add_credential_payload_format_to_issuance_transactions.py"
+      },
+      {
+        "down_revisions": [
+          "add_credential_payload_format"
+        ],
+        "line": 12,
+        "revision": "add_revocation_to_tx",
+        "source": "services/issuance/infrastructure/migrations/versions/20260228_0100_add_revocation_to_issuance_transactions.py"
+      },
+      {
+        "down_revisions": [
+          "add_revocation_to_tx"
+        ],
+        "line": 13,
+        "revision": "add_issuer_signing_keys",
+        "source": "services/issuance/infrastructure/migrations/versions/20260330_1200_add_issuer_signing_keys_table.py"
+      },
+      {
+        "down_revisions": [
+          "add_issuer_signing_keys"
+        ],
+        "line": 13,
+        "revision": "add_sd_claims_col",
+        "source": "services/issuance/infrastructure/migrations/versions/20260405_2100_add_selective_disclosure_claims.py"
+      },
+      {
+        "down_revisions": [
+          "add_sd_claims_col"
+        ],
+        "line": 20,
+        "revision": "seed_marty_application_templates",
+        "source": "services/issuance/infrastructure/migrations/versions/20260416_2200_seed_marty_application_templates_from_credential_templates.py"
+      },
+      {
+        "down_revisions": [
+          "seed_marty_application_templates"
+        ],
+        "line": 14,
+        "revision": "add_issuer_did_override",
+        "source": "services/issuance/infrastructure/migrations/versions/20260417_1400_add_issuer_did_override_to_issuance_transactions.py"
+      },
+      {
+        "down_revisions": [
+          "add_issuer_did_override"
+        ],
+        "line": 14,
+        "revision": "add_issuer_did_to_issued_credentials",
+        "source": "services/issuance/infrastructure/migrations/versions/20260418_1000_add_issuer_did_to_issued_credentials.py"
+      },
+      {
+        "down_revisions": [
+          "add_issuer_did_to_issued_credentials"
+        ],
+        "line": 13,
+        "revision": "add_canvas_tables",
+        "source": "services/issuance/infrastructure/migrations/versions/20260507_1200_add_canvas_integration_tables.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_tables"
+        ],
+        "line": 13,
+        "revision": "add_canvas_lti_launch_states",
+        "source": "services/issuance/infrastructure/migrations/versions/20260507_1300_add_canvas_lti_launch_states.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_lti_launch_states"
+        ],
+        "line": 13,
+        "revision": "add_canvas_jwks_cache_metadata",
+        "source": "services/issuance/infrastructure/migrations/versions/20260507_1400_add_canvas_jwks_cache_metadata.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_jwks_cache_metadata"
+        ],
+        "line": 13,
+        "revision": "scope_canvas_receipts_by_account",
+        "source": "services/issuance/infrastructure/migrations/versions/20260507_1500_scope_canvas_event_receipts_by_account.py"
+      },
+      {
+        "down_revisions": [
+          "scope_canvas_receipts_by_account"
+        ],
+        "line": 13,
+        "revision": "add_canvas_evidence_flow_policy",
+        "source": "services/issuance/infrastructure/migrations/versions/20260511_1000_add_canvas_evidence_flow_policy.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_evidence_flow_policy"
+        ],
+        "line": 13,
+        "revision": "add_explicit_issuer_selection",
+        "source": "services/issuance/infrastructure/migrations/versions/20260512_1000_add_explicit_issuer_selection.py"
+      },
+      {
+        "down_revisions": [
+          "add_explicit_issuer_selection"
+        ],
+        "line": 13,
+        "revision": "add_credential_delivery_records",
+        "source": "services/issuance/infrastructure/migrations/versions/20260512_1100_add_credential_delivery_records.py"
+      },
+      {
+        "down_revisions": [
+          "add_credential_delivery_records"
+        ],
+        "line": 13,
+        "revision": "add_evidence_facts",
+        "source": "services/issuance/infrastructure/migrations/versions/20260514_1000_add_evidence_facts.py"
+      },
+      {
+        "down_revisions": [
+          "add_evidence_facts"
+        ],
+        "line": 12,
+        "revision": "add_canvas_platform_program_bindings",
+        "source": "services/issuance/infrastructure/migrations/versions/20260515_1000_add_canvas_platform_program_bindings.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_platform_program_bindings"
+        ],
+        "line": 10,
+        "revision": "add_canvas_program_binding_feature_gates",
+        "source": "services/issuance/infrastructure/migrations/versions/20260517_1000_add_canvas_program_binding_feature_gates.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_program_binding_feature_gates"
+        ],
+        "line": 12,
+        "revision": "add_issued_credential_status_list_metadata",
+        "source": "services/issuance/infrastructure/migrations/versions/20260519_1000_add_issued_credential_status_list_metadata.py"
+      },
+      {
+        "down_revisions": [
+          "add_issued_credential_status_list_metadata"
+        ],
+        "line": 12,
+        "revision": "canonicalize_canvas_lti_launch_states",
+        "source": "services/issuance/infrastructure/migrations/versions/20260521_1000_canonicalize_canvas_lti_launch_states.py"
+      },
+      {
+        "down_revisions": [
+          "canonicalize_canvas_lti_launch_states"
+        ],
+        "line": 12,
+        "revision": "add_canvas_credentials_binding_config",
+        "source": "services/issuance/infrastructure/migrations/versions/20260521_1100_add_canvas_credentials_binding_config.py"
+      },
+      {
+        "down_revisions": [
+          "add_canvas_credentials_binding_config"
+        ],
+        "line": 11,
+        "revision": "add_org_integration_secrets",
+        "source": "services/issuance/infrastructure/migrations/versions/20260524_1000_add_org_integration_secrets.py"
+      },
+      {
+        "down_revisions": [
+          "add_org_integration_secrets"
+        ],
+        "line": 11,
+        "revision": "add_physical_document_jobs",
+        "source": "services/issuance/infrastructure/migrations/versions/20260711_1000_add_physical_document_jobs.py"
+      },
+      {
+        "down_revisions": [
+          "add_physical_document_jobs"
+        ],
+        "line": 10,
+        "revision": "application_template_mip03",
+        "source": "services/issuance/infrastructure/migrations/versions/20260711_1100_application_template_mip03.py"
+      },
+      {
+        "down_revisions": [
+          "application_template_mip03"
+        ],
+        "line": 11,
+        "revision": "issuance_tx_revocation_profile",
+        "source": "services/issuance/infrastructure/migrations/versions/20260712_1200_add_transaction_revocation_profile.py"
+      },
+      {
+        "down_revisions": [
+          "issuance_tx_revocation_profile"
+        ],
+        "line": 11,
+        "revision": "credential_renewal_mip031",
+        "source": "services/issuance/infrastructure/migrations/versions/20260712_1300_add_credential_renewal.py"
+      },
+      {
+        "down_revisions": [
+          "credential_renewal_mip031"
+        ],
+        "line": 17,
+        "revision": "canonical_application_template_fields",
+        "source": "services/issuance/infrastructure/migrations/versions/20260712_1400_canonicalize_application_template_fields.py"
+      },
+      {
+        "down_revisions": [
+          "canonical_application_template_fields"
+        ],
+        "line": 17,
+        "revision": "derive_server_owned_claims",
+        "source": "services/issuance/infrastructure/migrations/versions/20260712_1500_derive_server_owned_template_claims.py"
+      },
+      {
+        "down_revisions": [
+          "derive_server_owned_claims"
+        ],
+        "line": 20,
+        "revision": "portable_canvas_connections",
+        "source": "services/issuance/infrastructure/migrations/versions/20260714_1000_portable_canvas_connections.py"
+      },
+      {
+        "down_revisions": [
+          "portable_canvas_connections"
+        ],
+        "line": 12,
+        "revision": "add_dpop_token_binding",
+        "source": "services/issuance/infrastructure/migrations/versions/20260719_1000_add_dpop_token_binding.py"
+      },
+      {
+        "down_revisions": [
+          "add_dpop_token_binding"
+        ],
+        "line": 11,
+        "revision": "oid4vci_registered_clients",
+        "source": "services/issuance/infrastructure/migrations/versions/20260727_0600_add_oid4vci_registered_clients.py"
+      },
+      {
+        "down_revisions": [
+          "oid4vci_registered_clients"
+        ],
+        "line": 11,
+        "revision": "issuance_tx_issuer_algorithm",
+        "source": "services/issuance/infrastructure/migrations/versions/20260806_1000_add_transaction_issuer_algorithm.py"
+      },
+      {
+        "down_revisions": [
+          "issuance_tx_issuer_algorithm"
+        ],
+        "line": 16,
+        "revision": "drop_legacy_issuer_keys",
+        "source": "services/issuance/infrastructure/migrations/versions/20260807_1000_drop_legacy_issuer_signing_keys.py"
+      },
+      {
+        "down_revisions": [
+          "drop_legacy_issuer_keys"
+        ],
+        "line": 11,
+        "revision": "issuance_offer_idempotency",
+        "source": "services/issuance/infrastructure/migrations/versions/20260809_1000_add_issuance_idempotency.py"
+      },
+      {
+        "down_revisions": [
+          "drop_legacy_issuer_keys"
+        ],
+        "line": 11,
+        "revision": "oid4vci_ephemeral_caps",
+        "source": "services/issuance/infrastructure/migrations/versions/20260809_1200_add_oid4vci_ephemeral_capabilities.py"
+      },
+      {
+        "down_revisions": [
+          "issuance_offer_idempotency",
+          "oid4vci_ephemeral_caps"
+        ],
+        "line": 11,
+        "revision": "merge_issuance_heads",
+        "source": "services/issuance/infrastructure/migrations/versions/20260810_0100_merge_issuance_heads.py"
+      }
+    ],
+    "roots": [
+      "735160618517"
+    ]
+  },
+  "purpose": "Language-neutral feature floor for the native Rust issuance cutover",
+  "runtime": {
+    "modes": [
+      {
+        "command": [
+          "python",
+          "-m",
+          "uvicorn",
+          "main:app",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8005"
+        ],
+        "module": "main",
+        "name": "api",
+        "source": "services/issuance/main.py",
+        "transports": [
+          "http",
+          "grpc"
+        ]
+      },
+      {
+        "command": [
+          "python",
+          "-m",
+          "issuance.canvas_worker"
+        ],
+        "module": "issuance.canvas_worker",
+        "name": "canvas-sync-worker",
+        "source": "services/issuance/canvas_worker.py",
+        "transports": [
+          "postgresql",
+          "canvas-http"
+        ]
+      }
+    ]
+  },
+  "schema": "marty.issuance-runtime-surface/v1"
+}
