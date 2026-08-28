@@ -79,6 +79,15 @@ governance rather than caller-selected organization or trust inputs. See
 [`services/verification/GOVERNANCE.md`](services/verification/GOVERNANCE.md)
 for the deployment schema, mandatory checks, digest rules, and rollout notes.
 
+## Native Issuance Service
+
+The feature-preserving replacement of the deployed Python issuance API and
+Canvas synchronization worker is governed by the
+[`Native Rust issuance migration roadmap`](docs/RUST_ISSUANCE_MIGRATION_ROADMAP.md).
+Its checked-in runtime-surface contract freezes every current HTTP and gRPC
+operation, runtime mode, configuration input, and migration revision before
+native cutover work begins.
+
 ## Release Process
 
 Stable releases are tag-driven, fail closed, and use only commits already on
