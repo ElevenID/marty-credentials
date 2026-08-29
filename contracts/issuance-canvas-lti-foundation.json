@@ -320,6 +320,62 @@
         }
       ]
     },
+    "orchestration": {
+      "ordered_stages": [
+        "load-platform",
+        "authorize-and-validate-platform",
+        "parse-submission",
+        "load-state",
+        "consume-state-atomically",
+        "verify-jwt-with-bounded-jwks-refresh",
+        "persist-verified-identity",
+        "resolve-binding-and-feature-gate",
+        "persist-verified-ags-line-item",
+        "project-private-response",
+        "merge-binding-capability-snapshot",
+        "persist-platform-validation-state"
+      ],
+      "invariants": {
+        "state_consumed_before_jwt_verification": true,
+        "state_restored_after_downstream_failure": false,
+        "identity_persisted_before_binding_resolution": true,
+        "ags_pin_persisted_before_response_projection": true,
+        "capability_snapshot_persisted_last": true,
+        "public_response_returned_only_after_all_persistence": true
+      },
+      "failure_cases": [
+        {
+          "name": "jwt_failure_keeps_state_consumed",
+          "failure_stage": "verify-jwt-with-bounded-jwks-refresh",
+          "completed_stages": [
+            "load-platform",
+            "authorize-and-validate-platform",
+            "parse-submission",
+            "load-state",
+            "consume-state-atomically"
+          ],
+          "state_consumed": true,
+          "identity_persisted": false,
+          "capability_snapshot_persisted": false
+        },
+        {
+          "name": "binding_failure_preserves_verified_identity_and_consumed_state",
+          "failure_stage": "resolve-binding-and-feature-gate",
+          "completed_stages": [
+            "load-platform",
+            "authorize-and-validate-platform",
+            "parse-submission",
+            "load-state",
+            "consume-state-atomically",
+            "verify-jwt-with-bounded-jwks-refresh",
+            "persist-verified-identity"
+          ],
+          "state_consumed": true,
+          "identity_persisted": true,
+          "capability_snapshot_persisted": false
+        }
+      ]
+    },
     "capability_snapshot_persistence": {
       "authority": "verified-signed-launch-claims",
       "authorization_index": "verified_binding_launches",
