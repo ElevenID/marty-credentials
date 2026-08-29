@@ -1,10 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Mutex;
 
 use base64::Engine as _;
 use ciborium::Value;
 use coset_isomdl::iana::Algorithm;
 use isomdl::definitions::device_key::cose_key::{CoseKey, EC2Curve, EC2Y};
 use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, ValidityInfo};
+use isomdl::digest_executor::{
+    DigestExecutionError, DigestExecutor, DigestJob, DigestResult, SerialDigestExecutor,
+};
 use isomdl::issuance::mdoc::{Mdoc, Namespaces, PreparedMdoc};
 use sha2::{Digest as _, Sha256, Sha384, Sha512};
 use time::OffsetDateTime;
@@ -25,6 +29,75 @@ fn public_prepare_decoys_extend_digests_without_changing_disclosures() {
     for (algorithm, name, digest_length) in digest_algorithms() {
         let prepared = prepare_fixture(algorithm, true);
         assert_prepared_semantics(&prepared, name, digest_length, true);
+    }
+}
+
+#[test]
+fn selected_serial_executor_jobs_reconstruct_the_mso_digest_multiset() {
+    for (algorithm, name, digest_length) in digest_algorithms() {
+        let executor = RecordingSerialDigestExecutor::default();
+        let (doc_type, namespaces, validity_info, device_key_info) = prepare_fixture_inputs();
+        let prepared = Mdoc::prepare_with_digest_executor(
+            doc_type,
+            namespaces,
+            validity_info,
+            algorithm,
+            device_key_info,
+            Algorithm::ES256,
+            true,
+            &executor,
+        )
+        .unwrap();
+        let jobs = executor.recorded_jobs();
+
+        let prepared_value = decode_value(&encode_value(&prepared));
+        let mso = text_entry(&prepared_value, "mso");
+        let disclosed_item_count =
+            issuer_signed_item_count(text_entry(&prepared_value, "namespaces"));
+        let mut mso_digests = digest_multiset(text_entry(mso, "valueDigests"));
+
+        assert!(
+            jobs.len() > disclosed_item_count,
+            "decoy-enabled preparation must submit both disclosure and decoy jobs"
+        );
+        assert_eq!(jobs.len(), mso_digests.len());
+        assert!(jobs.iter().all(|job| job.algorithm == algorithm));
+
+        let mut independently_computed = jobs
+            .iter()
+            .map(|job| digest(name, &job.input))
+            .collect::<Vec<_>>();
+        assert!(
+            independently_computed
+                .iter()
+                .all(|digest| digest.len() == digest_length),
+            "the independently selected hash must have the expected output length"
+        );
+
+        independently_computed.sort();
+        mso_digests.sort();
+        assert_eq!(independently_computed, mso_digests);
+    }
+}
+
+#[derive(Default)]
+struct RecordingSerialDigestExecutor {
+    jobs: Mutex<Vec<DigestJob>>,
+}
+
+impl RecordingSerialDigestExecutor {
+    fn recorded_jobs(&self) -> Vec<DigestJob> {
+        self.jobs.lock().unwrap().clone()
+    }
+}
+
+impl DigestExecutor for RecordingSerialDigestExecutor {
+    fn execute(&self, jobs: &[DigestJob]) -> Result<Vec<DigestResult>, DigestExecutionError> {
+        self.jobs
+            .lock()
+            .map_err(|_| DigestExecutionError)?
+            .extend_from_slice(jobs);
+        SerialDigestExecutor.execute(jobs)
     }
 }
 
@@ -237,6 +310,39 @@ fn digest_map(value: &Value) -> BTreeMap<u64, Vec<u8>> {
         .iter()
         .map(|(digest_id, digest)| (unsigned_integer(digest_id), byte_string(digest).to_vec()))
         .collect()
+}
+
+fn digest_multiset(value: &Value) -> Vec<Vec<u8>> {
+    let Value::Map(namespaces) = value else {
+        panic!("valueDigests must be a namespace map");
+    };
+    let mut digests = Vec::new();
+    for (_, namespace_digests) in namespaces {
+        let Value::Map(namespace_digests) = namespace_digests else {
+            panic!("each valueDigests namespace must be a map");
+        };
+        digests.extend(
+            namespace_digests
+                .iter()
+                .map(|(_, digest)| byte_string(digest).to_vec()),
+        );
+    }
+    digests
+}
+
+fn issuer_signed_item_count(value: &Value) -> usize {
+    let Value::Map(namespaces) = value else {
+        panic!("issuer namespaces must be a map");
+    };
+    namespaces
+        .iter()
+        .map(|(_, items)| {
+            let Value::Array(items) = items else {
+                panic!("each issuer namespace must contain an item array");
+            };
+            items.len()
+        })
+        .sum()
 }
 
 fn digest(algorithm: &str, input: &[u8]) -> Vec<u8> {
