@@ -661,7 +661,13 @@ async def _main() -> None:
     )
     if not database_url.startswith("postgresql+asyncpg://"):
         database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    engine = create_async_engine(database_url, pool_pre_ping=True, pool_size=5, max_overflow=5)
+    engine = create_async_engine(
+        database_url,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=5,
+        hide_parameters=True,
+    )
     repo = PostgresIssuanceRepository(async_sessionmaker(engine, expire_on_commit=False))
     config = CanvasSyncWorkerConfig.from_env()
     processor = load_canvas_sync_processor(os.environ.get("CANVAS_SYNC_PROCESSOR"))
