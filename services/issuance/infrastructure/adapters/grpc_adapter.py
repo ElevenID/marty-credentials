@@ -27,6 +27,10 @@ from issuance.application.issuance_idempotency import (
     normalize_idempotency_key,
 )
 from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
+from issuance.application.oid4vci_audience import (
+    match_credential_issuer_audience,
+    unverified_proof_audience,
+)
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
@@ -976,6 +980,22 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 context.set_details("Proof of possession is required (OID4VCI §7.2)")
                 return pb2.IssueCredentialResponse()
 
+            try:
+                proof_audience = unverified_proof_audience(proof_jwt)
+            except ValueError:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Could not decode proof JWT audience")
+                return pb2.IssueCredentialResponse()
+            issuer_url = match_credential_issuer_audience(
+                proof_audience,
+                issuer_base_url=ISSUER_BASE_URL,
+                organization_id=tx.organization_id,
+            )
+            if issuer_url is None:
+                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+                context.set_details("Proof JWT audience does not match credential issuer")
+                return pb2.IssueCredentialResponse()
+
             credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
             requested_format = request.format or "vc+sd-jwt"
             remote_credential_format = _credential_format_for_remote_context(
@@ -1001,6 +1021,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 issuer_context=issuer_context,
                 organization_id=tx.organization_id,
                 expected_nonce=tx.nonce or None,
+                issuer_url=issuer_url,
                 proof_verifier=verify_proof_jwt,
                 bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
             )

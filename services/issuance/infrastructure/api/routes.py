@@ -45,6 +45,10 @@ from issuance.application.issuance_idempotency import (
     normalize_idempotency_key,
 )
 from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
+from issuance.application.oid4vci_audience import (
+    allowed_credential_issuer_audience_paths,
+    match_credential_issuer_audience,
+)
 from issuance.application.oid4vci_client_auth import (
     ClientAuthenticationError,
     authenticate_oid4vci_client,
@@ -1625,24 +1629,19 @@ def org_issuer_url_apple_wallet(org_id: str) -> str:
 
 def _allowed_credential_issuer_audience_paths(org_id: str) -> tuple[str, ...]:
     """Credential issuer URL paths accepted in holder proof JWT audiences."""
-    return (
-        f"/org/{org_id}",
-        f"/org/{org_id}/credential-manager",
-        f"/org/{org_id}/apple-wallet",
-        f"/org/{org_id}/waltid",
-    )
+    return allowed_credential_issuer_audience_paths(org_id)
 
 
 def _proof_audience_matches_org_issuer(audience: str | None, org_id: str) -> bool:
     """Return True when a proof JWT aud matches a supported per-org issuer URL."""
-    normalized = (audience or "").strip().rstrip("/")
-    if not normalized:
-        return False
-
-    parsed = urlparse(normalized)
-    candidate_path = (parsed.path if (parsed.scheme or parsed.netloc) else normalized).rstrip("/")
-    allowed_paths = _allowed_credential_issuer_audience_paths(org_id)
-    return candidate_path in allowed_paths
+    return (
+        match_credential_issuer_audience(
+            audience,
+            issuer_base_url=ISSUER_BASE_URL,
+            organization_id=org_id,
+        )
+        is not None
+    )
 
 
 def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetime | None) -> str:
@@ -4500,8 +4499,9 @@ async def issue_credential(
         )
 
     # OID4VCI-1FINAL Appendix F.4: aud in proof JWT MUST be the credential_issuer URL.
-    # We validate the issuer URL path to accept both localhost and production
-    # hostnames while honoring current wallet-specific issuer paths.
+    # Match the complete configured URL while honoring current wallet-specific
+    # issuer variants; a supported path on any other origin is not sufficient.
+    _validated_proof_issuer_url: str | None = None
     if tx.organization_id:
         try:
             import base64 as _b64
@@ -4512,7 +4512,12 @@ async def issue_credential(
             _proof_payload = _json.loads(_b64.urlsafe_b64decode(_proof_parts[1] + _pad))
             _proof_aud = _proof_payload.get("aud") or ""
             _expected_aud_paths = _allowed_credential_issuer_audience_paths(tx.organization_id)
-            if not _proof_audience_matches_org_issuer(_proof_aud, tx.organization_id):
+            _validated_proof_issuer_url = match_credential_issuer_audience(
+                _proof_aud,
+                issuer_base_url=ISSUER_BASE_URL,
+                organization_id=tx.organization_id,
+            )
+            if _validated_proof_issuer_url is None:
                 logger.warning(
                     f"[credential] rid={rid} aud mismatch: got {_proof_aud!r}, "
                     f"expected issuer path in {_expected_aud_paths!r}"
@@ -4537,9 +4542,8 @@ async def issue_credential(
                 },
             )
 
-    # Verify proof JWT signature via Rust + extract holder DID
-    # Pass issuer_url as None to let the Rust layer use the URL embedded in the proof's aud;
-    # full aud validation requires the public gateway URL which is available via ISSUER_BASE_URL.
+    # Verify the signature and the exact allow-listed issuer URL via Rust, then
+    # extract the holder DID.
     try:
         import base64 as _b64n
         import json as _json_n
@@ -4572,6 +4576,7 @@ async def issue_credential(
         issuer_context=issuer_context,
         organization_id=tx.organization_id,
         expected_nonce=_proof_nonce,
+        issuer_url=_validated_proof_issuer_url,
         proof_verifier=verify_proof_jwt,
         bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
     )

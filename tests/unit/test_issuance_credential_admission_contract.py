@@ -102,15 +102,15 @@ def encode(value: dict[str, Any]) -> str:
 def proof(kind: str) -> str:
     if kind == "malformed":
         return "malformed"
-    audience = (
-        "https://issuer.example/org/other"
-        if kind == "wrong_audience"
-        else (
-            "https://issuer.example/evil/org/org-a"
-            if kind == "prefixed_audience"
-            else CONTRACT["inputs"]["proof_audience"]
-        )
-    )
+    audience = {
+        "wrong_audience": "https://issuer.example/org/other",
+        "prefixed_audience": "https://issuer.example/evil/org/org-a",
+        "alternate_scheme_audience": "http://issuer.example/org/org-a",
+        "alternate_host_audience": "https://other.example/org/org-a",
+        "alternate_port_audience": "https://issuer.example:444/org/org-a",
+        "userinfo_audience": "https://issuer.example@other.example/org/org-a",
+        "relative_audience": "/org/org-a",
+    }.get(kind, CONTRACT["inputs"]["proof_audience"])
     payload = {"aud": audience}
     if kind != "missing_nonce":
         payload["nonce"] = CONTRACT["inputs"]["proof_nonce"]
@@ -136,13 +136,17 @@ def request(headers: dict[str, str]) -> Request:
     )
 
 
-async def invoke(case: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> tuple[int, Any, list]:
+async def invoke(
+    case: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int, Any, list]:
     repository = ContractRepository(case["setup"])
 
     async def issuer_context(_transaction: Any, **_kwargs: Any) -> dict[str, Any]:
         return {}
 
     async def verify_proof(*_args: Any, **_kwargs: Any) -> tuple:
+        assert _kwargs["issuer_url"] == CONTRACT["inputs"]["proof_audience"]
         if case["setup"] == "invalid_signature":
             return False, "", None, "invalid signature"
         return True, "did:key:contract-holder", {}, None
@@ -199,8 +203,13 @@ async def test_credential_admission_matches_language_neutral_contract(
 def test_credential_admission_contract_has_required_security_boundaries() -> None:
     assert CONTRACT["schema"] == "marty.issuance-credential-admission/v1"
     names = {case["name"] for case in CONTRACT["cases"]}
-    assert len(names) == len(CONTRACT["cases"]) == 21
+    assert len(names) == len(CONTRACT["cases"]) == 26
     assert {
+        "proof_audience_rejects_alternate_scheme",
+        "proof_audience_rejects_alternate_host",
+        "proof_audience_rejects_unconfigured_port",
+        "proof_audience_rejects_userinfo_confusion",
+        "proof_audience_rejects_relative_url",
         "invalid_signature_does_not_consume_nonce",
         "proof_nonce_is_single_use",
         "proof_nonce_store_fails_closed",
