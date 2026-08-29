@@ -19,7 +19,11 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 from issuance.application.canvas_lti_services import canvas_lti_trust_profile  # noqa: E402
-from issuance.domain.entities import CanvasLtiLaunchState, CanvasPlatform  # noqa: E402
+from issuance.domain.entities import (  # noqa: E402
+    CanvasLtiLaunchState,
+    CanvasPlatform,
+    CanvasProgramBinding,
+)
 from issuance.infrastructure.adapters.memory_repository import (  # noqa: E402
     InMemoryIssuanceRepository,
 )
@@ -304,6 +308,50 @@ def test_canvas_lti_security_and_lifetime_constants_are_frozen(
             "process_canvas_nrps_membership_event_route",
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_canvas_lti_launch_submission_failures_replay_the_contract() -> None:
+    failures = {
+        failure["name"]: failure for failure in CONTRACT["launch"]["submission"]["failures"]
+    }
+    cases = [
+        ("id_token_missing", {"state": "state-1"}),
+        ("state_missing", {"id_token": "header.payload.signature"}),
+        ("id_token_missing", {"id_token": 7, "state": "state-1"}),
+        ("state_missing", {"id_token": "header.payload.signature", "state": False}),
+    ]
+    for failure_name, payload in cases:
+        with pytest.raises(HTTPException) as rejected:
+            await canvas_routes._parse_lti_launch_submission(
+                _json_request(payload, "/v1/integrations/canvas/lti/platforms/platform-1/launch")
+            )
+        expected = failures[failure_name]
+        assert (rejected.value.status_code, rejected.value.detail) == (
+            expected["status_code"],
+            expected["detail"],
+        )
+
+
+def test_canvas_lti_public_launch_projection_replays_the_contract() -> None:
+    vector = CONTRACT["launch"]["public_response_vector"]
+    platform = CanvasPlatform(**vector["platform"])
+    binding = CanvasProgramBinding(
+        organization_id=platform.organization_id,
+        platform_id=platform.id,
+        **vector["binding"],
+    )
+    private_response = canvas_routes._lti_launch_response(
+        platform=platform,
+        binding=binding,
+        state="private-state",
+        verified=vector["verified"],
+    )
+    public_response = canvas_routes._public_lti_launch_response(private_response).model_dump()
+
+    assert public_response == vector["expected"]
+    for field in CONTRACT["launch"]["private_response_fields"]:
+        assert field not in public_response
 
 
 def test_canvas_config_token_is_platform_bound_and_fail_closed() -> None:
