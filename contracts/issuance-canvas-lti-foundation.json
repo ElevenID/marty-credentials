@@ -79,6 +79,70 @@
       "atomic_single_use": true,
       "consumed_before_jwt_verification": true
     },
+    "identity_mapping": {
+      "scope": ["organization_id", "platform_id", "deployment_id"],
+      "opaque_subject_field": "lti_subject",
+      "numeric_canvas_field": "canvas_user_id",
+      "forbidden_join_fields": ["email"],
+      "sis_join_policy": "explicit-institution-policy-only",
+      "subject_only": {
+        "stored_status": "subject_verified",
+        "launch_response_status": "numeric_id_unavailable"
+      },
+      "linked": {
+        "stored_status": "linked",
+        "launch_response_status": "linked"
+      },
+      "conflict": {
+        "stored_status": "quarantined",
+        "launch_response_status": "quarantined",
+        "quarantine_both_sides": true,
+        "subject_reason": "LTI subject was previously linked to another Canvas user",
+        "numeric_reason": "Canvas user was previously linked to another LTI subject"
+      },
+      "cases": [
+        {
+          "name": "subject_is_recorded_before_numeric_id_is_available",
+          "subject": "opaque-a",
+          "canvas_user_id": null,
+          "expected_status": "subject_verified"
+        },
+        {
+          "name": "subject_only_record_is_enriched_in_place",
+          "subject": "opaque-a",
+          "canvas_user_id": "99",
+          "expected_status": "linked",
+          "preserve_subject_record_id": true
+        },
+        {
+          "name": "same_verified_pair_is_idempotent",
+          "subject": "opaque-a",
+          "canvas_user_id": "99",
+          "expected_status": "linked",
+          "preserve_subject_record_id": true
+        },
+        {
+          "name": "numeric_id_cannot_move_to_another_subject",
+          "subject": "opaque-b",
+          "canvas_user_id": "99",
+          "expected_status": "quarantined",
+          "existing_status": "quarantined",
+          "reason": "Canvas user was previously linked to another LTI subject"
+        },
+        {
+          "name": "quarantined_pair_cannot_reactivate",
+          "subject": "opaque-b",
+          "canvas_user_id": "99",
+          "expected_status": "quarantined"
+        },
+        {
+          "name": "quarantined_numeric_id_cannot_move_to_a_third_subject",
+          "subject": "opaque-c",
+          "canvas_user_id": "99",
+          "expected_status": "quarantined"
+        }
+      ]
+    },
     "jwt": {
       "algorithm_policy": "protected-header-and-matching-jwk",
       "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",

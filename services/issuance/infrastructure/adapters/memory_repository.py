@@ -22,7 +22,6 @@ from issuance.domain.entities import (
     CanvasEvidenceSyncJobStatus,
     CanvasEvidenceSyncTarget,
     CanvasLearnerIdentity,
-    CanvasLearnerIdentityStatus,
     CanvasLtiLaunchState,
     CanvasOAuthAuthorization,
     CanvasOAuthConnection,
@@ -1116,7 +1115,6 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 and identity.platform_id == platform_id
                 and identity.deployment_id == deployment_id
                 and identity.canvas_user_id == canvas_user_id
-                and identity.status == CanvasLearnerIdentityStatus.LINKED
             ):
                 return identity
         return None
