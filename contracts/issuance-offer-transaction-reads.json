@@ -170,20 +170,23 @@
       "name": "missing_offer",
       "path": "/v1/issuance/offers/missing",
       "status_code": 404,
-      "body": {"detail": "Offer not found"}
+      "body": {"detail": "Offer not found"},
+      "repository_calls": [{"method": "get_transaction", "value": "missing"}]
     },
     {
       "name": "expired_offer",
       "path": "/v1/issuance/offers/tx-expired",
       "status_code": 410,
-      "body": {"detail": "Offer expired"}
+      "body": {"detail": "Offer expired"},
+      "repository_calls": [{"method": "get_transaction", "value": "tx-expired"}]
     },
     {
       "name": "missing_management_key",
       "path": "/v1/issuance/transactions?organization_id=org-a",
       "headers": {"X-Organization-ID": "org-a"},
       "status_code": 401,
-      "body": {"detail": "X-API-Key header is missing"}
+      "body": {"detail": "X-API-Key header is missing"},
+      "repository_calls": []
     },
     {
       "name": "mismatched_list_tenant",
@@ -193,7 +196,8 @@
         "X-Organization-ID": "org-a"
       },
       "status_code": 403,
-      "body": {"detail": "Organization context does not match requested organization"}
+      "body": {"detail": "Organization context does not match requested organization"},
+      "repository_calls": []
     },
     {
       "name": "missing_transaction",
@@ -203,7 +207,8 @@
         "X-Organization-ID": "org-a"
       },
       "status_code": 404,
-      "body": {"detail": "Transaction not found"}
+      "body": {"detail": "Transaction not found"},
+      "repository_calls": [{"method": "get_transaction", "value": "missing"}]
     },
     {
       "name": "cross_tenant_transaction_is_hidden",
@@ -213,14 +218,16 @@
         "X-Organization-ID": "org-a"
       },
       "status_code": 404,
-      "body": {"detail": "Resource not found"}
+      "body": {"detail": "Resource not found"},
+      "repository_calls": [{"method": "get_transaction", "value": "tx-foreign"}]
     },
     {
       "name": "missing_internal_owner",
       "path": "/internal/v1/resource-owners/issuance-transactions/missing",
       "headers": {"X-API-Key": "contract-management-key"},
       "status_code": 404,
-      "body": {"detail": "Resource not found"}
+      "body": {"detail": "Resource not found"},
+      "repository_calls": [{"method": "get_transaction", "value": "missing"}]
     }
   ]
 }
