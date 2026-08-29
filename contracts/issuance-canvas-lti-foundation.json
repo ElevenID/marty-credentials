@@ -771,6 +771,157 @@
         }
       }
     },
+    "bootstrap": {
+      "ordered_stages": [
+        "parse-session-bearer",
+        "validate-request-body",
+        "load-and-validate-session",
+        "require-bound-enable-canvas-lti-feature",
+        "require-portable-canvas-pilot",
+        "load-and-tenant-check-application-template",
+        "resume-exact-state-or-active-subject-binding-or-create",
+        "attach-application-to-session",
+        "materialize-current-award-candidate",
+        "reload-application",
+        "best-effort-enqueue-canvas-sync",
+        "respond-browser-safe"
+      ],
+      "request": {
+        "content_type": "application/json",
+        "applicant_identifier": "accepted-but-never-used-as-canonical-identity",
+        "applicant_data": "object-default-empty",
+        "extra_fields": "ignored",
+        "schema_failure_status": 422
+      },
+      "feature_gate": {
+        "binding_lookup": "only-when-session-has-canvas-program-binding-id",
+        "flag": "enable_canvas_lti",
+        "disabled_failure": {"status_code": 409, "detail": "Canvas LTI is disabled for this deployment profile"},
+        "portable_pilot_required_before-template-access": true
+      },
+      "template": {
+        "id_precedence": ["mip-context", "verified-launch"],
+        "failures": [
+          {"name": "missing-binding", "status_code": 409, "detail": "Canvas LTI session is not bound to an application template"},
+          {"name": "not-found", "status_code": 404, "detail": "Bound application template not found"},
+          {"name": "cross-organization", "status_code": 409, "detail": "Canvas LTI application template belongs to a different organization"}
+        ]
+      },
+      "resume": {
+        "application_order": "created-at-descending",
+        "precedence": ["exact-original-lti-state", "same-subject-and-binding-non-terminal", "create"],
+        "exact_state_includes_terminal_applications": true,
+        "subject_binding_terminal_statuses_excluded": ["rejected", "withdrawn"],
+        "subject_binding_updates": ["last_lti_state", "last-ten-lti-states", "deployment_profile_id", "feature_flags", "delivery_mode", "updated_at"],
+        "same_application_returns_created_false": true,
+        "duplicate_bootstrap_event_forbidden": true
+      },
+      "new_application": {
+        "canonical_applicant_identifier": "canvas_lti:<verified-subject>-or-random-canvas_lti_<8-hex>",
+        "caller_identifier_forbidden_for_join": true,
+        "caller_protected_fields": ["canvas_subject", "canvas_course_id", "canvas_user_id"],
+        "trusted_profile_precedence": ["learner-identity", "raw-claims"],
+        "trusted_profile_fields": ["email", "given_name", "family_name", "name"],
+        "course_id_precedence": ["signed-custom-canvas-course-id", "context-id", "context-context-id"],
+        "course_name_precedence": ["context-title", "context-label"],
+        "event": "CANVAS_LTI_APPLICATION_BOOTSTRAPPED"
+      },
+      "session_attachment": {
+        "mip_context_application_id": true,
+        "verified_launch_application_id": true,
+        "audit_fields": ["application_id", "created", "bootstrapped_at"],
+        "persist_before-return": true
+      },
+      "candidate_materialization": {
+        "attempted_for-created-and-resumed-applications": true,
+        "requires": ["portable-pilot", "bound-platform-and-binding", "pending-claim-or-eligible-candidate", "fresh-candidate", "valid-requirements", "fresh-verified-required-observations"],
+        "subject-only-match": "exact-lti-subject",
+        "numeric-rest-match": "exact-current-non-quarantined-subject-and-canvas-user-identity-join",
+        "first-matching-candidate": true,
+        "persists": ["authoritative-facts", "policy-decision", "candidate-application-link", "application-candidate-link"],
+        "automatic-approval_requires": ["policy-allowed", "identity-still-linked", "binding-still-ready", "application-pending"],
+        "kms-or-readiness-drift": "leave-pending-without-fallback-key"
+      },
+      "sync_enqueue": {
+        "after-application-reload": true,
+        "canvas-sync-service-errors": "ignored-so-learner-can-continue",
+        "durable-worker-gap_exposed_by": ["readiness", "operations"]
+      },
+      "response": {
+        "fields": ["application_id", "application_status", "created", "organization_id", "application_template_id", "credential_template_id", "canvas_account_id", "canvas_platform_id", "canvas_program_binding_id", "canvas_context"],
+        "canvas_context_fields": ["course_id", "title", "label", "identity_mapping_status"],
+        "private_fields_forbidden": ["applicant_identifier", "form_data", "integration_context", "lti_state", "verified_launch", "mip_primitives", "raw_claims", "subject", "nonce"]
+      },
+      "vector": {
+        "request": {
+          "applicant_identifier": "attacker-controlled@example.test",
+          "applicant_data": {
+            "preferred_language": "en",
+            "email": "caller@example.test",
+            "canvas_subject": "attacker-subject",
+            "canvas_course_id": "attacker-course",
+            "canvas_user_id": "attacker-user"
+          },
+          "ignored_extra": "ignored-by-pydantic"
+        },
+        "verified_launch": {
+          "subject": "learner-subject-1",
+          "deployment_id": "deployment-1",
+          "identity_mapping_status": "linked",
+          "learner_identity": {"subject": "learner-subject-1", "email": "trusted@example.test", "given_name": "Ada", "family_name": "Lovelace", "name": "Ada Lovelace"},
+          "raw_claims": {"email": "raw@example.test", "https://purl.imsglobal.org/spec/lti/claim/custom": {"canvas_course_id": "course-signed", "canvas_user_id": "42"}},
+          "context": {"id": "course-context", "context_id": "course-fallback", "title": "Portable Trust 101", "label": "PT-101", "private": "redact-me"},
+          "roles": ["Learner"]
+        },
+        "session_values": {
+          "state": "launch-state-1",
+          "canvas_account_id": "account-1",
+          "canvas_platform_id": "platform-1",
+          "canvas_program_binding_id": "binding-1",
+          "application_template_id": "application-template-1",
+          "credential_template_id": "credential-template-1",
+          "deployment_profile_id": "deployment-profile-1",
+          "feature_flags": {"enable_canvas_lti": true},
+          "delivery_mode": "wallet_and_direct",
+          "launch_url": "https://ui.example.test/canvas/lti/experience?code=private",
+          "lti_capabilities": {"resource_link": true}
+        },
+        "expected_applicant_identifier": "canvas_lti:learner-subject-1",
+        "expected_form_data": {
+          "preferred_language": "en",
+          "email": "trusted@example.test",
+          "given_name": "Ada",
+          "family_name": "Lovelace",
+          "name": "Ada Lovelace",
+          "canvas_subject": "learner-subject-1",
+          "canvas_course_id": "course-signed",
+          "canvas_course_name": "Portable Trust 101"
+        },
+        "expected_canvas_context": {
+          "source": "canvas_lti_bootstrap",
+          "lti_state": "launch-state-1",
+          "last_lti_state": "launch-state-1",
+          "lti_states": ["launch-state-1"],
+          "canvas_account_id": "account-1",
+          "canvas_platform_id": "platform-1",
+          "canvas_program_binding_id": "binding-1",
+          "deployment_profile_id": "deployment-profile-1",
+          "feature_flags": {"enable_canvas_lti": true},
+          "application_template_id": "application-template-1",
+          "credential_template_id": "credential-template-1",
+          "delivery_mode": "wallet_and_direct",
+          "canvas_course_id": "course-signed",
+          "canvas_context": {"id": "course-context", "context_id": "course-fallback", "title": "Portable Trust 101", "label": "PT-101", "private": "redact-me"},
+          "lti_subject": "learner-subject-1",
+          "canvas_user_id": "42",
+          "learner_identity": {"subject": "learner-subject-1", "email": "trusted@example.test", "given_name": "Ada", "family_name": "Lovelace", "name": "Ada Lovelace"},
+          "roles": ["Learner"],
+          "launch_url": "https://ui.example.test/canvas/lti/experience?code=private",
+          "lti_capabilities": {"resource_link": true}
+        },
+        "expected_public_canvas_context": {"course_id": "course-signed", "title": "Portable Trust 101", "label": "PT-101", "identity_mapping_status": "linked"}
+      }
+    },
     "invalid_code": {
       "status_code": 400,
       "detail": "Canvas LTI experience code has expired, is invalid, or was already used"
