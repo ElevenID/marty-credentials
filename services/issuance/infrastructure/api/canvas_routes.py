@@ -2406,6 +2406,45 @@ def _verify_lti_launch_with_platform(
     )
 
 
+async def _verify_lti_launch_with_jwks_refresh(
+    *,
+    platform: CanvasPlatform,
+    id_token: str,
+    expected_nonce: str,
+    repo: IIssuanceRepository,
+) -> tuple[CanvasPlatform, dict[str, Any]]:
+    """Verify once, refreshing the pinned Canvas JWKS only for a key miss."""
+
+    try:
+        verified = _verify_lti_launch_with_platform(
+            platform=platform,
+            id_token=id_token,
+            expected_nonce=expected_nonce,
+        )
+    except Exception as exc:  # pragma: no cover - exact binding exception type varies
+        if not (_is_lti_kid_miss(exc) and platform.canvas_base_url):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Canvas LTI launch verification failed: {exc}",
+            ) from exc
+        try:
+            platform, _probe = await _refresh_canvas_platform_jwks(platform, repo)
+            verified = _verify_lti_launch_with_platform(
+                platform=platform,
+                id_token=id_token,
+                expected_nonce=expected_nonce,
+            )
+        except Exception as refresh_exc:  # pragma: no cover - exact binding exception type varies
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Canvas LTI launch verification failed after JWKS refresh: "
+                    f"{refresh_exc}"
+                ),
+            ) from refresh_exc
+    return platform, verified
+
+
 def _as_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -3575,27 +3614,12 @@ async def _verify_canvas_lti_launch_submission(
     if consumed_state is None:
         raise HTTPException(status_code=400, detail="Canvas LTI state has expired or already been used")
 
-    try:
-        verified = _verify_lti_launch_with_platform(
-            platform=platform,
-            id_token=id_token,
-            expected_nonce=consumed_state.nonce,
-        )
-    except Exception as exc:  # pragma: no cover - exact binding exception type varies
-        if not (_is_lti_kid_miss(exc) and platform.canvas_base_url):
-            raise HTTPException(status_code=400, detail=f"Canvas LTI launch verification failed: {exc}") from exc
-        try:
-            platform, _probe = await _refresh_canvas_platform_jwks(platform, repo)
-            verified = _verify_lti_launch_with_platform(
-                platform=platform,
-                id_token=id_token,
-                expected_nonce=consumed_state.nonce,
-            )
-        except Exception as refresh_exc:  # pragma: no cover - exact binding exception type varies
-            raise HTTPException(
-                status_code=400,
-                detail=f"Canvas LTI launch verification failed after JWKS refresh: {refresh_exc}",
-            ) from refresh_exc
+    platform, verified = await _verify_lti_launch_with_jwks_refresh(
+        platform=platform,
+        id_token=id_token,
+        expected_nonce=consumed_state.nonce,
+        repo=repo,
+    )
 
     await _record_verified_canvas_launch_identity(
         platform=platform,
