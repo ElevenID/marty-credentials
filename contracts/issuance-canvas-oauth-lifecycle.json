@@ -1,0 +1,153 @@
+{
+  "schema": "marty.issuance-canvas-oauth-lifecycle/v1",
+  "scope": {
+    "routes": [
+      {
+        "method": "POST",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
+        "operation": "start_canvas_oauth_connection",
+        "authentication": "management-api-key-and-trusted-organization"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/integrations/canvas/oauth/callback",
+        "operation": "complete_canvas_oauth_connection",
+        "authentication": "public-one-time-state"
+      },
+      {
+        "method": "DELETE",
+        "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
+        "operation": "disconnect_canvas_oauth_connection",
+        "authentication": "management-api-key-and-trusted-organization"
+      }
+    ]
+  },
+  "capabilities": {
+    "catalog": [
+      "url:GET|/api/v1/courses",
+      "url:GET|/api/v1/courses/:course_id/assignments",
+      "url:GET|/api/v1/courses/:course_id/modules"
+    ],
+    "native_activity_scores": [
+      "url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id"
+    ],
+    "course_completion": [
+      "url:GET|/api/v1/courses/:course_id/users/:user_id/progress"
+    ],
+    "module_completion": [
+      "url:GET|/api/v1/courses/:course_id/modules/:id"
+    ],
+    "background_roster": [
+      "url:GET|/api/v1/courses/:course_id/users",
+      "url:GET|/api/v1/courses/:course_id/enrollments",
+      "url:GET|/api/v1/courses/:course_id/bulk_user_progress"
+    ]
+  },
+  "capability_aliases": {
+    "scope_catalog.read": "catalog",
+    "assignment_submission.read": "native_activity_scores",
+    "quiz_submission.read": "native_activity_scores",
+    "course_progress.read": "course_completion",
+    "module_progress.read": "module_completion"
+  },
+  "start": {
+    "request": {
+      "extra_fields": "forbidden",
+      "client_id": {"min_length": 1, "max_length": 512},
+      "client_secret_secret_id": {"min_length": 1, "max_length": 512},
+      "capabilities": {"min_items": 1, "max_items": 5}
+    },
+    "authorization": {
+      "endpoint_path": "/login/oauth2/auth",
+      "response_type": "code",
+      "state_entropy_bytes_minimum": 32,
+      "persisted_state": "sha256-only",
+      "ttl_seconds": 600,
+      "scope_policy": "server-owned-capability-derived"
+    },
+    "failures": [
+      {"status_code": 404, "detail": "Canvas platform not found"},
+      {"status_code": 404, "detail": "Portable Canvas integration is not enabled for this organization"},
+      {"status_code": 404, "detail": "Canvas OAuth client secret reference was not found"},
+      {"status_code": 409, "detail": "Canvas OAuth requires a registered HTTPS Canvas base URL"},
+      {"status_code": 409, "detail": "Canvas OAuth platform origin is not trusted"},
+      {"status_code": 409, "detail": "Disconnect the existing Canvas OAuth connection before authorizing again"},
+      {"status_code": 409, "detail": "Canvas platform configuration changed"}
+    ]
+  },
+  "callback": {
+    "query_limits": {
+      "code_max_length": 4096,
+      "state_min_length": 32,
+      "state_max_length": 512,
+      "error_max_length": 256
+    },
+    "redirect_status_code": 303,
+    "response_headers": {
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer"
+    },
+    "outcomes": [
+      "connected",
+      "oauth_state_invalid",
+      "oauth_platform_invalid",
+      "oauth_rollout_disabled",
+      "oauth_authorization_denied",
+      "oauth_configuration_changed",
+      "oauth_authorization_conflict",
+      "oauth_token_exchange_failed"
+    ],
+    "token_endpoint": {
+      "method": "POST",
+      "path": "/login/oauth2/token",
+      "timeout_seconds": 15,
+      "follow_redirects": false,
+      "exact_registered_origin": true,
+      "response_size_bounded": true
+    },
+    "publication": {
+      "platform_snapshot_cas": true,
+      "connection_insert_only_cas": true,
+      "access_token_storage": "encrypted-organization-secret-reference",
+      "refresh_token_storage": "encrypted-organization-secret-reference",
+      "browser_token_disclosure": false,
+      "conflict_cleanup": ["delete-local-token-secrets", "revoke-remote-access-token"]
+    }
+  },
+  "disconnect": {
+    "remote_revocation": {
+      "method": "DELETE",
+      "path": "/login/oauth2/token",
+      "timeout_seconds": 15,
+      "follow_redirects": false,
+      "exact_connection_origin": true,
+      "success_status_codes": [200, 204, 404]
+    },
+    "states": ["disconnected", "revocation_pending"],
+    "lease_seconds": 60,
+    "retry": {
+      "base_seconds": 30,
+      "maximum_seconds": 3600,
+      "honor_retry_after": true,
+      "durable": true
+    },
+    "successful_cleanup": [
+      "delete-connection",
+      "delete-access-token-secret",
+      "delete-refresh-token-secret",
+      "clear-pending-authorization",
+      "clear-granted-scopes-and-capabilities"
+    ]
+  },
+  "security_invariants": [
+    "management-routes-authorize-before-repository-use",
+    "management-routes-hide-cross-organization-platforms",
+    "callback-consumes-state-before-any-provider-exchange",
+    "callback-state-is-single-use-even-on-denial-or-failure",
+    "provider-error-text-is-never-reflected-in-completion-url",
+    "provider-redirects-are-never-followed",
+    "provider-traffic-is-pinned-to-the-snapshotted-https-origin",
+    "client-and-token-secrets-are-never-returned-or-logged",
+    "platform-reconfiguration-or-archival-invalidates-in-flight-publication"
+  ]
+}
