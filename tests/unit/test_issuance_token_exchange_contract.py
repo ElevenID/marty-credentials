@@ -97,6 +97,8 @@ class ContractRepository:
 
     async def get_by_pre_auth_code(self, code: str) -> Any:
         self.calls.append({"method": "get_by_pre_auth_code", "value": code})
+        if self._setup == "repository_unavailable":
+            raise RuntimeError("contract repository unavailable")
         return await self._delegate.get_by_pre_auth_code(code)
 
     async def claim_transaction_for_token(self, prepared: Any) -> Any:
@@ -140,7 +142,12 @@ class ContractRepository:
         return result
 
 
-def client(monkeypatch, repository: ContractRepository) -> TestClient:
+def client(
+    monkeypatch,
+    repository: ContractRepository,
+    *,
+    raise_server_exceptions: bool = True,
+) -> TestClient:
     from issuance import main
     from issuance.infrastructure.api import routes
 
@@ -185,7 +192,7 @@ def client(monkeypatch, repository: ContractRepository) -> TestClient:
 
     monkeypatch.setattr(routes, "_validated_dpop_jkt", validate_dpop)
     monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
-    return TestClient(main.create_app())
+    return TestClient(main.create_app(), raise_server_exceptions=raise_server_exceptions)
 
 
 def test_token_exchange_contract_matches_python_oracle(monkeypatch) -> None:
@@ -206,3 +213,46 @@ def test_token_exchange_contract_matches_python_oracle(monkeypatch) -> None:
         assert repository.calls == case["repository_calls"], case["name"]
         if "final_state" in case:
             assert asyncio.run(repository.final_state(case["final_state"])) == case["final_state"]
+
+
+def test_token_exchange_rate_limit_matches_language_neutral_contract(monkeypatch) -> None:
+    from issuance.infrastructure.api import routes
+
+    expected = CONTRACT["rate_limit"]
+    repository = ContractRepository("no_state")
+    monkeypatch.setattr(
+        routes,
+        "_token_limiter",
+        routes._InMemoryRateLimiter(expected["requests"], expected["window_seconds"]),
+    )
+    http = client(monkeypatch, repository)
+    for _ in range(expected["requests"]):
+        response = http.post(
+            CONTRACT["inputs"]["path"],
+            data=copy.deepcopy(expected["request"]["form"]),
+        )
+        assert response.status_code == expected["allowed_status_code"]
+
+    response = http.post(
+        CONTRACT["inputs"]["path"],
+        data=copy.deepcopy(expected["request"]["form"]),
+    )
+    assert response.status_code == expected["status_code"]
+    assert response.headers["content-type"].split(";", 1)[0] == "application/json"
+    for name, value in expected["headers"].items():
+        assert response.headers[name] == value
+    assert response.json() == expected["body"]
+
+
+def test_token_exchange_dependency_failures_match_python_oracle(monkeypatch) -> None:
+    for case in CONTRACT["dependency_failures"]:
+        repository = ContractRepository(case["setup"])
+        http = client(monkeypatch, repository, raise_server_exceptions=False)
+        response = http.post(
+            CONTRACT["inputs"]["path"],
+            data=copy.deepcopy(case["form"]),
+        )
+        assert response.status_code == case["status_code"], case["name"]
+        assert response.headers["content-type"].split(";", 1)[0] == case["content_type"]
+        assert response.text == case["body"]
+        assert repository.calls == case["repository_calls"]
