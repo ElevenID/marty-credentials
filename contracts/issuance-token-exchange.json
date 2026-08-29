@@ -1,0 +1,363 @@
+{
+  "schema": "marty.issuance-token-exchange/v1",
+  "inputs": {
+    "path": "/v1/issuance/token",
+    "pre_authorized_grant": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+    "transaction_id": "tx-token",
+    "pre_authorized_code": "pre-auth-token",
+    "authorization_session_id": "auth-session-token",
+    "authorization_code": "auth-code-token",
+    "client_id": "public-wallet",
+    "organization_id": "org-a",
+    "generated_pre_authorized_token": "access-token-pre-authorized",
+    "generated_authorization_code_token": "access-token-authorization-code"
+  },
+  "cases": [
+    {
+      "name": "pre_authorized_code_success",
+      "setup": "pending_transaction",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 200,
+      "body": {
+        "access_token": "access-token-pre-authorized",
+        "token_type": "Bearer",
+        "expires_in": 1800
+      },
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"},
+        {"method": "claim_transaction_for_token", "value": "tx-token"}
+      ],
+      "final_state": {
+        "kind": "transaction",
+        "status": "authorized",
+        "access_token": "access-token-pre-authorized"
+      }
+    },
+    {
+      "name": "authorization_code_success",
+      "setup": "pending_authorization_session",
+      "form": {
+        "grant_type": "authorization_code",
+        "code": "auth-code-token",
+        "client_id": "public-wallet"
+      },
+      "status_code": 200,
+      "body": {
+        "access_token": "access-token-authorization-code",
+        "token_type": "Bearer",
+        "expires_in": 1800
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"},
+        {"method": "claim_authorization_session_for_token", "value": "auth-session-token"}
+      ],
+      "final_state": {
+        "kind": "authorization_session",
+        "status": "exchanged",
+        "access_token": "access-token-authorization-code"
+      }
+    },
+    {
+      "name": "pre_authorized_code_success_binds_dpop",
+      "setup": "pending_transaction",
+      "headers": {"DPoP": "valid-proof"},
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 200,
+      "body": {
+        "access_token": "access-token-pre-authorized",
+        "token_type": "Bearer",
+        "expires_in": 1800
+      },
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"},
+        {"method": "claim_transaction_for_token", "value": "tx-token"}
+      ],
+      "final_state": {
+        "kind": "transaction",
+        "status": "authorized",
+        "access_token": "access-token-pre-authorized",
+        "dpop_jkt": "contract-dpop-jkt"
+      }
+    },
+    {
+      "name": "authorization_code_success_binds_dpop",
+      "setup": "pending_authorization_session",
+      "headers": {"DPoP": "valid-proof"},
+      "form": {
+        "grant_type": "authorization_code",
+        "code": "auth-code-token",
+        "client_id": "public-wallet"
+      },
+      "status_code": 200,
+      "body": {
+        "access_token": "access-token-authorization-code",
+        "token_type": "Bearer",
+        "expires_in": 1800
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"},
+        {"method": "claim_authorization_session_for_token", "value": "auth-session-token"}
+      ],
+      "final_state": {
+        "kind": "authorization_session",
+        "status": "exchanged",
+        "access_token": "access-token-authorization-code",
+        "dpop_jkt": "contract-dpop-jkt"
+      }
+    }
+  ],
+  "failures": [
+    {
+      "name": "management_transport_requires_grant_type",
+      "setup": "pending_transaction",
+      "form": {},
+      "status_code": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": ["body", "grant_type"],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "repository_calls": []
+    },
+    {
+      "name": "invalid_dpop_precedes_grant_validation",
+      "setup": "pending_transaction",
+      "headers": {"DPoP": "invalid-proof"},
+      "form": {"grant_type": "unsupported"},
+      "status_code": 400,
+      "body": {"error": "invalid_dpop_proof"},
+      "repository_calls": []
+    },
+    {
+      "name": "authorization_code_is_required",
+      "setup": "pending_authorization_session",
+      "form": {"grant_type": "authorization_code"},
+      "status_code": 400,
+      "body": {"error": "invalid_request", "error_description": "code is required"},
+      "repository_calls": []
+    },
+    {
+      "name": "authorization_code_is_unknown",
+      "setup": "no_state",
+      "form": {"grant_type": "authorization_code", "code": "missing"},
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Invalid authorization code"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "missing"}
+      ]
+    },
+    {
+      "name": "authorization_code_is_expired",
+      "setup": "expired_authorization_session",
+      "form": {"grant_type": "authorization_code", "code": "auth-code-token"},
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Authorization code expired"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"}
+      ]
+    },
+    {
+      "name": "authorization_code_is_single_use",
+      "setup": "exchanged_authorization_session",
+      "form": {"grant_type": "authorization_code", "code": "auth-code-token"},
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Authorization code already used"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"}
+      ]
+    },
+    {
+      "name": "authorization_code_atomic_claim_lost",
+      "setup": "authorization_claim_lost",
+      "form": {
+        "grant_type": "authorization_code",
+        "code": "auth-code-token",
+        "client_id": "public-wallet"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Authorization code already used"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"},
+        {"method": "claim_authorization_session_for_token", "value": "auth-session-token"}
+      ]
+    },
+    {
+      "name": "authorization_code_redirect_uri_must_match",
+      "setup": "redirect_authorization_session",
+      "form": {
+        "grant_type": "authorization_code",
+        "code": "auth-code-token",
+        "client_id": "public-wallet",
+        "redirect_uri": "https://wallet.example/wrong"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Token exchange error: Invalid pre-authorized code: redirect_uri mismatch"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"}
+      ]
+    },
+    {
+      "name": "authorization_code_pkce_verifier_is_required",
+      "setup": "pkce_authorization_session",
+      "form": {
+        "grant_type": "authorization_code",
+        "code": "auth-code-token",
+        "client_id": "public-wallet",
+        "redirect_uri": "https://wallet.example/callback"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Token exchange error: Invalid pre-authorized code: code_verifier required (PKCE)"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"}
+      ]
+    },
+    {
+      "name": "authorization_code_pkce_verifier_must_match",
+      "setup": "pkce_authorization_session",
+      "form": {
+        "grant_type": "authorization_code",
+        "code": "auth-code-token",
+        "client_id": "public-wallet",
+        "redirect_uri": "https://wallet.example/callback",
+        "code_verifier": "wrong-verifier"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Token exchange error: Invalid pre-authorized code: PKCE code_verifier does not match code_challenge"
+      },
+      "repository_calls": [
+        {"method": "get_authorization_session_by_code", "value": "auth-code-token"}
+      ]
+    },
+    {
+      "name": "pre_authorized_code_is_required_before_grant_support",
+      "setup": "pending_transaction",
+      "form": {"grant_type": "unsupported"},
+      "status_code": 400,
+      "body": {
+        "error": "invalid_request",
+        "error_description": "pre-authorized_code is required"
+      },
+      "repository_calls": []
+    },
+    {
+      "name": "unsupported_pre_authorized_grant",
+      "setup": "pending_transaction",
+      "form": {"grant_type": "unsupported", "pre-authorized_code": "pre-auth-token"},
+      "status_code": 400,
+      "body": {
+        "error": "unsupported_grant_type",
+        "error_description": "Unsupported grant type"
+      },
+      "repository_calls": []
+    },
+    {
+      "name": "pre_authorized_code_is_unknown",
+      "setup": "no_state",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "missing"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Invalid pre-authorized code"
+      },
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "missing"}
+      ]
+    },
+    {
+      "name": "transaction_is_expired",
+      "setup": "expired_transaction",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 400,
+      "body": {"error": "invalid_grant", "error_description": "Transaction expired"},
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"}
+      ]
+    },
+    {
+      "name": "pre_authorized_code_is_single_use",
+      "setup": "authorized_transaction",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Pre-authorized code has already been used and is single-use only"
+      },
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"}
+      ]
+    },
+    {
+      "name": "transaction_state_must_be_pending",
+      "setup": "failed_transaction",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Invalid transaction state"
+      },
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"}
+      ]
+    },
+    {
+      "name": "pre_authorized_atomic_claim_lost",
+      "setup": "transaction_claim_lost",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 400,
+      "body": {
+        "error": "invalid_grant",
+        "error_description": "Pre-authorized code has already been used and is single-use only"
+      },
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"},
+        {"method": "claim_transaction_for_token", "value": "tx-token"}
+      ]
+    }
+  ]
+}
