@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+import logging
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
@@ -213,6 +214,64 @@ def test_token_exchange_contract_matches_python_oracle(monkeypatch) -> None:
         assert repository.calls == case["repository_calls"], case["name"]
         if "final_state" in case:
             assert asyncio.run(repository.final_state(case["final_state"])) == case["final_state"]
+
+
+def test_token_exchange_logs_presence_without_grant_capabilities(
+    monkeypatch: Any, caplog: Any
+) -> None:
+    import asyncio
+
+    cases = {
+        case["name"]: copy.deepcopy(case)
+        for case in CONTRACT["cases"]
+        if case["name"] in {"pre_authorized_code_success", "authorization_code_success"}
+    }
+    attempts = (
+        (
+            cases["pre_authorized_code_success"],
+            "pre-authorized_code",
+            "pre-auth-MUST-NOT-ENTER-LOGS-7e912af0",
+            "pre_authorized_code",
+        ),
+        (
+            cases["authorization_code_success"],
+            "code",
+            "authorization-MUST-NOT-ENTER-LOGS-d3b1f682",
+            "authorization_code",
+        ),
+    )
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    for case, form_field, capability, grant_type_label in attempts:
+        repository = ContractRepository(case["setup"])
+        if form_field == "pre-authorized_code":
+            repository.transaction.pre_auth_code = capability
+        else:
+            repository.authorization_session.code = capability
+        asyncio.run(repository.initialize())
+        case["form"][form_field] = capability
+        caplog.clear()
+
+        response = client(monkeypatch, repository).post(
+            CONTRACT["inputs"]["path"],
+            data=case["form"],
+            headers=case.get("headers", {}),
+        )
+
+        assert response.status_code == case["status_code"]
+        route_records = [
+            record
+            for record in caplog.records
+            if record.name == "issuance.infrastructure.api.routes"
+        ]
+        assert route_records
+        rendered_logs = "\n".join(record.getMessage() for record in route_records)
+        structured_logs = "\n".join(repr(record.__dict__) for record in route_records)
+        assert capability not in rendered_logs
+        assert capability not in structured_logs
+        assert f"grant_type={grant_type_label}" in rendered_logs
+        assert "pre_authorized_code_present=" in rendered_logs
+        assert "authorization_code_present=" in rendered_logs
 
 
 def test_token_exchange_rate_limit_matches_language_neutral_contract(monkeypatch) -> None:
