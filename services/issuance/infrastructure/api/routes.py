@@ -4526,8 +4526,8 @@ async def issue_credential(
             )
             if _validated_proof_issuer_url is None:
                 logger.warning(
-                    f"[credential] rid={rid} aud mismatch: got {_proof_aud!r}, "
-                    f"expected issuer path in {_expected_aud_paths!r}"
+                    "[credential] rid=%s proof audience did not match configured issuer",
+                    rid,
                 )
                 return JSONResponse(
                     status_code=400,
@@ -4540,7 +4540,11 @@ async def issue_credential(
                     },
                 )
         except Exception as _aud_err:
-            logger.warning(f"[credential] rid={rid} could not decode proof aud: {_aud_err}")
+            logger.warning(
+                "[credential] rid=%s could not decode proof audience (%s)",
+                rid,
+                type(_aud_err).__name__,
+            )
             return JSONResponse(
                 status_code=400,
                 content={
@@ -4560,7 +4564,11 @@ async def issue_credential(
         _payload_n = _json_n.loads(_b64n.urlsafe_b64decode(_proof_parts_n[1] + _pad_n))
         _proof_nonce = _payload_n.get("nonce")
     except Exception as _nonce_err:
-        logger.warning(f"[credential] rid={rid} could not decode proof nonce: {_nonce_err}")
+        logger.warning(
+            "[credential] rid=%s could not decode proof nonce (%s)",
+            rid,
+            type(_nonce_err).__name__,
+        )
         _proof_nonce = None
 
     if not _proof_nonce:
@@ -4588,9 +4596,7 @@ async def issue_credential(
         bound_proof_verifier=verify_key_attestation_bound_proof_jwt,
     )
     if not ok:
-        logger.warning(
-            f"[credential] rid={rid} tx_id={tx.id} proof verification failed: {verify_err}"
-        )
+        logger.warning("[credential] rid=%s proof verification failed", rid)
         return JSONResponse(
             status_code=400,
             content={
@@ -4623,7 +4629,7 @@ async def issue_credential(
         )
 
     holder_did = did_from_proof
-    logger.info(f"[credential] rid={rid} proof OK, holder_did={holder_did}")
+    logger.info("[credential] rid=%s proof verified", rid)
 
     # Filter internal workflow fields out of claims — these are metadata used by the
     # applicant service and must never appear as credential subject attributes.
@@ -4649,7 +4655,10 @@ async def issue_credential(
     }
     clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
     logger.info(
-        f"[credential] rid={rid} claims={list(clean_claims.keys())} subject={holder_did or tx.subject_did or 'none'}"
+        "[credential] rid=%s claim_count=%s subject_present=%s",
+        rid,
+        len(clean_claims),
+        bool(holder_did or tx.subject_did),
     )
 
     # Use the stored vct URI for the SD-JWT `vct` claim (RFC 9596 §3.1).
