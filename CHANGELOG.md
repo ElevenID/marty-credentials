@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Advance the maintained ElevenID `isomdl` pin through its reviewed serial
+  mdoc digest boundary and optional bounded native executor while leaving
+  Marty issuance on the existing scalar route and keeping `parallel` disabled.
+
 ## [0.1.71] - 2026-08-27
 
 ### Fixed

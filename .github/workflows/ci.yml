@@ -55,6 +55,26 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check the native feature set
         run: cargo check --locked --no-default-features --features native
+      - name: Require scalar isomdl feature selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          check_scalar_surface() {
+            local feature_set="$1"
+            shift
+            local feature_tree
+            local target_label="${*:-host}"
+            feature_tree="$(cargo tree --locked --no-default-features --features "$feature_set" --edges normal,build,features "$@")"
+            grep -F 'isomdl feature "default"' <<<"$feature_tree"
+            if grep -F 'isomdl feature "parallel"' <<<"$feature_tree"; then
+              echo "isomdl/parallel must remain inactive for the $feature_set consumer surface ($target_label)" >&2
+              exit 1
+            fi
+          }
+          check_scalar_surface native
+          check_scalar_surface python
+          check_scalar_surface wasm --target wasm32-unknown-unknown
+          check_scalar_surface wasm-full --target wasm32-unknown-unknown
 
   test-rust:
     name: Rust ${{ matrix.task }} (${{ matrix.os }})
