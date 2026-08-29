@@ -1,0 +1,57 @@
+{
+  "schema": "marty.issuance-proof-nonce/v1",
+  "inputs": {
+    "path": "/v1/issuance/nonce",
+    "generated_nonce": "contract-proof-nonce",
+    "ttl_seconds": 300
+  },
+  "nonce_shape": {
+    "source_bytes": 32,
+    "encoded_length": 43,
+    "pattern": "^[A-Za-z0-9_-]{43}$"
+  },
+  "persistence": {
+    "digest_algorithm": "sha-256",
+    "digest_length": 64,
+    "plaintext_retained": false,
+    "single_use": true
+  },
+  "success": {
+    "status_code": 200,
+    "content_type": "application/json",
+    "headers": {"Cache-Control": "no-store"},
+    "body": {"c_nonce": "contract-proof-nonce"},
+    "repository_calls": [
+      {
+        "method": "save_proof_nonce",
+        "value": "contract-proof-nonce",
+        "ttl_seconds": 300
+      }
+    ]
+  },
+  "failures": [
+    {
+      "name": "nonce_store_rejects_write",
+      "setup": "store_returns_false",
+      "status_code": 503,
+      "content_type": "application/json",
+      "body": {"detail": "Proof nonce storage is unavailable"}
+    },
+    {
+      "name": "nonce_store_is_unavailable",
+      "setup": "store_raises",
+      "status_code": 503,
+      "content_type": "application/json",
+      "body": {"detail": "Proof nonce storage is unavailable"}
+    }
+  ],
+  "rate_limit": {
+    "requests": 2,
+    "window_seconds": 17,
+    "allowed_status_code": 200,
+    "status_code": 429,
+    "headers": {"Retry-After": "17"},
+    "body": {"detail": "Rate limit exceeded"},
+    "repository_call_count": 2
+  }
+}
