@@ -5,6 +5,7 @@ import base64
 import json
 from datetime import UTC, datetime
 from importlib import import_module
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +28,11 @@ from starlette.requests import Request
 
 migration = import_module(
     "issuance.infrastructure.migrations.versions.20260714_1000_portable_canvas_connections"
+)
+SIGNING_CONTRACT = json.loads(
+    (Path(__file__).resolve().parents[2] / "contracts/issuance-credential-signing.json").read_text(
+        encoding="utf-8"
+    )
 )
 
 
@@ -143,13 +149,13 @@ def _credential(transaction: IssuanceTransaction, credential_id: str) -> IssuedC
 
 
 def _proof_jwt() -> str:
-    encode = lambda value: (
-        base64.urlsafe_b64encode(  # noqa: E731 - compact JWT fixture
-            json.dumps(value, separators=(",", ":")).encode()
+    def encode(value):
+        return (
+            base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode())
+            .rstrip(b"=")
+            .decode()
         )
-        .rstrip(b"=")
-        .decode()
-    )
+
     return f"{encode({'alg': 'ES256'})}.{encode({'aud': 'https://beta.elevenidllc.com/org/org-1', 'nonce': 'wallet-nonce'})}.signature"
 
 
@@ -968,8 +974,9 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     assert sum(isinstance(result, routes.CredentialResponse) for result in results) == 1
     conflicts = [result for result in results if isinstance(result, JSONResponse)]
     assert len(conflicts) == 1
-    assert conflicts[0].status_code == 409
-    assert json.loads(conflicts[0].body)["error"] == "issuance_in_progress"
+    concurrent_loser = SIGNING_CONTRACT["state_machine"]["concurrent_loser"]
+    assert conflicts[0].status_code == concurrent_loser["status_code"]
+    assert json.loads(conflicts[0].body) == concurrent_loser["body"]
 
     stored = await repo.get_transaction("tx-concurrent-claim")
     assert stored is not None and stored.status == IssuanceStatus.ISSUED
@@ -1204,8 +1211,9 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
     monkeypatch,
 ) -> None:
     repo = InMemoryIssuanceRepository()
+    auth_code_contract = SIGNING_CONTRACT["authorization_code_only"]
     authorization_session = AuthorizationSession(
-        id="authorization-session-race",
+        id=auth_code_contract["authorization_session_id"],
         organization_id="org-1",
         credential_configuration_ids=["OpenBadgeCredential#sd-jwt"],
         access_token="wallet-token",
@@ -1307,10 +1315,15 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
     )
 
     expected_transaction_id = routes._authorization_session_transaction_id(authorization_session.id)
+    assert expected_transaction_id == auth_code_contract["transaction_id"]
     transactions = await repo.list_transactions("org-1")
     assert [transaction.id for transaction in transactions] == [expected_transaction_id]
     assert transactions[0].status == IssuanceStatus.ISSUED
     assert counts == {"builder": 1, "kms": 1}
     assert sum(isinstance(result, routes.CredentialResponse) for result in results) == 1
-    assert sum(isinstance(result, JSONResponse) for result in results) == 1
+    conflicts = [result for result in results if isinstance(result, JSONResponse)]
+    assert len(conflicts) == 1
+    concurrent_loser = SIGNING_CONTRACT["state_machine"]["concurrent_loser"]
+    assert conflicts[0].status_code == concurrent_loser["status_code"]
+    assert json.loads(conflicts[0].body) == concurrent_loser["body"]
     assert len(await repo.list_credentials_by_org("org-1")) == 1

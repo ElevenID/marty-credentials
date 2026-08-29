@@ -1642,7 +1642,7 @@ def _proof_audience_matches_org_issuer(audience: str | None, org_id: str) -> boo
     parsed = urlparse(normalized)
     candidate_path = (parsed.path if (parsed.scheme or parsed.netloc) else normalized).rstrip("/")
     allowed_paths = _allowed_credential_issuer_audience_paths(org_id)
-    return any(candidate_path == path or candidate_path.endswith(path) for path in allowed_paths)
+    return candidate_path in allowed_paths
 
 
 def _credential_status_to_protocol(status: CredentialStatus, expires_at: datetime | None) -> str:

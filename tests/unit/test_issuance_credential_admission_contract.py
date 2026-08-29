@@ -105,7 +105,11 @@ def proof(kind: str) -> str:
     audience = (
         "https://issuer.example/org/other"
         if kind == "wrong_audience"
-        else CONTRACT["inputs"]["proof_audience"]
+        else (
+            "https://issuer.example/evil/org/org-a"
+            if kind == "prefixed_audience"
+            else CONTRACT["inputs"]["proof_audience"]
+        )
     )
     payload = {"aud": audience}
     if kind != "missing_nonce":
@@ -195,7 +199,7 @@ async def test_credential_admission_matches_language_neutral_contract(
 def test_credential_admission_contract_has_required_security_boundaries() -> None:
     assert CONTRACT["schema"] == "marty.issuance-credential-admission/v1"
     names = {case["name"] for case in CONTRACT["cases"]}
-    assert len(names) == len(CONTRACT["cases"]) == 20
+    assert len(names) == len(CONTRACT["cases"]) == 21
     assert {
         "invalid_signature_does_not_consume_nonce",
         "proof_nonce_is_single_use",
