@@ -60,6 +60,19 @@
   },
   "launch": {
     "required_fields": ["id_token", "state"],
+    "submission": {
+      "accepted_content_types": ["application/json", "application/x-www-form-urlencoded"],
+      "duplicate_form_field_policy": "last-value-wins",
+      "non_string_json_field_policy": "treat-as-absent",
+      "failures": [
+        {"name": "id_token_missing", "status_code": 400, "detail": "Canvas LTI launch requires id_token"},
+        {"name": "state_missing", "status_code": 400, "detail": "Canvas LTI launch requires server-generated state"},
+        {"name": "state_unknown", "status_code": 400, "detail": "Canvas LTI state is unknown for this platform"},
+        {"name": "state_consumed", "status_code": 400, "detail": "Canvas LTI state has expired or already been used"},
+        {"name": "binding_missing", "status_code": 409, "detail": "Canvas LTI launch did not match an enabled Canvas program binding"},
+        {"name": "feature_disabled", "status_code": 409, "detail": "Canvas LTI is disabled for this deployment profile"}
+      ]
+    },
     "state": {
       "platform_bound": true,
       "pending_and_unexpired": true,
@@ -85,7 +98,49 @@
       "roles",
       "identity_mapping_status"
     ],
-    "private_response_fields": ["raw_claims", "learner_identity", "nonce", "subject", "audience", "lti_capabilities"]
+    "private_response_fields": ["raw_claims", "learner_identity", "nonce", "subject", "audience", "lti_capabilities", "state", "issuer", "deployment_id", "issued_at", "expires_at", "target_link_uri"],
+    "public_response_vector": {
+      "platform": {
+        "id": "platform-1",
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1"
+      },
+      "binding": {
+        "id": "binding-1",
+        "application_template_id": "application-template-1",
+        "credential_template_id": "credential-template-1"
+      },
+      "verified": {
+        "issuer": "https://canvas.instructure.com",
+        "subject": "private-subject",
+        "audience": ["client-1"],
+        "deployment_id": "deployment-1",
+        "nonce": "private-nonce",
+        "issued_at": 1700000000,
+        "expires_at": 1700000300,
+        "message_type": "LtiResourceLinkRequest",
+        "lti_version": "1.3.0",
+        "target_link_uri": "https://tool.example/launch",
+        "context": {"id": "context-1", "title": "Portable Credentials", "label": "PORTABLE101", "private": "not-public"},
+        "roles": ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner", "Instructor"],
+        "learner_identity": {"subject": "private-subject"},
+        "raw_claims": {"sub": "private-subject"},
+        "identity_mapping_status": "linked"
+      },
+      "expected": {
+        "verified": true,
+        "organization_id": "org-1",
+        "canvas_account_id": "account-1",
+        "canvas_platform_id": "platform-1",
+        "canvas_program_binding_id": "binding-1",
+        "application_template_id": "application-template-1",
+        "credential_template_id": "credential-template-1",
+        "message_type": "LtiResourceLinkRequest",
+        "context": {"course_id": "context-1", "title": "Portable Credentials", "label": "PORTABLE101"},
+        "roles": ["membership#Learner", "Instructor"],
+        "identity_mapping_status": "linked"
+      }
+    }
   },
   "experience": {
     "redirect_status_code": 303,
