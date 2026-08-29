@@ -1,0 +1,353 @@
+{
+  "schema": "marty.issuance-tenant-discovery/v1",
+  "inputs": {
+    "issuer_base_url": "https://issuer.example",
+    "issuer_display_name": "Example Issuer",
+    "organization_id": "org-a",
+    "credential_types": ["EmployeeBadge", "org.iso.18013.5.1.mDL"],
+    "credential_type_formats": [
+      ["EmployeeBadge", ["jwt_vc_json", "sd_jwt_vc", "w3c_vcdm_v2_di"]],
+      ["org.iso.18013.5.1.mDL", ["mso_mdoc"]]
+    ],
+    "display_metadata": {
+      "EmployeeBadge": {
+        "name": "Employee Badge",
+        "description": "Company access credential",
+        "claims": [
+          {
+            "name": "employee_id",
+            "display": {"label": "Employee ID"},
+            "required": true
+          },
+          {"name": "department", "display_name": "Department"}
+        ],
+        "display_style": {
+          "background_color": "#112233",
+          "text_color": "#ffffff",
+          "logo_url": "https://issuer.example/logo.png"
+        },
+        "vct": "https://types.example/employee-badge",
+        "issuer_did": "did:web:issuer.example:employee"
+      },
+      "org.iso.18013.5.1.mDL": {
+        "name": "Mobile Driving Licence",
+        "claims": [],
+        "display_style": {},
+        "issuer_did": "did:web:issuer.example:mdl"
+      }
+    },
+    "required_key_attestation_by_format": {
+      "jwt_vc_json": {},
+      "dc+sd-jwt": {
+        "key_storage": ["iso_18045_high"],
+        "user_authentication": ["biometric"]
+      },
+      "ldp_vc": {"user_authentication": ["biometric"]},
+      "mso_mdoc": {"key_storage": ["iso_18045_high"]}
+    }
+  },
+  "failure": {
+    "resolver_unavailable": {
+      "status_code": 503,
+      "body": {"detail": "Issuer proof policy is temporarily unavailable"}
+    }
+  },
+  "variants": [
+    {
+      "operation": "get_org_issuer_metadata",
+      "path": "/.well-known/openid-credential-issuer/org/org-a",
+      "issuer_suffix": "",
+      "expected_resolver_calls": [
+        {
+          "organization_id": "org-a",
+          "issuer_did": "did:web:issuer.example:employee",
+          "credential_format": "jwt_vc_json",
+          "key_purpose": "vc_jwt_issuer"
+        },
+        {
+          "organization_id": "org-a",
+          "issuer_did": "did:web:issuer.example:employee",
+          "credential_format": "dc+sd-jwt",
+          "key_purpose": "vc_jwt_issuer"
+        },
+        {
+          "organization_id": "org-a",
+          "issuer_did": "did:web:issuer.example:employee",
+          "credential_format": "ldp_vc",
+          "key_purpose": "vc_jwt_issuer"
+        },
+        {
+          "organization_id": "org-a",
+          "issuer_did": "did:web:issuer.example:mdl",
+          "credential_format": "mso_mdoc",
+          "key_purpose": "mdoc_dsc"
+        }
+      ],
+      "credential_configurations_supported": {
+        "EmployeeBadge": {
+          "format": "jwt_vc_json",
+          "scope": "EmployeeBadge",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {}
+            }
+          },
+          "credential_definition": {
+            "type": ["VerifiableCredential", "EmployeeBadge"]
+          },
+          "credential_metadata": {
+            "display": [
+              {
+                "name": "Employee Badge",
+                "locale": "en-US",
+                "description": "Company access credential",
+                "background_color": "#112233",
+                "text_color": "#ffffff",
+                "logo": {
+                  "uri": "https://issuer.example/logo.png",
+                  "alt_text": "Employee Badge"
+                }
+              }
+            ],
+            "claims": [
+              {
+                "path": ["employee_id"],
+                "display": [{"name": "Employee ID", "locale": "en-US"}],
+                "mandatory": true
+              },
+              {
+                "path": ["department"],
+                "display": [{"name": "Department", "locale": "en-US"}]
+              }
+            ]
+          }
+        },
+        "EmployeeBadge#sd-jwt": {
+          "format": "dc+sd-jwt",
+          "vct": "https://types.example/employee-badge",
+          "scope": "EmployeeBadge",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {
+                "key_storage": ["iso_18045_high"],
+                "user_authentication": ["biometric"]
+              }
+            }
+          },
+          "credential_metadata": {
+            "display": [
+              {
+                "name": "Employee Badge",
+                "locale": "en-US",
+                "description": "Company access credential",
+                "background_color": "#112233",
+                "text_color": "#ffffff",
+                "logo": {
+                  "uri": "https://issuer.example/logo.png",
+                  "alt_text": "Employee Badge"
+                }
+              }
+            ],
+            "claims": [
+              {
+                "path": ["employee_id"],
+                "display": [{"name": "Employee ID", "locale": "en-US"}],
+                "mandatory": true
+              },
+              {
+                "path": ["department"],
+                "display": [{"name": "Department", "locale": "en-US"}]
+              }
+            ]
+          }
+        },
+        "EmployeeBadge#ldp-vc": {
+          "format": "ldp_vc",
+          "scope": "EmployeeBadge",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {
+                "user_authentication": ["biometric"]
+              }
+            }
+          },
+          "credential_definition": {
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "EmployeeBadge"]
+          },
+          "credential_metadata": {
+            "display": [
+              {
+                "name": "Employee Badge",
+                "locale": "en-US",
+                "description": "Company access credential",
+                "background_color": "#112233",
+                "text_color": "#ffffff",
+                "logo": {
+                  "uri": "https://issuer.example/logo.png",
+                  "alt_text": "Employee Badge"
+                }
+              }
+            ],
+            "claims": [
+              {
+                "path": ["employee_id"],
+                "display": [{"name": "Employee ID", "locale": "en-US"}],
+                "mandatory": true
+              },
+              {
+                "path": ["department"],
+                "display": [{"name": "Department", "locale": "en-US"}]
+              }
+            ]
+          }
+        },
+        "org.iso.18013.5.1.mDL#mdoc": {
+          "format": "mso_mdoc",
+          "doctype": "org.iso.18013.5.1.mDL",
+          "scope": "org.iso.18013.5.1.mDL",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": [-7, -8],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {
+                "key_storage": ["iso_18045_high"]
+              }
+            }
+          },
+          "credential_metadata": {
+            "display": [
+              {"name": "Mobile Driving Licence", "locale": "en-US"}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "operation": "get_org_issuer_metadata_credential_manager",
+      "path": "/.well-known/openid-credential-issuer/org/org-a/credential-manager",
+      "issuer_suffix": "/credential-manager",
+      "expected_resolver_calls": [
+        {
+          "organization_id": "org-a",
+          "issuer_did": null,
+          "credential_format": "dc+sd-jwt",
+          "key_purpose": "vc_jwt_issuer"
+        }
+      ],
+      "credential_configurations_supported": {
+        "EmployeeBadge#credential-manager": {
+          "format": "dc+sd-jwt",
+          "vct": "https://types.example/employee-badge",
+          "scope": "EmployeeBadge",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {
+                "key_storage": ["iso_18045_high"],
+                "user_authentication": ["biometric"]
+              }
+            }
+          },
+          "display": [
+            {
+              "name": "Employee Badge",
+              "locale": "en-US",
+              "description": "Company access credential",
+              "background_color": "#112233",
+              "text_color": "#ffffff",
+              "logo": {
+                "uri": "https://issuer.example/logo.png",
+                "alt_text": "Employee Badge"
+              }
+            }
+          ],
+          "claims": [
+            {
+              "path": ["employee_id"],
+              "display": [{"name": "Employee ID", "locale": "en-US"}],
+              "mandatory": true
+            },
+            {
+              "path": ["department"],
+              "display": [{"name": "Department", "locale": "en-US"}]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "operation": "get_org_issuer_metadata_apple_wallet",
+      "path": "/.well-known/openid-credential-issuer/org/org-a/apple-wallet",
+      "issuer_suffix": "/apple-wallet",
+      "expected_resolver_calls": [
+        {
+          "organization_id": "org-a",
+          "issuer_did": null,
+          "credential_format": "mso_mdoc",
+          "key_purpose": "mdoc_dsc"
+        }
+      ],
+      "credential_configurations_supported": {
+        "EmployeeBadge#apple-wallet": {
+          "format": "mso_mdoc",
+          "doctype": "EmployeeBadge",
+          "scope": "EmployeeBadge",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": [-7, -8],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {
+                "key_storage": ["iso_18045_high"]
+              }
+            }
+          },
+          "display": [
+            {
+              "name": "Employee Badge",
+              "locale": "en-US",
+              "description": "Company access credential",
+              "background_color": "#112233",
+              "text_color": "#ffffff",
+              "logo": {
+                "uri": "https://issuer.example/logo.png",
+                "alt_text": "Employee Badge"
+              }
+            }
+          ]
+        },
+        "org.iso.18013.5.1.mDL#apple-wallet": {
+          "format": "mso_mdoc",
+          "doctype": "org.iso.18013.5.1.mDL",
+          "scope": "org.iso.18013.5.1.mDL",
+          "cryptographic_binding_methods_supported": ["did:key", "jwk"],
+          "credential_signing_alg_values_supported": [-7, -8],
+          "proof_types_supported": {
+            "jwt": {
+              "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+              "key_attestations_required": {
+                "key_storage": ["iso_18045_high"]
+              }
+            }
+          },
+          "display": [
+            {"name": "Mobile Driving Licence", "locale": "en-US"}
+          ]
+        }
+      }
+    }
+  ]
+}
