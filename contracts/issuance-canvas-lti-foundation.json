@@ -218,6 +218,108 @@
         }
       ]
     },
+    "ags_line_item_pinning": {
+      "authoritative_inputs": [
+        "signed-custom-claim:canvas_program_binding_id",
+        "signed-custom-claim:canvas_requirement_id",
+        "signed-custom-claim:canvas_resource_id",
+        "signed-ags-claim:lineitem"
+      ],
+      "matching_requirement_source": "ags_result",
+      "service_url_policy": "validated-https-canvas-origin",
+      "incomplete_claim_policy": "no-op",
+      "idempotent": true,
+      "changed_binding_policy": {
+        "config_version_increment": 1,
+        "enabled": false,
+        "reset_fields": [
+          "validated_config_version",
+          "readiness_checks",
+          "readiness_validated_at",
+          "activated_at",
+          "credential_template_snapshot"
+        ]
+      },
+      "cases": [
+        {
+          "name": "verified_line_item_change_is_pinned_and_invalidates_readiness",
+          "signed_binding_id": "binding-1",
+          "signed_requirement_id": "score-1",
+          "signed_resource_id": "resource-1",
+          "line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/new",
+          "requirement_source": "ags_result",
+          "existing_line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/old",
+          "changed": true,
+          "status_code": 200
+        },
+        {
+          "name": "same_verified_line_item_is_idempotent",
+          "signed_binding_id": "binding-1",
+          "signed_requirement_id": "score-1",
+          "signed_resource_id": "resource-1",
+          "line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/old",
+          "requirement_source": "ags_result",
+          "existing_line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/old",
+          "changed": false,
+          "status_code": 200
+        },
+        {
+          "name": "incomplete_signed_claims_are_a_no_op",
+          "signed_binding_id": "binding-1",
+          "signed_requirement_id": "score-1",
+          "signed_resource_id": "resource-1",
+          "line_item_url": null,
+          "requirement_source": "ags_result",
+          "existing_line_item_url": null,
+          "changed": false,
+          "status_code": 200
+        },
+        {
+          "name": "signed_binding_mismatch_fails_closed",
+          "signed_binding_id": "binding-other",
+          "signed_requirement_id": "score-1",
+          "signed_resource_id": "resource-1",
+          "line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/new",
+          "requirement_source": "ags_result",
+          "existing_line_item_url": null,
+          "status_code": 409,
+          "detail": "Canvas launch resource does not match the selected binding"
+        },
+        {
+          "name": "requirement_or_resource_mismatch_fails_closed",
+          "signed_binding_id": "binding-1",
+          "signed_requirement_id": "score-other",
+          "signed_resource_id": "resource-1",
+          "line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/new",
+          "requirement_source": "ags_result",
+          "existing_line_item_url": null,
+          "status_code": 409,
+          "detail": "Canvas launch resource does not match an AGS requirement"
+        },
+        {
+          "name": "non_ags_requirement_fails_closed",
+          "signed_binding_id": "binding-1",
+          "signed_requirement_id": "score-1",
+          "signed_resource_id": "resource-1",
+          "line_item_url": "https://canvas.example.edu/api/lti/courses/1/line_items/new",
+          "requirement_source": "canvas_rest",
+          "existing_line_item_url": null,
+          "status_code": 409,
+          "detail": "Canvas launch resource does not match an AGS requirement"
+        },
+        {
+          "name": "unsafe_line_item_url_fails_closed",
+          "signed_binding_id": "binding-1",
+          "signed_requirement_id": "score-1",
+          "signed_resource_id": "resource-1",
+          "line_item_url": "http://127.0.0.1/internal",
+          "requirement_source": "ags_result",
+          "existing_line_item_url": null,
+          "status_code": 409,
+          "detail_prefix": "Canvas AGS line item could not be pinned:"
+        }
+      ]
+    },
     "jwt": {
       "algorithm_policy": "protected-header-and-matching-jwk",
       "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",
