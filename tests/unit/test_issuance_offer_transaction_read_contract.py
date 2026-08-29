@@ -86,7 +86,7 @@ def test_offer_transaction_read_contract_matches_python_oracle(monkeypatch) -> N
 def test_offer_transaction_read_failures_match_python_oracle(monkeypatch) -> None:
     http, repository = client(monkeypatch)
 
-    for failure in CONTRACT["failures"]:
+    for failure in [*CONTRACT["edge_cases"], *CONTRACT["failures"]]:
         repository.calls.clear()
         response = http.get(failure["path"], headers=failure.get("headers", {}))
         assert response.status_code == failure["status_code"], failure["name"]

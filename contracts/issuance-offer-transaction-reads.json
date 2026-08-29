@@ -165,6 +165,88 @@
       "repository_calls": [{"method": "get_transaction", "value": "tx-pending"}]
     }
   ],
+  "edge_cases": [
+    {
+      "name": "duplicate_list_tenant_uses_last_value",
+      "path": "/v1/issuance/transactions?organization_id=org-a&organization_id=org-b",
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-b"
+      },
+      "status_code": 200,
+      "body": [],
+      "repository_calls": [{"method": "list_transactions", "value": "org-b"}]
+    },
+    {
+      "name": "missing_list_tenant_query",
+      "path": "/v1/issuance/transactions",
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 422,
+      "body": {
+        "detail": [
+          {
+            "type": "missing",
+            "loc": ["query", "organization_id"],
+            "msg": "Field required",
+            "input": null
+          }
+        ]
+      },
+      "repository_calls": []
+    },
+    {
+      "name": "blank_management_key",
+      "path": "/v1/issuance/transactions?organization_id=org-a",
+      "headers": {
+        "X-API-Key": "",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 401,
+      "body": {"detail": "X-API-Key header is missing"},
+      "repository_calls": []
+    },
+    {
+      "name": "invalid_management_key",
+      "path": "/v1/issuance/transactions?organization_id=org-a",
+      "headers": {
+        "X-API-Key": "wrong",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 401,
+      "body": {"detail": "Invalid API Key"},
+      "repository_calls": []
+    },
+    {
+      "name": "missing_list_tenant_context",
+      "path": "/v1/issuance/transactions?organization_id=org-a",
+      "headers": {"X-API-Key": "contract-management-key"},
+      "status_code": 403,
+      "body": {"detail": "Trusted organization context is required"},
+      "repository_calls": []
+    },
+    {
+      "name": "missing_detail_tenant_context",
+      "path": "/v1/issuance/transactions/tx-pending",
+      "headers": {"X-API-Key": "contract-management-key"},
+      "status_code": 403,
+      "body": {"detail": "Trusted organization context is required"},
+      "repository_calls": [{"method": "get_transaction", "value": "tx-pending"}]
+    },
+    {
+      "name": "cross_tenant_revocation_status_is_hidden",
+      "path": "/v1/issuance/transactions/tx-foreign/revocation-status",
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 404,
+      "body": {"detail": "Resource not found"},
+      "repository_calls": [{"method": "get_transaction", "value": "tx-foreign"}]
+    }
+  ],
   "failures": [
     {
       "name": "missing_offer",
