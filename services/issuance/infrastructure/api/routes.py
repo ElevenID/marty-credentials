@@ -3954,9 +3954,16 @@ async def exchange_token(
 ) -> TokenResponse:
     """Exchange pre-authorized code or authorization code for access token (OID4VCI)."""
     rid = http_request.headers.get("X-Request-ID", "-")
+    grant_type_label = {
+        "authorization_code": "authorization_code",
+        "urn:ietf:params:oauth:grant-type:pre-authorized_code": "pre_authorized_code",
+    }.get(grant_type, "unsupported")
     logger.info(
-        f"[token] rid={rid} grant_type={grant_type!r} "
-        f"pre_authorized_code={pre_authorized_code!r} code={code!r}"
+        "[token] rid=%s grant_type=%s pre_authorized_code_present=%s authorization_code_present=%s",
+        rid,
+        grant_type_label,
+        pre_authorized_code is not None,
+        code is not None,
     )
 
     # ── Authorization code flow ────────────────────────────────────
