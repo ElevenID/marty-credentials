@@ -1097,37 +1097,66 @@ class TestCredentialFormatToProtocol:
 
 
 class TestProofAudienceMatching:
-    def test_accepts_supported_org_issuer_paths(self):
-        from issuance.infrastructure.api.routes import _proof_audience_matches_org_issuer
+    @pytest.mark.parametrize(
+        "suffix",
+        ("", "/credential-manager", "/apple-wallet", "/waltid"),
+    )
+    def test_accepts_exact_configured_org_issuer_urls(self, monkeypatch, suffix):
+        from issuance.infrastructure.api import routes
 
         org_id = "00000000-0000-0000-0000-000000000001"
-        assert _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}",
-            org_id,
-        )
-        assert _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}/credential-manager",
-            org_id,
-        )
-        assert _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}/apple-wallet",
-            org_id,
-        )
-        assert _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}/waltid",
-            org_id,
+        monkeypatch.setattr(routes, "ISSUER_BASE_URL", "https://issuer.example")
+
+        assert routes._proof_audience_matches_org_issuer(
+            f"https://issuer.example/org/{org_id}{suffix}", org_id
         )
 
-    def test_rejects_unknown_org_issuer_path(self):
-        from issuance.infrastructure.api.routes import _proof_audience_matches_org_issuer
+    @pytest.mark.parametrize(
+        "audience",
+        (
+            "http://issuer.example/org/{org_id}",
+            "https://other.example/org/{org_id}",
+            "https://issuer.example:444/org/{org_id}",
+            "https://issuer.example@other.example/org/{org_id}",
+            "/org/{org_id}",
+            "https://issuer.example/org/{org_id}/",
+            "https://issuer.example/org/{org_id}?wallet=other",
+            "https://issuer.example/org/{org_id}#other",
+        ),
+    )
+    def test_rejects_unconfigured_origin_with_supported_path(
+        self, monkeypatch, audience
+    ):
+        from issuance.infrastructure.api import routes
 
         org_id = "00000000-0000-0000-0000-000000000001"
-        assert not _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}/unknown-wallet",
+        monkeypatch.setattr(routes, "ISSUER_BASE_URL", "https://issuer.example")
+
+        assert not routes._proof_audience_matches_org_issuer(
+            audience.format(org_id=org_id), org_id
+        )
+
+    def test_accepts_exact_configured_port(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        org_id = "00000000-0000-0000-0000-000000000001"
+        monkeypatch.setattr(routes, "ISSUER_BASE_URL", "https://issuer.example:8443")
+
+        assert routes._proof_audience_matches_org_issuer(
+            f"https://issuer.example:8443/org/{org_id}", org_id
+        )
+
+    def test_rejects_unknown_org_issuer_path(self, monkeypatch):
+        from issuance.infrastructure.api import routes
+
+        org_id = "00000000-0000-0000-0000-000000000001"
+        monkeypatch.setattr(routes, "ISSUER_BASE_URL", "https://issuer.example")
+        assert not routes._proof_audience_matches_org_issuer(
+            f"https://issuer.example/org/{org_id}/unknown-wallet",
             org_id,
         )
-        assert not _proof_audience_matches_org_issuer(
-            f"https://beta.elevenidllc.com/org/{org_id}/spruce",
+        assert not routes._proof_audience_matches_org_issuer(
+            f"https://issuer.example/org/{org_id}/spruce",
             org_id,
         )
 

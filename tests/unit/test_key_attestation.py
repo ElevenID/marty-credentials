@@ -443,6 +443,39 @@ async def test_accepts_spec_optional_assurance_and_status_claims_when_not_requir
 
 
 @pytest.mark.asyncio
+async def test_routes_exact_issuer_url_to_ordinary_core_verifier() -> None:
+    proof = _sign_proof(ec.generate_private_key(ec.SECP256R1()), None)
+    calls: list[tuple[str, str | None, str | None]] = []
+
+    def ordinary_verifier(
+        checked_proof: str,
+        nonce: str | None,
+        issuer_url: str | None,
+    ) -> tuple[bool, str, dict[str, Any] | None, str | None]:
+        calls.append((checked_proof, nonce, issuer_url))
+        return True, "did:key:holder", {}, None
+
+    result = await verify_oid4vci_proof_with_issuer_policy(
+        proof,
+        issuer_context=None,
+        organization_id="org-a",
+        expected_nonce="nonce-1",
+        issuer_url="https://issuer.example/org/org-a",
+        proof_verifier=ordinary_verifier,
+        bound_proof_verifier=lambda *_args: (True, "", {}, None),
+    )
+
+    assert result == (True, "did:key:holder", {}, None)
+    assert calls == [
+        (
+            proof,
+            "nonce-1",
+            "https://issuer.example/org/org-a",
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_routes_exact_validated_attestation_to_core_binding() -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     attestation_key, certificate = _attestation_material(now)

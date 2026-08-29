@@ -148,7 +148,9 @@ def _credential(transaction: IssuanceTransaction, credential_id: str) -> IssuedC
     )
 
 
-def _proof_jwt() -> str:
+def _proof_jwt(
+    audience: str = "https://beta.elevenidllc.com/org/org-1",
+) -> str:
     def encode(value):
         return (
             base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode())
@@ -156,7 +158,10 @@ def _proof_jwt() -> str:
             .decode()
         )
 
-    return f"{encode({'alg': 'ES256'})}.{encode({'aud': 'https://beta.elevenidllc.com/org/org-1', 'nonce': 'wallet-nonce'})}.signature"
+    return (
+        f"{encode({'alg': 'ES256'})}."
+        f"{encode({'aud': audience, 'nonce': 'wallet-nonce'})}.signature"
+    )
 
 
 async def _accept_test_nonce(_nonce: str) -> bool:
@@ -985,6 +990,63 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
     assert credentials[0].id == stored.reserved_credential_id
 
 
+@pytest.mark.parametrize(
+    "audience",
+    (
+        "http://issuer.example/org/org-1",
+        "https://other.example/org/org-1",
+        "https://issuer.example:444/org/org-1",
+        "https://issuer.example@other.example/org/org-1",
+        "/org/org-1",
+    ),
+)
+@pytest.mark.asyncio
+async def test_grpc_credential_endpoint_rejects_unconfigured_proof_audience(
+    monkeypatch,
+    audience: str,
+) -> None:
+    import grpc
+    from issuance.infrastructure.adapters import grpc_adapter
+    from marty_proto.v1 import issuance_service_pb2 as pb2
+
+    repo = InMemoryIssuanceRepository()
+    transaction = _transaction()
+    await repo.save_transaction(transaction)
+
+    async def unexpected_resolution(*_args, **_kwargs):
+        raise AssertionError("audience rejection must precede issuer resolution")
+
+    monkeypatch.setattr(
+        grpc_adapter,
+        "_resolve_remote_signing_context_for_tx",
+        unexpected_resolution,
+    )
+    monkeypatch.setattr(grpc_adapter, "ISSUER_BASE_URL", "https://issuer.example")
+    service = grpc_adapter.IssuanceServiceGrpc(lambda: repo)
+    request = pb2.IssueCredentialRequest(
+        access_token=transaction.access_token,
+        format="vc+sd-jwt",
+        proofs=[pb2.ProofJwt(proof_type="jwt", jwt=_proof_jwt(audience))],
+    )
+
+    class Context:
+        code = None
+        details = None
+
+        def set_code(self, code):
+            self.code = code
+
+        def set_details(self, details):
+            self.details = details
+
+    context = Context()
+    response = await service.IssueCredential(request, context)
+
+    assert response == pb2.IssueCredentialResponse()
+    assert context.code is grpc.StatusCode.INVALID_ARGUMENT
+    assert context.details == "Proof JWT audience does not match credential issuer"
+
+
 @pytest.mark.asyncio
 async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeypatch) -> None:
     from issuance.infrastructure.adapters import delivery_records, grpc_adapter
@@ -1008,6 +1070,7 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
         return remote_context
 
     async def verify_proof(*_args, **_kwargs):
+        assert _kwargs["issuer_url"] == "https://issuer.example/org/org-1"
         return True, "did:key:learner", {"kty": "EC"}, None
 
     async def build_credential(_tx, *, credential_id, **_kwargs):
@@ -1031,6 +1094,7 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
     monkeypatch.setattr(grpc_adapter, "_resolve_remote_signing_context_for_tx", resolve_context)
     monkeypatch.setattr(grpc_adapter, "verify_oid4vci_proof_with_issuer_policy", verify_proof)
     monkeypatch.setattr(grpc_adapter, "_create_remote_signed_sd_jwt_for_tx", build_credential)
+    monkeypatch.setattr(grpc_adapter, "ISSUER_BASE_URL", "https://issuer.example")
     monkeypatch.setattr(delivery_records, "record_post_issuance_deliveries", record_delivery)
 
     service = grpc_adapter.IssuanceServiceGrpc(lambda: repo)
@@ -1038,7 +1102,12 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
     request = pb2.IssueCredentialRequest(
         access_token=transaction.access_token,
         format="vc+sd-jwt",
-        proofs=[pb2.ProofJwt(proof_type="jwt", jwt=_proof_jwt())],
+        proofs=[
+            pb2.ProofJwt(
+                proof_type="jwt",
+                jwt=_proof_jwt("https://issuer.example/org/org-1"),
+            )
+        ],
     )
 
     class Context:
