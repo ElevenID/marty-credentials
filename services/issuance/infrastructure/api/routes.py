@@ -1267,6 +1267,22 @@ class DidcommDeliveryResponse(BaseModel):
     error: str | None = None
 
 
+def _log_didcomm_failure(
+    stage: Literal["auto-delivery", "encryption-preflight", "encryption", "transport"],
+    exc: BaseException,
+) -> None:
+    """Record a DIDComm failure without retaining exception or identity data."""
+
+    exception_type = type(exc).__name__
+    logger.warning(
+        f"DIDComm {stage} failed ({exception_type})",
+        extra={
+            "didcomm_stage": stage,
+            "didcomm_exception_type": exception_type,
+        },
+    )
+
+
 def _didcomm_private_ips_enabled() -> bool:
     """Allow private-address agents only when a deployment opts in explicitly."""
 
@@ -3152,7 +3168,7 @@ async def _issuance_response_from_transaction(
                     )
                     credential_offer_uris[wallet_id] = f"didcomm://{delivery.service_endpoint}"
                 except Exception as exc:
-                    logger.warning("DIDComm auto-delivery failed: %s", exc)
+                    _log_didcomm_failure("auto-delivery", exc)
                     credential_offer_uris[wallet_id] = f"didcomm://pending?transaction_id={tx.id}"
             else:
                 credential_offer_uris[wallet_id] = f"didcomm://pending?transaction_id={tx.id}"
@@ -5169,7 +5185,7 @@ async def _didcomm_sign_and_deliver(
     if not service_endpoint:
         raise HTTPException(
             status_code=422,
-            detail=f"Holder DID {holder_did} has no DIDComm service endpoint",
+            detail="Holder DID has no DIDComm service endpoint",
         )
     service_endpoint = await _validated_didcomm_delivery_endpoint(service_endpoint)
 
@@ -5266,7 +5282,7 @@ async def _didcomm_sign_and_deliver(
             detail="DIDComm sender-authentication configuration is unavailable",
         ) from enc_err
     except Exception as enc_err:
-        logger.warning("DIDComm encryption preflight failed for holder DID %s", holder_did)
+        _log_didcomm_failure("encryption-preflight", enc_err)
         raise HTTPException(
             status_code=422,
             detail="Holder DID does not provide a compatible DIDComm key agreement method",
@@ -5348,7 +5364,7 @@ async def _didcomm_sign_and_deliver(
             detail="DIDComm sender-authentication configuration is unavailable",
         ) from enc_err
     except Exception as enc_err:
-        logger.warning("DIDComm encryption failed for holder DID %s", holder_did)
+        _log_didcomm_failure("encryption", enc_err)
         raise HTTPException(
             status_code=422,
             detail="Holder DID does not provide a compatible DIDComm key agreement method",
@@ -5371,10 +5387,11 @@ async def _didcomm_sign_and_deliver(
             )
             if resp.status_code >= 400:
                 delivery_status = "delivery_failed"
-                delivery_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-    except Exception as e:
+                delivery_error = f"HTTP {resp.status_code}"
+    except Exception as exc:
         delivery_status = "delivery_failed"
-        delivery_error = str(e)
+        delivery_error = "DIDComm transport failed"
+        _log_didcomm_failure("transport", exc)
 
     # Commit the credential and issued state atomically only after transport
     # succeeds. Signing or delivery failure leaves the original transaction
