@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import ssl
 from pathlib import Path
 from types import SimpleNamespace
@@ -39,6 +40,81 @@ def _write_encryption_policy(tmp_path: Path, issuers: dict) -> str:
         encoding="utf-8",
     )
     return str(policy_path)
+
+
+def _configure_delivery_through_transport(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    holder_did: str,
+    preflight_error: Exception | None = None,
+    encryption_error: Exception | None = None,
+) -> tuple[IssuanceTransaction, SimpleNamespace]:
+    transaction = IssuanceTransaction(
+        id="tx-didcomm-diagnostic-privacy",
+        organization_id="org-a",
+        credential_template_id="template-a",
+        issuer_profile_id="profile-a",
+        issuer_did_override="did:web:issuer.example",
+        issuer_algorithm="ES256",
+        claims={"given_name": "Alice"},
+    )
+    repo = SimpleNamespace(save_transaction=AsyncMock())
+    remote_context = {
+        "issuer_did": transaction.issuer_did_override,
+        "issuer_profile_id": transaction.issuer_profile_id,
+        "algorithm": transaction.issuer_algorithm,
+        "verification_method_id": "did:web:issuer.example#key-1",
+        "service": {"algorithm": "ES256"},
+    }
+
+    monkeypatch.setattr(routes, "didcomm_resolve_did", lambda _did: {"id": holder_did})
+    monkeypatch.setattr(
+        routes,
+        "didcomm_extract_endpoint",
+        lambda _doc: "https://wallet.example/inbox",
+    )
+    monkeypatch.setattr(
+        routes,
+        "_validated_didcomm_delivery_endpoint",
+        AsyncMock(return_value="https://wallet.example/inbox"),
+    )
+    monkeypatch.setattr(
+        routes,
+        "apply_remote_issuer_context",
+        AsyncMock(return_value=remote_context),
+    )
+    monkeypatch.setattr(
+        routes,
+        "prepare_didcomm_delivery_encryption",
+        Mock(side_effect=preflight_error) if preflight_error else Mock(return_value=object()),
+    )
+    monkeypatch.setattr(
+        routes,
+        "_allocate_credential_status_list_entries",
+        AsyncMock(return_value=(None, [])),
+    )
+    monkeypatch.setattr(
+        routes,
+        "create_sd_jwt_vc_with_remote_signing",
+        AsyncMock(
+            return_value=(
+                "signed-credential",
+                stable_issuance_credential_id(transaction.id),
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        routes,
+        "didcomm_pack_credential",
+        Mock(return_value=json.dumps({"id": "message-a"})),
+    )
+    monkeypatch.setattr(
+        routes,
+        "didcomm_encrypt_prepared_delivery",
+        Mock(side_effect=encryption_error) if encryption_error else Mock(return_value=b"packed"),
+    )
+    monkeypatch.setattr(routes, "_didcomm_tls_verifier", Mock(return_value=True))
+    return transaction, repo
 
 
 def test_delivery_contract_rejects_caller_selected_resolver() -> None:
@@ -486,6 +562,210 @@ def test_delivery_fails_closed_when_operator_ca_is_unavailable(
         routes._didcomm_tls_verifier()
 
     assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_auto_delivery_logs_only_sanitized_stage_and_exception_type(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    holder_did = "did:peer:holder-MUST-NOT-ENTER-LOGS-1b9266d5"
+    sensitive_error = "transport-secret-MUST-NOT-ENTER-LOGS-9f76ae42"
+    transaction = IssuanceTransaction(
+        id="tx-auto-delivery-privacy",
+        organization_id="org-a",
+        credential_type="EmployeeCredential",
+        wallet_configs=[
+            {
+                "wallet_id": "didcomm-wallet",
+                "format_variant": "didcomm_v2",
+            }
+        ],
+    )
+    request = routes.InitiateIssuanceRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example",
+        holder_did=holder_did,
+    )
+    monkeypatch.setattr(routes, "oid4vci_create_credential_offer", Mock(return_value="{}"))
+    monkeypatch.setattr(
+        routes,
+        "_didcomm_sign_and_deliver",
+        AsyncMock(side_effect=RuntimeError(sensitive_error)),
+    )
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    response = await routes._issuance_response_from_transaction(
+        tx=transaction,
+        request=request,
+        repo=SimpleNamespace(),
+    )
+
+    assert response.credential_offer_uris == {
+        "didcomm-wallet": "didcomm://pending?transaction_id=tx-auto-delivery-privacy"
+    }
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    rendered_logs = "\n".join(item.getMessage() for item in route_records)
+    structured_logs = "\n".join(repr(item.__dict__) for item in route_records)
+    for sensitive_value in (holder_did, sensitive_error):
+        assert sensitive_value not in rendered_logs
+        assert sensitive_value not in structured_logs
+    records = [
+        record
+        for record in route_records
+        if getattr(record, "didcomm_stage", None) == "auto-delivery"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.getMessage() == "DIDComm auto-delivery failed (RuntimeError)"
+    assert record.didcomm_exception_type == "RuntimeError"
+    assert record.args == ()
+    assert record.exc_info is None
+
+
+@pytest.mark.asyncio
+async def test_missing_endpoint_detail_does_not_echo_holder_did(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holder_did = "did:peer:holder-MUST-NOT-ENTER-RESPONSE-8d85cf16"
+    transaction = IssuanceTransaction(
+        id="tx-missing-didcomm-endpoint",
+        organization_id="org-a",
+        claims={"given_name": "Alice"},
+    )
+    monkeypatch.setattr(routes, "didcomm_resolve_did", lambda _did: {"id": holder_did})
+    monkeypatch.setattr(routes, "didcomm_extract_endpoint", lambda _doc: None)
+
+    with pytest.raises(HTTPException) as exc:
+        await routes._didcomm_sign_and_deliver(
+            transaction,
+            holder_did,
+            SimpleNamespace(),
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Holder DID has no DIDComm service endpoint"
+    assert holder_did not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_stage"),
+    [
+        ("preflight", "encryption-preflight"),
+        ("encryption", "encryption"),
+    ],
+)
+async def test_encryption_logs_do_not_retain_holder_or_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_stage: str,
+    expected_stage: str,
+) -> None:
+    holder_did = "did:peer:holder-MUST-NOT-ENTER-LOGS-6791f3f2"
+    sensitive_error = "encryption-secret-MUST-NOT-ENTER-LOGS-1ba2e8d7"
+    failure = RuntimeError(sensitive_error)
+    transaction, repo = _configure_delivery_through_transport(
+        monkeypatch,
+        holder_did=holder_did,
+        preflight_error=failure if failure_stage == "preflight" else None,
+        encryption_error=failure if failure_stage == "encryption" else None,
+    )
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    with pytest.raises(HTTPException) as exc:
+        await routes._didcomm_sign_and_deliver(transaction, holder_did, repo)
+
+    assert exc.value.status_code == 422
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    rendered_logs = "\n".join(item.getMessage() for item in route_records)
+    structured_logs = "\n".join(repr(item.__dict__) for item in route_records)
+    for sensitive_value in (holder_did, sensitive_error):
+        assert sensitive_value not in rendered_logs
+        assert sensitive_value not in structured_logs
+    records = [
+        record
+        for record in route_records
+        if getattr(record, "didcomm_stage", None) == expected_stage
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.getMessage() == f"DIDComm {expected_stage} failed (RuntimeError)"
+    assert record.didcomm_exception_type == "RuntimeError"
+    assert record.args == ()
+    assert record.exc_info is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["http", "transport"])
+async def test_delivery_error_omits_remote_body_and_transport_exception_text(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure_kind: str,
+) -> None:
+    holder_did = "did:peer:holder-a"
+    response_body = "wallet-body-MUST-NOT-ENTER-RESPONSE-757f9c55"
+    transport_detail = "transport-secret-MUST-NOT-ENTER-RESPONSE-309c60e7"
+    transaction, repo = _configure_delivery_through_transport(
+        monkeypatch,
+        holder_did=holder_did,
+    )
+
+    class FakeResponse:
+        status_code = 502
+        text = response_body
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+        async def post(self, *args, **kwargs):
+            if failure_kind == "transport":
+                raise RuntimeError(transport_detail)
+            return FakeResponse()
+
+    monkeypatch.setattr(routes.httpx, "AsyncClient", FakeClient)
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    response = await routes._didcomm_sign_and_deliver(transaction, holder_did, repo)
+
+    body = response.model_dump()
+    serialized_body = json.dumps(body, sort_keys=True)
+    assert body["status"] == "delivery_failed"
+    assert "error" in body
+    assert body["error"] == ("HTTP 502" if failure_kind == "http" else "DIDComm transport failed")
+    assert response_body not in serialized_body
+    assert transport_detail not in serialized_body
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    rendered_logs = "\n".join(item.getMessage() for item in route_records)
+    structured_logs = "\n".join(repr(item.__dict__) for item in route_records)
+    for sensitive_value in (holder_did, response_body, transport_detail):
+        assert sensitive_value not in rendered_logs
+        assert sensitive_value not in structured_logs
+    if failure_kind == "http":
+        assert "502" in body["error"]
+    else:
+        records = [
+            record
+            for record in route_records
+            if getattr(record, "didcomm_stage", None) == "transport"
+        ]
+        assert len(records) == 1
+        assert records[0].getMessage() == "DIDComm transport failed (RuntimeError)"
+        assert records[0].args == ()
+        assert transport_detail not in repr(records[0].__dict__)
 
 
 @pytest.mark.asyncio
