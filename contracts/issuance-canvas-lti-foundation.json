@@ -143,6 +143,81 @@
         }
       ]
     },
+    "draft_binding_fallback": {
+      "normal_resolution_precedes_fallback": true,
+      "allowed_message_types": ["LtiDeepLinkingRequest", "LtiResourceLinkRequest"],
+      "required_roles": ["Instructor", "Administrator"],
+      "requested_binding_source": "signed-custom-claim:canvas_program_binding_id",
+      "candidate_scope": ["organization_id", "platform_id", "canvas_scope"],
+      "archived_candidates_forbidden": true,
+      "unique_candidate_required": true,
+      "learner_fallback_forbidden": true,
+      "cases": [
+        {
+          "name": "instructor_can_select_one_matching_draft_binding",
+          "message_type": "LtiDeepLinkingRequest",
+          "roles": ["Instructor"],
+          "requested_binding_id": null,
+          "candidates": [
+            {"id": "draft-a", "course_id": "course-1", "archived": false}
+          ],
+          "expected_binding_id": "draft-a"
+        },
+        {
+          "name": "signed_binding_id_disambiguates_staff_resource_launch",
+          "message_type": "LtiResourceLinkRequest",
+          "roles": ["Administrator"],
+          "requested_binding_id": "draft-b",
+          "candidates": [
+            {"id": "draft-a", "course_id": "course-1", "archived": false},
+            {"id": "draft-b", "course_id": "course-1", "archived": false}
+          ],
+          "expected_binding_id": "draft-b"
+        },
+        {
+          "name": "learner_cannot_select_a_draft_binding",
+          "message_type": "LtiResourceLinkRequest",
+          "roles": ["Learner"],
+          "requested_binding_id": "draft-a",
+          "candidates": [
+            {"id": "draft-a", "course_id": "course-1", "archived": false}
+          ],
+          "expected_binding_id": null
+        },
+        {
+          "name": "unsupported_message_cannot_select_a_draft_binding",
+          "message_type": "LtiSubmissionReviewRequest",
+          "roles": ["Instructor"],
+          "requested_binding_id": "draft-a",
+          "candidates": [
+            {"id": "draft-a", "course_id": "course-1", "archived": false}
+          ],
+          "expected_binding_id": null
+        },
+        {
+          "name": "ambiguous_staff_launch_fails_closed",
+          "message_type": "LtiDeepLinkingRequest",
+          "roles": ["Instructor"],
+          "requested_binding_id": null,
+          "candidates": [
+            {"id": "draft-a", "course_id": "course-1", "archived": false},
+            {"id": "draft-b", "course_id": "course-1", "archived": false}
+          ],
+          "expected_binding_id": null
+        },
+        {
+          "name": "archived_or_wrong_scope_candidates_fail_closed",
+          "message_type": "LtiDeepLinkingRequest",
+          "roles": ["Instructor"],
+          "requested_binding_id": null,
+          "candidates": [
+            {"id": "draft-a", "course_id": "course-1", "archived": true},
+            {"id": "draft-b", "course_id": "course-2", "archived": false}
+          ],
+          "expected_binding_id": null
+        }
+      ]
+    },
     "jwt": {
       "algorithm_policy": "protected-header-and-matching-jwk",
       "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",
