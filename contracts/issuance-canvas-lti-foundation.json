@@ -148,6 +148,66 @@
       "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",
       "required_bindings": ["issuer", "client_id", "deployment_id", "nonce"],
       "jwks_refresh": "retry-once-only-for-unknown-kid",
+      "jwks_refresh_policy": {
+        "unknown_kid_marker": "No JWKS entry found for LTI kid",
+        "requires_canvas_base_url": true,
+        "maximum_refreshes": 1,
+        "maximum_verification_attempts": 2,
+        "persist_before_retry": true,
+        "reuse_persisted_trust_profile": true,
+        "state_remains_consumed_on_failure": true,
+        "cases": [
+          {
+            "name": "unknown_kid_refreshes_and_retries_once",
+            "canvas_base_url": true,
+            "first_verification": "unknown_kid",
+            "refresh": "succeeds",
+            "second_verification": "succeeds",
+            "verification_attempts": 2,
+            "refresh_attempts": 1,
+            "status_code": 200
+          },
+          {
+            "name": "signature_failure_does_not_refresh",
+            "canvas_base_url": true,
+            "first_verification": "invalid_signature",
+            "verification_attempts": 1,
+            "refresh_attempts": 0,
+            "status_code": 400,
+            "detail_prefix": "Canvas LTI launch verification failed:"
+          },
+          {
+            "name": "unknown_kid_without_canvas_origin_does_not_refresh",
+            "canvas_base_url": false,
+            "first_verification": "unknown_kid",
+            "verification_attempts": 1,
+            "refresh_attempts": 0,
+            "status_code": 400,
+            "detail_prefix": "Canvas LTI launch verification failed:"
+          },
+          {
+            "name": "refresh_failure_stops_before_second_verification",
+            "canvas_base_url": true,
+            "first_verification": "unknown_kid",
+            "refresh": "fails",
+            "verification_attempts": 1,
+            "refresh_attempts": 1,
+            "status_code": 400,
+            "detail_prefix": "Canvas LTI launch verification failed after JWKS refresh:"
+          },
+          {
+            "name": "unknown_kid_after_refresh_is_not_refreshed_again",
+            "canvas_base_url": true,
+            "first_verification": "unknown_kid",
+            "refresh": "succeeds",
+            "second_verification": "unknown_kid",
+            "verification_attempts": 2,
+            "refresh_attempts": 1,
+            "status_code": 400,
+            "detail_prefix": "Canvas LTI launch verification failed after JWKS refresh:"
+          }
+        ]
+      },
       "refresh_failure_status": 400
     },
     "public_response_fields": [
