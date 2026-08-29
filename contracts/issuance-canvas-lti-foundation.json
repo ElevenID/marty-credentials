@@ -1,0 +1,157 @@
+{
+  "schema": "marty.issuance-canvas-lti-foundation/v1",
+  "scope": {
+    "route_prefix": "/v1/integrations/canvas/lti",
+    "route_count": 12,
+    "routes": [
+      {"method": "GET", "path": "/v1/integrations/canvas/lti/config/{token}", "operation": "get_public_canvas_lti_config", "authentication": "public-revocable-token"},
+      {"method": "GET", "path": "/v1/integrations/canvas/lti/experience-sessions/current", "operation": "get_canvas_lti_experience_session_route", "authentication": "lti-session-bearer"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap", "operation": "bootstrap_canvas_lti_experience_application_route", "authentication": "lti-session-bearer"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response", "operation": "create_canvas_lti_deep_linking_response_route", "authentication": "lti-session-bearer"},
+      {"method": "GET", "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status", "operation": "get_canvas_lti_evidence_status", "authentication": "lti-session-bearer"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync", "operation": "sync_canvas_lti_evidence", "authentication": "lti-session-bearer"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/experience-sessions/exchange", "operation": "exchange_canvas_lti_experience_code_route", "authentication": "public-one-time-code"},
+      {"method": "GET", "path": "/v1/integrations/canvas/lti/jwks", "operation": "get_canvas_lti_tool_jwks", "authentication": "public"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience", "operation": "launch_canvas_lti_experience_route", "authentication": "public-lti-form-post"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login", "operation": "initiate_canvas_lti_experience_login_route", "authentication": "public-lti-login"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch", "operation": "verify_canvas_lti_launch_route", "authentication": "public-lti-form-post"},
+      {"method": "POST", "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login", "operation": "initiate_canvas_lti_login_route", "authentication": "public-lti-login"}
+    ]
+  },
+  "session_authentication": {
+    "transport": "Authorization: Bearer <opaque-token>",
+    "token_in_url": false,
+    "plaintext_persisted": false,
+    "persistence_digest": "sha-256",
+    "missing_or_invalid_status": 401
+  },
+  "hosted_global_trust": {
+    "profile": "hosted_global",
+    "environment": "production",
+    "canvas_origin": "https://school.canvas.example",
+    "issuer": "https://canvas.instructure.com",
+    "authorization_endpoint": "https://sso.canvaslms.com/api/lti/authorize_redirect",
+    "jwks_uri": "https://sso.canvaslms.com/api/lti/security/jwks",
+    "token_endpoint": "https://school.canvas.example/login/oauth2/token",
+    "metadata_drift_status": 409
+  },
+  "login": {
+    "required_fields": ["login_hint"],
+    "optional_bound_fields": ["iss", "client_id", "target_link_uri", "lti_message_hint"],
+    "success": {
+      "status_code": 303,
+      "authorization_parameters": {
+        "scope": "openid",
+        "response_type": "id_token",
+        "response_mode": "form_post",
+        "prompt": "none"
+      },
+      "server_generated": ["state", "nonce"],
+      "state_source_bytes": 32,
+      "state_ttl_minutes": 10
+    },
+    "failures": [
+      {"name": "platform_missing", "status_code": 404, "detail": "Canvas platform not found"},
+      {"name": "pilot_disabled", "status_code": 404, "detail": "Portable Canvas integration is not enabled for this organization"},
+      {"name": "login_hint_missing", "status_code": 400, "detail": "Canvas LTI login requires login_hint"},
+      {"name": "issuer_mismatch", "status_code": 400, "detail": "Canvas LTI issuer does not match platform"},
+      {"name": "client_id_mismatch", "status_code": 400, "detail": "Canvas LTI client_id does not match platform"}
+    ]
+  },
+  "launch": {
+    "required_fields": ["id_token", "state"],
+    "state": {
+      "platform_bound": true,
+      "pending_and_unexpired": true,
+      "atomic_single_use": true,
+      "consumed_before_jwt_verification": true
+    },
+    "jwt": {
+      "algorithm_policy": "protected-header-and-matching-jwk",
+      "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",
+      "required_bindings": ["issuer", "client_id", "deployment_id", "nonce"],
+      "jwks_refresh": "retry-once-only-for-unknown-kid",
+      "refresh_failure_status": 400
+    },
+    "public_response_fields": [
+      "organization_id",
+      "canvas_account_id",
+      "canvas_platform_id",
+      "canvas_program_binding_id",
+      "application_template_id",
+      "credential_template_id",
+      "message_type",
+      "context",
+      "roles",
+      "identity_mapping_status"
+    ],
+    "private_response_fields": ["raw_claims", "learner_identity", "nonce", "subject", "audience", "lti_capabilities"]
+  },
+  "experience": {
+    "redirect_status_code": 303,
+    "code_ttl_seconds": 60,
+    "code_single_use": true,
+    "exchange_cache_headers": {"Cache-Control": "no-store", "Pragma": "no-cache"},
+    "invalid_code": {
+      "status_code": 400,
+      "detail": "Canvas LTI experience code has expired, is invalid, or was already used"
+    },
+    "session_ttl_minutes": 30,
+    "session_token_source_bytes": 32,
+    "browser_safe_capabilities": ["resource_link", "deep_linking", "assignment_grade_services", "names_roles"]
+  },
+  "tool_signing": {
+    "algorithm": "RS256",
+    "key_type": "RSA",
+    "key_use": "sig",
+    "identity_selector": ["organization_id", "issuer_did"],
+    "forbidden_selectors": ["issuer_profile_id", "signing_service_id", "key_reference"],
+    "verification_method_prefix": "<issuer_did>#",
+    "private_jwk_fields_forbidden": ["d", "p", "q", "dp", "dq", "qi", "oth"],
+    "jwks_order": "active-first-then-assertion-method-id",
+    "rotation_scope": "issuer-did-assertion-methods-only",
+    "client_assertion": {
+      "issuer_equals_subject": true,
+      "audience": "token_endpoint",
+      "ttl_seconds": 300,
+      "unique_jti": true
+    }
+  },
+  "registration": {
+    "tool_id": "marty-portable-canvas-v1",
+    "installation_method": "institution_admin_lti_1_3",
+    "platform": "canvas.instructure.com",
+    "privacy_level": "public",
+    "placements": [
+      {"placement": "course_navigation", "message_type": "LtiResourceLinkRequest"},
+      {"placement": "assignment_selection", "message_type": "LtiDeepLinkingRequest"}
+    ],
+    "server_owned_custom_fields": {
+      "canvas_user_id": "$Canvas.user.id",
+      "canvas_course_id": "$Canvas.course.id",
+      "canvas_account_id": "$Canvas.account.id",
+      "canvas_assignment_id": "$Canvas.assignment.id"
+    },
+    "config_token": {
+      "random_source_bytes": 32,
+      "persistence_digest": "sha-256",
+      "rotating": true,
+      "revocable": true
+    }
+  },
+  "deep_linking": {
+    "staff_roles": ["Instructor", "Administrator"],
+    "browser_owned_custom_claims": false,
+    "browser_owned_line_item": false,
+    "signed_response_algorithm": "RS256"
+  },
+  "legacy_event_ingest": {
+    "default": "disabled",
+    "status_code": 410,
+    "operations": [
+      "process_canvas_evidence_event_route",
+      "process_canvas_ags_score_event_route",
+      "process_canvas_nrps_membership_event_route"
+    ]
+  }
+}
