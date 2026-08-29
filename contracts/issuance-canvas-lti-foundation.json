@@ -686,6 +686,91 @@
       }
     },
     "exchange_cache_headers": {"Cache-Control": "no-store", "Pragma": "no-cache"},
+    "session_current": {
+      "ordered_stages": ["parse-bearer", "hash-session-token", "load-session-by-digest", "validate-session", "derive-session-context", "project-browser-safe-capabilities", "project-browser-safe-canvas-context", "derive-learner-key", "respond"],
+      "authentication": {
+        "header": "Authorization",
+        "scheme_case_insensitive": "Bearer",
+        "normalization": "strip-header-partition-first-ascii-space-strip-token",
+        "plaintext_in_url_forbidden": true,
+        "failure": {"status_code": 401, "detail": "Canvas LTI experience session bearer token is required", "headers": {"WWW-Authenticate": "Bearer"}},
+        "failure_cases": ["missing-header", "missing-ascii-space", "wrong-scheme", "blank-token"]
+      },
+      "lookup": {
+        "key": "sha-256-of-normalized-plaintext-token",
+        "plaintext_lookup_forbidden": true,
+        "required": ["record-exists", "status-session", "unexpired", "kind-canvas-lti-experience-session", "verified-launch-object", "mip-primitives-object"],
+        "failure": {"status_code": 404, "detail": "Canvas LTI experience session not found"}
+      },
+      "context_precedence": {
+        "canvas_platform_id": ["mip-context", "verified-launch", "stored-platform"],
+        "canvas_program_binding_id": ["mip-context", "verified-launch"],
+        "application_template_id": ["mip-context", "verified-launch"],
+        "credential_template_id": ["mip-context", "verified-launch"],
+        "application_id": ["mip-context", "verified-launch"],
+        "lti_capabilities": ["mip-context", "verified-launch", "empty-object"]
+      },
+      "browser_safe": {
+        "capability_fields": ["resource_link", "deep_linking", "assignment_grade_services", "names_roles"],
+        "capability_values": "boolean-coercion",
+        "canvas_context_fields": ["course_id", "title", "label"],
+        "course_id_precedence": ["signed-custom-canvas-course-id", "context-id", "context-context-id"],
+        "roles": "strip-trailing-slash-then-last-slash-segment",
+        "learner_display_name": "trimmed-learner-identity-name-or-null",
+        "learner_subject_precedence": ["verified-subject", "learner-identity-subject", "raw-claims-sub"],
+        "learner_key": "sha-256(canvas-platform-id:deployment-id:learner-subject)",
+        "private_response_fields_forbidden": ["session_token", "session_id", "state", "verified_launch", "mip_primitives", "raw_claims", "subject", "nonce"]
+      },
+      "vector": {
+        "authorization": "  bEaReR   session-token-contract-0123456789abcdef  ",
+        "normalized_token": "session-token-contract-0123456789abcdef",
+        "expected_state_digest": "b9bbe734211f8db70ba0f801743116dcc9e6b17f1e9922e426cc5fe7e51b073b",
+        "stored_session": {
+          "id": "experience-session-id-1",
+          "platform_id": "platform-stored",
+          "organization_id": "org-1",
+          "canvas_account_id": "account-1",
+          "status": "session",
+          "metadata": {
+            "kind": "canvas_lti_experience_session",
+            "launch_state": "launch-state-1",
+            "verified_launch": {
+              "canvas_platform_id": "platform-verified",
+              "canvas_program_binding_id": "binding-verified",
+              "application_template_id": "application-template-verified",
+              "credential_template_id": "credential-template-verified",
+              "application_id": "application-verified",
+              "deployment_id": "deployment-1",
+              "subject": "",
+              "context": {"id": "course-context", "context_id": "course-context-fallback", "title": "Portable Trust 101", "label": "PT-101", "private": "redact-me"},
+              "roles": ["Learner", "https://roles.example/Instructor/"],
+              "learner_identity": {"subject": "learner-subject", "name": "  Learner Name  ", "email": "private@example.test"},
+              "raw_claims": {"sub": "raw-subject", "https://purl.imsglobal.org/spec/lti/claim/custom": {"canvas_course_id": "course-signed"}},
+              "lti_capabilities": {"resource_link": false, "deep_linking": true},
+              "identity_mapping_status": "numeric_id_unavailable"
+            },
+            "mip_primitives": {"context": {"canvas_platform_id": "platform-mip", "canvas_program_binding_id": "binding-mip", "credential_template_id": "credential-template-mip", "lti_capabilities": {"resource_link": 1, "deep_linking": "", "assignment_grade_services": ["score"], "names_roles": null, "private_capability": true}}}
+          }
+        },
+        "expected_learner_key": "8ab954a22db15b7782233bc2c7a423a9564249860085bc1c1bca7f710684d009",
+        "expected_response": {
+          "organization_id": "org-1",
+          "canvas_account_id": "account-1",
+          "canvas_platform_id": "platform-mip",
+          "canvas_program_binding_id": "binding-mip",
+          "application_template_id": "application-template-verified",
+          "credential_template_id": "credential-template-mip",
+          "status": "session",
+          "application_id": "application-verified",
+          "lti_capabilities": {"resource_link": true, "deep_linking": false, "assignment_grade_services": true, "names_roles": false},
+          "canvas_context": {"course_id": "course-signed", "title": "Portable Trust 101", "label": "PT-101"},
+          "roles": ["Learner", "Instructor"],
+          "learner_display_name": "Learner Name",
+          "learner_key": "8ab954a22db15b7782233bc2c7a423a9564249860085bc1c1bca7f710684d009",
+          "identity_mapping_status": "numeric_id_unavailable"
+        }
+      }
+    },
     "invalid_code": {
       "status_code": 400,
       "detail": "Canvas LTI experience code has expired, is invalid, or was already used"
