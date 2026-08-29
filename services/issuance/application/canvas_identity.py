@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from issuance.domain.entities import CanvasLearnerIdentity, CanvasLearnerIdentityStatus
 from issuance.domain.ports import IIssuanceRepository
@@ -28,7 +28,7 @@ async def record_verified_canvas_lti_subject(
     if missing:
         raise ValueError(f"Missing verified Canvas subject fields: {', '.join(missing)}")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     identity = await repo.get_canvas_learner_identity_by_subject(**values)
     if identity is None:
         identity = CanvasLearnerIdentity(
@@ -80,10 +80,20 @@ async def link_verified_canvas_learner_identity(
         deployment_id=values["deployment_id"],
         canvas_user_id=values["canvas_user_id"],
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     conflict = False
     reasons: list[str] = []
+    if (
+        existing_subject is not None
+        and existing_subject.status == CanvasLearnerIdentityStatus.QUARANTINED
+    ):
+        conflict = True
+        reasons.extend(
+            reason.strip()
+            for reason in str(existing_subject.conflict_reason or "").split(";")
+            if reason.strip()
+        )
     if existing_subject is not None and existing_subject.canvas_user_id not in {
         None,
         values["canvas_user_id"],
@@ -93,6 +103,7 @@ async def link_verified_canvas_learner_identity(
     if existing_numeric is not None and existing_numeric.lti_subject != values["lti_subject"]:
         conflict = True
         reasons.append("Canvas user was previously linked to another LTI subject")
+    reasons = list(dict.fromkeys(reasons))
 
     identity = existing_subject or CanvasLearnerIdentity(
         organization_id=values["organization_id"],

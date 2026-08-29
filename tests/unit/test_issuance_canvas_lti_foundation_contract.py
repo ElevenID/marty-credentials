@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import sys
 from datetime import UTC, datetime
@@ -352,6 +353,86 @@ def test_canvas_lti_public_launch_projection_replays_the_contract() -> None:
     assert public_response == vector["expected"]
     for field in CONTRACT["launch"]["private_response_fields"]:
         assert field not in public_response
+
+
+@pytest.mark.asyncio
+async def test_canvas_lti_identity_mapping_replays_the_contract() -> None:
+    identity_contract = CONTRACT["launch"]["identity_mapping"]
+    cases = {case["name"]: case for case in identity_contract["cases"]}
+    repo = InMemoryIssuanceRepository()
+    values = {
+        "organization_id": "org-1",
+        "platform_id": "platform-1",
+        "deployment_id": "deployment-1",
+    }
+
+    subject_case = cases["subject_is_recorded_before_numeric_id_is_available"]
+    subject_only = await canvas_routes.record_verified_canvas_lti_subject(
+        repo=repo,
+        lti_subject=subject_case["subject"],
+        **values,
+    )
+    assert subject_only.status.value == subject_case["expected_status"]
+    assert subject_only.canvas_user_id == subject_case["canvas_user_id"]
+
+    enrich_case = cases["subject_only_record_is_enriched_in_place"]
+    linked = await canvas_routes.link_verified_canvas_learner_identity(
+        repo=repo,
+        lti_subject=enrich_case["subject"],
+        canvas_user_id=enrich_case["canvas_user_id"],
+        **values,
+    )
+    if enrich_case["preserve_subject_record_id"]:
+        assert linked.id == subject_only.id
+    assert linked.status.value == enrich_case["expected_status"]
+
+    repeated_case = cases["same_verified_pair_is_idempotent"]
+    repeated = await canvas_routes.link_verified_canvas_learner_identity(
+        repo=repo,
+        lti_subject=repeated_case["subject"],
+        canvas_user_id=repeated_case["canvas_user_id"],
+        **values,
+    )
+    if repeated_case["preserve_subject_record_id"]:
+        assert repeated.id == subject_only.id
+    assert repeated.status.value == repeated_case["expected_status"]
+
+    conflict_case = cases["numeric_id_cannot_move_to_another_subject"]
+    conflict = await canvas_routes.link_verified_canvas_learner_identity(
+        repo=repo,
+        lti_subject=conflict_case["subject"],
+        canvas_user_id=conflict_case["canvas_user_id"],
+        **values,
+    )
+    assert conflict.status.value == conflict_case["expected_status"]
+    assert linked.status.value == conflict_case["existing_status"]
+    assert conflict.conflict_reason == conflict_case["reason"]
+
+    for name in (
+        "quarantined_pair_cannot_reactivate",
+        "quarantined_numeric_id_cannot_move_to_a_third_subject",
+    ):
+        sticky_case = cases[name]
+        sticky = await canvas_routes.link_verified_canvas_learner_identity(
+            repo=repo,
+            lti_subject=sticky_case["subject"],
+            canvas_user_id=sticky_case["canvas_user_id"],
+            **values,
+        )
+        assert sticky.status.value == sticky_case["expected_status"]
+
+    identities = list(repo._canvas_learner_identities.values())
+    assert len(identities) == 3
+    assert all(
+        identity.status.value == identity_contract["conflict"]["stored_status"]
+        for identity in identities
+    )
+
+    link_parameters = inspect.signature(
+        canvas_routes.link_verified_canvas_learner_identity
+    ).parameters
+    assert identity_contract["forbidden_join_fields"] == ["email"]
+    assert "email" not in link_parameters
 
 
 def test_canvas_config_token_is_platform_bound_and_fail_closed() -> None:

@@ -2975,8 +2975,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     canvas_learner_identities_table.c.platform_id == platform_id,
                     canvas_learner_identities_table.c.deployment_id == deployment_id,
                     canvas_learner_identities_table.c.canvas_user_id == canvas_user_id,
-                    canvas_learner_identities_table.c.status
-                    == CanvasLearnerIdentityStatus.LINKED.value,
                 )
             )
             row = result.first()
