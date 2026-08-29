@@ -1,0 +1,226 @@
+{
+  "schema": "marty.issuance-offer-transaction-reads/v1",
+  "inputs": {
+    "issuer_base_url": "https://issuer.example",
+    "management_api_key": "contract-management-key",
+    "organization_id": "org-a",
+    "foreign_organization_id": "org-b",
+    "transactions": [
+      {
+        "id": "tx-pending",
+        "organization_id": "org-a",
+        "credential_template_id": "template-a",
+        "applicant_id": "applicant-a",
+        "application_id": "application-a",
+        "subject_did": "did:key:z6MkHolder",
+        "status": "pending",
+        "pre_auth_code": "pre-auth-a",
+        "credential_type": "EmployeeBadge",
+        "created_at": "2026-08-20T12:34:56+00:00",
+        "expires_at": "2099-08-20T12:49:56+00:00"
+      },
+      {
+        "id": "tx-revoked",
+        "organization_id": "org-a",
+        "credential_template_id": "template-b",
+        "status": "revoked",
+        "pre_auth_code": "pre-auth-b",
+        "credential_type": "MemberCredential",
+        "created_at": "2026-08-19T10:00:00+00:00",
+        "expires_at": "2099-08-19T10:15:00+00:00",
+        "issued_at": "2026-08-19T10:03:00+00:00",
+        "revoked_at": "2026-08-21T09:30:00+00:00",
+        "revocation_reason": "superseded"
+      },
+      {
+        "id": "tx-foreign",
+        "organization_id": "org-b",
+        "credential_template_id": "template-foreign",
+        "status": "authorized",
+        "pre_auth_code": "pre-auth-foreign",
+        "credential_type": "ForeignCredential",
+        "created_at": "2026-08-18T08:00:00+00:00",
+        "expires_at": "2099-08-18T08:15:00+00:00"
+      },
+      {
+        "id": "tx-expired",
+        "organization_id": "org-a",
+        "credential_template_id": "template-expired",
+        "status": "pending",
+        "pre_auth_code": "pre-auth-expired",
+        "credential_type": "ExpiredCredential",
+        "created_at": "2000-01-01T00:00:00+00:00",
+        "expires_at": "2000-01-01T00:15:00+00:00"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "operation": "get_credential_offer",
+      "method": "GET",
+      "path": "/v1/issuance/offers/tx-pending",
+      "status_code": 200,
+      "body": {
+        "credential_issuer": "https://issuer.example/org/org-a",
+        "credential_configuration_ids": ["EmployeeBadge"],
+        "grants": {
+          "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+            "pre-authorized_code": "pre-auth-a"
+          }
+        }
+      },
+      "repository_calls": [{"method": "get_transaction", "value": "tx-pending"}]
+    },
+    {
+      "operation": "list_transactions",
+      "method": "GET",
+      "path": "/v1/issuance/transactions?organization_id=org-a",
+      "status_code": 200,
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "body": [
+        {
+          "id": "tx-pending",
+          "organization_id": "org-a",
+          "credential_template_id": "template-a",
+          "applicant_id": "applicant-a",
+          "application_id": "application-a",
+          "subject_did": "did:key:z6MkHolder",
+          "status": "pending",
+          "created_at": "2026-08-20T12:34:56+00:00",
+          "expires_at": null,
+          "issued_at": null,
+          "revoked_at": null,
+          "revocation_reason": null
+        },
+        {
+          "id": "tx-revoked",
+          "organization_id": "org-a",
+          "credential_template_id": "template-b",
+          "applicant_id": null,
+          "application_id": null,
+          "subject_did": null,
+          "status": "revoked",
+          "created_at": "2026-08-19T10:00:00+00:00",
+          "expires_at": null,
+          "issued_at": null,
+          "revoked_at": null,
+          "revocation_reason": null
+        }
+      ],
+      "repository_calls": [{"method": "list_transactions", "value": "org-a"}]
+    },
+    {
+      "operation": "get_transaction",
+      "method": "GET",
+      "path": "/v1/issuance/transactions/tx-revoked",
+      "status_code": 200,
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "body": {
+        "id": "tx-revoked",
+        "organization_id": "org-a",
+        "credential_template_id": "template-b",
+        "applicant_id": null,
+        "application_id": null,
+        "subject_did": null,
+        "status": "revoked",
+        "created_at": "2026-08-19T10:00:00+00:00",
+        "expires_at": "2099-08-19T10:15:00+00:00",
+        "issued_at": "2026-08-19T10:03:00+00:00",
+        "revoked_at": "2026-08-21T09:30:00+00:00",
+        "revocation_reason": "superseded"
+      },
+      "repository_calls": [{"method": "get_transaction", "value": "tx-revoked"}]
+    },
+    {
+      "operation": "get_transaction_revocation_status",
+      "method": "GET",
+      "path": "/v1/issuance/transactions/tx-revoked/revocation-status",
+      "status_code": 200,
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "body": {
+        "id": "tx-revoked",
+        "revoked": true,
+        "status": "revoked",
+        "revoked_at": "2026-08-21T09:30:00+00:00",
+        "revocation_reason": "superseded"
+      },
+      "repository_calls": [{"method": "get_transaction", "value": "tx-revoked"}]
+    },
+    {
+      "operation": "get_issuance_transaction_owner",
+      "method": "GET",
+      "path": "/internal/v1/resource-owners/issuance-transactions/tx-pending",
+      "status_code": 200,
+      "headers": {"X-API-Key": "contract-management-key"},
+      "body": {"organization_id": "org-a"},
+      "repository_calls": [{"method": "get_transaction", "value": "tx-pending"}]
+    }
+  ],
+  "failures": [
+    {
+      "name": "missing_offer",
+      "path": "/v1/issuance/offers/missing",
+      "status_code": 404,
+      "body": {"detail": "Offer not found"}
+    },
+    {
+      "name": "expired_offer",
+      "path": "/v1/issuance/offers/tx-expired",
+      "status_code": 410,
+      "body": {"detail": "Offer expired"}
+    },
+    {
+      "name": "missing_management_key",
+      "path": "/v1/issuance/transactions?organization_id=org-a",
+      "headers": {"X-Organization-ID": "org-a"},
+      "status_code": 401,
+      "body": {"detail": "X-API-Key header is missing"}
+    },
+    {
+      "name": "mismatched_list_tenant",
+      "path": "/v1/issuance/transactions?organization_id=org-b",
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 403,
+      "body": {"detail": "Organization context does not match requested organization"}
+    },
+    {
+      "name": "missing_transaction",
+      "path": "/v1/issuance/transactions/missing",
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 404,
+      "body": {"detail": "Transaction not found"}
+    },
+    {
+      "name": "cross_tenant_transaction_is_hidden",
+      "path": "/v1/issuance/transactions/tx-foreign",
+      "headers": {
+        "X-API-Key": "contract-management-key",
+        "X-Organization-ID": "org-a"
+      },
+      "status_code": 404,
+      "body": {"detail": "Resource not found"}
+    },
+    {
+      "name": "missing_internal_owner",
+      "path": "/internal/v1/resource-owners/issuance-transactions/missing",
+      "headers": {"X-API-Key": "contract-management-key"},
+      "status_code": 404,
+      "body": {"detail": "Resource not found"}
+    }
+  ]
+}
