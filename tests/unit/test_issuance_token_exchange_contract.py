@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import copy
 import json
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +53,19 @@ class ContractRepository:
             code=inputs["authorization_code"],
             client_id=inputs["client_id"],
             organization_id=inputs["organization_id"],
+            redirect_uri=(
+                "https://wallet.example/callback"
+                if setup in {"redirect_authorization_session", "pkce_authorization_session"}
+                else None
+            ),
+            code_challenge=(
+                base64.urlsafe_b64encode(sha256(b"correct-verifier").digest())
+                .decode("ascii")
+                .rstrip("=")
+                if setup == "pkce_authorization_session"
+                else None
+            ),
+            code_challenge_method=("S256" if setup == "pkce_authorization_session" else None),
             status=("exchanged" if setup == "exchanged_authorization_session" else "pending"),
             created_at=datetime.fromisoformat("2026-08-20T12:00:00+00:00"),
             expires_at=datetime.fromisoformat(
@@ -75,6 +90,8 @@ class ContractRepository:
             "expired_authorization_session",
             "exchanged_authorization_session",
             "authorization_claim_lost",
+            "redirect_authorization_session",
+            "pkce_authorization_session",
         }:
             await self._delegate.save_authorization_session(self.authorization_session)
 
@@ -109,11 +126,18 @@ class ContractRepository:
                 self.authorization_session.code
             )
         assert value is not None
-        return {
+        result = {
             "kind": expected["kind"],
             "status": value.status.value if hasattr(value.status, "value") else value.status,
             "access_token": value.access_token,
         }
+        if "dpop_jkt" in expected:
+            result["dpop_jkt"] = (
+                value.claims.get("_dpop_jkt")
+                if expected["kind"] == "transaction"
+                else value.dpop_jkt
+            )
+        return result
 
 
 def client(monkeypatch, repository: ContractRepository) -> TestClient:
@@ -131,14 +155,28 @@ def client(monkeypatch, repository: ContractRepository) -> TestClient:
             "expires_in": 1800,
         },
     )
-    monkeypatch.setattr(
-        routes,
-        "oid4vci_exchange_auth_code_for_token",
-        lambda _request, _session, _lifetime: {
-            "access_token": inputs["generated_authorization_code_token"],
-            "expires_in": 1800,
-        },
-    )
+    if repository._setup not in {
+        "redirect_authorization_session",
+        "pkce_authorization_session",
+    }:
+        monkeypatch.setattr(
+            routes,
+            "oid4vci_exchange_auth_code_for_token",
+            lambda _request, _session, _lifetime: {
+                "access_token": inputs["generated_authorization_code_token"],
+                "expires_in": 1800,
+            },
+        )
+    else:
+        from issuance.application.rust_integration import (
+            oid4vci_exchange_auth_code_for_token,
+        )
+
+        monkeypatch.setattr(
+            routes,
+            "oid4vci_exchange_auth_code_for_token",
+            oid4vci_exchange_auth_code_for_token,
+        )
 
     def validate_dpop(proof: str, **_kwargs: Any) -> str:
         if proof == "invalid-proof":
