@@ -251,3 +251,28 @@ def canvas_lti_experience_handoff(
         "experience_code_expires_at": experience_code_expires_at,
     }
     return code_metadata, consumed_state_metadata
+
+
+def canvas_lti_experience_exchange_metadata(
+    code_metadata: dict[str, Any] | None,
+    *,
+    experience_code_id: str,
+    session_id: str,
+    session_created_at: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project the private session metadata and redacted spent-code audit pointer."""
+
+    source = code_metadata or {}
+    session_metadata = {
+        **source,
+        "kind": "canvas_lti_experience_session",
+        "experience_code_id": experience_code_id,
+        "session_created_at": session_created_at,
+    }
+    spent_code_metadata = {
+        "kind": "canvas_lti_experience_code_consumed",
+        "launch_state": source.get("launch_state"),
+        "session_id": session_id,
+        "exchanged_at": session_created_at,
+    }
+    return session_metadata, spent_code_metadata

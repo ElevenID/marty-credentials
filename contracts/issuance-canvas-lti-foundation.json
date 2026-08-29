@@ -650,6 +650,41 @@
         "expected_consumed_state_metadata": {"login_marker": "preserve-me", "experience_code_id": "experience-code-id-1", "experience_code_expires_at": "2026-08-29T12:01:00+00:00"}
       }
     },
+    "exchange": {
+      "ordered_stages": ["set-no-store-cache-headers", "normalize-code", "consume-code-atomically", "validate-code-kind", "mint-session-token", "hash-session-token", "derive-session-expiry", "project-session-and-audit-metadata", "persist-session", "redact-and-persist-spent-code", "respond-after-persistence"],
+      "request": {"content_type": "application/json", "extra_fields": "forbidden", "code_min_length": 32, "code_max_length": 256, "code_normalization": "trim-before-consumption", "schema_failure_status": 422, "schema_failure_cases": ["missing-code", "code-too-short", "code-too-long", "extra-field"]},
+      "code_consumption": {"lookup": "plaintext-one-time-state", "pending_and_unexpired": true, "atomic_single_use": true, "kind_validated_after_consumption": true},
+      "session": {"status": "session", "scope_fields": ["platform_id", "organization_id", "canvas_account_id", "redirect_uri"], "scope_source": "consumed-code", "token_source_bytes": 32, "plaintext_persisted": false, "state_digest": "sha-256", "ttl_minutes": 30, "consumed_at": "session-created-at"},
+      "metadata": {"session_policy": "merge-private-code-metadata-then-replace-kind-and-attach-code-id-and-created-at", "spent_code_policy": "redact-private-launch-claims-and-retain-launch-state-session-id-and-exchanged-at"},
+      "persistence_order": ["session", "redacted-spent-code"],
+      "response_after_both_persistence_writes": true,
+      "vector": {
+        "experience_code_id": "experience-code-id-1",
+        "session_id": "experience-session-id-1",
+        "session_token": "session-token-contract-0123456789abcdef",
+        "session_created_at": "2026-08-29T12:02:00+00:00",
+        "session_expires_at": "2026-08-29T12:32:00+00:00",
+        "expected_session_state": "b9bbe734211f8db70ba0f801743116dcc9e6b17f1e9922e426cc5fe7e51b073b",
+        "expected_response": {"session_token": "session-token-contract-0123456789abcdef", "expires_at": "2026-08-29T12:32:00+00:00"},
+        "code_metadata": {
+          "kind": "canvas_lti_experience_code",
+          "launch_state": "launch-state-1",
+          "verified_launch": {"subject": "opaque-subject-1"},
+          "mip_primitives": {"protocol": "ELEVENID_EXPERIENCE"},
+          "launch_url": "https://ui.example.test/canvas/lti/experience?code=experience-code-1"
+        },
+        "expected_session_metadata": {
+          "kind": "canvas_lti_experience_session",
+          "launch_state": "launch-state-1",
+          "verified_launch": {"subject": "opaque-subject-1"},
+          "mip_primitives": {"protocol": "ELEVENID_EXPERIENCE"},
+          "launch_url": "https://ui.example.test/canvas/lti/experience?code=experience-code-1",
+          "experience_code_id": "experience-code-id-1",
+          "session_created_at": "2026-08-29T12:02:00+00:00"
+        },
+        "expected_spent_code_metadata": {"kind": "canvas_lti_experience_code_consumed", "launch_state": "launch-state-1", "session_id": "experience-session-id-1", "exchanged_at": "2026-08-29T12:02:00+00:00"}
+      }
+    },
     "exchange_cache_headers": {"Cache-Control": "no-store", "Pragma": "no-cache"},
     "invalid_code": {
       "status_code": 400,

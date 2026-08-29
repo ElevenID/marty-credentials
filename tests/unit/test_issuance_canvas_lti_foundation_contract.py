@@ -22,6 +22,7 @@ if str(SERVICES) not in sys.path:
 
 from issuance.application.canvas_lti_services import canvas_lti_trust_profile  # noqa: E402
 from issuance.application.mip_integration_primitives import (  # noqa: E402
+    canvas_lti_experience_exchange_metadata,
     canvas_lti_experience_handoff,
 )
 from issuance.domain.entities import (  # noqa: E402
@@ -261,6 +262,24 @@ async def test_canvas_experience_exchange_replays_the_contract() -> None:
     session = await repo.get_canvas_lti_launch_state(session_digest)
     assert session is not None
     assert session.status == "session"
+    assert (
+        session.platform_id,
+        session.organization_id,
+        session.canvas_account_id,
+        session.redirect_uri,
+    ) == (
+        code.platform_id,
+        code.organization_id,
+        code.canvas_account_id,
+        code.redirect_uri,
+    )
+    assert session.metadata["kind"] == "canvas_lti_experience_session"
+    assert session.metadata["experience_code_id"] == code.id
+    spent_code = await repo.get_canvas_lti_launch_state(code.state)
+    assert spent_code is not None
+    assert spent_code.metadata["kind"] == "canvas_lti_experience_code_consumed"
+    assert "verified_launch" not in spent_code.metadata
+    assert "mip_primitives" not in spent_code.metadata
     expires_at = datetime.fromisoformat(exchanged.expires_at)
     remaining_minutes = (expires_at - datetime.now(UTC)).total_seconds() / 60
     assert (
@@ -280,6 +299,31 @@ async def test_canvas_experience_exchange_replays_the_contract() -> None:
         invalid["status_code"],
         invalid["detail"],
     )
+
+
+def test_canvas_experience_exchange_metadata_replays_the_complete_contract() -> None:
+    policy = CONTRACT["experience"]["exchange"]
+    vector = policy["vector"]
+    session_metadata, spent_code_metadata = canvas_lti_experience_exchange_metadata(
+        vector["code_metadata"],
+        experience_code_id=vector["experience_code_id"],
+        session_id=vector["session_id"],
+        session_created_at=vector["session_created_at"],
+    )
+
+    assert hashlib.sha256(vector["session_token"].encode("utf-8")).hexdigest() == vector[
+        "expected_session_state"
+    ]
+    assert session_metadata == vector["expected_session_metadata"]
+    assert spent_code_metadata == vector["expected_spent_code_metadata"]
+    assert vector["expected_response"] == {
+        "session_token": vector["session_token"],
+        "expires_at": vector["session_expires_at"],
+    }
+    assert policy["request"]["schema_failure_status"] == 422
+    assert policy["persistence_order"] == ["session", "redacted-spent-code"]
+    assert policy["response_after_both_persistence_writes"] is True
+    assert len(policy["ordered_stages"]) == 11
 
 
 def test_canvas_experience_callback_handoff_replays_the_contract() -> None:
