@@ -320,6 +320,78 @@
         }
       ]
     },
+    "capability_snapshot_persistence": {
+      "authority": "verified-signed-launch-claims",
+      "authorization_index": "verified_binding_launches",
+      "last_launch_projection": true,
+      "carry_prior_requires": ["same-binding", "same-course", "same-config"],
+      "ags_pin_version_exception": "one-version-behind-only-when-line-item-changed",
+      "positive_values_are_sticky": ["non-null", "non-empty-string", "true", "non-empty-list", "object", "number"],
+      "verified_ags_line_items": "sorted-deduplicated-union",
+      "cases": [
+        {
+          "name": "first_launch_creates_binding_index_and_last_launch_projection",
+          "binding_id": "binding-1",
+          "binding_config_version": 4,
+          "signed_course_id": "course-1",
+          "line_item_configuration_changed": false,
+          "prior": null,
+          "launch_capabilities": {"assignment_grade_services": true, "ags_lineitem_url": "https://canvas.example.edu/line-items/2"},
+          "expected_binding_capabilities": {"assignment_grade_services": true, "ags_lineitem_url": "https://canvas.example.edu/line-items/2", "verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "verified_at": "2026-08-29T12:00:00+00:00", "verified_ags_line_items": ["https://canvas.example.edu/line-items/2"]}
+        },
+        {
+          "name": "complementary_launch_preserves_positive_same_scope_capabilities",
+          "binding_id": "binding-1",
+          "binding_config_version": 4,
+          "signed_course_id": "course-1",
+          "line_item_configuration_changed": false,
+          "prior": {"snapshot_key": "binding-1", "verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "names_roles": true, "nrps_context_memberships_url": "https://canvas.example.edu/nrps", "verified_ags_line_items": ["https://canvas.example.edu/line-items/1"]},
+          "launch_capabilities": {"assignment_grade_services": true, "names_roles": false, "nrps_context_memberships_url": null, "ags_lineitem_url": "https://canvas.example.edu/line-items/2"},
+          "expected_binding_capabilities": {"verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "names_roles": true, "nrps_context_memberships_url": "https://canvas.example.edu/nrps", "verified_ags_line_items": ["https://canvas.example.edu/line-items/1", "https://canvas.example.edu/line-items/2"], "assignment_grade_services": true, "ags_lineitem_url": "https://canvas.example.edu/line-items/2", "verified_at": "2026-08-29T12:00:00+00:00"}
+        },
+        {
+          "name": "configuration_drift_discards_prior_capabilities",
+          "binding_id": "binding-1",
+          "binding_config_version": 4,
+          "signed_course_id": "course-1",
+          "line_item_configuration_changed": false,
+          "prior": {"snapshot_key": "binding-1", "verified_binding_id": "binding-1", "verified_binding_config_version": 3, "verified_course_id": "course-1", "names_roles": true, "verified_ags_line_items": ["https://canvas.example.edu/line-items/1"]},
+          "launch_capabilities": {"assignment_grade_services": true, "names_roles": false},
+          "expected_binding_capabilities": {"assignment_grade_services": true, "names_roles": false, "verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "verified_at": "2026-08-29T12:00:00+00:00", "verified_ags_line_items": []}
+        },
+        {
+          "name": "ags_pin_carries_exactly_one_prior_configuration",
+          "binding_id": "binding-1",
+          "binding_config_version": 4,
+          "signed_course_id": "course-1",
+          "line_item_configuration_changed": true,
+          "prior": {"snapshot_key": "binding-1", "verified_binding_id": "binding-1", "verified_binding_config_version": 3, "verified_course_id": "course-1", "names_roles": true},
+          "launch_capabilities": {"assignment_grade_services": true, "ags_lineitem_url": "https://canvas.example.edu/line-items/2"},
+          "expected_binding_capabilities": {"verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "names_roles": true, "assignment_grade_services": true, "ags_lineitem_url": "https://canvas.example.edu/line-items/2", "verified_at": "2026-08-29T12:00:00+00:00", "verified_ags_line_items": ["https://canvas.example.edu/line-items/2"]}
+        },
+        {
+          "name": "course_drift_discards_prior_capabilities",
+          "binding_id": "binding-1",
+          "binding_config_version": 4,
+          "signed_course_id": "course-2",
+          "line_item_configuration_changed": false,
+          "prior": {"snapshot_key": "binding-1", "verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "names_roles": true},
+          "launch_capabilities": {"assignment_grade_services": false},
+          "expected_binding_capabilities": {"assignment_grade_services": false, "verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-2", "verified_at": "2026-08-29T12:00:00+00:00", "verified_ags_line_items": []}
+        },
+        {
+          "name": "other_binding_index_is_preserved_but_never_carried",
+          "binding_id": "binding-1",
+          "binding_config_version": 4,
+          "signed_course_id": "course-1",
+          "line_item_configuration_changed": false,
+          "prior": {"snapshot_key": "binding-other", "verified_binding_id": "binding-other", "verified_binding_config_version": 4, "verified_course_id": "course-1", "names_roles": true},
+          "launch_capabilities": {"assignment_grade_services": false},
+          "expected_binding_capabilities": {"assignment_grade_services": false, "verified_binding_id": "binding-1", "verified_binding_config_version": 4, "verified_course_id": "course-1", "verified_at": "2026-08-29T12:00:00+00:00", "verified_ags_line_items": []},
+          "preserve_other_binding": true
+        }
+      ]
+    },
     "jwt": {
       "algorithm_policy": "protected-header-and-matching-jwk",
       "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",
