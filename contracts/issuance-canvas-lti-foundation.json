@@ -797,7 +797,8 @@
         "binding_lookup": "only-when-session-has-canvas-program-binding-id",
         "flag": "enable_canvas_lti",
         "disabled_failure": {"status_code": 409, "detail": "Canvas LTI is disabled for this deployment profile"},
-        "portable_pilot_required_before-template-access": true
+        "portable_pilot_required_before-template-access": true,
+        "portable_pilot_failure": {"status_code": 404, "detail": "Portable Canvas integration is not enabled for this organization"}
       },
       "template": {
         "id_precedence": ["mip-context", "verified-launch"],

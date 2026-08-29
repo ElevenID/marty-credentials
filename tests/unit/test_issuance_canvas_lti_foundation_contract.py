@@ -649,7 +649,9 @@ async def test_canvas_experience_bootstrap_subject_binding_resume_matches_the_co
 
 
 @pytest.mark.asyncio
-async def test_canvas_experience_bootstrap_feature_gate_matches_the_contract() -> None:
+async def test_canvas_experience_bootstrap_feature_gate_matches_the_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     policy = CONTRACT["experience"]["bootstrap"]
     repo = InMemoryIssuanceRepository()
     await repo.save_canvas_program_binding(
@@ -667,6 +669,16 @@ async def test_canvas_experience_bootstrap_feature_gate_matches_the_contract() -
             detail=policy["feature_gate"]["disabled_failure"]["detail"],
         )
     expected = policy["feature_gate"]["disabled_failure"]
+    assert (rejected.value.status_code, rejected.value.detail) == (
+        expected["status_code"],
+        expected["detail"],
+    )
+
+    monkeypatch.delenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", raising=False)
+    monkeypatch.delenv("CANVAS_PILOT_ORGANIZATION_IDS", raising=False)
+    with pytest.raises(HTTPException) as rejected:
+        canvas_routes._require_portable_canvas_pilot("org-1")
+    expected = policy["feature_gate"]["portable_pilot_failure"]
     assert (rejected.value.status_code, rejected.value.detail) == (
         expected["status_code"],
         expected["detail"],
