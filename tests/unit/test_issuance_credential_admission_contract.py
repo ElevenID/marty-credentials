@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -139,6 +140,8 @@ def request(headers: dict[str, str]) -> Request:
 async def invoke(
     case: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    verification_error: str = "invalid signature",
 ) -> tuple[int, Any, list]:
     repository = ContractRepository(case["setup"])
 
@@ -148,7 +151,7 @@ async def invoke(
     async def verify_proof(*_args: Any, **_kwargs: Any) -> tuple:
         assert _kwargs["issuer_url"] == CONTRACT["inputs"]["proof_audience"]
         if case["setup"] == "invalid_signature":
-            return False, "", None, "invalid signature"
+            return False, "", None, verification_error
         return True, "did:key:contract-holder", {}, None
 
     def validate_dpop(value: str, **_kwargs: Any) -> str:
@@ -198,6 +201,66 @@ async def test_credential_admission_matches_language_neutral_contract(
     assert status_code == case["status_code"]
     assert body == case["body"]
     assert repository_calls == case["repository_calls"]
+
+
+@pytest.mark.asyncio
+async def test_credential_admission_logs_do_not_reflect_proof_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    case = next(
+        item
+        for item in CONTRACT["cases"]
+        if item["name"] == "invalid_signature_does_not_consume_nonce"
+    )
+    sensitive_error = "proof-error-MUST-NOT-ENTER-LOGS-4a2f6dc1"
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    status_code, _, _ = await invoke(
+        case,
+        monkeypatch,
+        verification_error=sensitive_error,
+    )
+
+    assert status_code == case["status_code"]
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    assert route_records
+    rendered_logs = "\n".join(record.getMessage() for record in route_records)
+    structured_logs = "\n".join(repr(record.__dict__) for record in route_records)
+    assert sensitive_error not in rendered_logs
+    assert sensitive_error not in structured_logs
+    assert "proof verification failed" in rendered_logs
+
+
+@pytest.mark.asyncio
+async def test_credential_admission_logs_do_not_echo_proof_audiences(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    case = next(
+        item
+        for item in CONTRACT["cases"]
+        if item["name"] == "proof_audience_rejects_alternate_host"
+    )
+    unexpected_audience = "https://other.example/org/org-a"
+    expected_paths = repr(routes._allowed_credential_issuer_audience_paths("org-a"))
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    status_code, _, _ = await invoke(case, monkeypatch)
+
+    assert status_code == case["status_code"]
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    assert route_records
+    rendered_logs = "\n".join(record.getMessage() for record in route_records)
+    structured_logs = "\n".join(repr(record.__dict__) for record in route_records)
+    for sensitive_value in (unexpected_audience, expected_paths):
+        assert sensitive_value not in rendered_logs
+        assert sensitive_value not in structured_logs
+    assert "proof audience did not match configured issuer" in rendered_logs
 
 
 def test_credential_admission_contract_has_required_security_boundaries() -> None:

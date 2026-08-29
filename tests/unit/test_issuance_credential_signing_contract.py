@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -96,10 +97,13 @@ def assert_subsequence(actual: list[str], expected: list[str]) -> None:
 @pytest.mark.parametrize("case", CONTRACT["formats"], ids=lambda case: case["name"])
 async def test_all_credential_formats_match_language_neutral_signing_contract(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     case: dict[str, Any],
 ) -> None:
     repo = InMemoryIssuanceRepository()
     tx = transaction(case)
+    sensitive_claim_name = "claim-MUST-NOT-ENTER-LOGS-7c34af91"
+    tx.claims[sensitive_claim_name] = "privacy-regression-value"
     await repo.save_transaction(tx)
     events: list[str] = []
     captured: dict[str, Any] = {"remote_formats": []}
@@ -227,6 +231,7 @@ async def test_all_credential_formats_match_language_neutral_signing_contract(
     monkeypatch.setattr(routes, "_finalize_credential_renewal", post_side_effect)
     monkeypatch.setattr(routes, "record_post_issuance_deliveries", post_side_effect)
     monkeypatch.setattr(uuid, "uuid4", lambda: uuid.UUID(CONTRACT["inputs"]["notification_id"]))
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
 
     response = await routes.issue_credential(
         http_request(),
@@ -239,6 +244,21 @@ async def test_all_credential_formats_match_language_neutral_signing_contract(
     )
 
     assert isinstance(response, routes.CredentialResponse)
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    assert route_records
+    rendered_logs = "\n".join(record.getMessage() for record in route_records)
+    structured_logs = "\n".join(repr(record.__dict__) for record in route_records)
+    for sensitive_value in (
+        CONTRACT["inputs"]["holder_did"],
+        sensitive_claim_name,
+    ):
+        assert sensitive_value not in rendered_logs
+        assert sensitive_value not in structured_logs
+    assert "proof verified" in rendered_logs
+    assert "claim_count=3 subject_present=True" in rendered_logs
+
     body = response.model_dump(exclude_none=True)
     assert body["credentials"][0]["format"] == case["response_format"]
     assert body["notification_id"] == CONTRACT["inputs"]["notification_id"]
@@ -259,15 +279,15 @@ async def test_all_credential_formats_match_language_neutral_signing_contract(
         assert builder_arguments.get("subject_id") == CONTRACT["inputs"]["holder_did"]
     else:
         assert "subject_id" not in builder_arguments
-    assert (
-        json.loads(builder_arguments["claims_json"])
-        == CONTRACT["claim_policy"]["preserved_fixture"]
-    )
+    assert json.loads(builder_arguments["claims_json"]) == {
+        **CONTRACT["claim_policy"]["preserved_fixture"],
+        sensitive_claim_name: "privacy-regression-value",
+    }
     if case["builder"] == "sd_jwt":
-        assert (
-            builder_arguments["selective_disclosure_claims"]
-            == CONTRACT["claim_policy"]["sd_jwt_default_disclosures"]
-        )
+        assert builder_arguments["selective_disclosure_claims"] == [
+            *CONTRACT["claim_policy"]["sd_jwt_default_disclosures"],
+            sensitive_claim_name,
+        ]
     if case["holder_jwk_required"]:
         assert builder_arguments["holder_jwk"]["kty"] == "EC"
 
