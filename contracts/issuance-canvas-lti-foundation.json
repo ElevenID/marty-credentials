@@ -575,6 +575,81 @@
     "redirect_status_code": 303,
     "code_ttl_seconds": 60,
     "code_single_use": true,
+    "callback": {
+      "ordered_stages": ["verify-launch-orchestration", "mint-one-time-code", "derive-launch-url", "project-mip-experience", "persist-experience-code", "attach-code-pointer-to-consumed-state", "redirect-after-persistence"],
+      "launch_url_template": "{experience_base_url}/canvas/lti/experience?code={url_encoded_code}",
+      "code_record": {"status": "pending", "redirect_uri": "copied-from-consumed-launch-state", "metadata_kind": "canvas_lti_experience_code"},
+      "consumed_state_metadata_policy": "merge-existing-and-attach-code-id-and-expiry",
+      "redirect_only_after_both_persistence_writes": true,
+      "handoff_vector": {
+        "platform": {"id": "platform-1", "organization_id": "org-1", "canvas_account_id": "account-1"},
+        "launch_state": "launch-state-1",
+        "launch_url": "https://ui.example.test/canvas/lti/experience?code=experience-code-1",
+        "existing_launch_metadata": {"login_marker": "preserve-me"},
+        "experience_code_id": "experience-code-id-1",
+        "experience_code_expires_at": "2026-08-29T12:01:00+00:00",
+        "verified_launch": {
+          "subject": "opaque-subject-1",
+          "issuer": "https://canvas.instructure.com",
+          "deployment_id": "deployment-1",
+          "context": {"id": "course-1", "label": "BIO101"},
+          "roles": ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+          "learner_identity": {"name": "Ada Learner"},
+          "lti_capabilities": {"resource_link": true, "assignment_grade_services": true},
+          "canvas_platform_id": "platform-1",
+          "canvas_program_binding_id": "binding-1",
+          "application_template_id": "application-template-1",
+          "credential_template_id": "credential-template-1",
+          "delivery_mode": "wallet_only",
+          "deployment_profile_id": null,
+          "feature_flags": {"enable_canvas_lti": true},
+          "evidence_requirements": [{"fact_type": "canvas.assignment_score"}]
+        },
+        "expected_mip_primitives": {
+          "organization_id": "org-1",
+          "platform_id": "platform-1",
+          "provider_account_id": "account-1",
+          "state": "launch-state-1",
+          "subject_id": "opaque-subject-1",
+          "launch_url": "https://ui.example.test/canvas/lti/experience?code=experience-code-1",
+          "source": {
+            "provider": "canvas",
+            "provider_account_id": "account-1",
+            "provider_event_id": "launch-state-1",
+            "event_type": "canvas.lti_launch",
+            "subject_id": "opaque-subject-1",
+            "signature_scheme": "OIDC_ID_TOKEN",
+            "payload_hash": null,
+            "attributes": {
+              "issuer": "https://canvas.instructure.com",
+              "deployment_id": "deployment-1",
+              "canvas_context_id": "course-1",
+              "roles": ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+              "lti_capabilities": {"resource_link": true, "assignment_grade_services": true}
+            }
+          },
+          "context": {
+            "canvas_platform_id": "platform-1",
+            "canvas_account_id": "account-1",
+            "canvas_context": {"id": "course-1", "label": "BIO101"},
+            "learner_identity": {"name": "Ada Learner"},
+            "roles": ["http://purl.imsglobal.org/vocab/lis/v2/membership#Learner"],
+            "lti_capabilities": {"resource_link": true, "assignment_grade_services": true},
+            "canvas_program_binding_id": "binding-1",
+            "application_template_id": "application-template-1",
+            "credential_template_id": "credential-template-1",
+            "delivery_mode": "wallet_only",
+            "deployment_profile_id": null,
+            "feature_flags": {"enable_canvas_lti": true},
+            "evidence_requirements": [{"fact_type": "canvas.assignment_score"}]
+          },
+          "action": "applications:read",
+          "resource_type": "Application",
+          "protocol": "ELEVENID_EXPERIENCE"
+        },
+        "expected_consumed_state_metadata": {"login_marker": "preserve-me", "experience_code_id": "experience-code-id-1", "experience_code_expires_at": "2026-08-29T12:01:00+00:00"}
+      }
+    },
     "exchange_cache_headers": {"Cache-Control": "no-store", "Pragma": "no-cache"},
     "invalid_code": {
       "status_code": 400,
