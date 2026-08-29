@@ -36,6 +36,9 @@ from issuance.application.canvas_issuance_guard import (
     canvas_approval_credential_context,
     canvas_evidence_observation_is_fresh,
 )
+from issuance.application.canvas_lti_capability_snapshots import (
+    merge_verified_lti_binding_capabilities,
+)
 from issuance.application.canvas_lti_services import (
     AGS_RESULT_READ_SCOPE,
     CANVAS_COLLECTION_MAX_PAGES,
@@ -3648,77 +3651,19 @@ async def _verify_canvas_lti_launch_submission(
     )
     platform.registration_status = "verified"
     verified_at = datetime.now(timezone.utc)
-    snapshot = dict(platform.capability_snapshot or {})
-    launches = (
-        dict(snapshot.get("verified_binding_launches") or {})
-        if isinstance(snapshot.get("verified_binding_launches"), dict)
-        else {}
-    )
-    prior = (
-        dict(launches.get(binding.id) or {})
-        if isinstance(launches.get(binding.id), dict)
-        else {}
-    )
     signed_course_id = str(
         _lti_signed_canvas_identifier(verified, "canvas_course_id") or ""
     ).strip()
-    try:
-        prior_version = int(prior.get("verified_binding_config_version"))
-    except (TypeError, ValueError):
-        prior_version = -1
-    prior_course_id = str(prior.get("verified_course_id") or "").strip()
-    can_carry_prior = bool(
-        prior.get("verified_binding_id") == binding.id
-        and prior_course_id == signed_course_id
-        and (
-            prior_version == binding.config_version
-            or (
-                line_item_configuration_changed
-                and prior_version == binding.config_version - 1
-            )
-        )
-    )
     launch_capabilities = dict(response.lti_capabilities or {})
-    binding_capabilities = prior if can_carry_prior else {}
-    # A course-navigation launch can omit AGS while a resource launch can omit
-    # NRPS.  Preserve previously verified positive claims for the same binding,
-    # course, and configuration instead of letting launch order erase them.
-    for key, value in launch_capabilities.items():
-        if (
-            value is not None
-            and value != ""
-            and value is not False
-            and value != []
-        ) or key not in binding_capabilities:
-            binding_capabilities[key] = value
-    verified_line_items = {
-        str(value).strip()
-        for value in binding_capabilities.get("verified_ags_line_items", [])
-        if str(value).strip()
-    }
-    current_line_item = str(launch_capabilities.get("ags_lineitem_url") or "").strip()
-    if current_line_item:
-        verified_line_items.add(current_line_item)
-    binding_capabilities.update(
-        {
-            "verified_binding_id": binding.id,
-            "verified_binding_config_version": binding.config_version,
-            "verified_course_id": signed_course_id,
-            "verified_at": verified_at.isoformat(),
-            "verified_ags_line_items": sorted(verified_line_items),
-        }
+    platform.capability_snapshot = merge_verified_lti_binding_capabilities(
+        capability_snapshot=dict(platform.capability_snapshot or {}),
+        launch_capabilities=launch_capabilities,
+        binding_id=binding.id,
+        binding_config_version=binding.config_version,
+        signed_course_id=signed_course_id,
+        line_item_configuration_changed=line_item_configuration_changed,
+        verified_at=verified_at,
     )
-    launches[binding.id] = binding_capabilities
-    # Keep the last-launch fields for diagnostics/backward-compatible display,
-    # while every authorization decision reads the binding-indexed snapshot.
-    platform.capability_snapshot = {
-        **launch_capabilities,
-        "verified_binding_id": binding.id,
-        "verified_binding_config_version": binding.config_version,
-        "verified_course_id": signed_course_id,
-        "verified_at": verified_at.isoformat(),
-        "verified_binding_launches": launches,
-    }
     platform.last_validated_at = verified_at
     platform.last_connection_error = None
     await repo.save_canvas_platform(platform)
