@@ -97,6 +97,8 @@ class ContractRepository:
 
     async def get_by_pre_auth_code(self, code: str) -> Any:
         self.calls.append({"method": "get_by_pre_auth_code", "value": code})
+        if self._setup == "repository_unavailable":
+            raise RuntimeError("contract repository unavailable")
         return await self._delegate.get_by_pre_auth_code(code)
 
     async def claim_transaction_for_token(self, prepared: Any) -> Any:
@@ -140,7 +142,12 @@ class ContractRepository:
         return result
 
 
-def client(monkeypatch, repository: ContractRepository) -> TestClient:
+def client(
+    monkeypatch,
+    repository: ContractRepository,
+    *,
+    raise_server_exceptions: bool = True,
+) -> TestClient:
     from issuance import main
     from issuance.infrastructure.api import routes
 
@@ -185,7 +192,7 @@ def client(monkeypatch, repository: ContractRepository) -> TestClient:
 
     monkeypatch.setattr(routes, "_validated_dpop_jkt", validate_dpop)
     monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
-    return TestClient(main.create_app())
+    return TestClient(main.create_app(), raise_server_exceptions=raise_server_exceptions)
 
 
 def test_token_exchange_contract_matches_python_oracle(monkeypatch) -> None:
@@ -235,3 +242,17 @@ def test_token_exchange_rate_limit_matches_language_neutral_contract(monkeypatch
     for name, value in expected["headers"].items():
         assert response.headers[name] == value
     assert response.json() == expected["body"]
+
+
+def test_token_exchange_dependency_failures_match_python_oracle(monkeypatch) -> None:
+    for case in CONTRACT["dependency_failures"]:
+        repository = ContractRepository(case["setup"])
+        http = client(monkeypatch, repository, raise_server_exceptions=False)
+        response = http.post(
+            CONTRACT["inputs"]["path"],
+            data=copy.deepcopy(case["form"]),
+        )
+        assert response.status_code == case["status_code"], case["name"]
+        assert response.headers["content-type"].split(";", 1)[0] == case["content_type"]
+        assert response.text == case["body"]
+        assert repository.calls == case["repository_calls"]

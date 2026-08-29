@@ -18,7 +18,7 @@
     "request": {
       "form": {
         "grant_type": "unsupported",
-        "pre-authorized-code": "pre-auth-token"
+        "pre-authorized_code": "pre-auth-token"
       }
     },
     "allowed_status_code": 400,
@@ -26,6 +26,22 @@
     "headers": {"Retry-After": "17"},
     "body": {"detail": "Rate limit exceeded"}
   },
+  "dependency_failures": [
+    {
+      "name": "token_repository_unavailable",
+      "setup": "repository_unavailable",
+      "form": {
+        "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+        "pre-authorized_code": "pre-auth-token"
+      },
+      "status_code": 500,
+      "content_type": "text/plain",
+      "body": "Internal Server Error",
+      "repository_calls": [
+        {"method": "get_by_pre_auth_code", "value": "pre-auth-token"}
+      ]
+    }
+  ],
   "cases": [
     {
       "name": "pre_authorized_code_success",
