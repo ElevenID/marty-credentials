@@ -67,7 +67,8 @@
       "consumed_before_jwt_verification": true
     },
     "jwt": {
-      "algorithm": "RS256",
+      "algorithm_policy": "protected-header-and-matching-jwk",
+      "algorithm_compatibility": "preserve-marty-oid4vci-verifier-set",
       "required_bindings": ["issuer", "client_id", "deployment_id", "nonce"],
       "jwks_refresh": "retry-once-only-for-unknown-kid",
       "refresh_failure_status": 400

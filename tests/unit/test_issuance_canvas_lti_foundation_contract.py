@@ -276,6 +276,10 @@ async def test_canvas_experience_exchange_replays_the_contract() -> None:
 def test_canvas_lti_security_and_lifetime_constants_are_frozen(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    assert CONTRACT["launch"]["jwt"]["algorithm_policy"] == ("protected-header-and-matching-jwk")
+    assert CONTRACT["launch"]["jwt"]["algorithm_compatibility"] == (
+        "preserve-marty-oid4vci-verifier-set"
+    )
     assert sorted(canvas_routes._RSA_PRIVATE_JWK_FIELDS) == sorted(
         CONTRACT["tool_signing"]["private_jwk_fields_forbidden"]
     )
