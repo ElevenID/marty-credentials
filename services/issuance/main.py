@@ -333,7 +333,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize PostgreSQL adapter
     config = get_config()
     engine = create_async_engine(
-        config["database_url"], pool_pre_ping=True, pool_size=5, max_overflow=10, echo=False
+        config["database_url"],
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+        echo=False,
+        hide_parameters=True,
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresIssuanceRepository(session_factory)

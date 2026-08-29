@@ -13,6 +13,32 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "python"))
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        Path("services/issuance/main.py"),
+        Path("services/issuance/canvas_worker.py"),
+    ],
+)
+def test_runtime_database_engines_hide_statement_parameters(relative_path: Path) -> None:
+    tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
+    engine_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "create_async_engine"
+    ]
+
+    assert len(engine_calls) == 1, relative_path
+    hide_parameters = next(
+        (keyword.value for keyword in engine_calls[0].keywords if keyword.arg == "hide_parameters"),
+        None,
+    )
+    assert isinstance(hide_parameters, ast.Constant), relative_path
+    assert hide_parameters.value is True, relative_path
+
+
 def test_issuance_module_runs_the_created_app_without_development_reload() -> None:
     source = (ROOT / "services" / "issuance" / "main.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
