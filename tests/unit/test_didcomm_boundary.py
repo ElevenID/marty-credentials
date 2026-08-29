@@ -852,6 +852,7 @@ async def test_delivery_rejects_claimed_tenant_before_transaction_lookup() -> No
 )
 async def test_delivery_rejects_private_or_unavailable_encryption(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     encryption_error: Exception,
     expected_status: int,
     expected_detail: str,
@@ -915,10 +916,13 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
         Mock(side_effect=encryption_error),
     )
 
+    sensitive_holder = "did:peer:holder-MUST-NOT-ENTER-LOGS-41fe379c"
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
     with pytest.raises(HTTPException, match=expected_detail) as exc:
         await routes._didcomm_sign_and_deliver(
             transaction,
-            "did:peer:holder",
+            sensitive_holder,
             repo,
         )
 
@@ -926,6 +930,14 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
     allocate_status.assert_not_awaited()
     sign_credential.assert_not_awaited()
     pack_credential.assert_not_called()
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    rendered_logs = "\n".join(record.getMessage() for record in route_records)
+    structured_logs = "\n".join(repr(record.__dict__) for record in route_records)
+    for sensitive_value in (sensitive_holder, str(encryption_error)):
+        assert sensitive_value not in rendered_logs
+        assert sensitive_value not in structured_logs
 
 
 @pytest.mark.asyncio

@@ -281,3 +281,21 @@ def test_credential_admission_contract_has_required_security_boundaries() -> Non
         "dpop_key_must_match_access_token",
         "issued_retry_returns_canonical_credential",
     } <= names
+
+
+def test_credential_failure_log_keeps_runtime_error_out(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sensitive_error = "credential-error-MUST-NOT-ENTER-LOGS-93d1ac7e"
+    caplog.set_level(logging.INFO, logger="issuance.infrastructure.api.routes")
+
+    routes._log_credential_creation_failure("request-safe", RuntimeError(sensitive_error))
+
+    route_records = [
+        record for record in caplog.records if record.name == "issuance.infrastructure.api.routes"
+    ]
+    rendered_logs = "\n".join(record.getMessage() for record in route_records)
+    structured_logs = "\n".join(repr(record.__dict__) for record in route_records)
+    assert sensitive_error not in rendered_logs
+    assert sensitive_error not in structured_logs
+    assert "credential creation failed (RuntimeError)" in rendered_logs

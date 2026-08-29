@@ -127,6 +127,14 @@ _CANVAS_ISSUANCE_DENIAL = {
 }
 
 
+def _log_credential_creation_failure(request_id: str, error: Exception) -> None:
+    logger.error(
+        "[credential] rid=%s credential creation failed (%s)",
+        request_id,
+        type(error).__name__,
+    )
+
+
 async def _validate_vcdm_related_resources(credential: dict[str, Any]) -> None:
     """Validate remote VCDM resources through the production issuance policy.
 
@@ -5088,7 +5096,7 @@ async def issue_credential(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[credential] rid={rid} tx_id={tx.id} credential creation failed: {e}")
+        _log_credential_creation_failure(rid, e)
         current_tx = await repo.get_transaction(tx.id)
         if current_tx is not None and current_tx.status == IssuanceStatus.SIGNING:
             current_tx.fail(str(e))
