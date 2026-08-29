@@ -206,3 +206,32 @@ def test_token_exchange_contract_matches_python_oracle(monkeypatch) -> None:
         assert repository.calls == case["repository_calls"], case["name"]
         if "final_state" in case:
             assert asyncio.run(repository.final_state(case["final_state"])) == case["final_state"]
+
+
+def test_token_exchange_rate_limit_matches_language_neutral_contract(monkeypatch) -> None:
+    from issuance.infrastructure.api import routes
+
+    expected = CONTRACT["rate_limit"]
+    repository = ContractRepository("no_state")
+    monkeypatch.setattr(
+        routes,
+        "_token_limiter",
+        routes._InMemoryRateLimiter(expected["requests"], expected["window_seconds"]),
+    )
+    http = client(monkeypatch, repository)
+    for _ in range(expected["requests"]):
+        response = http.post(
+            CONTRACT["inputs"]["path"],
+            data=copy.deepcopy(expected["request"]["form"]),
+        )
+        assert response.status_code == expected["allowed_status_code"]
+
+    response = http.post(
+        CONTRACT["inputs"]["path"],
+        data=copy.deepcopy(expected["request"]["form"]),
+    )
+    assert response.status_code == expected["status_code"]
+    assert response.headers["content-type"].split(";", 1)[0] == "application/json"
+    for name, value in expected["headers"].items():
+        assert response.headers[name] == value
+    assert response.json() == expected["body"]

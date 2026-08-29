@@ -12,6 +12,20 @@
     "generated_pre_authorized_token": "access-token-pre-authorized",
     "generated_authorization_code_token": "access-token-authorization-code"
   },
+  "rate_limit": {
+    "requests": 2,
+    "window_seconds": 17,
+    "request": {
+      "form": {
+        "grant_type": "unsupported",
+        "pre-authorized-code": "pre-auth-token"
+      }
+    },
+    "allowed_status_code": 400,
+    "status_code": 429,
+    "headers": {"Retry-After": "17"},
+    "body": {"detail": "Rate limit exceeded"}
+  },
   "cases": [
     {
       "name": "pre_authorized_code_success",
