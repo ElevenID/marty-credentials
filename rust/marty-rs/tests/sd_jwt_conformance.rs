@@ -18,7 +18,7 @@
 //!  §7  Verification — SDJWTVerifier accepts valid presentations
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use jsonwebtoken::EncodingKey;
+use jsonwebtoken_legacy::EncodingKey;
 use sd_jwt_rs::{
     issuer::ClaimsForSelectiveDisclosureStrategy, SDJWTHolder, SDJWTIssuer,
     SDJWTSerializationFormat,

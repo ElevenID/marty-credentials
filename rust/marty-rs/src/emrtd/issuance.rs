@@ -106,12 +106,12 @@ mod tests {
     use crate::emrtd::CscaKeyAlgorithm;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine as _;
-    use der::Decode;
+    use der_legacy::Decode;
     use marty_crypto::cert_builder::create_csca_certificate;
     use marty_crypto::keygen::KeyType;
     use marty_verification::verification::emrtd::{verify_emrtd, HashStatus, SecurityObject};
     use marty_verification::CscaRegistry;
-    use x509_cert::Certificate;
+    use x509_cert_legacy::Certificate;
 
     use super::*;
 

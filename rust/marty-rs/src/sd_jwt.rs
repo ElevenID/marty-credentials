@@ -3,7 +3,9 @@
 // This module provides Python bindings for creating and verifying
 // Selective Disclosure JWTs according to the SD-JWT specification.
 
-use jsonwebtoken::{DecodingKey, EncodingKey, Header};
+// sd-jwt-rs owns this type boundary and remains pinned to jsonwebtoken 10.
+// The workspace-facing jsonwebtoken dependency can move independently.
+use jsonwebtoken_legacy::{DecodingKey, EncodingKey, Header};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
