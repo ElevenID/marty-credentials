@@ -91,6 +91,7 @@ from issuance.application.canvas_sync_service import (
     validate_canvas_sync_target,
 )
 from issuance.application.mip_integration_primitives import (
+    canvas_lti_experience_exchange_metadata,
     canvas_lti_experience_handoff,
 )
 from issuance.application.rust_integration import (
@@ -6950,24 +6951,20 @@ async def exchange_canvas_lti_experience_code_route(
         state=hashlib.sha256(session_token.encode("utf-8")).hexdigest(),
         redirect_uri=consumed_code.redirect_uri,
         status="session",
-        metadata={
-            **metadata,
-            "kind": "canvas_lti_experience_session",
-            "experience_code_id": consumed_code.id,
-            "session_created_at": now.isoformat(),
-        },
+        metadata={},
         expires_at=expires_at,
         consumed_at=now,
+    )
+    session.metadata, spent_code_metadata = canvas_lti_experience_exchange_metadata(
+        metadata,
+        experience_code_id=consumed_code.id,
+        session_id=session.id,
+        session_created_at=now.isoformat(),
     )
     await repo.save_canvas_lti_launch_state(session)
 
     # Retain an audit pointer but remove launch claims from the spent code.
-    consumed_code.metadata = {
-        "kind": "canvas_lti_experience_code_consumed",
-        "launch_state": metadata.get("launch_state"),
-        "session_id": session.id,
-        "exchanged_at": now.isoformat(),
-    }
+    consumed_code.metadata = spent_code_metadata
     await repo.save_canvas_lti_launch_state(consumed_code)
     return CanvasLtiExperienceCodeExchangeResponse(
         session_token=session_token,
