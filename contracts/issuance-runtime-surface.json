@@ -179,7 +179,7 @@
     "method_count": 12,
     "methods": [
       {
-        "implementation_line": 713,
+        "implementation_line": 709,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 44,
         "method": "ExchangeToken",
@@ -190,7 +190,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1424,
+        "implementation_line": 1428,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 84,
         "method": "GetCredentialStatus",
@@ -201,7 +201,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1186,
+        "implementation_line": 1190,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 54,
         "method": "GetOffer",
@@ -212,7 +212,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1251,
+        "implementation_line": 1255,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 64,
         "method": "GetTransaction",
@@ -223,7 +223,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1513,
+        "implementation_line": 1517,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 94,
         "method": "HealthCheck",
@@ -234,7 +234,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 307,
+        "implementation_line": 305,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 39,
         "method": "InitiateIssuance",
@@ -245,7 +245,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 904,
+        "implementation_line": 900,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 49,
         "method": "IssueCredential",
@@ -256,7 +256,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1220,
+        "implementation_line": 1224,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 59,
         "method": "ListTransactions",
@@ -267,7 +267,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1413,
+        "implementation_line": 1417,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 79,
         "method": "ReinstateCredential",
@@ -278,7 +278,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1391,
+        "implementation_line": 1395,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 69,
         "method": "RevokeCredential",
@@ -289,7 +289,7 @@
         "transport": "unary_unary"
       },
       {
-        "implementation_line": 1479,
+        "implementation_line": 1483,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 89,
         "method": "StreamCredentialEvents",
@@ -300,7 +300,7 @@
         "transport": "unary_stream"
       },
       {
-        "implementation_line": 1402,
+        "implementation_line": 1406,
         "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 74,
         "method": "SuspendCredential",

@@ -1124,17 +1124,13 @@ class TestProofAudienceMatching:
             "https://issuer.example/org/{org_id}#other",
         ),
     )
-    def test_rejects_unconfigured_origin_with_supported_path(
-        self, monkeypatch, audience
-    ):
+    def test_rejects_unconfigured_origin_with_supported_path(self, monkeypatch, audience):
         from issuance.infrastructure.api import routes
 
         org_id = "00000000-0000-0000-0000-000000000001"
         monkeypatch.setattr(routes, "ISSUER_BASE_URL", "https://issuer.example")
 
-        assert not routes._proof_audience_matches_org_issuer(
-            audience.format(org_id=org_id), org_id
-        )
+        assert not routes._proof_audience_matches_org_issuer(audience.format(org_id=org_id), org_id)
 
     def test_accepts_exact_configured_port(self, monkeypatch):
         from issuance.infrastructure.api import routes
@@ -4232,7 +4228,7 @@ class TestRustIntegrationOrgIdValidation:
                 verification_method_id=verification_method_id,
             )
 
-    async def test_grpc_remote_signing_helper_uses_did_without_profile_or_kms_coordinates(
+    async def test_grpc_remote_signing_helper_uses_admitted_did_context_without_reresolving(
         self, monkeypatch
     ):
         from issuance.application.rust_integration import base64url_decode
@@ -4243,39 +4239,15 @@ class TestRustIntegrationOrgIdValidation:
         verification_method_id = f"{issuer_did}#cred-issuer-acme-es256"
         captured: dict[str, object] = {}
 
-        async def fake_resolve_remote_issuer_context(
-            organization_id: str,
-            *,
-            issuer_did: str | None = None,
-            issuer_mode: str | None = None,
-            credential_format: str | None = None,
-            key_purpose: str | None = None,
-            algorithm: str | None = None,
-        ):
-            captured["resolve"] = {
-                "organization_id": organization_id,
-                "issuer_did": issuer_did,
-                "issuer_mode": issuer_mode,
-                "credential_format": credential_format,
-                "key_purpose": key_purpose,
-                "algorithm": algorithm,
-            }
-            return {
-                "ok": True,
-                "issuer_did": issuer_did,
-                "issuer_profile_id": "ip-grpc",
-                "issuer_mode": "org_managed",
-                "algorithm": "ES256",
-                "verification_method_id": verification_method_id,
-                "issuer_x5c": ["leaf-certificate", "issuer-certificate"],
-            }
+        async def reject_second_resolution(*_args, **_kwargs):
+            raise AssertionError("the signing helper must use its admitted issuer context")
 
         async def fake_sign_payload_with_issuer_did(**kwargs):
             captured["sign"] = kwargs
             return {"signature_raw_b64": "AQID", "algorithm": kwargs.get("algorithm")}
 
         monkeypatch.setattr(
-            signing_context, "resolve_remote_issuer_context", fake_resolve_remote_issuer_context
+            signing_context, "resolve_remote_issuer_context", reject_second_resolution
         )
         monkeypatch.setattr(
             signing_context,
@@ -4291,6 +4263,16 @@ class TestRustIntegrationOrgIdValidation:
             issuer_algorithm="ES256",
         )
         expected_credential_id = stable_issuance_credential_id(tx.id)
+        admitted_context = {
+            "ok": True,
+            "issuer_did": issuer_did,
+            "issuer_profile_id": "ip-grpc",
+            "issuer_mode": "org_managed",
+            "algorithm": "ES256",
+            "verification_method_id": verification_method_id,
+            "issuer_x5c": ["leaf-certificate", "issuer-certificate"],
+            "signing_service_id": "svc-old",
+        }
 
         (
             credential,
@@ -4298,6 +4280,7 @@ class TestRustIntegrationOrgIdValidation:
             remote_context,
         ) = await grpc_adapter._create_remote_signed_sd_jwt_for_tx(
             tx,
+            issuer_context=admitted_context,
             credential_id=expected_credential_id,
             subject_id="did:key:z6Mk_subject",
             credential_type="https://beta.elevenidllc.com/credentials/access_badge",
@@ -4312,16 +4295,9 @@ class TestRustIntegrationOrgIdValidation:
         assert header["kid"] == verification_method_id
         assert header["x5c"] == ["leaf-certificate", "issuer-certificate"]
         assert tx.issuer_did_override == issuer_did
-        assert tx.signing_service_id is None
+        assert tx.signing_service_id == "svc-old"
         assert remote_context["verification_method_id"] == verification_method_id
-        assert captured["resolve"] == {
-            "organization_id": "org-1",
-            "issuer_did": issuer_did,
-            "issuer_mode": "org_managed",
-            "credential_format": "dc+sd-jwt",
-            "key_purpose": "vc_jwt_issuer",
-            "algorithm": "ES256",
-        }
+        assert remote_context is admitted_context
         assert captured["sign"]["organization_id"] == "org-1"
         assert captured["sign"]["issuer_did"] == issuer_did
         assert captured["sign"]["credential_format"] == "dc+sd-jwt"

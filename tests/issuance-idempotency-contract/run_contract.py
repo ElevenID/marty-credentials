@@ -70,7 +70,7 @@ def _transaction(*, request_hash: str = REQUEST_HASH) -> IssuanceTransaction:
 
 
 async def _exercise_production_repository() -> tuple[
-    list[tuple[IssuanceTransaction, bool]], list[bool], bool, bool
+    list[tuple[IssuanceTransaction, bool]], list[bool], bool, bool, str, int, str
 ]:
     async_database_url = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
     engine = create_async_engine(async_database_url)
@@ -127,11 +127,86 @@ async def _exercise_production_repository() -> tuple[
         assert finalized.status == IssuanceStatus.ISSUED
         assert finalized.issued_at == issued_at
         assert (await repository.get_credential_by_transaction_id(committed.id)).id == credential.id
+
+        grpc_transaction = IssuanceTransaction(
+            id=str(uuid.uuid4()),
+            organization_id="org-grpc-signing-race",
+            credential_template_id="template-grpc-signing-race",
+            status=IssuanceStatus.AUTHORIZED,
+            access_token="grpc-signing-race-token",
+            claims={"achievement": "grpc-signing-race"},
+            credential_type="OpenBadgeCredential",
+            issuer_profile_id="issuer-profile-grpc-signing-race",
+            issuer_did_override="did:web:issuer.example",
+            issuer_algorithm="ES256",
+            signing_service_id="openbao-transit",
+        )
+        await repository.save_transaction(grpc_transaction)
+        grpc_credential_id = stable_issuance_credential_id(grpc_transaction.id)
+        grpc_claims = await asyncio.gather(
+            repository.claim_transaction_for_signing(grpc_transaction, grpc_credential_id),
+            repository.claim_transaction_for_signing(grpc_transaction, grpc_credential_id),
+        )
+        grpc_winners = [claim for claim in grpc_claims if claim is not None]
+        assert len(grpc_winners) == 1
+        grpc_winner = grpc_winners[0]
+        assert grpc_winner.status == IssuanceStatus.SIGNING
+        assert grpc_winner.reserved_credential_id == grpc_credential_id
+        grpc_issued_at = datetime.now(UTC)
+        grpc_credential = IssuedCredential(
+            id=grpc_credential_id,
+            transaction_id=grpc_winner.id,
+            organization_id=grpc_winner.organization_id,
+            credential_template_id=grpc_winner.credential_template_id,
+            credential_jwt="grpc-contract-signed-credential",
+            credential_hash=hashlib.sha256(b"grpc-contract-signed-credential").hexdigest(),
+            status=CredentialStatus.ACTIVE,
+            issued_at=grpc_issued_at,
+        )
+        await repository.finalize_credential_issuance(grpc_winner, grpc_credential)
+        grpc_finalized = await repository.get_transaction(grpc_winner.id)
+        assert grpc_finalized is not None
+        assert grpc_finalized.status == IssuanceStatus.ISSUED
+        assert grpc_finalized.issued_at == grpc_issued_at
+        assert (
+            await repository.get_credential_by_transaction_id(grpc_winner.id)
+        ).id == grpc_credential_id
+
+        grpc_failed_transaction = IssuanceTransaction(
+            id=str(uuid.uuid4()),
+            organization_id="org-grpc-signing-failure",
+            credential_template_id="template-grpc-signing-failure",
+            status=IssuanceStatus.AUTHORIZED,
+            access_token="grpc-signing-failure-token",
+            claims={"achievement": "grpc-signing-failure"},
+            credential_type="OpenBadgeCredential",
+            issuer_profile_id="issuer-profile-grpc-signing-failure",
+            issuer_did_override="did:web:issuer.example",
+            issuer_algorithm="ES256",
+            signing_service_id="openbao-transit",
+        )
+        await repository.save_transaction(grpc_failed_transaction)
+        grpc_failed_credential_id = stable_issuance_credential_id(grpc_failed_transaction.id)
+        grpc_failed_claim = await repository.claim_transaction_for_signing(
+            grpc_failed_transaction,
+            grpc_failed_credential_id,
+        )
+        assert grpc_failed_claim is not None
+        grpc_failed_claim.fail("KMS unavailable")
+        await repository.save_transaction(grpc_failed_claim)
+        grpc_failed = await repository.get_transaction(grpc_failed_claim.id)
+        assert grpc_failed is not None
+        assert grpc_failed.status == IssuanceStatus.FAILED
+        assert grpc_failed.reserved_credential_id == grpc_failed_credential_id
+        assert await repository.get_credential_by_transaction_id(grpc_failed_claim.id) is None
         return (
             list(results),
             list(finalization_results),
             changed_semantics_rejected,
             early_recovery_exercised,
+            grpc_transaction.id,
+            len(grpc_winners),
+            grpc_failed_transaction.id,
         )
     finally:
         await engine.dispose()
@@ -144,6 +219,9 @@ def main() -> None:
         finalization_results,
         changed_semantics_rejected,
         early_recovery_exercised,
+        grpc_transaction_id,
+        grpc_signing_claim_winner_count,
+        grpc_failed_transaction_id,
     ) = asyncio.run(_exercise_production_repository())
 
     assert sorted(created for _, created in results) == [False, True]
@@ -175,6 +253,38 @@ def main() -> None:
         ).fetchone()
         assert issued_count == 1
         assert issued_transaction_count == 1
+        grpc_issued_count, grpc_issued_transaction_count = connection.execute(
+            """
+            SELECT
+                (SELECT count(*) FROM issuance_service.issued_credentials
+                 WHERE transaction_id = %s),
+                (SELECT count(*) FROM issuance_service.issuance_transactions
+                 WHERE id = %s AND status = 'issued' AND issued_at IS NOT NULL)
+            """,
+            (grpc_transaction_id, grpc_transaction_id),
+        ).fetchone()
+        assert grpc_issued_count == 1
+        assert grpc_issued_transaction_count == 1
+        (
+            grpc_failed_reserved_transaction_count,
+            grpc_failed_issued_credential_count,
+        ) = connection.execute(
+            """
+            SELECT
+                (SELECT count(*) FROM issuance_service.issuance_transactions
+                 WHERE id = %s AND status = 'failed'
+                   AND reserved_credential_id = %s),
+                (SELECT count(*) FROM issuance_service.issued_credentials
+                 WHERE transaction_id = %s)
+            """,
+            (
+                grpc_failed_transaction_id,
+                stable_issuance_credential_id(grpc_failed_transaction_id),
+                grpc_failed_transaction_id,
+            ),
+        ).fetchone()
+        assert grpc_failed_reserved_transaction_count == 1
+        assert grpc_failed_issued_credential_count == 0
         raw_key_persisted = connection.execute(
             """
             SELECT EXISTS (
@@ -215,6 +325,11 @@ def main() -> None:
                 "delivered_finalization_winner_count": sum(finalization_results),
                 "issued_credential_count": issued_count,
                 "issued_transaction_count": issued_transaction_count,
+                "grpc_signing_claim_winner_count": grpc_signing_claim_winner_count,
+                "grpc_issued_credential_count": grpc_issued_count,
+                "grpc_issued_transaction_count": grpc_issued_transaction_count,
+                "grpc_failed_reserved_transaction_count": (grpc_failed_reserved_transaction_count),
+                "grpc_failed_issued_credential_count": grpc_failed_issued_credential_count,
             },
             indent=2,
             sort_keys=True,
