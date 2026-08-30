@@ -1,0 +1,222 @@
+{
+  "schema": "marty.issuance-canvas-management/v1",
+  "purpose": "Language-neutral behavior floor for the remaining Canvas management and legacy-ingest HTTP slice before native Rust cutover.",
+  "scope": {
+    "source": "services/issuance/infrastructure/api/canvas_routes.py",
+    "route_prefix": "/v1/integrations/canvas",
+    "route_count": 31,
+    "routes": [
+      {"method": "POST", "path": "/v1/integrations/canvas/applications/{application_id}/approve", "operation": "approve_canvas_application", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/lti/config/{token}", "operation": "get_public_canvas_lti_config", "authentication": "public-revocable-token"},
+      {"method": "GET", "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config", "operation": "get_canvas_lti_registration_config", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "PUT", "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation", "operation": "update_canvas_lti_installation", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness", "operation": "get_canvas_platform_readiness", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/platforms", "operation": "create_canvas_platform", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/platforms", "operation": "list_canvas_platforms", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/platforms/{platform_id}", "operation": "get_canvas_platform", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "PUT", "path": "/v1/integrations/canvas/platforms/{platform_id}", "operation": "update_canvas_platform", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "DELETE", "path": "/v1/integrations/canvas/platforms/{platform_id}", "operation": "delete_canvas_platform", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe", "operation": "probe_canvas_platform_sandbox", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh", "operation": "refresh_canvas_platform_jwks", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery", "operation": "discover_canvas_scope", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog", "operation": "get_canvas_catalog", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings", "operation": "create_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/program-bindings", "operation": "list_canvas_program_bindings", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/program-bindings/{binding_id}", "operation": "get_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "PUT", "path": "/v1/integrations/canvas/program-bindings/{binding_id}", "operation": "update_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "DELETE", "path": "/v1/integrations/canvas/program-bindings/{binding_id}", "operation": "delete_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate", "operation": "validate_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate", "operation": "activate_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate", "operation": "deactivate_canvas_program_binding", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/canvas-credentials/validate", "operation": "validate_canvas_credentials_provider", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/integration-secrets", "operation": "create_canvas_integration_secret", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "GET", "path": "/v1/integrations/canvas/integration-secrets", "operation": "list_canvas_integration_secrets", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "PUT", "path": "/v1/integrations/canvas/integration-secrets/{secret_id}", "operation": "update_canvas_integration_secret", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "DELETE", "path": "/v1/integrations/canvas/integration-secrets/{secret_id}", "operation": "delete_canvas_integration_secret", "authentication": "management-api-key-and-trusted-organization"},
+      {"method": "POST", "path": "/v1/integrations/canvas/evidence-events", "operation": "process_canvas_evidence_event_route", "authentication": "default-disabled-legacy-ingest"},
+      {"method": "POST", "path": "/v1/integrations/canvas/ags/score-events", "operation": "process_canvas_ags_score_event_route", "authentication": "default-disabled-legacy-ingest"},
+      {"method": "POST", "path": "/v1/integrations/canvas/nrps/membership-events", "operation": "process_canvas_nrps_membership_event_route", "authentication": "default-disabled-legacy-ingest"},
+      {"method": "GET", "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}", "operation": "get_canvas_evidence_event_status", "authentication": "management-api-key-and-trusted-organization"}
+    ],
+    "complement_contracts": [
+      "contracts/issuance-canvas-lti-foundation.json",
+      "contracts/issuance-canvas-oauth-lifecycle.json"
+    ]
+  },
+  "management_boundary": {
+    "api_key_dependency": "_verify_management_api_key",
+    "trusted_organization_header": "X-Organization-ID",
+    "missing_organization": {"status_code": 400, "detail": "X-Organization-ID is required for Canvas management"},
+    "claimed_organization_mismatch": {"status_code": 404, "detail": "Canvas resource not found"},
+    "cross_tenant_policy": "hide-as-not-found-before-provider-or-mutation-work",
+    "hidden_resource_status": 404,
+    "archived_resources_hidden": true
+  },
+  "request_ownership": {
+    "extra_fields": "forbidden",
+    "models": {
+      "CanvasPlatformCreate": ["display_name", "canvas_base_url", "lti_client_id", "lti_deployment_id", "enabled"],
+      "CanvasLtiInstallationRequest": ["lti_client_id", "lti_deployment_id", "rotate_config_token", "revoke_config_token"],
+      "CanvasProgramBindingCreate": ["application_template_id", "credential_template_id", "display_name", "auto_approve_on_evidence", "evidence_requirements", "canvas_scope", "delivery_mode", "approval_policy_set_id", "deployment_profile_id", "feature_flags", "canvas_credentials"],
+      "CanvasEvidenceRequirementInput": ["requirement_id", "source", "fact_type", "scope", "pass_rule", "required"],
+      "CanvasCredentialsValidationRequest": ["organization_id", "canvas_credentials"],
+      "CanvasIntegrationSecretCreate": ["organization_id", "name", "provider", "purpose", "secret_value", "metadata", "enabled"],
+      "CanvasIntegrationSecretUpdate": ["name", "secret_value", "metadata", "enabled"],
+      "CanvasScopeDiscoveryRequest": ["course_id", "include_courses", "include_assignments", "include_quizzes", "include_modules", "limit"],
+      "CanvasApplicationApprovalRequest": ["review_notes"]
+    },
+    "server_owned_platform_fields": ["organization_id", "canvas_account_id", "lti_trust_profile", "lti_issuer", "lti_jwks_url", "lti_openid_configuration", "connection_config", "capability_snapshot", "config_version", "archived_at"],
+    "server_owned_binding_fields": ["canvas_account_id", "flow_mode", "direct_issue_enabled", "issuer_mode", "enabled", "config_version", "validated_config_version", "readiness_checks", "readiness_validated_at", "activated_at", "archived_at"],
+    "allowed_evidence_sources": ["ags_result", "canvas_rest"],
+    "allowed_fact_types": ["canvas.assignment_score", "canvas.quiz_score", "canvas.course_completion", "canvas.module_completion"],
+    "allowed_canvas_scope_fields": ["course_id", "assignment_id", "module_id", "quiz_id", "resource_link_id"],
+    "allowed_delivery_modes": ["wallet_only", "wallet_plus_canvas_mirror"]
+  },
+  "platform_lifecycle": {
+    "create": {
+      "organization_source": "trusted-header-only",
+      "canvas_account_id_prefix": "unverified:",
+      "enabled_intent_persisted": true,
+      "enabled_before_successful_probe": false,
+      "initial_registration_status": "draft",
+      "initial_config_version": 1
+    },
+    "origin_policy": {
+      "https_required_except_explicit-localhost-development-switch": true,
+      "credentials_forbidden": true,
+      "fragments_forbidden": true,
+      "private_origin_requires_exact_operator_allowlist": true,
+      "hosted_profile": "hosted_global",
+      "self_managed_profile": "self_managed_same_origin",
+      "self_managed_requires_exact_origin_allowlist": true
+    },
+    "configuration_change": {
+      "increments_config_version": true,
+      "disables_platform": true,
+      "invalidates_all_non_archived_binding_readiness": true,
+      "binding_fields_cleared": ["enabled", "validated_config_version", "readiness_checks", "readiness_validated_at", "activated_at"]
+    },
+    "archive": {
+      "idempotent": true,
+      "soft_delete": true,
+      "registration_status": "archived",
+      "config_token_revoked": true,
+      "all_bindings_archived_and_disabled": true,
+      "oauth_revocation_durable": true,
+      "cas_conflict_status": 409
+    }
+  },
+  "registration": {
+    "public_config": {
+      "token_format": "base64url-platform-id.dot.32-byte-random-secret",
+      "persistence": "sha256-only",
+      "comparison": "constant-time",
+      "cache_control": "no-store",
+      "invalid_revoked_archived_or_unknown": {"status_code": 404, "detail": "Canvas LTI configuration not found"}
+    },
+    "installation": {
+      "rotate_and_revoke_mutually_exclusive": {"status_code": 400, "detail": "Rotate and revoke are mutually exclusive"},
+      "client_or_deployment_change_invalidates_readiness": true,
+      "successful_probe_required_before_enabled": true
+    }
+  },
+  "program_binding": {
+    "identity_scope": ["organization_id", "platform_id", "application_template_id", "canvas_scope"],
+    "duplicate_status": 409,
+    "application_template_must_be_owned_and_active": true,
+    "credential_template_is_server_resolved_when_omitted": true,
+    "generated_requirement_id_prefix": "canvas_req_",
+    "flow_mode": "elevenid_orchestrated_canvas_evidence",
+    "direct_issue_enabled": false,
+    "issuer_mode": "org_managed",
+    "created_enabled": false,
+    "update_preserves_id_and_created_at": true,
+    "update_increments_config_version": true,
+    "update_invalidates_readiness": true,
+    "delete_is_soft_archive": true,
+    "validation": {
+      "persists_exact_config_version": true,
+      "blocking_checks_fail_closed": true,
+      "provider_redirects_forbidden": true,
+      "external_http_timeout_seconds": 10
+    },
+    "activation": {
+      "requires_current_successful_readiness": true,
+      "failure_status": 409,
+      "enables_platform_and_binding": true,
+      "background_roster_target_only_when_verified_capability_present": true,
+      "existing_applications_enqueued_for_sync": true
+    },
+    "deactivation": {
+      "disables_binding": true,
+      "clears_activated_at": true,
+      "disables_background_roster_target": true
+    }
+  },
+  "integration_secrets": {
+    "provider_purpose_pairs": {
+      "canvas": "oauth_client_secret",
+      "canvas_credentials": "api_token"
+    },
+    "storage": "encrypted-organization-secret",
+    "reference_format": "org_secret://{organization_id}/{secret_id}",
+    "secret_hint": "last-four-characters-only",
+    "response_forbidden_fields": ["secret_value", "ciphertext", "nonce", "key_id"],
+    "list_and_mutation_tenant_scoped": true,
+    "wrong_tenant_status": 404,
+    "provider_validation_never_publishes_a_credential": true
+  },
+  "application_approval": {
+    "canvas_application_only": true,
+    "required_initial_status": "pending",
+    "reviewer_id": "canvas-integration-management-api",
+    "default_review_notes": "Approved through Canvas integration operations",
+    "uses_canonical_issuance_guard": true,
+    "uses_required_remote_issuer_context": true,
+    "success": {"status_code": 200, "status": "approved"},
+    "not_ready": {"status_code": 409, "detail": "Canvas application is not ready for approval"},
+    "provider_and_signing_error_details_redacted": true
+  },
+  "catalog_and_probe": {
+    "canvas_provider_origin": "exact-validated-platform-origin",
+    "provider_redirects_forbidden": true,
+    "scope_discovery_authentication": "organization-oauth-secret-reference",
+    "scope_discovery_limit": {"default": 50, "minimum": 1, "maximum": 100},
+    "jwks_refresh": {"single_forced_refresh": true, "bounded": true, "fail_closed": true},
+    "probe_persists_pinned_issuer_authorization_token_and_jwks_metadata": true
+  },
+  "legacy_ingest": {
+    "environment_switch": "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+    "default_enabled": false,
+    "disabled_status_code": 410,
+    "disabled_before_body_or_repository_processing": true,
+    "enabled_response_headers": {
+      "Deprecation": "true",
+      "Sunset": "Wed, 14 Oct 2026 00:00:00 GMT"
+    },
+    "routes": [
+      "process_canvas_evidence_event_route",
+      "process_canvas_ags_score_event_route",
+      "process_canvas_nrps_membership_event_route"
+    ]
+  },
+  "event_status": {
+    "lookup_key": ["canvas_account_id", "provider_event_id"],
+    "tenant_rechecked_after_lookup": true,
+    "missing_or_foreign": {"status_code": 404, "detail": "Canvas evidence event receipt not found"},
+    "response_includes": ["response", "evidence_facts", "policy_decision", "replay_available"]
+  },
+  "security_invariants": [
+    "management-api-key-and-trusted-organization-are-required-together",
+    "cross-tenant-and-archived-resources-are-hidden-as-not-found",
+    "caller-cannot-select-trust-metadata-provider-or-private-service-urls",
+    "caller-cannot-enable-a-platform-or-binding-before-readiness",
+    "configuration-changes-invalidate-stale-capability-and-readiness-snapshots",
+    "public-registration-token-is-revocable-digest-only-and-no-store",
+    "organization-secrets-are-never-returned-in-plaintext",
+    "provider-redirects-are-never-followed",
+    "provider-traffic-is-pinned-to-the-validated-platform-origin",
+    "application-approval-never-reflects-provider-or-signing-secrets",
+    "legacy-ingest-remains-explicitly-gone-by-default-rather-than-silently-disappearing"
+  ]
+}
