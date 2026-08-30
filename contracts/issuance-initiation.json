@@ -1,0 +1,271 @@
+{
+  "schema": "marty.issuance-initiation/v1",
+  "purpose": "Language-neutral behavior floor for replacing Python issuance initiation with one shared Rust core",
+  "surface": {
+    "http": {
+      "method": "POST",
+      "path": "/v1/issuance/initiate",
+      "operation": "initiate_issuance",
+      "authentication": "management-api-key",
+      "content_type": "application/json"
+    },
+    "grpc": {
+      "service": "marty.ui.issuance.v1.IssuanceService",
+      "rpc": "InitiateIssuance",
+      "request": "marty.ui.issuance.v1.InitiateIssuanceRequest",
+      "response": "marty.ui.issuance.v1.IssuanceResponse"
+    }
+  },
+  "domain_request": {
+    "fields": [
+      {"name": "organization_id", "type": "string", "required": true, "http": true, "grpc": true},
+      {"name": "credential_template_id", "type": "nullable-string", "required": false, "http": true, "grpc": true},
+      {"name": "application_id", "type": "nullable-string", "required": false, "http": true, "grpc": true},
+      {"name": "applicant_id", "type": "nullable-string", "required": false, "http": true, "grpc": true},
+      {"name": "subject_did", "type": "nullable-string", "required": false, "http": true, "grpc": true},
+      {"name": "holder_did", "type": "nullable-string", "required": false, "http": true, "grpc": true},
+      {"name": "issuer_did", "type": "non-empty-string", "required": true, "http": true, "grpc": true},
+      {"name": "authorized_client_id", "type": "nullable-string", "required": false, "http": true, "grpc": true},
+      {"name": "delivery_mode", "type": "string", "required": false, "default": "wallet_only", "http": true, "grpc": true},
+      {"name": "claims", "type": "json-object", "required": false, "default": {}, "http": true, "grpc": true},
+      {"name": "credential_subject", "type": "nullable-json-object-or-non-empty-array", "required": false, "http": true, "grpc": false},
+      {"name": "credential_document", "type": "nullable-json-object", "required": false, "http": true, "grpc": false}
+    ],
+    "unknown_http_fields": "reject",
+    "reserved_claim_fields": ["_application_id", "_credential_subject", "_credential_document"],
+    "delivery_modes": ["wallet_only", "wallet_plus_canvas_mirror"],
+    "exclusive_inputs": [
+      ["credential_document", "claims"],
+      ["credential_document", "credential_subject"],
+      ["credential_subject", "claims"]
+    ],
+    "credential_subject_formats": [
+      "jwt_vc",
+      "jwt_vc_json",
+      "w3c_vcdm_v2_jwt",
+      "w3c_vcdm_v2_jwt_vc",
+      "json_ld",
+      "ldp_vc",
+      "w3c_vcdm_v2_di"
+    ],
+    "credential_document_formats": ["json_ld", "ldp_vc", "w3c_vcdm_v2_di"],
+    "credential_document_requirements": ["valid-vcdm", "unsigned", "issuer-matches-resolved-issuer-did", "related-resources-validated"]
+  },
+  "grpc_projection": {
+    "field_numbers": {
+      "organization_id": 1,
+      "credential_template_id": 2,
+      "applicant_id": 3,
+      "subject_did": 4,
+      "claims": 5,
+      "holder_did": 6,
+      "authorized_client_id": 7,
+      "application_id": 8,
+      "issuer_did": 9,
+      "delivery_mode": 10,
+      "idempotency_key": 11,
+      "claims_json": 12
+    },
+    "nested_claims": "claims_json",
+    "legacy_claims": "string-map",
+    "claims_json_precedence": "reject-when-both-non-empty",
+    "claims_json_shape": "json-object",
+    "unsupported_domain_inputs": ["credential_subject", "credential_document"]
+  },
+  "idempotency": {
+    "http_source": "Idempotency-Key header",
+    "grpc_source": "idempotency_key field",
+    "key_pattern": "^[A-Za-z0-9._:-]{1,128}$",
+    "surrounding_whitespace": "reject",
+    "plaintext_persisted": false,
+    "key_hash_prefix": "marty:issuance-idempotency-key:v1:",
+    "request_hash_prefix": "marty:issuance-initiate-request:v1:",
+    "request_canonicalization": "utf8-json-sorted-keys-compact-no-nan",
+    "scope": ["organization_id", "key_hash"],
+    "semantic_fields": [
+      "organization_id",
+      "credential_template_id",
+      "application_id",
+      "applicant_id",
+      "subject_did",
+      "holder_did",
+      "issuer_did",
+      "authorized_client_id",
+      "delivery_mode",
+      "claims",
+      "credential_subject",
+      "credential_document"
+    ],
+    "recovery_order": "after-organization-and-client-validation-before-template-resolution",
+    "same_request": "return-committed-transaction-snapshot",
+    "different_request": {"http_status": 409, "grpc_status": "ALREADY_EXISTS"},
+    "didcomm_push_with_idempotency": {"http_status": 422, "grpc_status": "INVALID_ARGUMENT"},
+    "vector": {
+      "key": "flow:application-1:stable-retry",
+      "key_hash": "634c3cc0b92be943a723c3611e27e58af748e4956e34891e5af713df0a0a805b",
+      "request": {
+        "organization_id": "org-1",
+        "credential_template_id": "template-1",
+        "application_id": "application-1",
+        "applicant_id": "applicant-1",
+        "subject_did": "did:key:z6MkHolder",
+        "holder_did": "",
+        "issuer_did": "did:web:issuer.example",
+        "authorized_client_id": "client-1",
+        "delivery_mode": "wallet_plus_canvas_mirror",
+        "claims": {"profile": {"level": 2}, "roles": ["student", "member"]},
+        "credential_subject": null,
+        "credential_document": null
+      },
+      "request_hash": "5653530413ae6e2e129b8052591b7dddc0704d4329757f83a6c41c44c966d5fb"
+    }
+  },
+  "dependency_order": [
+    "validate-transport-request",
+    "validate-organization-best-effort-except-not-found",
+    "validate-authorized-client-when-selected",
+    "recover-idempotent-transaction",
+    "resolve-template-grpc-first-http-fallback",
+    "validate-template-issuer-policy",
+    "validate-explicit-vcdm-inputs",
+    "validate-active-revocation-profile",
+    "resolve-application-claims-when-no-explicit-claims",
+    "resolve-required-remote-kms-issuer-context",
+    "reserve-transaction-atomically",
+    "project-offer-from-committed-transaction"
+  ],
+  "idempotent_recovery_branch": [
+    "recover-idempotent-transaction",
+    "project-offer-from-committed-transaction",
+    "return-before-template-resolution"
+  ],
+  "organization_resolution": {
+    "not_found": {"http_status": 404, "grpc_status": "NOT_FOUND"},
+    "network_or_server_failure": "log-and-proceed"
+  },
+  "authorized_client": {
+    "scope": ["organization_id", "authorized_client_id"],
+    "requirements": ["registered", "active", "private_key_jwt"],
+    "http_status": 422,
+    "grpc_status": "FAILED_PRECONDITION"
+  },
+  "template_resolution": {
+    "order": ["credential-template-grpc", "credential-template-http"],
+    "default_credential_type": "org.iso.18013.5.1.mDL",
+    "default_payload_format": "w3c_vcdm_v2_sd_jwt",
+    "default_validity_days": 365,
+    "default_renewable": false,
+    "default_renewal_window_days": 30,
+    "required_when_template_selected": ["issuer_did", "supported-issuer-algorithm", "active-revocation-profile"],
+    "supported_issuer_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
+    "caller_issuer_override": "reject",
+    "http_failure_mapping": {
+      "not_found": 404,
+      "http_client_error": "propagate",
+      "connect_error": 503,
+      "timeout": 504
+    }
+  },
+  "revocation_profile": {
+    "required": true,
+    "requirements": ["exists", "same-organization", "active"],
+    "http_invalid_status": 422,
+    "http_unavailable_status": 503,
+    "grpc_invalid_status": "FAILED_PRECONDITION",
+    "grpc_unavailable_status": "UNAVAILABLE"
+  },
+  "application_claim_resolution": {
+    "trigger": "application-id-present-and-no-explicit-claims",
+    "source": "application.form_data",
+    "missing_or_unavailable": "log-and-proceed",
+    "reserved_vct_wins": true
+  },
+  "issuer_custody": {
+    "mode": "organization-managed",
+    "required_context": [
+      "issuer_profile_id",
+      "issuer_did",
+      "issuer_algorithm",
+      "signing_service_id",
+      "signing_key_reference",
+      "verification_method_id"
+    ],
+    "profile_status": "active",
+    "direct_http_headers_forbidden": [
+      "x-signing-service-id",
+      "x-signing-key-reference",
+      "x-key-reference",
+      "x-issuer-profile-id",
+      "x-issuer-mode",
+      "x-issuer-did"
+    ],
+    "direct_header_failure": {
+      "http_status": 422,
+      "detail": "Direct signing or issuer-profile selection is not allowed; supply issuer_did in the request body."
+    }
+  },
+  "transaction": {
+    "default_template_id": "default",
+    "initial_status": "pending",
+    "id_generation": "uuid-v4",
+    "pre_auth_code_source_bytes": 32,
+    "pre_auth_code_encoded_length": 43,
+    "offer_ttl_minutes": 10080,
+    "server_generated": ["id", "pre_auth_code", "created_at", "expires_at"],
+    "persisted_from_template": [
+      "credential_type",
+      "vct",
+      "zk_predicate_claims",
+      "selective_disclosure_claims",
+      "credential_payload_format",
+      "wallet_configs",
+      "revocation_profile_id",
+      "issuer_algorithm",
+      "validity_days",
+      "renewable",
+      "renewal_window_days"
+    ],
+    "persisted_from_request": [
+      "organization_id",
+      "credential_template_id",
+      "application_id",
+      "applicant_id",
+      "subject_did",
+      "authorized_client_id",
+      "delivery_mode",
+      "claims",
+      "credential_subject",
+      "credential_document"
+    ],
+    "atomic_reservation": true
+  },
+  "response": {
+    "fields": [
+      "id",
+      "organization_id",
+      "credential_template_id",
+      "status",
+      "credential_offer_uri",
+      "credential_offer_uris",
+      "credential_offer_labels",
+      "pre_auth_code",
+      "expires_at"
+    ],
+    "source": "committed-transaction-snapshot",
+    "default_scheme": "openid-credential-offer://",
+    "wallet_variants": ["default", "credential-manager", "apple-wallet", "didcomm_v2"],
+    "wallet_display_name_becomes_label": true,
+    "didcomm": {
+      "http_without_holder": "pending-uri",
+      "http_delivery_failure": "sanitized-log-and-pending-uri",
+      "legacy_grpc": "openid-offer-only",
+      "native_rust_target": "same-delivery-semantics-as-http"
+    },
+    "pre_auth_code_visibility": "internal-only-gateway-removes-publicly"
+  },
+  "events": {
+    "grpc_created": "offer_created",
+    "grpc_recovered": "none",
+    "http_created": "none"
+  }
+}

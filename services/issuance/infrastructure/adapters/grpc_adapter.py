@@ -429,6 +429,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             credential_type = "org.iso.18013.5.1.mDL"
             credential_vct: str | None = None
             zk_predicate_claims: list[str] = []
+            selective_disclosure_claims: list[str] = []
             credential_payload_format = "w3c_vcdm_v2_sd_jwt"
             wallet_configs: list[dict] = []
             revocation_profile_id: str | None = None
@@ -464,6 +465,11 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         ISSUER_BASE_URL,
                     )
                     zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
+                    selective_disclosure_claims = (
+                        list(tmpl_resp.selective_disclosure_fields)
+                        if tmpl_resp.selective_disclosure_fields
+                        else []
+                    )
                     credential_payload_format = (
                         tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
                     )
@@ -517,6 +523,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                         ISSUER_BASE_URL,
                     )
                     zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
+                    selective_disclosure_claims = tmpl.get("selective_disclosure_fields") or []
                     credential_payload_format = (
                         tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
                     )
@@ -651,6 +658,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 delivery_mode=delivery_mode,
                 credential_type=credential_type,
                 zk_predicate_claims=zk_predicate_claims,
+                selective_disclosure_claims=selective_disclosure_claims,
                 credential_payload_format=credential_payload_format,
                 wallet_configs=wallet_configs,
                 revocation_profile_id=revocation_profile_id,
