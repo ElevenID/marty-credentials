@@ -26,9 +26,11 @@ from issuance.application.mip_integration_primitives import (  # noqa: E402
     canvas_lti_experience_handoff,
 )
 from issuance.domain.entities import (  # noqa: E402
+    ApplicationTemplate,
     CanvasLtiLaunchState,
     CanvasPlatform,
     CanvasProgramBinding,
+    EventType,
 )
 from issuance.infrastructure.adapters.memory_repository import (  # noqa: E402
     InMemoryIssuanceRepository,
@@ -311,9 +313,10 @@ def test_canvas_experience_exchange_metadata_replays_the_complete_contract() -> 
         session_created_at=vector["session_created_at"],
     )
 
-    assert hashlib.sha256(vector["session_token"].encode("utf-8")).hexdigest() == vector[
-        "expected_session_state"
-    ]
+    assert (
+        hashlib.sha256(vector["session_token"].encode("utf-8")).hexdigest()
+        == vector["expected_session_state"]
+    )
     assert session_metadata == vector["expected_session_metadata"]
     assert spent_code_metadata == vector["expected_spent_code_metadata"]
     assert vector["expected_response"] == {
@@ -421,9 +424,7 @@ def test_canvas_experience_current_session_bearer_failures_match_the_contract() 
         [(b"authorization", b"Bearer   ")],
     ]
     for values in headers:
-        request = Request(
-            {"type": "http", "method": "GET", "path": "/", "headers": values}
-        )
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": values})
         with pytest.raises(HTTPException) as rejected:
             canvas_routes._lti_session_bearer_token(request)
         assert (rejected.value.status_code, rejected.value.detail, rejected.value.headers) == (
@@ -431,6 +432,312 @@ def test_canvas_experience_current_session_bearer_failures_match_the_contract() 
             failure["detail"],
             failure["headers"],
         )
+
+
+def test_canvas_experience_bootstrap_identity_and_context_replay_the_contract() -> None:
+    policy = CONTRACT["experience"]["bootstrap"]
+    vector = policy["vector"]
+    request = canvas_routes.CanvasLtiApplicationBootstrapRequest.model_validate(vector["request"])
+
+    assert "ignored_extra" not in request.model_dump()
+    assert (
+        canvas_routes._lti_applicant_identifier(
+            verified_launch=vector["verified_launch"],
+            request=request,
+        )
+        == vector["expected_applicant_identifier"]
+    )
+    assert (
+        canvas_routes._lti_application_form_data(
+            verified_launch=vector["verified_launch"],
+            request=request,
+        )
+        == vector["expected_form_data"]
+    )
+    assert (
+        canvas_routes._lti_application_canvas_context(
+            session_values=vector["session_values"],
+            verified_launch=vector["verified_launch"],
+        )
+        == vector["expected_canvas_context"]
+    )
+    assert request.applicant_identifier not in {
+        vector["expected_applicant_identifier"],
+        vector["expected_form_data"].get("email"),
+    }
+    for protected in policy["new_application"]["caller_protected_fields"]:
+        assert vector["request"]["applicant_data"][protected] not in json.dumps(
+            {
+                "identifier": vector["expected_applicant_identifier"],
+                "form_data": vector["expected_form_data"],
+                "canvas_context": vector["expected_canvas_context"],
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_canvas_experience_bootstrap_create_and_exact_replay_match_the_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = CONTRACT["experience"]["bootstrap"]
+    vector = policy["vector"]
+    session_values = vector["session_values"]
+    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+
+    repo = InMemoryIssuanceRepository()
+    await repo.save_canvas_platform(
+        CanvasPlatform(
+            id=session_values["canvas_platform_id"],
+            organization_id="org-1",
+            canvas_account_id=session_values["canvas_account_id"],
+        )
+    )
+    await repo.save_application_template(
+        ApplicationTemplate(
+            id=session_values["application_template_id"],
+            organization_id="org-1",
+            credential_template_id=session_values["credential_template_id"],
+        )
+    )
+    await repo.save_canvas_program_binding(
+        CanvasProgramBinding(
+            id=session_values["canvas_program_binding_id"],
+            organization_id="org-1",
+            platform_id=session_values["canvas_platform_id"],
+            application_template_id=session_values["application_template_id"],
+            credential_template_id=session_values["credential_template_id"],
+            feature_flags={"enable_canvas_lti": True},
+        )
+    )
+    session_token = "bootstrap-session-token-contract-0123456789"
+    session_digest = hashlib.sha256(session_token.encode("utf-8")).hexdigest()
+    await repo.save_canvas_lti_launch_state(
+        CanvasLtiLaunchState(
+            id="bootstrap-session-id-1",
+            state=session_digest,
+            platform_id=session_values["canvas_platform_id"],
+            organization_id="org-1",
+            canvas_account_id=session_values["canvas_account_id"],
+            status="session",
+            expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+            metadata={
+                "kind": "canvas_lti_experience_session",
+                "launch_state": session_values["state"],
+                "launch_url": session_values["launch_url"],
+                "verified_launch": json.loads(json.dumps(vector["verified_launch"])),
+                "mip_primitives": {
+                    "context": {
+                        key: value
+                        for key, value in session_values.items()
+                        if key
+                        not in {
+                            "state",
+                            "canvas_account_id",
+                            "launch_url",
+                        }
+                    }
+                },
+            },
+        )
+    )
+    request = canvas_routes.CanvasLtiApplicationBootstrapRequest.model_validate(vector["request"])
+    first = await canvas_routes.bootstrap_canvas_lti_experience_application_route(
+        session_token,
+        request=request,
+        repo=repo,
+    )
+    second = await canvas_routes.bootstrap_canvas_lti_experience_application_route(
+        session_token,
+        request=request,
+        repo=repo,
+    )
+
+    async def unavailable_sync(**_kwargs):
+        raise canvas_routes.CanvasSyncServiceError("queue-unavailable", "unavailable")
+
+    monkeypatch.setattr(canvas_routes, "enqueue_application_canvas_sync", unavailable_sync)
+    third = await canvas_routes.bootstrap_canvas_lti_experience_application_route(
+        session_token,
+        request=request,
+        repo=repo,
+    )
+
+    assert first.created is True
+    assert second.created is False
+    assert second.application_id == first.application_id
+    assert third.created is False
+    assert third.application_id == first.application_id
+    applications = await repo.list_applications(
+        org_id="org-1",
+        template_id=session_values["application_template_id"],
+    )
+    assert len(applications) == 1
+    app = applications[0]
+    assert app.applicant_identifier == vector["expected_applicant_identifier"]
+    assert app.form_data == vector["expected_form_data"]
+    assert app.integration_context["canvas"] == vector["expected_canvas_context"]
+    assert app.integration_context["delivery_mode"] == session_values["delivery_mode"]
+    assert first.canvas_context == vector["expected_public_canvas_context"]
+    response = first.model_dump(mode="json")
+    for field in policy["response"]["private_fields_forbidden"]:
+        assert field not in response
+
+    stored_session = await repo.get_canvas_lti_launch_state(session_digest)
+    assert stored_session is not None
+    assert stored_session.metadata["verified_launch"]["application_id"] == app.id
+    assert stored_session.metadata["mip_primitives"]["context"]["application_id"] == app.id
+    assert stored_session.metadata["application_bootstrap"]["application_id"] == app.id
+    assert stored_session.metadata["application_bootstrap"]["created"] is False
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type for event in events] == [EventType.CANVAS_LTI_APPLICATION_BOOTSTRAPPED]
+    assert len(policy["ordered_stages"]) == 12
+
+
+@pytest.mark.asyncio
+async def test_canvas_experience_bootstrap_subject_binding_resume_matches_the_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = CONTRACT["experience"]["bootstrap"]
+    vector = policy["vector"]
+    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+    repo = InMemoryIssuanceRepository()
+    await repo.save_application_template(
+        ApplicationTemplate(id="application-template-1", organization_id="org-1")
+    )
+    request = canvas_routes.CanvasLtiApplicationBootstrapRequest.model_validate(vector["request"])
+    first_state = CanvasLtiLaunchState(
+        organization_id="org-1",
+        canvas_account_id="account-1",
+        metadata={},
+    )
+    first, created = await canvas_routes._find_or_create_lti_application(
+        repo=repo,
+        launch_state=first_state,
+        verified_launch=json.loads(json.dumps(vector["verified_launch"])),
+        mip_primitives={},
+        session_values=vector["session_values"],
+        request=request,
+    )
+    second_values = {**vector["session_values"], "state": "launch-state-2"}
+    resumed, resumed_created = await canvas_routes._find_or_create_lti_application(
+        repo=repo,
+        launch_state=CanvasLtiLaunchState(
+            organization_id="org-1",
+            canvas_account_id="account-1",
+            metadata={},
+        ),
+        verified_launch=json.loads(json.dumps(vector["verified_launch"])),
+        mip_primitives={},
+        session_values=second_values,
+        request=request,
+    )
+
+    assert created is True
+    assert resumed_created is False
+    assert resumed.id == first.id
+    canvas = resumed.integration_context["canvas"]
+    assert canvas["lti_state"] == vector["session_values"]["state"]
+    assert canvas["last_lti_state"] == second_values["state"]
+    assert canvas["lti_states"] == [vector["session_values"]["state"], second_values["state"]]
+    assert len(await repo.list_events_for_application(first.id)) == 1
+    assert policy["resume"]["subject_binding_terminal_statuses_excluded"] == [
+        "rejected",
+        "withdrawn",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_canvas_experience_bootstrap_feature_gate_matches_the_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = CONTRACT["experience"]["bootstrap"]
+    repo = InMemoryIssuanceRepository()
+    await repo.save_canvas_program_binding(
+        CanvasProgramBinding(
+            id="binding-disabled",
+            organization_id="org-1",
+            feature_flags={"enable_canvas_lti": False},
+        )
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await canvas_routes._require_lti_session_canvas_feature(
+            repo=repo,
+            session_values={"canvas_program_binding_id": "binding-disabled"},
+            flag=policy["feature_gate"]["flag"],
+            detail=policy["feature_gate"]["disabled_failure"]["detail"],
+        )
+    expected = policy["feature_gate"]["disabled_failure"]
+    assert (rejected.value.status_code, rejected.value.detail) == (
+        expected["status_code"],
+        expected["detail"],
+    )
+
+    monkeypatch.delenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", raising=False)
+    monkeypatch.delenv("CANVAS_PILOT_ORGANIZATION_IDS", raising=False)
+    with pytest.raises(HTTPException) as rejected:
+        canvas_routes._require_portable_canvas_pilot("org-1")
+    expected = policy["feature_gate"]["portable_pilot_failure"]
+    assert (rejected.value.status_code, rejected.value.detail) == (
+        expected["status_code"],
+        expected["detail"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_canvas_experience_bootstrap_template_failures_match_the_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = CONTRACT["experience"]["bootstrap"]
+    failures = {failure["name"]: failure for failure in policy["template"]["failures"]}
+    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+    monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
+    launch_state = CanvasLtiLaunchState(organization_id="org-1")
+
+    for name, session_values in [
+        ("missing-binding", {"state": "state-1"}),
+        (
+            "not-found",
+            {"state": "state-1", "application_template_id": "missing-template"},
+        ),
+    ]:
+        with pytest.raises(HTTPException) as rejected:
+            await canvas_routes._find_or_create_lti_application(
+                repo=InMemoryIssuanceRepository(),
+                launch_state=launch_state,
+                verified_launch={},
+                mip_primitives={},
+                session_values=session_values,
+                request=canvas_routes.CanvasLtiApplicationBootstrapRequest(),
+            )
+        expected = failures[name]
+        assert (rejected.value.status_code, rejected.value.detail) == (
+            expected["status_code"],
+            expected["detail"],
+        )
+
+    cross_tenant_repo = InMemoryIssuanceRepository()
+    await cross_tenant_repo.save_application_template(
+        ApplicationTemplate(id="cross-template", organization_id="org-2")
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await canvas_routes._find_or_create_lti_application(
+            repo=cross_tenant_repo,
+            launch_state=launch_state,
+            verified_launch={},
+            mip_primitives={},
+            session_values={
+                "state": "state-1",
+                "application_template_id": "cross-template",
+            },
+            request=canvas_routes.CanvasLtiApplicationBootstrapRequest(),
+        )
+    expected = failures["cross-organization"]
+    assert (rejected.value.status_code, rejected.value.detail) == (
+        expected["status_code"],
+        expected["detail"],
+    )
 
 
 def test_canvas_experience_callback_handoff_replays_the_contract() -> None:
