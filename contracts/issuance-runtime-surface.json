@@ -740,7 +740,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7000,
+        "line": 6978,
         "method": "GET",
         "operation": "get_canvas_lti_experience_session_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current",
@@ -748,7 +748,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7047,
+        "line": 7025,
         "method": "POST",
         "operation": "bootstrap_canvas_lti_experience_application_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
@@ -756,7 +756,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7109,
+        "line": 7087,
         "method": "POST",
         "operation": "create_canvas_lti_deep_linking_response_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
@@ -780,7 +780,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6944,
+        "line": 6922,
         "method": "POST",
         "operation": "exchange_canvas_lti_experience_code_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
