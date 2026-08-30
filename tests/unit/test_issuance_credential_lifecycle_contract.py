@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import grpc
 import pytest
+from fastapi import HTTPException
 from issuance.domain.entities import CredentialStatus
 from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
 from issuance.infrastructure.api import routes
@@ -188,6 +189,35 @@ async def test_grpc_mutation_fails_closed_before_local_state_or_event(monkeypatc
     assert context.details == "revocation publication unavailable"
     assert issued.status == CredentialStatus.ACTIVE
     assert calls == ["publish-revocation-profile-status"]
+
+
+@pytest.mark.asyncio
+async def test_http_wrong_organization_is_hidden_before_mutation() -> None:
+    calls: list[str] = []
+    issued = credential()
+    repo = RecordingRepository(issued, calls)
+    wrong_organization = SimpleNamespace(headers={"X-Organization-ID": "org-other"})
+
+    with pytest.raises(HTTPException) as read_error:
+        await routes.get_credential_status(
+            issued.id,
+            http_request=wrong_organization,
+            repo=repo,
+        )
+    assert read_error.value.status_code == 404
+    assert read_error.value.detail == "Resource not found"
+
+    with pytest.raises(HTTPException) as mutation_error:
+        await routes.revoke_credential(
+            issued.id,
+            routes.CredentialStatusRequest(reason="review"),
+            repo,
+            http_request=wrong_organization,
+        )
+    assert mutation_error.value.status_code == 404
+    assert mutation_error.value.detail == "Resource not found"
+    assert issued.status == CredentialStatus.ACTIVE
+    assert calls == []
 
 
 @pytest.mark.asyncio
