@@ -3447,12 +3447,14 @@ dependencies = [
  "console_error_panic_hook",
  "coset 0.3.8",
  "coset 0.4.2",
+ "der 0.7.10",
  "der 0.8.1",
  "ed25519-dalek 3.0.0",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
  "isomdl",
  "js-sys",
+ "jsonwebtoken 10.4.0",
  "jsonwebtoken 11.0.0",
  "marty-crypto",
  "marty-oid4vci",
@@ -3482,6 +3484,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
+ "x509-cert 0.2.5",
  "x509-cert 0.3.0",
 ]
 

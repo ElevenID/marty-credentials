@@ -27,6 +27,7 @@ native = [
     "dep:marty-oid4vci",
     "sd-jwt-rs",
     "jsonwebtoken",
+    "dep:jsonwebtoken-legacy",
     "p256",
     "sha2",
 ]
@@ -50,6 +51,7 @@ python = [
     "ciborium",
     "sd-jwt-rs",
     "jsonwebtoken",
+    "dep:jsonwebtoken-legacy",
     "p256",
     "ed25519-dalek",
     "sha2"
@@ -114,6 +116,9 @@ pem-rfc7468 = { workspace = true, optional = false }
 # SD-JWT support
 sd-jwt-rs = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
+# sd-jwt-rs is still pinned to jsonwebtoken 10. Keep that boundary explicit
+# while the workspace-facing dependency advances independently to 11.
+jsonwebtoken-legacy = { package = "jsonwebtoken", version = "10.4", features = ["rust_crypto"], optional = true }
 
 # Crypto for signatures
 p256 = { version = "0.14", features = ["ecdsa", "pkcs8"], optional = true }
@@ -135,10 +140,14 @@ wasm-bindgen-test = "0.3"
 ciborium = { workspace = true }
 coset-isomdl = { package = "coset", version = "=0.3.8" }
 der = "0.8"
+# The pinned marty-verification boundary still exposes x509-cert 0.2 types.
+# Keep the round-trip test explicit until that shared boundary moves to 0.3.
+der-legacy = { package = "der", version = "0.7" }
 isomdl = { workspace = true }
 sha2 = "0.11"
 time = { workspace = true }
 x509-cert = "0.3"
+x509-cert-legacy = { package = "x509-cert", version = "0.2" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # UUID 1.24 uses getrandom 0.4, which requires an explicit browser backend.
