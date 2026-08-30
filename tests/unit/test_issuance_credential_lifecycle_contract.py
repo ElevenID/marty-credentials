@@ -102,14 +102,28 @@ def test_contract_freezes_cross_transport_state_and_failure_policy() -> None:
 
 
 @pytest.mark.asyncio
-async def test_grpc_mutation_reuses_canonical_handler_in_contract_order(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("initial_status", "method", "expected_status", "expected_event"),
+    [
+        (CredentialStatus.ACTIVE, "RevokeCredential", "revoked", "revoked"),
+        (CredentialStatus.ACTIVE, "SuspendCredential", "suspended", "suspended"),
+        (CredentialStatus.SUSPENDED, "ReinstateCredential", "active", "reinstated"),
+    ],
+)
+async def test_grpc_mutations_reuse_canonical_handler_in_contract_order(
+    monkeypatch,
+    initial_status: CredentialStatus,
+    method: str,
+    expected_status: str,
+    expected_event: str,
+) -> None:
     calls: list[str] = []
-    issued = credential()
+    issued = credential(status=initial_status)
     repo = RecordingRepository(issued, calls)
     service = IssuanceServiceGrpc(lambda: repo)
 
     async def publish_status(**_kwargs) -> dict:
-        assert issued.status == CredentialStatus.ACTIVE
+        assert issued.status == initial_status
         calls.append("publish-revocation-profile-status")
         return {"success": True}
 
@@ -117,15 +131,15 @@ async def test_grpc_mutation_reuses_canonical_handler_in_contract_order(monkeypa
         calls.append("synchronize-canvas-delivery-records")
         return []
 
-    async def emit(_event_type: str, **_kwargs) -> None:
-        calls.append("emit-grpc-stream-event")
+    async def emit(event_type: str, **_kwargs) -> None:
+        calls.append(f"emit-grpc-stream-event:{event_type}")
 
     monkeypatch.setattr(routes, "_delegate_to_revocation_profile", publish_status)
     monkeypatch.setattr(routes, "_sync_canvas_lifecycle_delivery_records", synchronize)
     monkeypatch.setattr(service, "_emit_credential_event", emit)
 
     context = RecordingContext()
-    response = await service.RevokeCredential(
+    response = await getattr(service, method)(
         pb2.CredentialLifecycleRequest(
             credential_id=issued.id,
             reason="policy violation",
@@ -135,14 +149,14 @@ async def test_grpc_mutation_reuses_canonical_handler_in_contract_order(monkeypa
 
     assert context.code is None
     assert response.id == issued.id
-    assert response.status == "revoked"
+    assert response.status == expected_status
     assert response.reason == "policy violation"
-    assert issued.status == CredentialStatus.REVOKED
+    assert issued.status.value == expected_status
     assert calls == [
         "publish-revocation-profile-status",
         "persist-local-status",
         "synchronize-canvas-delivery-records",
-        "emit-grpc-stream-event",
+        f"emit-grpc-stream-event:{expected_event}",
     ]
 
 
