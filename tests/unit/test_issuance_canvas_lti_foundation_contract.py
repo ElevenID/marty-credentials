@@ -326,6 +326,113 @@ def test_canvas_experience_exchange_metadata_replays_the_complete_contract() -> 
     assert len(policy["ordered_stages"]) == 11
 
 
+@pytest.mark.asyncio
+async def test_canvas_experience_current_session_replays_the_complete_contract() -> None:
+    policy = CONTRACT["experience"]["session_current"]
+    vector = policy["vector"]
+    stored = vector["stored_session"]
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/v1/integrations/canvas/lti/experience-sessions/current",
+            "headers": [(b"authorization", vector["authorization"].encode("ascii"))],
+        }
+    )
+    token = canvas_routes._lti_session_bearer_token(request)
+    assert token == vector["normalized_token"]
+    assert hashlib.sha256(token.encode("utf-8")).hexdigest() == vector["expected_state_digest"]
+
+    repo = InMemoryIssuanceRepository()
+    session = CanvasLtiLaunchState(
+        id=stored["id"],
+        state=vector["expected_state_digest"],
+        platform_id=stored["platform_id"],
+        organization_id=stored["organization_id"],
+        canvas_account_id=stored["canvas_account_id"],
+        status=stored["status"],
+        metadata=stored["metadata"],
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    await repo.save_canvas_lti_launch_state(session)
+    response = await canvas_routes.get_canvas_lti_experience_session_route(token, repo=repo)
+
+    assert response.model_dump(mode="json") == vector["expected_response"]
+    assert response.learner_key == vector["expected_learner_key"]
+    assert await repo.get_canvas_lti_launch_state(token) is None
+    for field in policy["browser_safe"]["private_response_fields_forbidden"]:
+        assert field not in response.model_dump(mode="json")
+
+    missing = policy["lookup"]["failure"]
+    with pytest.raises(HTTPException) as unknown:
+        await canvas_routes.get_canvas_lti_experience_session_route("unknown-token", repo=repo)
+    assert (unknown.value.status_code, unknown.value.detail) == (
+        missing["status_code"],
+        missing["detail"],
+    )
+
+    invalid_conditions = policy["lookup"]["required"][1:]
+    for condition in invalid_conditions:
+        invalid_repo = InMemoryIssuanceRepository()
+        invalid_token = f"invalid-session-token-{condition}"
+        metadata = json.loads(json.dumps(stored["metadata"]))
+        status = "session"
+        expires_at = datetime(2099, 1, 1, tzinfo=UTC)
+        if condition == "status-session":
+            status = "pending"
+        elif condition == "unexpired":
+            expires_at = datetime(2000, 1, 1, tzinfo=UTC)
+        elif condition == "kind-canvas-lti-experience-session":
+            metadata["kind"] = "canvas_lti_experience_code"
+        elif condition == "verified-launch-object":
+            metadata["verified_launch"] = []
+        elif condition == "mip-primitives-object":
+            metadata["mip_primitives"] = None
+        else:  # pragma: no cover - contract additions must add an explicit mutation
+            raise AssertionError(f"unhandled session condition: {condition}")
+        await invalid_repo.save_canvas_lti_launch_state(
+            CanvasLtiLaunchState(
+                state=hashlib.sha256(invalid_token.encode("utf-8")).hexdigest(),
+                platform_id=stored["platform_id"],
+                organization_id=stored["organization_id"],
+                canvas_account_id=stored["canvas_account_id"],
+                status=status,
+                metadata=metadata,
+                expires_at=expires_at,
+            )
+        )
+        with pytest.raises(HTTPException) as invalid:
+            await canvas_routes.get_canvas_lti_experience_session_route(
+                invalid_token,
+                repo=invalid_repo,
+            )
+        assert (invalid.value.status_code, invalid.value.detail) == (
+            missing["status_code"],
+            missing["detail"],
+        )
+
+
+def test_canvas_experience_current_session_bearer_failures_match_the_contract() -> None:
+    failure = CONTRACT["experience"]["session_current"]["authentication"]["failure"]
+    headers = [
+        [],
+        [(b"authorization", b"Bearer")],
+        [(b"authorization", b"Basic token")],
+        [(b"authorization", b"Bearer   ")],
+    ]
+    for values in headers:
+        request = Request(
+            {"type": "http", "method": "GET", "path": "/", "headers": values}
+        )
+        with pytest.raises(HTTPException) as rejected:
+            canvas_routes._lti_session_bearer_token(request)
+        assert (rejected.value.status_code, rejected.value.detail, rejected.value.headers) == (
+            failure["status_code"],
+            failure["detail"],
+            failure["headers"],
+        )
+
+
 def test_canvas_experience_callback_handoff_replays_the_contract() -> None:
     policy = CONTRACT["experience"]["callback"]
     vector = policy["handoff_vector"]
