@@ -8,6 +8,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -20,6 +21,9 @@ if str(SERVICES) not in sys.path:
     sys.path.insert(0, str(SERVICES))
 
 from issuance.application.canvas_lti_services import canvas_lti_trust_profile  # noqa: E402
+from issuance.application.mip_integration_primitives import (  # noqa: E402
+    canvas_lti_experience_handoff,
+)
 from issuance.domain.entities import (  # noqa: E402
     CanvasLtiLaunchState,
     CanvasPlatform,
@@ -276,6 +280,30 @@ async def test_canvas_experience_exchange_replays_the_contract() -> None:
         invalid["status_code"],
         invalid["detail"],
     )
+
+
+def test_canvas_experience_callback_handoff_replays_the_contract() -> None:
+    policy = CONTRACT["experience"]["callback"]
+    vector = policy["handoff_vector"]
+    code_metadata, consumed_metadata = canvas_lti_experience_handoff(
+        SimpleNamespace(**vector["platform"]),
+        launch_state=vector["launch_state"],
+        verified_launch=vector["verified_launch"],
+        launch_url=vector["launch_url"],
+        existing_launch_metadata=vector["existing_launch_metadata"],
+        experience_code_id=vector["experience_code_id"],
+        experience_code_expires_at=vector["experience_code_expires_at"],
+    )
+
+    assert code_metadata == {
+        "kind": policy["code_record"]["metadata_kind"],
+        "launch_state": vector["launch_state"],
+        "verified_launch": vector["verified_launch"],
+        "mip_primitives": vector["expected_mip_primitives"],
+        "launch_url": vector["launch_url"],
+    }
+    assert consumed_metadata == vector["expected_consumed_state_metadata"]
+    assert policy["redirect_only_after_both_persistence_writes"] is True
 
 
 def test_canvas_lti_security_and_lifetime_constants_are_frozen(

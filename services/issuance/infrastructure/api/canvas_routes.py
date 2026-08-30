@@ -91,7 +91,7 @@ from issuance.application.canvas_sync_service import (
     validate_canvas_sync_target,
 )
 from issuance.application.mip_integration_primitives import (
-    canvas_lti_launch_to_mip_experience,
+    canvas_lti_experience_handoff,
 )
 from issuance.application.rust_integration import (
     verify_canvas_lti_launch,
@@ -6905,38 +6905,16 @@ async def launch_canvas_lti_experience_route(
         + timedelta(seconds=max(1, CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS)),
     )
     launch_url = _lti_experience_url(experience_code.state)
-    mip_experience = canvas_lti_launch_to_mip_experience(
+    experience_code.metadata, consumed_state.metadata = canvas_lti_experience_handoff(
         platform,
-        state=consumed_state.state,
+        launch_state=consumed_state.state,
         verified_launch=verified_response.model_dump(),
         launch_url=launch_url,
+        existing_launch_metadata=consumed_state.metadata,
+        experience_code_id=experience_code.id,
+        experience_code_expires_at=experience_code.expires_at.isoformat(),
     )
-    mip_primitives = mip_experience.to_dict()
-    mip_primitives["context"] = {
-        **(mip_primitives.get("context") or {}),
-        "canvas_platform_id": verified_response.canvas_platform_id,
-        "canvas_program_binding_id": verified_response.canvas_program_binding_id,
-        "application_template_id": verified_response.application_template_id,
-        "credential_template_id": verified_response.credential_template_id,
-        "delivery_mode": verified_response.delivery_mode,
-        "deployment_profile_id": verified_response.deployment_profile_id,
-        "feature_flags": verified_response.feature_flags,
-        "evidence_requirements": verified_response.evidence_requirements,
-        "lti_capabilities": verified_response.lti_capabilities,
-    }
-    experience_code.metadata = {
-        "kind": "canvas_lti_experience_code",
-        "launch_state": consumed_state.state,
-        "verified_launch": verified_response.model_dump(),
-        "mip_primitives": mip_primitives,
-        "launch_url": launch_url,
-    }
     await repo.save_canvas_lti_launch_state(experience_code)
-    consumed_state.metadata = {
-        **(consumed_state.metadata or {}),
-        "experience_code_id": experience_code.id,
-        "experience_code_expires_at": experience_code.expires_at.isoformat(),
-    }
     await repo.save_canvas_lti_launch_state(consumed_state)
     return RedirectResponse(launch_url, status_code=status.HTTP_303_SEE_OTHER)
 

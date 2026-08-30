@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-
 MIP_PROVIDER_CANVAS = "canvas"
 
 MIP_ACTION_CREDENTIALS_ISSUE = "credentials:issue"
@@ -207,3 +206,48 @@ def canvas_lti_launch_to_mip_experience(
             "lti_capabilities": verified_launch.get("lti_capabilities") or {},
         },
     )
+
+
+def canvas_lti_experience_handoff(
+    platform: Any,
+    *,
+    launch_state: str,
+    verified_launch: dict[str, Any],
+    launch_url: str,
+    existing_launch_metadata: dict[str, Any] | None,
+    experience_code_id: str,
+    experience_code_expires_at: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project the durable code and launch-state metadata for one LTI handoff."""
+
+    mip_primitives = canvas_lti_launch_to_mip_experience(
+        platform,
+        state=launch_state,
+        verified_launch=verified_launch,
+        launch_url=launch_url,
+    ).to_dict()
+    mip_primitives["context"] = {
+        **(mip_primitives.get("context") or {}),
+        "canvas_platform_id": verified_launch.get("canvas_platform_id"),
+        "canvas_program_binding_id": verified_launch.get("canvas_program_binding_id"),
+        "application_template_id": verified_launch.get("application_template_id"),
+        "credential_template_id": verified_launch.get("credential_template_id"),
+        "delivery_mode": verified_launch.get("delivery_mode"),
+        "deployment_profile_id": verified_launch.get("deployment_profile_id"),
+        "feature_flags": verified_launch.get("feature_flags") or {},
+        "evidence_requirements": verified_launch.get("evidence_requirements") or [],
+        "lti_capabilities": verified_launch.get("lti_capabilities") or {},
+    }
+    code_metadata = {
+        "kind": "canvas_lti_experience_code",
+        "launch_state": launch_state,
+        "verified_launch": verified_launch,
+        "mip_primitives": mip_primitives,
+        "launch_url": launch_url,
+    }
+    consumed_state_metadata = {
+        **(existing_launch_metadata or {}),
+        "experience_code_id": experience_code_id,
+        "experience_code_expires_at": experience_code_expires_at,
+    }
+    return code_metadata, consumed_state_metadata
