@@ -13,12 +13,13 @@ import hashlib
 import json
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
 import grpc
 import httpx
+from fastapi import HTTPException
 from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.issuance_idempotency import (
     canonical_issuance_request,
@@ -48,9 +49,6 @@ from marty_proto.v1 import (
 
 logger = logging.getLogger(__name__)
 
-REVOCATION_PROFILE_SERVICE_URL = os.environ.get(
-    "REVOCATION_PROFILE_SERVICE_URL", "http://localhost:8013"
-)
 CREDENTIAL_TEMPLATE_SERVICE_URL = os.environ.get(
     "CREDENTIAL_TEMPLATE_SERVICE_URL", "http://localhost:8003"
 )
@@ -102,19 +100,6 @@ def _key_purpose_for_credential_format(credential_format: str) -> str:
     if credential_format == "vds_nc":
         return "vdsnc_signing"
     return "vc_jwt_issuer"
-
-
-def _revocation_index_from_credential(credential: Any) -> int | None:
-    for entry in getattr(credential, "status_list_entries", None) or []:
-        if not isinstance(entry, dict):
-            continue
-        purpose = str(entry.get("status_purpose") or entry.get("statusPurpose") or "revocation")
-        if purpose != "revocation":
-            continue
-        index = entry.get("index")
-        if index is not None:
-            return int(index)
-    return None
 
 
 async def _resolve_remote_signing_context_for_tx(
@@ -1117,7 +1102,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 return pb2.IssueCredentialResponse()
 
             response_format = fmt or signing_format or "vc+sd-jwt"
-            issued_at = datetime.now(timezone.utc)
+            issued_at = datetime.now(UTC)
             expires_at = issued_at + timedelta(days=365)
             issued_credential = IssuedCredential(
                 id=credential_id,
@@ -1272,106 +1257,28 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
     # Credential Lifecycle: Revoke / Suspend / Reinstate / GetStatus
     # ------------------------------------------------------------------ #
 
-    async def _credential_lifecycle(self, credential_id: str, action: str, reason: str, context):
-        """Shared logic for revoke/suspend/reinstate."""
-        from issuance.domain.entities import CredentialStatus
+    async def _credential_lifecycle(self, credential_id: str, action: str, reason: str):
+        """Run the canonical HTTP lifecycle handler for a gRPC mutation."""
+        from issuance.infrastructure.api import routes as issuance_routes
 
+        handlers = {
+            "revoke": issuance_routes.revoke_credential,
+            "suspend": issuance_routes.suspend_credential,
+            "reinstate": issuance_routes.reinstate_credential,
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            raise ValueError(f"Unsupported credential lifecycle action: {action}")
         repo = self._get_repo()
+        response = await handler(
+            credential_id,
+            issuance_routes.CredentialStatusRequest(reason=reason or None),
+            repo,
+            http_request=None,
+        )
         cred = await repo.get_credential(credential_id)
-        if not cred:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details("Credential not found")
-            return pb2.CredentialStatusResponse()
-
-        if action == "revoke":
-            if cred.status == CredentialStatus.REVOKED:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details("Credential already revoked")
-                return pb2.CredentialStatusResponse()
-            cred.status = CredentialStatus.REVOKED
-            cred.revoked = True
-            cred.revoked_at = datetime.now(timezone.utc)
-            cred.revocation_reason = reason or None
-
-        elif action == "suspend":
-            if cred.status == CredentialStatus.REVOKED:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details("Cannot suspend revoked credential")
-                return pb2.CredentialStatusResponse()
-            cred.status = CredentialStatus.SUSPENDED
-
-        elif action == "reinstate":
-            if cred.status == CredentialStatus.REVOKED:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details("Cannot reinstate revoked credential")
-                return pb2.CredentialStatusResponse()
-            if cred.status != CredentialStatus.SUSPENDED:
-                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-                context.set_details("Only suspended credentials can be reinstated")
-                return pb2.CredentialStatusResponse()
-            cred.status = CredentialStatus.ACTIVE
-
-        cred.status_updated_at = datetime.now(timezone.utc)
-        await repo.save_credential(cred)
-
-        # Best-effort delegation to RevocationProfile service
-        # Map action to status for RevocationProfile contract
-        action_to_status = {"revoke": "revoked", "suspend": "suspended", "reinstate": "reinstated"}
-        revocation_status = action_to_status.get(action, action)
-        revocation_profile_id = getattr(cred, "revocation_profile_id", None)
-        status_list_index = _revocation_index_from_credential(cred)
-        try:
-            if not revocation_profile_id or status_list_index is None:
-                raise RuntimeError(
-                    "credential has no Revocation Profile and allocated status-list entry"
-                )
-            from marty_proto.v1 import revocation_profile_service_pb2 as rp_pb2
-            from marty_proto.v1 import revocation_profile_service_pb2_grpc as rp_grpc
-
-            rp_grpc_target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
-            async with create_service_channel(rp_grpc_target) as channel:
-                rp_stub = rp_grpc.RevocationProfileServiceStub(channel)
-                resp = await rp_stub.ProcessRevocation(
-                    rp_pb2.ProcessRevocationRequest(
-                        profile_id=revocation_profile_id,
-                        organization_id=cred.organization_id,
-                        credential_id=credential_id,
-                        index=status_list_index,
-                        status=revocation_status,
-                        reason=reason or "",
-                        credential_format="sd_jwt",
-                    )
-                )
-            if not resp.success:
-                logger.warning(f"RevocationProfile gRPC returned error for {action}: {resp.error}")
-        except Exception as e:
-            logger.warning(f"RevocationProfile gRPC failed for {action}, falling back to HTTP: {e}")
-            if not revocation_profile_id or status_list_index is None:
-                logger.warning(
-                    "Skipping RevocationProfile HTTP fallback because credential has no bound profile and status-list entry"
-                )
-                status_list_index = -1
-            try:
-                import httpx
-
-                if status_list_index >= 0:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        await client.post(
-                            f"{REVOCATION_PROFILE_SERVICE_URL}/internal/revocation-profiles/{revocation_profile_id}/process-revocation",
-                            json={
-                                "organization_id": cred.organization_id,
-                                "credential_id": credential_id,
-                                "index": status_list_index,
-                                "status": revocation_status,
-                                "credential_format": "sd_jwt",
-                                "reason": reason or None,
-                            },
-                            headers=service_token_headers(),
-                        )
-            except Exception as http_e:
-                logger.warning(f"RevocationProfile HTTP also unavailable for {action}: {http_e}")
-
-        logger.info(f"{action.title()}d credential {credential_id}: {reason}")
+        if cred is None:
+            raise RuntimeError("Credential disappeared after lifecycle mutation")
 
         # Emit lifecycle event to stream subscribers
         event_type_map = {"revoke": "revoked", "suspend": "suspended", "reinstate": "reinstated"}
@@ -1386,44 +1293,44 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
         )
 
         return pb2.CredentialStatusResponse(
-            id=cred.id,
-            status=cred.status.value,
-            status_updated_at=cred.status_updated_at.isoformat(),
-            reason=reason or "",
+            id=response["id"],
+            status=response["status"],
+            status_updated_at=response["status_updated_at"],
+            reason=response.get("reason") or "",
         )
 
-    async def RevokeCredential(self, request, context):
+    async def _run_credential_lifecycle_rpc(self, request, context, action: str):
         try:
             return await self._credential_lifecycle(
-                request.credential_id, "revoke", request.reason, context
+                request.credential_id,
+                action,
+                request.reason,
             )
+        except HTTPException as exc:
+            code = {
+                400: grpc.StatusCode.FAILED_PRECONDITION,
+                403: grpc.StatusCode.PERMISSION_DENIED,
+                404: grpc.StatusCode.NOT_FOUND,
+                409: grpc.StatusCode.FAILED_PRECONDITION,
+                422: grpc.StatusCode.INVALID_ARGUMENT,
+            }.get(exc.status_code, grpc.StatusCode.INTERNAL)
+            context.set_code(code)
+            context.set_details(str(exc.detail))
+            return pb2.CredentialStatusResponse()
         except Exception as exc:
-            logger.exception("RevokeCredential failed")
+            logger.exception("%s credential failed", action.title())
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))
             return pb2.CredentialStatusResponse()
+
+    async def RevokeCredential(self, request, context):
+        return await self._run_credential_lifecycle_rpc(request, context, "revoke")
 
     async def SuspendCredential(self, request, context):
-        try:
-            return await self._credential_lifecycle(
-                request.credential_id, "suspend", request.reason, context
-            )
-        except Exception as exc:
-            logger.exception("SuspendCredential failed")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(exc))
-            return pb2.CredentialStatusResponse()
+        return await self._run_credential_lifecycle_rpc(request, context, "suspend")
 
     async def ReinstateCredential(self, request, context):
-        try:
-            return await self._credential_lifecycle(
-                request.credential_id, "reinstate", request.reason, context
-            )
-        except Exception as exc:
-            logger.exception("ReinstateCredential failed")
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(str(exc))
-            return pb2.CredentialStatusResponse()
+        return await self._run_credential_lifecycle_rpc(request, context, "reinstate")
 
     async def GetCredentialStatus(self, request, context):
         """Get credential status."""
@@ -1467,7 +1374,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
             organization_id=organization_id,
             credential_template_id=credential_template_id,
             status=status,
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
         )
         stale: list[str] = []
         for sub_id, q in self._stream_queues.items():
@@ -1504,7 +1411,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     if request.event_types and event.event_type not in list(request.event_types):
                         continue
                     yield event
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     continue
         finally:
             self._stream_queues.pop(sub_id, None)
