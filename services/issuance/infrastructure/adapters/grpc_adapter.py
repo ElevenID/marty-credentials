@@ -67,6 +67,8 @@ _SD_JWT_PAYLOAD_FORMATS = {
     "dc+sd-jwt",
 }
 
+_GRPC_SIGNING_CLAIM_CONFLICT = "Credential signing has already been claimed for this transaction"
+
 
 async def _fetch_credential_template_http(template_id: str) -> httpx.Response:
     """Fetch a template over the authenticated internal HTTP fallback."""
@@ -163,6 +165,7 @@ async def _resolve_remote_signing_context_for_tx(
 async def _create_remote_signed_sd_jwt_for_tx(
     tx: Any,
     *,
+    issuer_context: dict[str, Any],
     credential_id: str,
     subject_id: str | None,
     holder_jwk: dict[str, Any] | None = None,
@@ -171,17 +174,12 @@ async def _create_remote_signed_sd_jwt_for_tx(
     credential_format: str,
     selective_disclosure_claims: list[str] | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
-    """Create an SD-JWT credential through the org-scoped issuer profile and DID."""
+    """Create an SD-JWT with the exact issuer context admitted before the signing claim."""
     from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
     from issuance.infrastructure.api.signing_context import sign_payload_with_issuer_did
 
-    remote_context = await _resolve_remote_signing_context_for_tx(
-        tx, credential_format=credential_format
-    )
     algorithm = str(tx.issuer_algorithm)
-    verification_method_id = (
-        remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
-    )
+    verification_method_id = issuer_context.get("verification_method_id")
 
     async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
         if algorithm_hint and algorithm_hint != algorithm:
@@ -209,11 +207,11 @@ async def _create_remote_signed_sd_jwt_for_tx(
         verification_method_id=verification_method_id,
         credential_format=credential_format,
         credential_id=credential_id,
-        issuer_certificate_chain=(remote_context.get("issuer_x5c")),
+        issuer_certificate_chain=issuer_context.get("issuer_x5c"),
     )
     if signed_credential_id != credential_id:
         raise RuntimeError("gRPC credential builder changed the stable credential ID")
-    return credential, credential_id, remote_context
+    return credential, credential_id, issuer_context
 
 
 def _tx_to_pb(tx: Any) -> pb2.TransactionResponse:
@@ -511,9 +509,7 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     logger.warning(f"gRPC template fetch failed, falling back to HTTP: {e}")
                     # HTTP fallback
                     try:
-                        resp = await _fetch_credential_template_http(
-                            request.credential_template_id
-                        )
+                        resp = await _fetch_credential_template_http(request.credential_template_id)
                         if resp.status_code == 404:
                             context.set_code(grpc.StatusCode.NOT_FOUND)
                             context.set_details(
@@ -1080,10 +1076,23 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 )
                 return pb2.IssueCredentialResponse()
 
+            credential_id = stable_issuance_credential_id(tx.id)
+            signing_tx = await repo.claim_transaction_for_signing(tx, credential_id)
+            if signing_tx is None:
+                # A request that observed AUTHORIZED before another request won
+                # the repository CAS is always a signing-admission loser. Keep
+                # its response independent of whether the winner is still
+                # signing or has already committed by the time this coroutine
+                # resumes.
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(_GRPC_SIGNING_CLAIM_CONFLICT)
+                return pb2.IssueCredentialResponse()
+            tx = signing_tx
+
             try:
-                credential_id = stable_issuance_credential_id(tx.id)
                 jwt_credential, credential_id, _ = await _create_remote_signed_sd_jwt_for_tx(
                     tx,
+                    issuer_context=issuer_context,
                     credential_id=credential_id,
                     subject_id=holder_did or tx.subject_did,
                     holder_jwk=holder_jwk,
@@ -1093,6 +1102,10 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                     selective_disclosure_claims=tx.selective_disclosure_claims or [],
                 )
             except Exception as signing_err:  # noqa: BLE001
+                current_tx = await repo.get_transaction(tx.id)
+                if current_tx is not None and current_tx.status == IssuanceStatus.SIGNING:
+                    current_tx.fail(str(signing_err))
+                    await repo.save_transaction(current_tx)
                 logger.error(
                     "gRPC DID-backed signing failed for tx=%s org=%s: %s",
                     tx.id,
@@ -1104,64 +1117,55 @@ class IssuanceServiceGrpc(issuance_service_pb2_grpc.IssuanceServiceServicer):
                 return pb2.IssueCredentialResponse()
 
             response_format = fmt or signing_format or "vc+sd-jwt"
-            if tx.status == IssuanceStatus.AUTHORIZED:
-                issued_at = datetime.now(timezone.utc)
-                expires_at = issued_at + timedelta(days=365)
-                issued_credential = IssuedCredential(
-                    id=credential_id,
+            issued_at = datetime.now(timezone.utc)
+            expires_at = issued_at + timedelta(days=365)
+            issued_credential = IssuedCredential(
+                id=credential_id,
+                transaction_id=tx.id,
+                organization_id=tx.organization_id,
+                credential_template_id=tx.credential_template_id,
+                applicant_id=tx.applicant_id,
+                subject_did=holder_did or tx.subject_did,
+                issuer_did=tx.issuer_did_override,
+                credential_jwt=jwt_credential,
+                credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
+                status=CredentialStatus.ACTIVE,
+                issued_at=issued_at,
+                expires_at=expires_at,
+            )
+            await repo.finalize_credential_issuance(tx, issued_credential)
+            tx.nonce = None
+            tx.status = IssuanceStatus.ISSUED
+            tx.issued_at = issued_at
+            await repo.save_event(
+                IssuanceEvent(
                     transaction_id=tx.id,
-                    organization_id=tx.organization_id,
-                    credential_template_id=tx.credential_template_id,
-                    applicant_id=tx.applicant_id,
-                    subject_did=holder_did or tx.subject_did,
-                    issuer_did=tx.issuer_did_override,
-                    credential_jwt=jwt_credential,
-                    credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
-                    status=CredentialStatus.ACTIVE,
-                    issued_at=issued_at,
-                    expires_at=expires_at,
+                    application_id=tx.application_id,
+                    event_type=EventType.CREDENTIAL_ISSUED,
+                    metadata={
+                        "credential_id": credential_id,
+                        "credential_type": credential_type,
+                    },
                 )
-                created = await repo.finalize_direct_credential_issuance(tx, issued_credential)
-                if created:
-                    tx.nonce = None
-                    tx.status = IssuanceStatus.ISSUED
-                    tx.issued_at = issued_at
-                    await repo.save_event(
-                        IssuanceEvent(
-                            transaction_id=tx.id,
-                            application_id=tx.application_id,
-                            event_type=EventType.CREDENTIAL_ISSUED,
-                            metadata={
-                                "credential_id": credential_id,
-                                "credential_type": credential_type,
-                            },
-                        )
-                    )
-                    await record_post_issuance_deliveries(
-                        repo,
-                        tx,
-                        issued_credential,
-                        delivered_target=DeliveryTarget.WALLET,
-                        delivery_metadata={
-                            "protocol": "grpc",
-                            "requested_format": response_format,
-                        },
-                    )
-                    await self._emit_credential_event(
-                        "issued",
-                        credential_id=credential_id,
-                        transaction_id=tx.id,
-                        organization_id=tx.organization_id,
-                        credential_template_id=tx.credential_template_id or "",
-                        status="issued",
-                    )
-                else:
-                    canonical = await repo.get_credential_by_transaction_id(tx.id)
-                    if canonical is None or canonical.id != credential_id:
-                        raise RuntimeError(
-                            "Concurrent gRPC finalization returned no canonical credential"
-                        )
-                    jwt_credential = canonical.credential_jwt
+            )
+            await record_post_issuance_deliveries(
+                repo,
+                tx,
+                issued_credential,
+                delivered_target=DeliveryTarget.WALLET,
+                delivery_metadata={
+                    "protocol": "grpc",
+                    "requested_format": response_format,
+                },
+            )
+            await self._emit_credential_event(
+                "issued",
+                credential_id=credential_id,
+                transaction_id=tx.id,
+                organization_id=tx.organization_id,
+                credential_template_id=tx.credential_template_id or "",
+                status="issued",
+            )
 
             import uuid as _uuid
 

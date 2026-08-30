@@ -159,8 +159,7 @@ def _proof_jwt(
         )
 
     return (
-        f"{encode({'alg': 'ES256'})}."
-        f"{encode({'aud': audience, 'nonce': 'wallet-nonce'})}.signature"
+        f"{encode({'alg': 'ES256'})}.{encode({'aud': audience, 'nonce': 'wallet-nonce'})}.signature"
     )
 
 
@@ -1048,8 +1047,11 @@ async def test_grpc_credential_endpoint_rejects_unconfigured_proof_audience(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeypatch) -> None:
+async def test_concurrent_grpc_delivery_executes_one_signing_path(monkeypatch) -> None:
+    import grpc
+    from issuance.application import rust_integration
     from issuance.infrastructure.adapters import delivery_records, grpc_adapter
+    from issuance.infrastructure.api import signing_context
     from marty_proto.v1 import issuance_service_pb2 as pb2
 
     repo = InMemoryIssuanceRepository()
@@ -1061,26 +1063,55 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
         "issuer_did": transaction.issuer_did_override,
         "algorithm": "ES256",
         "verification_method_id": "did:web:issuer.example#badge-key",
+        "signing_service_id": "openbao-primary",
         "service": {"algorithm": "ES256"},
     }
-    signing_arrivals = 0
-    both_signing = asyncio.Event()
+    drifted_context = {
+        **remote_context,
+        "verification_method_id": "did:web:issuer.example#rotated-key",
+        "signing_service_id": "openbao-rotated",
+    }
+    counts = {"builder": 0, "kms": 0}
+    resolution_calls = 0
+    claim_arrivals = 0
+    claim_completions = 0
+    both_at_claim = asyncio.Event()
+    both_claimed = asyncio.Event()
+    original_claim = repo.claim_transaction_for_signing
 
     async def resolve_context(_tx, **_kwargs):
-        return remote_context
+        nonlocal resolution_calls
+        resolution_calls += 1
+        # Both contenders validate the same admitted context. A forbidden
+        # post-claim re-resolution would observe a rotated key and service.
+        return remote_context if resolution_calls <= 2 else drifted_context
 
     async def verify_proof(*_args, **_kwargs):
         assert _kwargs["issuer_url"] == "https://issuer.example/org/org-1"
         return True, "did:key:learner", {"kty": "EC"}, None
 
-    async def build_credential(_tx, *, credential_id, **_kwargs):
-        nonlocal signing_arrivals
-        signing_arrivals += 1
-        attempt = signing_arrivals
-        if signing_arrivals == 2:
-            both_signing.set()
-        await asyncio.wait_for(both_signing.wait(), timeout=2)
-        return f"signed-credential-{attempt}", credential_id, remote_context
+    async def claim_for_signing(*args, **kwargs):
+        nonlocal claim_arrivals, claim_completions
+        claim_arrivals += 1
+        if claim_arrivals == 2:
+            both_at_claim.set()
+        await asyncio.wait_for(both_at_claim.wait(), timeout=2)
+        claimed = await original_claim(*args, **kwargs)
+        claim_completions += 1
+        if claim_completions == 2:
+            both_claimed.set()
+        return claimed
+
+    async def sign_payload(**kwargs):
+        counts["kms"] += 1
+        assert kwargs["expected_verification_method_id"] == remote_context["verification_method_id"]
+        return {"signature_raw_b64": "cmVtb3RlLXNpZ25hdHVyZQ", "algorithm": "ES256"}
+
+    async def build_credential(*, remote_sign, credential_id, **_kwargs):
+        counts["builder"] += 1
+        await asyncio.wait_for(both_claimed.wait(), timeout=2)
+        await remote_sign(b"signing-input", "ES256")
+        return "signed-credential", credential_id
 
     delivery_calls = 0
 
@@ -1093,9 +1124,11 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
 
     monkeypatch.setattr(grpc_adapter, "_resolve_remote_signing_context_for_tx", resolve_context)
     monkeypatch.setattr(grpc_adapter, "verify_oid4vci_proof_with_issuer_policy", verify_proof)
-    monkeypatch.setattr(grpc_adapter, "_create_remote_signed_sd_jwt_for_tx", build_credential)
     monkeypatch.setattr(grpc_adapter, "ISSUER_BASE_URL", "https://issuer.example")
     monkeypatch.setattr(delivery_records, "record_post_issuance_deliveries", record_delivery)
+    monkeypatch.setattr(repo, "claim_transaction_for_signing", claim_for_signing)
+    monkeypatch.setattr(rust_integration, "create_sd_jwt_vc_with_remote_signing", build_credential)
+    monkeypatch.setattr(signing_context, "sign_payload_with_issuer_did", sign_payload)
 
     service = grpc_adapter.IssuanceServiceGrpc(lambda: repo)
     monkeypatch.setattr(service, "_emit_credential_event", no_op_event)
@@ -1126,9 +1159,19 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
         service.IssueCredential(request, contexts[1]),
     )
 
-    assert signing_arrivals == 2
-    assert all(context.code is None for context in contexts)
-    assert len({response.credentials[0].credential for response in responses}) == 1
+    assert claim_arrivals == 2
+    assert resolution_calls == 2
+    assert counts == {"builder": 1, "kms": 1}
+    assert sum(context.code is None for context in contexts) == 1
+    losers = [
+        context for context in contexts if context.code is grpc.StatusCode.FAILED_PRECONDITION
+    ]
+    assert len(losers) == 1
+    assert losers[0].details == grpc_adapter._GRPC_SIGNING_CLAIM_CONFLICT
+    assert sum(bool(response.credentials) for response in responses) == 1
+    assert {
+        response.credentials[0].credential for response in responses if response.credentials
+    } == {"signed-credential"}
     credentials = await repo.list_credentials_by_org(transaction.organization_id)
     assert len(credentials) == 1
     assert credentials[0].id == stable_id
@@ -1136,6 +1179,78 @@ async def test_concurrent_grpc_delivery_commits_one_canonical_credential(monkeyp
     assert stored is not None and stored.status == IssuanceStatus.ISSUED
     assert len(await repo.list_events_for_application(transaction.application_id)) == 1
     assert delivery_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_grpc_signing_failure_marks_reserved_transaction_failed(monkeypatch) -> None:
+    import grpc
+    from issuance.infrastructure.adapters import grpc_adapter
+    from marty_proto.v1 import issuance_service_pb2 as pb2
+
+    repo = InMemoryIssuanceRepository()
+    transaction = _transaction()
+    await repo.save_transaction(transaction)
+    stable_id = stable_issuance_credential_id(transaction.id)
+    remote_context = {
+        "issuer_profile_id": "issuer-profile-1",
+        "issuer_did": transaction.issuer_did_override,
+        "algorithm": "ES256",
+        "verification_method_id": "did:web:issuer.example#badge-key",
+        "service": {"algorithm": "ES256"},
+    }
+    builder_calls = 0
+
+    async def resolve_context(_tx, **_kwargs):
+        return remote_context
+
+    async def verify_proof(*_args, **_kwargs):
+        return True, "did:key:learner", {"kty": "EC"}, None
+
+    async def fail_signing(_tx, **_kwargs):
+        nonlocal builder_calls
+        builder_calls += 1
+        raise RuntimeError("KMS unavailable")
+
+    monkeypatch.setattr(grpc_adapter, "_resolve_remote_signing_context_for_tx", resolve_context)
+    monkeypatch.setattr(grpc_adapter, "verify_oid4vci_proof_with_issuer_policy", verify_proof)
+    monkeypatch.setattr(grpc_adapter, "_create_remote_signed_sd_jwt_for_tx", fail_signing)
+    monkeypatch.setattr(grpc_adapter, "ISSUER_BASE_URL", "https://issuer.example")
+
+    service = grpc_adapter.IssuanceServiceGrpc(lambda: repo)
+    request = pb2.IssueCredentialRequest(
+        access_token=transaction.access_token,
+        format="vc+sd-jwt",
+        proofs=[
+            pb2.ProofJwt(
+                proof_type="jwt",
+                jwt=_proof_jwt("https://issuer.example/org/org-1"),
+            )
+        ],
+    )
+
+    class Context:
+        code = None
+        details = None
+
+        def set_code(self, code):
+            self.code = code
+
+        def set_details(self, details):
+            self.details = details
+
+    context = Context()
+    response = await service.IssueCredential(request, context)
+
+    assert response == pb2.IssueCredentialResponse()
+    assert context.code is grpc.StatusCode.UNAVAILABLE
+    assert context.details == "DID-backed remote signing failed: KMS unavailable"
+    assert builder_calls == 1
+    stored = await repo.get_transaction(transaction.id)
+    assert stored is not None
+    assert stored.status == IssuanceStatus.FAILED
+    assert stored.reserved_credential_id == stable_id
+    assert await repo.list_credentials_by_org(transaction.organization_id) == []
+    assert await repo.list_events_for_application(transaction.application_id) == []
 
 
 @pytest.mark.asyncio
