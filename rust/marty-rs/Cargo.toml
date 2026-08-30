@@ -134,11 +134,11 @@ wasm-bindgen-test = "0.3"
 [dev-dependencies]
 ciborium = { workspace = true }
 coset-isomdl = { package = "coset", version = "=0.3.8" }
-der = "0.7"
+der = "0.8"
 isomdl = { workspace = true }
 sha2 = "0.11"
 time = { workspace = true }
-x509-cert = "0.2"
+x509-cert = "0.3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # UUID 1.24 uses getrandom 0.4, which requires an explicit browser backend.
