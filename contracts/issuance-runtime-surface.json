@@ -596,7 +596,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 6735,
+        "line": 6736,
         "method": "POST",
         "operation": "process_canvas_ags_score_event_route",
         "path": "/v1/integrations/canvas/ags/score-events",
@@ -604,7 +604,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3673,
+        "line": 3674,
         "method": "POST",
         "operation": "approve_canvas_application",
         "path": "/v1/integrations/canvas/applications/{application_id}/approve",
@@ -628,7 +628,7 @@
         "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
       },
       {
-        "line": 5187,
+        "line": 5188,
         "method": "POST",
         "operation": "validate_canvas_credentials_provider",
         "path": "/v1/integrations/canvas/canvas-credentials/validate",
@@ -668,7 +668,7 @@
         "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
       },
       {
-        "line": 6706,
+        "line": 6707,
         "method": "POST",
         "operation": "process_canvas_evidence_event_route",
         "path": "/v1/integrations/canvas/evidence-events",
@@ -676,7 +676,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6791,
+        "line": 6792,
         "method": "GET",
         "operation": "get_canvas_evidence_event_status",
         "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
@@ -700,7 +700,7 @@
         "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
       },
       {
-        "line": 5252,
+        "line": 5253,
         "method": "GET",
         "operation": "list_canvas_integration_secrets",
         "path": "/v1/integrations/canvas/integration-secrets",
@@ -708,7 +708,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5219,
+        "line": 5220,
         "method": "POST",
         "operation": "create_canvas_integration_secret",
         "path": "/v1/integrations/canvas/integration-secrets",
@@ -716,7 +716,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5302,
+        "line": 5303,
         "method": "DELETE",
         "operation": "delete_canvas_integration_secret",
         "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
@@ -724,7 +724,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5269,
+        "line": 5270,
         "method": "PUT",
         "operation": "update_canvas_integration_secret",
         "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
@@ -732,7 +732,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3764,
+        "line": 3765,
         "method": "GET",
         "operation": "get_public_canvas_lti_config",
         "path": "/v1/integrations/canvas/lti/config/{token}",
@@ -740,7 +740,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6978,
+        "line": 6975,
         "method": "GET",
         "operation": "get_canvas_lti_experience_session_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current",
@@ -748,7 +748,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7025,
+        "line": 7022,
         "method": "POST",
         "operation": "bootstrap_canvas_lti_experience_application_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
@@ -756,7 +756,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7087,
+        "line": 7084,
         "method": "POST",
         "operation": "create_canvas_lti_deep_linking_response_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
@@ -764,7 +764,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6682,
+        "line": 6683,
         "method": "GET",
         "operation": "get_canvas_lti_evidence_status",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
@@ -772,7 +772,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6644,
+        "line": 6645,
         "method": "POST",
         "operation": "sync_canvas_lti_evidence",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
@@ -780,7 +780,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6922,
+        "line": 6923,
         "method": "POST",
         "operation": "exchange_canvas_lti_experience_code_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
@@ -788,7 +788,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3756,
+        "line": 3757,
         "method": "GET",
         "operation": "get_canvas_lti_tool_jwks",
         "path": "/v1/integrations/canvas/lti/jwks",
@@ -796,7 +796,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6885,
+        "line": 6886,
         "method": "POST",
         "operation": "launch_canvas_lti_experience_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience",
@@ -804,7 +804,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6850,
+        "line": 6851,
         "method": "POST",
         "operation": "initiate_canvas_lti_experience_login_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login",
@@ -812,7 +812,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6867,
+        "line": 6868,
         "method": "POST",
         "operation": "verify_canvas_lti_launch_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
@@ -820,7 +820,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6833,
+        "line": 6834,
         "method": "POST",
         "operation": "initiate_canvas_lti_login_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
@@ -828,7 +828,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6763,
+        "line": 6764,
         "method": "POST",
         "operation": "process_canvas_nrps_membership_event_route",
         "path": "/v1/integrations/canvas/nrps/membership-events",
@@ -836,7 +836,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4015,
+        "line": 4016,
         "method": "GET",
         "operation": "complete_canvas_oauth_connection",
         "path": "/v1/integrations/canvas/oauth/callback",
@@ -844,7 +844,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4442,
+        "line": 4443,
         "method": "GET",
         "operation": "list_canvas_platforms",
         "path": "/v1/integrations/canvas/platforms",
@@ -852,7 +852,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4425,
+        "line": 4426,
         "method": "POST",
         "operation": "create_canvas_platform",
         "path": "/v1/integrations/canvas/platforms",
@@ -860,7 +860,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4510,
+        "line": 4511,
         "method": "DELETE",
         "operation": "delete_canvas_platform",
         "path": "/v1/integrations/canvas/platforms/{platform_id}",
@@ -868,7 +868,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4462,
+        "line": 4463,
         "method": "GET",
         "operation": "get_canvas_platform",
         "path": "/v1/integrations/canvas/platforms/{platform_id}",
@@ -876,7 +876,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4481,
+        "line": 4482,
         "method": "PUT",
         "operation": "update_canvas_platform",
         "path": "/v1/integrations/canvas/platforms/{platform_id}",
@@ -884,7 +884,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4781,
+        "line": 4782,
         "method": "GET",
         "operation": "get_canvas_catalog",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog",
@@ -892,7 +892,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4650,
+        "line": 4651,
         "method": "POST",
         "operation": "refresh_canvas_platform_jwks",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
@@ -900,7 +900,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3811,
+        "line": 3812,
         "method": "PUT",
         "operation": "update_canvas_lti_installation",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
@@ -908,7 +908,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4313,
+        "line": 4314,
         "method": "DELETE",
         "operation": "disconnect_canvas_oauth_connection",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
@@ -916,7 +916,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3924,
+        "line": 3925,
         "method": "POST",
         "operation": "start_canvas_oauth_connection",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
@@ -924,7 +924,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4815,
+        "line": 4816,
         "method": "POST",
         "operation": "create_canvas_program_binding",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
@@ -932,7 +932,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3870,
+        "line": 3871,
         "method": "GET",
         "operation": "get_canvas_platform_readiness",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness",
@@ -940,7 +940,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3790,
+        "line": 3791,
         "method": "GET",
         "operation": "get_canvas_lti_registration_config",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
@@ -948,7 +948,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4614,
+        "line": 4615,
         "method": "POST",
         "operation": "probe_canvas_platform_sandbox",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
@@ -956,7 +956,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4674,
+        "line": 4675,
         "method": "POST",
         "operation": "discover_canvas_scope",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
@@ -964,7 +964,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4841,
+        "line": 4842,
         "method": "GET",
         "operation": "list_canvas_program_bindings",
         "path": "/v1/integrations/canvas/program-bindings",
@@ -972,7 +972,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4932,
+        "line": 4933,
         "method": "DELETE",
         "operation": "delete_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
@@ -980,7 +980,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4874,
+        "line": 4875,
         "method": "GET",
         "operation": "get_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
@@ -988,7 +988,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4898,
+        "line": 4899,
         "method": "PUT",
         "operation": "update_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
@@ -996,7 +996,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5042,
+        "line": 5043,
         "method": "POST",
         "operation": "activate_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
@@ -1004,7 +1004,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5156,
+        "line": 5157,
         "method": "POST",
         "operation": "deactivate_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
@@ -1012,7 +1012,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5023,
+        "line": 5024,
         "method": "POST",
         "operation": "validate_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
