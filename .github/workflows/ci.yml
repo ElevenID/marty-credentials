@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: ec307b6edd0450c558869fd587215e72cd46e9d1
+  MARTY_CORE_REVISION: 1e27c4d22853fa51ff7d6bda447d9690433edcff
 
 jobs:
   preflight:
@@ -178,9 +178,9 @@ jobs:
           maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
           python -m pip install --disable-pip-version-check local-wheels/*.whl
 
-      - name: Exercise the local Python presentation boundary
+      - name: Exercise the local Python crypto boundaries
         working-directory: marty-credentials
-        run: pytest rust/marty-rs/tests/python/test_sd_jwt_presentation.py -v
+        run: pytest rust/marty-rs/tests/python -v
 
   security:
     name: Security Audit
