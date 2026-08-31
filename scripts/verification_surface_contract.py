@@ -7,6 +7,7 @@ import argparse
 import ast
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -95,13 +96,48 @@ def _router_prefixes(sources: list[PythonSource]) -> dict[str, str]:
 
 
 def _model_names(sources: list[PythonSource]) -> set[str]:
-    return {
-        node.name
+    classes = {
+        node.name: {_call_name(base) for base in node.bases}
         for source in sources
         for node in source.tree.body
         if isinstance(node, ast.ClassDef)
-        and any(_call_name(base) == "BaseModel" for base in node.bases)
     }
+    models = {name for name, bases in classes.items() if "BaseModel" in bases}
+    while inherited := {
+        name for name, bases in classes.items() if name not in models and bases & models
+    }:
+        models.update(inherited)
+    return models
+
+
+def _http_status(node: ast.AST | None) -> int | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return node.value
+    if node is None:
+        return None
+    expression = ast.unparse(node)
+    match = re.fullmatch(r"status\.HTTP_(\d{3})_[A-Z0-9_]+", expression)
+    if match is None:
+        raise ContractError(f"HTTP status must be a literal or Starlette constant: {expression}")
+    return int(match.group(1))
+
+
+def _literal_return_shape(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, Any] | None:
+    returns = [node for node in ast.walk(function) if isinstance(node, ast.Return)]
+    if len(returns) != 1 or not isinstance(returns[0].value, ast.Dict):
+        return None
+    shape: dict[str, Any] = {}
+    for key, value in zip(returns[0].value.keys, returns[0].value.values, strict=True):
+        name = _literal_string(key)
+        if name is None:
+            raise ContractError(f"dynamic response key in {function.name}")
+        if isinstance(value, ast.Constant):
+            shape[name] = {"literal": value.value}
+        else:
+            shape[name] = {"expression": ast.unparse(value)}
+    return shape
 
 
 def _registered_routers(main: PythonSource) -> set[str]:
@@ -184,7 +220,7 @@ def _http_routes(sources: list[PythonSource]) -> list[dict[str, Any]]:
                     detail_node = _keyword(call, "detail")
                     errors.append(
                         {
-                            "status": ast.unparse(status_node) if status_node is not None else None,
+                            "status": _http_status(status_node),
                             "detail": _literal_string(detail_node),
                             "line": call.lineno,
                         }
@@ -199,6 +235,7 @@ def _http_routes(sources: list[PythonSource]) -> list[dict[str, Any]]:
                         "response_model": response_model,
                         "dependencies": dependencies,
                         "declared_errors": errors,
+                        "literal_response_shape": _literal_return_shape(node),
                         "source": source.relative,
                         "line": decorator.lineno,
                     }
@@ -368,6 +405,10 @@ def _function_body_sha256(tree: ast.Module, name: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _ast_sha256(node: ast.AST) -> str:
+    return hashlib.sha256(ast.dump(node).encode("utf-8")).hexdigest()
+
+
 def _function_in_tree(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     return next(
         (
@@ -403,6 +444,21 @@ def _string_constants(sources: list[PythonSource]) -> dict[str, str]:
             for target in targets:
                 if isinstance(target, ast.Name):
                     constants[target.id] = value
+    return constants
+
+
+def _integer_constants(sources: list[PythonSource]) -> dict[str, int]:
+    constants: dict[str, int] = {}
+    for source in sources:
+        for node in source.tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, int):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = node.value.value
     return constants
 
 
@@ -459,29 +515,41 @@ def _governance_contract(sources: list[PythonSource]) -> dict[str, Any]:
     }
 
 
-def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
-    constants = _string_constants(sources)
-    authorize = _required_function(sources, "_authorize")
-    arguments = [*authorize.args.args, *authorize.args.kwonlyargs]
+def _header_contract(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, str]:
+    arguments = [*function.args.args, *function.args.kwonlyargs]
     defaults: list[ast.AST | None] = [
-        *([None] * (len(authorize.args.args) - len(authorize.args.defaults))),
-        *authorize.args.defaults,
-        *authorize.args.kw_defaults,
+        *([None] * (len(function.args.args) - len(function.args.defaults))),
+        *function.args.defaults,
+        *function.args.kw_defaults,
     ]
-    header_alias: str | None = None
     for argument, default in zip(arguments, defaults, strict=True):
         if argument.arg != "x_api_key" or not isinstance(default, ast.Call):
             continue
         if _call_name(default.func) != "Header":
-            raise ContractError("_authorize x_api_key must use FastAPI Header")
-        header_alias = _literal_string(_keyword(default, "alias"))
-    if header_alias is None:
-        raise ContractError("_authorize must declare a literal x_api_key header alias")
+            raise ContractError(f"{function.name} x_api_key must use FastAPI Header")
+        alias = _literal_string(_keyword(default, "alias"))
+        default_value = default.args[0] if default.args else _keyword(default, "default")
+        if alias is None or default_value is None:
+            raise ContractError(f"{function.name} must declare a static API-key header")
+        return {
+            "alias": alias,
+            "annotation": ast.unparse(argument.annotation),
+            "default": ast.unparse(default_value),
+        }
+    raise ContractError(f"{function.name} must declare x_api_key as a Header")
+
+
+def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
+    constants = _string_constants(sources)
+    authorize = _required_function(sources, "_authorize")
+    helper_header = _header_contract(authorize)
 
     errors = sorted(
         {
             (
-                ast.unparse(call.args[0] if call.args else _keyword(call, "status_code")),
+                _http_status(call.args[0] if call.args else _keyword(call, "status_code")),
                 _literal_string(_keyword(call, "detail")),
             )
             for call in ast.walk(authorize)
@@ -491,7 +559,7 @@ def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
         }
     )
 
-    wrappers: dict[str, str] = {}
+    wrappers: dict[str, dict[str, Any]] = {}
     for wrapper in (
         "_authorize_session_create",
         "_authorize_direct_verify",
@@ -503,16 +571,102 @@ def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
             for call in ast.walk(function)
             if isinstance(call, ast.Call) and _call_name(call.func) == "_authorize"
         ]
-        if len(calls) != 1 or not calls[0].args or not isinstance(calls[0].args[0], ast.Name):
+        if (
+            len(calls) != 1
+            or len(calls[0].args) != 2
+            or not isinstance(calls[0].args[0], ast.Name)
+            or not isinstance(calls[0].args[1], ast.Name)
+            or calls[0].args[1].id != "x_api_key"
+        ):
             raise ContractError(f"{wrapper} must call _authorize with one purpose constant")
         constant = calls[0].args[0].id
         if constant not in constants:
             raise ContractError(f"{wrapper} purpose must resolve to a string constant")
-        wrappers[wrapper] = constants[constant]
+        header = _header_contract(function)
+        if header != helper_header:
+            raise ContractError(f"{wrapper} header contract differs from _authorize")
+        wrappers[wrapper] = {
+            "purpose": constants[constant],
+            "header": header,
+            "forwarded_argument": calls[0].args[1].id,
+        }
     return {
-        "api_key_header": header_alias,
+        "api_key_header": helper_header,
         "errors": [{"status": status_code, "detail": detail} for status_code, detail in errors],
         "purpose_wrappers": wrappers,
+    }
+
+
+def _configuration_semantics(sources: list[PythonSource]) -> dict[str, Any]:
+    integers = _integer_constants(sources)
+    secret_reader = _required_function(sources, "_read_secret_value")
+    signing_url = _required_function(sources, "_internal_signing_base_url")
+    lease = _required_function(sources, "processing_lease_seconds")
+    did_web = _required_function(sources, "_did_web_url")
+
+    secret_lookups = [
+        ast.unparse(call.args[0])
+        for call in ast.walk(secret_reader)
+        if isinstance(call, ast.Call) and _call_name(call.func) == "os.environ.get" and call.args
+    ]
+    signing_call = next(
+        call
+        for call in ast.walk(signing_url)
+        if isinstance(call, ast.Call)
+        and _call_name(call.func) == "os.environ.get"
+        and _literal_string(call.args[0] if call.args else None) == "SIGNING_KEYS_INTERNAL_URL"
+    )
+    signing_default = _literal_string(signing_call.args[1] if len(signing_call.args) > 1 else None)
+    if signing_default is None:
+        raise ContractError("SIGNING_KEYS_INTERNAL_URL must have a literal default")
+
+    did_environment_variables = sorted(
+        {
+            name
+            for call in ast.walk(did_web)
+            if isinstance(call, ast.Call)
+            and _call_name(call.func) == "os.environ.get"
+            and call.args
+            if (name := _literal_string(call.args[0])) is not None
+        }
+    )
+    did_literals = {
+        node.value
+        for node in ast.walk(did_web)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    production_aliases = sorted({"production", "prod"} & did_literals)
+    if production_aliases != ["prod", "production"]:
+        raise ContractError("did:web production aliases drifted")
+
+    return {
+        "processing_lease_seconds": {
+            "environment_variable": "VERIFICATION_PROCESSING_LEASE_SECONDS",
+            "default": integers["DEFAULT_PROCESSING_LEASE_SECONDS"],
+            "minimum": integers["MIN_PROCESSING_LEASE_SECONDS"],
+            "maximum": integers["MAX_PROCESSING_LEASE_SECONDS"],
+            "behavior_sha256": _ast_sha256(lease),
+        },
+        "signing_keys": {
+            "base_url_environment_variable": "SIGNING_KEYS_INTERNAL_URL",
+            "base_url_default": signing_default,
+            "api_key_precedence": secret_lookups,
+            "secret_reader_sha256": _ast_sha256(secret_reader),
+        },
+        "did_web_egress": {
+            "environment_variables": did_environment_variables,
+            "production_aliases": production_aliases,
+            "scheme": "https",
+            "default_port": 443,
+            "requires_production_allowlist": (
+                "Production did:web resolution requires a configured egress allowlist"
+                in did_literals
+            ),
+            "requires_production_default_https_port": (
+                "Production did:web resolution requires the default HTTPS port" in did_literals
+            ),
+            "behavior_sha256": _ast_sha256(did_web),
+        },
     }
 
 
@@ -576,6 +730,7 @@ def build_contract() -> dict[str, Any]:
             "environment_variable_count": len(variables),
             "environment_variables": variables,
             "dynamic_lookups": dynamic,
+            "semantics": _configuration_semantics(sources),
         },
         "runtime": {
             "startup_validation_hooks": _startup_hooks(sources),

@@ -1,24 +1,52 @@
 {
   "authorization": {
-    "api_key_header": "X-API-Key",
+    "api_key_header": {
+      "alias": "X-API-Key",
+      "annotation": "str | None",
+      "default": "None"
+    },
     "errors": [
       {
         "detail": "Invalid or unauthorized API key",
-        "status": "401"
+        "status": 401
       },
       {
         "detail": "X-API-Key header is missing",
-        "status": "401"
+        "status": 401
       },
       {
         "detail": "Verification governance is unavailable",
-        "status": "status.HTTP_503_SERVICE_UNAVAILABLE"
+        "status": 503
       }
     ],
     "purpose_wrappers": {
-      "_authorize_direct_verify": "verification.direct",
-      "_authorize_session_create": "verification.session.create",
-      "_authorize_vds_nc_verify": "verification.vds-nc"
+      "_authorize_direct_verify": {
+        "forwarded_argument": "x_api_key",
+        "header": {
+          "alias": "X-API-Key",
+          "annotation": "str | None",
+          "default": "None"
+        },
+        "purpose": "verification.direct"
+      },
+      "_authorize_session_create": {
+        "forwarded_argument": "x_api_key",
+        "header": {
+          "alias": "X-API-Key",
+          "annotation": "str | None",
+          "default": "None"
+        },
+        "purpose": "verification.session.create"
+      },
+      "_authorize_vds_nc_verify": {
+        "forwarded_argument": "x_api_key",
+        "header": {
+          "alias": "X-API-Key",
+          "annotation": "str | None",
+          "default": "None"
+        },
+        "purpose": "verification.vds-nc"
+      }
     }
   },
   "configuration": {
@@ -47,7 +75,41 @@
       "SIGNING_KEYS_INTERNAL_URL",
       "VERIFICATION_GOVERNANCE_JSON",
       "VERIFICATION_PROCESSING_LEASE_SECONDS"
-    ]
+    ],
+    "semantics": {
+      "did_web_egress": {
+        "behavior_sha256": "49fc7ad797f9764713e23545cabfd1f05cb3ae6530598c2703f9ac4184428d8a",
+        "default_port": 443,
+        "environment_variables": [
+          "APP_ENV",
+          "DID_WEB_ALLOWED_HOSTS",
+          "ENVIRONMENT"
+        ],
+        "production_aliases": [
+          "prod",
+          "production"
+        ],
+        "requires_production_allowlist": true,
+        "requires_production_default_https_port": true,
+        "scheme": "https"
+      },
+      "processing_lease_seconds": {
+        "behavior_sha256": "6103b1ba525571b21cb9e263a1fc403c595df6331372843076b057e824c1d6d5",
+        "default": 60,
+        "environment_variable": "VERIFICATION_PROCESSING_LEASE_SECONDS",
+        "maximum": 300,
+        "minimum": 5
+      },
+      "signing_keys": {
+        "api_key_precedence": [
+          "name",
+          "f'{name}_FILE'"
+        ],
+        "base_url_default": "http://gateway:8000/internal/signing-keys",
+        "base_url_environment_variable": "SIGNING_KEYS_INTERNAL_URL",
+        "secret_reader_sha256": "938b3ce37aefb52b84c3c376492b79a894b2aae2a377fa9d31d7b06b84d8ea1e"
+      }
+    }
   },
   "dto": {
     "models": [
@@ -485,6 +547,17 @@
         "declared_errors": [],
         "dependencies": [],
         "line": 48,
+        "literal_response_shape": {
+          "native_backend": {
+            "expression": "marty_rs_diagnostic(REQUIRED_MARTY_RS_CAPABILITIES)"
+          },
+          "service": {
+            "literal": "verification"
+          },
+          "status": {
+            "literal": "healthy"
+          }
+        },
         "method": "GET",
         "operation": "health",
         "path": "/health",
@@ -496,6 +569,11 @@
         "declared_errors": [],
         "dependencies": [],
         "line": 335,
+        "literal_response_shape": {
+          "status": {
+            "literal": "healthy"
+          }
+        },
         "method": "GET",
         "operation": "health_check",
         "path": "/v1/verification/health",
@@ -508,12 +586,12 @@
           {
             "detail": "Verification request does not match its governed policy",
             "line": 218,
-            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+            "status": 422
           },
           {
             "detail": "Failed to create verification session",
             "line": 224,
-            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            "status": 500
           }
         ],
         "dependencies": [
@@ -521,6 +599,7 @@
           "get_verification_service"
         ],
         "line": 191,
+        "literal_response_shape": null,
         "method": "POST",
         "operation": "create_verification_session",
         "path": "/v1/verification/sessions",
@@ -533,13 +612,14 @@
           {
             "detail": "Session not found",
             "line": 290,
-            "status": "status.HTTP_404_NOT_FOUND"
+            "status": 404
           }
         ],
         "dependencies": [
           "get_verification_service"
         ],
         "line": 283,
+        "literal_response_shape": null,
         "method": "GET",
         "operation": "get_session",
         "path": "/v1/verification/sessions/{session_id}",
@@ -552,38 +632,39 @@
           {
             "detail": "Verification session not found",
             "line": 251,
-            "status": "status.HTTP_404_NOT_FOUND"
+            "status": 404
           },
           {
             "detail": "Verification session has expired",
             "line": 256,
-            "status": "status.HTTP_410_GONE"
+            "status": 410
           },
           {
             "detail": "Verification session submission conflicts",
             "line": 261,
-            "status": "status.HTTP_409_CONFLICT"
+            "status": 409
           },
           {
             "detail": "Session presentation cannot be bound to the verifier nonce",
             "line": 266,
-            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+            "status": 422
           },
           {
             "detail": "Invalid presentation data",
             "line": 271,
-            "status": "status.HTTP_400_BAD_REQUEST"
+            "status": 400
           },
           {
             "detail": "Presentation submission failed",
             "line": 277,
-            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            "status": 500
           }
         ],
         "dependencies": [
           "get_verification_service"
         ],
         "line": 230,
+        "literal_response_shape": null,
         "method": "POST",
         "operation": "submit_presentation",
         "path": "/v1/verification/sessions/{session_id}/submit",
@@ -596,12 +677,12 @@
           {
             "detail": "Verification request does not match its governed policy",
             "line": 324,
-            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+            "status": 422
           },
           {
             "detail": "Verification failed",
             "line": 330,
-            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            "status": 500
           }
         ],
         "dependencies": [
@@ -609,6 +690,7 @@
           "get_verification_service"
         ],
         "line": 304,
+        "literal_response_shape": null,
         "method": "POST",
         "operation": "verify_presentation_direct",
         "path": "/v1/verification/verify",
@@ -621,12 +703,12 @@
           {
             "detail": "issuer_did did not resolve to a usable public JWK",
             "line": 372,
-            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+            "status": 422
           },
           {
             "detail": "VDS-NC verification failed",
             "line": 403,
-            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+            "status": 500
           }
         ],
         "dependencies": [
@@ -634,6 +716,7 @@
           "get_credential_verifier"
         ],
         "line": 341,
+        "literal_response_shape": null,
         "method": "POST",
         "operation": "verify_vds_nc_barcode",
         "path": "/v1/verification/verify/vds-nc",

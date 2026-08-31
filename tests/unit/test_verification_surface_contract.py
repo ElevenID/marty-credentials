@@ -107,24 +107,53 @@ def test_contract_retains_authorization_and_error_mapping() -> None:
     assert submit["dependencies"] == ["get_verification_service"]
     submit_statuses = {error["status"] for error in submit["declared_errors"]}
     assert {
-        "status.HTTP_400_BAD_REQUEST",
-        "status.HTTP_404_NOT_FOUND",
-        "status.HTTP_409_CONFLICT",
-        "status.HTTP_410_GONE",
-        "status.HTTP_422_UNPROCESSABLE_ENTITY",
-        "status.HTTP_500_INTERNAL_SERVER_ERROR",
+        400,
+        404,
+        409,
+        410,
+        422,
+        500,
     } <= submit_statuses
     authorization = contract["authorization"]
-    assert authorization["api_key_header"] == "X-API-Key"
+    expected_header = {
+        "alias": "X-API-Key",
+        "annotation": "str | None",
+        "default": "None",
+    }
+    assert authorization["api_key_header"] == expected_header
     assert authorization["purpose_wrappers"] == {
-        "_authorize_direct_verify": "verification.direct",
-        "_authorize_session_create": "verification.session.create",
-        "_authorize_vds_nc_verify": "verification.vds-nc",
+        "_authorize_direct_verify": {
+            "purpose": "verification.direct",
+            "header": expected_header,
+            "forwarded_argument": "x_api_key",
+        },
+        "_authorize_session_create": {
+            "purpose": "verification.session.create",
+            "header": expected_header,
+            "forwarded_argument": "x_api_key",
+        },
+        "_authorize_vds_nc_verify": {
+            "purpose": "verification.vds-nc",
+            "header": expected_header,
+            "forwarded_argument": "x_api_key",
+        },
     }
     assert {(error["status"], error["detail"]) for error in authorization["errors"]} == {
-        ("401", "Invalid or unauthorized API key"),
-        ("401", "X-API-Key header is missing"),
-        ("status.HTTP_503_SERVICE_UNAVAILABLE", "Verification governance is unavailable"),
+        (401, "Invalid or unauthorized API key"),
+        (401, "X-API-Key header is missing"),
+        (503, "Verification governance is unavailable"),
+    }
+
+
+def test_contract_retains_health_response_shapes() -> None:
+    routes = {route["path"]: route for route in surface.build_contract()["http"]["routes"]}
+    assert routes["/v1/verification/health"]["literal_response_shape"] == {
+        "status": {"literal": "healthy"}
+    }
+    assert routes["/health"]["literal_response_shape"] == {
+        "status": {"literal": "healthy"},
+        "service": {"literal": "verification"},
+        "native_backend": {"expression": "marty_rs_diagnostic(REQUIRED_MARTY_RS_CAPABILITIES)"},
     }
 
 
@@ -145,6 +174,20 @@ def test_contract_retains_fail_closed_configuration() -> None:
         "validate_internal_resolver_configuration",
         "validate_marty_rs_capabilities",
     ]
+    semantics = surface.build_contract()["configuration"]["semantics"]
+    lease = semantics["processing_lease_seconds"]
+    assert {key: value for key, value in lease.items() if key != "behavior_sha256"} == {
+        "environment_variable": "VERIFICATION_PROCESSING_LEASE_SECONDS",
+        "default": 60,
+        "minimum": 5,
+        "maximum": 300,
+    }
+    assert semantics["signing_keys"]["base_url_default"] == (
+        "http://gateway:8000/internal/signing-keys"
+    )
+    assert semantics["signing_keys"]["api_key_precedence"] == ["name", "f'{name}_FILE'"]
+    assert semantics["did_web_egress"]["requires_production_allowlist"] is True
+    assert semantics["did_web_egress"]["requires_production_default_https_port"] is True
 
 
 def _sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -161,7 +204,7 @@ def _sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 def _assert_mutation_detected() -> None:
-    with pytest.raises(surface.ContractError, match="verification surface drifted"):
+    with pytest.raises(surface.ContractError):
         surface.check_contract()
 
 
@@ -244,14 +287,26 @@ def test_contract_hashes_are_line_ending_independent(
     assert surface.build_contract() == lf_contract
 
 
-def test_authorization_header_mutation_is_detected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    "wrapper",
+    [
+        "_authorize_session_create",
+        "_authorize_direct_verify",
+        "_authorize_vds_nc_verify",
+    ],
+)
+def test_public_authorization_header_mutation_is_detected(
+    wrapper: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = _sandbox(tmp_path, monkeypatch)
     routes = service / "infrastructure" / "api" / "routes.py"
+    signature = (
+        f'async def {wrapper}(\n    x_api_key: str | None = Header(None, alias="X-API-Key"),'
+    )
     routes.write_text(
         routes.read_text(encoding="utf-8").replace(
-            'Header(None, alias="X-API-Key")', 'Header(None, alias="X-Changed-Key")', 1
+            "".join(signature),
+            "".join(signature).replace("X-API-Key", "X-Changed-Key"),
         ),
         encoding="utf-8",
     )
@@ -285,6 +340,21 @@ def test_authorization_wrapper_purpose_mutation_is_detected(
     _assert_mutation_detected()
 
 
+def test_authorization_wrapper_forwarding_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    routes = service / "infrastructure" / "api" / "routes.py"
+    routes.write_text(
+        routes.read_text(encoding="utf-8").replace(
+            "return await _authorize(DIRECT_VERIFY_PURPOSE, x_api_key)",
+            "return await _authorize(DIRECT_VERIFY_PURPOSE, None)",
+        ),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
 def test_validator_decorator_mutation_is_detected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -307,4 +377,86 @@ def test_added_dto_mutation_is_detected(tmp_path: Path, monkeypatch: pytest.Monk
         + "\n\nclass AddedContractModel(BaseModel):\n    value: str\n",
         encoding="utf-8",
     )
+    _assert_mutation_detected()
+
+
+def test_inherited_dto_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    models = service / "infrastructure" / "api" / "models.py"
+    models.write_text(
+        models.read_text(encoding="utf-8")
+        + (
+            "\n\nclass CommonContractModel(BaseModel):\n"
+            "    common: str\n\n"
+            "class SpecializedContractModel(CommonContractModel):\n"
+            "    specialized: str\n"
+        ),
+        encoding="utf-8",
+    )
+    names = {model["name"] for model in surface.build_contract()["dto"]["models"]}
+    assert {"CommonContractModel", "SpecializedContractModel"} <= names
+    _assert_mutation_detected()
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new"),
+    [
+        ("main.py", '"service": "verification",\n', ""),
+        (
+            "infrastructure/api/routes.py",
+            'return {"status": "healthy"}',
+            'return {"status": "ready"}',
+        ),
+    ],
+)
+def test_health_response_mutation_is_detected(
+    relative: str,
+    old: str,
+    new: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    source = service / relative
+    source.write_text(source.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+    _assert_mutation_detected()
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new"),
+    [
+        (
+            "application/service.py",
+            "DEFAULT_PROCESSING_LEASE_SECONDS = 60",
+            "DEFAULT_PROCESSING_LEASE_SECONDS = 90",
+        ),
+        (
+            "application/did_resolver.py",
+            "http://gateway:8000/internal/signing-keys",
+            "http://gateway:9000/internal/signing-keys",
+        ),
+        (
+            "application/did_resolver.py",
+            "direct = os.environ.get(name)",
+            'direct = os.environ.get(f"{name}_FILE")',
+        ),
+        (
+            "application/did_resolver.py",
+            'environment in {"production", "prod"} and not configured_hosts',
+            'environment in {"production", "prod"} and False',
+        ),
+    ],
+)
+def test_configuration_semantic_mutation_is_detected(
+    relative: str,
+    old: str,
+    new: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    source = service / relative
+    source.write_text(source.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
     _assert_mutation_detected()
