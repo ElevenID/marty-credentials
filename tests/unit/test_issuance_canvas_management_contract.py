@@ -444,9 +444,17 @@ async def test_legacy_ingest_and_event_status_replay_the_contract(
     repo = InMemoryIssuanceRepository()
     for operation in legacy["routes"]:
         handler = getattr(canvas_routes, operation)
+        response = Response()
         with pytest.raises(HTTPException) as gone:
-            await handler(request=_request(body=b"{}"), response=Response(), repo=repo)
-        assert gone.value.status_code == legacy["disabled_status_code"]
+            await handler(request=_request(body=b"{}"), response=response, repo=repo)
+        assert (gone.value.status_code, gone.value.detail) == (
+            legacy["disabled_status_code"],
+            legacy["disabled_details"][operation],
+        )
+        assert set(response.headers).isdisjoint(
+            {name.lower() for name in legacy["enabled_response_headers"]}
+            | {name.lower() for name in legacy["evidence_route_additional_header"]}
+        )
 
     await repo.save_canvas_event_receipt(
         CanvasEventReceipt(
@@ -474,5 +482,6 @@ async def test_legacy_ingest_and_event_status_replay_the_contract(
         "account-1", "event-1", trusted_organization_id="org-1", repo=repo
     )
     serialized = owned.model_dump(mode="json")
+    assert list(serialized) == CONTRACT["event_status"]["response_fields"]
     assert set(CONTRACT["event_status"]["response_includes"]).issubset(serialized)
     assert owned.replay_available is True
