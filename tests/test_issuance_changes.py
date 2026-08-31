@@ -270,7 +270,7 @@ def test_root_issuer_metadata_advertises_selectable_oid4vci_formats(monkeypatch)
         "credential_signing_alg_values_supported": [-7, -8],
         "proof_types_supported": {
             "jwt": {
-                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
+                "proof_signing_alg_values_supported": ["ES256"],
                 "key_attestations_required": {},
             }
         },

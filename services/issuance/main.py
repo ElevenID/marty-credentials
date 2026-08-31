@@ -176,6 +176,22 @@ def _issuer_display_entries() -> list[dict[str, str]]:
     return [{"name": os.environ.get("ISSUER_DISPLAY_NAME", "ElevenID LLC"), "locale": "en-US"}]
 
 
+def _oid4vci_proof_types(
+    credential_format: str,
+    *,
+    key_attestations_required: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
+    """Build JWT proof metadata without conflating proof and credential algorithms."""
+    proof_algorithms = ["ES256"] if credential_format == "mso_mdoc" else ["ES256", "EdDSA"]
+    requirement = {name: list(values) for name, values in (key_attestations_required or {}).items()}
+    return {
+        "jwt": {
+            "proof_signing_alg_values_supported": proof_algorithms,
+            "key_attestations_required": requirement,
+        }
+    }
+
+
 async def _oid4vci_proof_types_for_org(
     organization_id: str,
     *,
@@ -191,16 +207,10 @@ async def _oid4vci_proof_types_for_org(
     """
     from issuance.infrastructure.api.signing_context import resolve_remote_issuer_context
 
-    proof_types: dict[str, Any] = {
-        "jwt": {
-            "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
-            # The current EUDI profile makes the attestation requirement part
-            # of every JWT proof metadata entry. An empty object imposes no
-            # additional wallet-key constraints; current EUDI wallets reject
-            # a configuration that omits the member.
-            "key_attestations_required": {},
-        }
-    }
+    # The current EUDI profile makes the attestation requirement part of every
+    # JWT proof metadata entry. An empty object imposes no additional wallet-key
+    # constraints; current EUDI wallets reject a configuration that omits it.
+    proof_types = _oid4vci_proof_types(credential_format)
     key_purpose = "mdoc_dsc" if credential_format == "mso_mdoc" else "vc_jwt_issuer"
     try:
         issuer_context = await resolve_remote_issuer_context(
@@ -230,8 +240,10 @@ async def _oid4vci_proof_types_for_org(
     user_authentication = policy.get("required_user_authentication")
     if isinstance(user_authentication, list) and user_authentication:
         requirement["user_authentication"] = [str(value) for value in user_authentication]
-    proof_types["jwt"]["key_attestations_required"] = requirement
-    return proof_types
+    return _oid4vci_proof_types(
+        credential_format,
+        key_attestations_required=requirement,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -586,13 +598,6 @@ def create_app() -> FastAPI:
         _binding = ["did:key", "jwk"]
         _signing_algs = ["ES256", "EdDSA"]
         _mdoc_signing_algs = [-7, -8]  # COSE ES256 and EdDSA (OID4VCI Appendix A.2)
-        _unbound_proof_types = {
-            "jwt": {
-                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
-                "key_attestations_required": {},
-            }
-        }
-
         # Pull distinct credential types from the issuance DB — self-contained,
         # no external auth required, and grows automatically with new templates.
         repo = get_repo()
@@ -607,7 +612,7 @@ def create_app() -> FastAPI:
             if not issuer_did:
                 # Metadata without a concrete public DID cannot claim a tenant
                 # key-attestation policy. Actual issuance still resolves the DID.
-                return _unbound_proof_types
+                return _oid4vci_proof_types(credential_format)
             cache_key = (issuer_did, credential_format)
             if cache_key not in proof_types_cache:
                 proof_types_cache[cache_key] = await _oid4vci_proof_types_for_org(
@@ -739,12 +744,6 @@ def create_app() -> FastAPI:
         """
         from issuance.infrastructure.api.routes import ISSUER_BASE_URL
 
-        _proof_types = {
-            "jwt": {
-                "proof_signing_alg_values_supported": ["ES256", "EdDSA"],
-                "key_attestations_required": {},
-            }
-        }
         return {
             "credential_issuer": ISSUER_BASE_URL,
             "authorization_servers": [ISSUER_BASE_URL],
@@ -759,7 +758,7 @@ def create_app() -> FastAPI:
                     "scope": "default",
                     "cryptographic_binding_methods_supported": ["did:key", "jwk"],
                     "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _oid4vci_proof_types("jwt_vc_json"),
                     "credential_definition": {"type": ["VerifiableCredential"]},
                     "credential_metadata": {
                         "display": [{"name": "Verifiable Credential", "locale": "en-US"}],
@@ -775,7 +774,7 @@ def create_app() -> FastAPI:
                     "vct": f"{ISSUER_BASE_URL}/credentials/default",
                     "cryptographic_binding_methods_supported": ["did:key", "jwk"],
                     "credential_signing_alg_values_supported": ["ES256", "EdDSA"],
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _oid4vci_proof_types("dc+sd-jwt"),
                     "credential_metadata": {
                         "display": [{"name": "Verifiable Credential (SD-JWT)", "locale": "en-US"}],
                     },
@@ -785,7 +784,7 @@ def create_app() -> FastAPI:
                     "scope": "default",
                     "cryptographic_binding_methods_supported": ["did:key", "jwk"],
                     "credential_signing_alg_values_supported": ["eddsa-rdfc-2022"],
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _oid4vci_proof_types("ldp_vc"),
                     "credential_definition": _data_integrity_credential_definition(
                         "VerifiableCredential"
                     ),
@@ -808,7 +807,7 @@ def create_app() -> FastAPI:
                     "doctype": "org.iso.18013.5.1.mDL",
                     "cryptographic_binding_methods_supported": ["did:key", "jwk"],
                     "credential_signing_alg_values_supported": [-7, -8],
-                    "proof_types_supported": _proof_types,
+                    "proof_types_supported": _oid4vci_proof_types("mso_mdoc"),
                     "credential_metadata": {
                         "display": [{"name": "Mobile Document (mDL)", "locale": "en-US"}],
                     },
