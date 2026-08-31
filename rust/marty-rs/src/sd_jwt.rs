@@ -162,13 +162,18 @@ impl SdJwtPresentation {
         audience: Option<String>,
         algorithm: Option<String>,
     ) -> PyResult<String> {
-        let mut holder = SDJWTHolder::new(self.sd_jwt.clone(), SDJWTSerializationFormat::Compact)
-            .map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to parse SD-JWT: {}",
-                e
-            ))
-        })?;
+        // Compatibility boundary: this Python API has never accepted a trusted
+        // issuer-key resolver. Its caller must authenticate the SD-JWT before
+        // asking this builder to select disclosures. Use the dependency's
+        // explicit opt-out rather than hiding a behavior change in a pin bump.
+        let mut holder =
+            SDJWTHolder::new_unverified(self.sd_jwt.clone(), SDJWTSerializationFormat::Compact)
+                .map_err(|e| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                        "Failed to parse SD-JWT: {}",
+                        e
+                    ))
+                })?;
 
         // Create presentation
         let presentation = match (holder_key_pem, nonce, audience) {

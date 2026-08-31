@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f
+  MARTY_CORE_REVISION: ec307b6edd0450c558869fd587215e72cd46e9d1
 
 jobs:
   preflight:
@@ -55,7 +55,7 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check the native feature set
         run: cargo check --locked --no-default-features --features native
-      - name: Require scalar isomdl feature selection
+      - name: Require scalar credential digest feature selection
         shell: bash
         run: |
           set -euo pipefail
@@ -66,8 +66,12 @@ jobs:
             local target_label="${*:-host}"
             feature_tree="$(cargo tree --locked --no-default-features --features "$feature_set" --edges normal,build,features "$@")"
             grep -F 'isomdl feature "default"' <<<"$feature_tree"
-            if grep -F 'isomdl feature "parallel"' <<<"$feature_tree"; then
-              echo "isomdl/parallel must remain inactive for the $feature_set consumer surface ($target_label)" >&2
+            if grep -E 'isomdl feature "(parallel|simd)"' <<<"$feature_tree"; then
+              echo "isomdl parallel and SIMD acceleration must remain inactive for the $feature_set consumer surface ($target_label)" >&2
+              exit 1
+            fi
+            if grep -E 'sd-jwt-rs feature "(issuance_bench|mock_salts|parallel)"' <<<"$feature_tree"; then
+              echo "sd-jwt-rs parallel, benchmark, and mock-salt features must remain inactive for the $feature_set consumer surface ($target_label)" >&2
               exit 1
             fi
           }
@@ -134,6 +138,49 @@ jobs:
         # Python and WASM features target different link environments and must
         # not be combined in one all-features build.
         run: cargo clippy --locked --no-default-features --features native -- -D warnings
+
+  test-local-python-binding:
+    name: Local Marty Python Binding
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
+
+      - name: Build the local Python extension from the locked workspace
+        working-directory: marty-credentials
+        run: |
+          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest pytest-asyncio
+          maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
+          python -m pip install --disable-pip-version-check local-wheels/*.whl
+
+      - name: Exercise the local Python presentation boundary
+        working-directory: marty-credentials
+        run: pytest rust/marty-rs/tests/python/test_sd_jwt_presentation.py -v
 
   security:
     name: Security Audit
@@ -584,7 +631,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, verification-session-postgres, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, verification-session-postgres, test-wasm]
     runs-on: ubuntu-latest
     permissions:
       actions: read
