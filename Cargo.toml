@@ -11,13 +11,13 @@ repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f" }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f", default-features = false }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f" }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1" }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1", default-features = false }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f" }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "ec307b6edd0450c558869fd587215e72cd46e9d1" }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
@@ -31,7 +31,7 @@ coset = { version = "0.4" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # SD-JWT
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "9244ec551ac56bb4fa7d3a87e50f59b2f36d1925" }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7" }
 
 # JWT
 jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
@@ -70,4 +70,4 @@ strip = true
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
 # Maintained ElevenID security/interoperability fork. The exact revision is
 # reviewed and synchronized from upstream through pull requests.
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "99189ab81c4831eee00c534928f37c46f559ea17" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "671044c9495aec101bf0cd381669d5ed6f64dd11" }

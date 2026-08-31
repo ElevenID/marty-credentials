@@ -385,8 +385,8 @@ fn holder_discloses_one_of_two_claims() {
     let mut claims_to_disclose = Map::new();
     claims_to_disclose.insert("given_name".to_string(), Value::Bool(true));
 
-    let mut holder =
-        SDJWTHolder::new(sd_jwt, SDJWTSerializationFormat::Compact).expect("SDJWTHolder");
+    let mut holder = SDJWTHolder::new_unverified(sd_jwt, SDJWTSerializationFormat::Compact)
+        .expect("caller-preverified SDJWTHolder");
     let presentation = holder
         .create_presentation(
             claims_to_disclose,
@@ -420,8 +420,8 @@ fn holder_discloses_nothing() {
         )
         .expect("issue");
 
-    let mut holder =
-        SDJWTHolder::new(sd_jwt, SDJWTSerializationFormat::Compact).expect("SDJWTHolder");
+    let mut holder = SDJWTHolder::new_unverified(sd_jwt, SDJWTSerializationFormat::Compact)
+        .expect("caller-preverified SDJWTHolder");
     let presentation = holder
         .create_presentation(
             Map::new(), // disclose nothing
@@ -436,5 +436,40 @@ fn holder_discloses_nothing() {
     assert!(
         presentation.ends_with('~'),
         "SD-JWT presentation must end with '~' even when no disclosures chosen"
+    );
+}
+
+/// The Python-facing presentation builder has historically accepted an SD-JWT
+/// only after its caller has authenticated the issuer. Keep that compatibility
+/// boundary explicit when the dependency exposes a named opt-out constructor:
+/// parsing must not silently start enforcing a second, unavailable key source.
+#[test]
+fn preverified_holder_path_remains_explicit() {
+    let mut issuer = make_issuer("ES256");
+    let sd_jwt = issuer
+        .issue_sd_jwt(
+            minimal_payload(),
+            ClaimsForSelectiveDisclosureStrategy::NoSDClaims,
+            None,
+            false,
+            SDJWTSerializationFormat::Compact,
+        )
+        .expect("issue");
+
+    let mut jwt_and_disclosures = sd_jwt.split('~').map(str::to_owned).collect::<Vec<_>>();
+    let mut jwt = jwt_and_disclosures[0]
+        .split('.')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let replacement = if jwt[2].starts_with('A') { 'B' } else { 'A' };
+    jwt[2].replace_range(..1, &replacement.to_string());
+    jwt_and_disclosures[0] = jwt.join(".");
+    let invalid_issuer_signature = jwt_and_disclosures.join("~");
+
+    let holder =
+        SDJWTHolder::new_unverified(invalid_issuer_signature, SDJWTSerializationFormat::Compact);
+    assert!(
+        holder.is_ok(),
+        "the explicitly caller-preverified path must preserve its existing parse-only behavior"
     );
 }

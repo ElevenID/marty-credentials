@@ -16,14 +16,26 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/spruceid/isomdl
-    current: "ElevenID/isomdl-elevenid@99189ab81c4831eee00c534928f37c46f559ea17"
+    current: "ElevenID/isomdl-elevenid@671044c9495aec101bf0cd381669d5ed6f64dd11"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
     advisories: [GHSA-9c48-w39g-hm26, GHSA-4grx-2x9w-596c, GHSA-c38w-74pg-36hr, RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
     review-after: 2026-10-28
-    rationale: mdoc issuance and verification remain supported. The exact-revision ElevenID fork removes ssi-jwk 0.2.1 and rsa 0.6.1, accepts standards-valid empty issuerSigned nameSpaces without weakening non-empty validation, and verifies DeviceAuthentication against the exact verifier-owned CBOR session transcript bytes. The reviewed revision also provides a serial-first digest executor boundary, behavior-locked mdoc issuance planning, and an optional bounded native executor without changing Marty's selected default route or enabling the parallel feature. It preserves SpruceID history and licensing and keeps synchronization changes reviewable inside the ElevenID fork; any pull request to SpruceID requires a separate future maintainer decision. Equivalent upstream behavior may replace a downstream patch only after the full mdoc interoperability and security suites pass.
+    rationale: mdoc issuance and verification remain supported. The exact-revision ElevenID fork removes ssi-jwk 0.2.1 and rsa 0.6.1, accepts standards-valid empty issuerSigned nameSpaces without weakening non-empty validation, and verifies DeviceAuthentication against the exact verifier-owned CBOR session transcript bytes. The reviewed revision provides a serial-first digest executor boundary, behavior-locked mdoc issuance planning, caller-ordered cross-credential preparation, an optional bounded native executor, and optional safe SHA-256 SIMD lanes. Marty keeps both parallel and SIMD features inactive, so the scalar route remains selected. It preserves SpruceID history and licensing and keeps synchronization changes reviewable inside the ElevenID fork; no upstream pull request is implied. Equivalent upstream behavior may replace a downstream patch only after the full mdoc interoperability and security suites pass.
+  - package: sd-jwt-rs
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
+    current: "0.7.1@c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+    target: current-upstream-plus-reviewed-elevenid-patches
+    status: maintained
+    decision: fork
+    advisories: []
+    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
+    review-after: 2026-10-30
+    rationale: The immutable ElevenID revision carries the RFC 9901 holder API update plus reviewed serial-first issuance and verifier refactors, consumer-compatible WASM binding resolution, and dependency-supported Rust 1.85 metadata. Marty leaves optional parallel and benchmark surfaces inactive. The source-breaking holder constructor is adopted through its explicit unverified variant to preserve the Python presentation builder's existing caller-preverified contract because that API does not receive a trusted issuer-key resolver; adding issuer authentication is a separate behavior change rather than a hidden dependency-bump side effect.
   - package: pyo3
     ecosystem: rust
     owner: ElevenID
