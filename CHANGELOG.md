@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.72] - 2026-08-31
+
 ### Changed
 
 - Advance the maintained ElevenID `isomdl` pin through its reviewed serial
   mdoc digest boundary and optional bounded native executor while leaving
   Marty issuance on the existing scalar route and keeping `parallel` disabled.
+- Retire the separately published Python verification service, its migrations,
+  image lifecycle, and implementation-specific surface contract after the
+  canonical Rust service passed the released-artifact compatibility matrix.
+  The distinct Credentials package verification adapter remains supported
+  until its own caller-level migration gate is complete.
+- Restrict Credentials image publication, promotion, and release evidence to
+  the retained issuance service. A source-boundary test prevents the retired
+  standalone verifier from being reintroduced.
 
 ## [0.1.71] - 2026-08-27
 
