@@ -28,6 +28,18 @@ RETIRED_OR_NATIVE_KERNEL_FILES = SERVICE_FILES + (
 )
 
 
+def test_standalone_python_verifier_does_not_return() -> None:
+    retired_paths = (
+        ROOT / "services/verification",
+        ROOT / "scripts/smoke_verification_image.py",
+        ROOT / "scripts/verification_surface_contract.py",
+        ROOT / "contracts/verification-runtime-surface.json",
+    )
+
+    assert all(not path.exists() for path in retired_paths)
+    assert (ROOT / "python/marty_credentials/adapters/services/verification_service.py").is_file()
+
+
 def test_service_kernels_do_not_import_python_crypto_or_legacy_native_package() -> None:
     imported_modules: set[str] = set()
     for path in SERVICE_FILES:

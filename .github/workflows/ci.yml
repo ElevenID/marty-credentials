@@ -551,55 +551,6 @@ jobs:
         working-directory: marty-credentials
         run: pytest tests/test_oid4vci_ephemeral_capabilities_postgres.py -v
 
-  verification-session-postgres:
-    name: Verification Session PostgreSQL Race
-    needs: build-core-python-wheels
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      VERIFICATION_SESSION_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_verification_test
-    services:
-      postgres:
-        image: postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
-        env:
-          POSTGRES_USER: marty
-          POSTGRES_PASSWORD: marty_test
-          POSTGRES_DB: marty_verification_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U marty -d marty_verification_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: marty-credentials
-
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: core-python-${{ runner.os }}
-          path: marty-credentials/release-deps
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
-
-      - name: Install service test dependencies
-        working-directory: marty-credentials
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install release-deps/*.whl
-          pip install -e .[dev]
-
-      - name: Exercise atomic claim, recovery, and terminal fencing
-        working-directory: marty-credentials
-        run: >-
-          pytest tests/test_verification_evidence_lifecycle.py
-          -k real_postgres_claim_recovery_and_terminal_fencing -v
-
   test-wasm:
     name: WASM Tests
     runs-on: ubuntu-latest
@@ -631,7 +582,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, verification-session-postgres, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, test-wasm]
     runs-on: ubuntu-latest
     permissions:
       actions: read

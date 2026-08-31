@@ -98,22 +98,6 @@ def test_native_extension_uses_canonical_top_level_module(monkeypatch) -> None:
     assert rust_integration.get_marty_rs() is extension
 
 
-def test_verification_native_contract_rejects_missing_capability(monkeypatch) -> None:
-    from marty_credentials.native_backend import NativeBackendUnavailable
-    from verification.application import rust_verifier
-
-    monkeypatch.setattr(
-        rust_verifier,
-        "require_marty_rs",
-        lambda capabilities=(): (_ for _ in ()).throw(
-            NativeBackendUnavailable("missing verify_vcdm_data_integrity")
-        ),
-    )
-
-    with pytest.raises(NativeBackendUnavailable, match="verify_vcdm_data_integrity"):
-        rust_verifier.validate_marty_rs_capabilities()
-
-
 def test_native_extension_capability_contract_rejects_incomplete_module(monkeypatch) -> None:
     from issuance.application import rust_integration
 
