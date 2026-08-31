@@ -1,4 +1,26 @@
 {
+  "authorization": {
+    "api_key_header": "X-API-Key",
+    "errors": [
+      {
+        "detail": "Invalid or unauthorized API key",
+        "status": "401"
+      },
+      {
+        "detail": "X-API-Key header is missing",
+        "status": "401"
+      },
+      {
+        "detail": "Verification governance is unavailable",
+        "status": "status.HTTP_503_SERVICE_UNAVAILABLE"
+      }
+    ],
+    "purpose_wrappers": {
+      "_authorize_direct_verify": "verification.direct",
+      "_authorize_session_create": "verification.session.create",
+      "_authorize_vds_nc_verify": "verification.vds-nc"
+    }
+  },
   "configuration": {
     "dynamic_lookups": [
       {
@@ -349,7 +371,10 @@
         "source": "services/verification/infrastructure/api/models.py",
         "validators": [
           {
-            "body_sha256": "4231006634199314a32b0a7f721a8b64313c13242a5d16d1590206ec103cddc9",
+            "decorators": [
+              "model_validator(mode='after')"
+            ],
+            "function_sha256": "2892aec5f5fb605fdbff983b38f613b2b13ccfdfdae7b46cf6cc3c1f2be0e468",
             "line": 93,
             "name": "derive_compatibility_projection"
           }
@@ -625,7 +650,7 @@
     "revision_count": 2,
     "revisions": [
       {
-        "content_sha256": "b501fa30978d89e0c46d8b28aedaf819634bc78c04d4e097affb7092c6338a25",
+        "content_sha256": "b41c2bd90dd259dfd2d12ab610a5f56adcd20292b2509419bbe84cc3b98441bc",
         "down_revisions": [],
         "downgrade_sha256": "11d126ac3f3044e84cd32c2c70eee64e851e63bbb42826e3a9c6d40d9c6b70ff",
         "line": 10,
@@ -634,7 +659,7 @@
         "upgrade_sha256": "b42c0d4da7c74d8a857eeec639cf1caf383d528c0d411bcbf0894f2f72897a48"
       },
       {
-        "content_sha256": "e6ad998cfb919d89c1293cc967306b4a0dd799cdc3d4fcd428ac48b9ea42d5c9",
+        "content_sha256": "6d15bf9813a7e2e9b9374d6d503b045169fa8e9d22d15b8f7629ee979cffc0f4",
         "down_revisions": [
           "202608081900"
         ],
@@ -650,11 +675,20 @@
     ]
   },
   "packaging": {
-    "command": "[\"python\", \"-m\", \"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8006\"]",
+    "command": [
+      "python",
+      "-m",
+      "uvicorn",
+      "main:app",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8006"
+    ],
     "dockerfile": "services/verification/Dockerfile",
     "expose": "8006",
     "health_command": "CMD curl -f http://localhost:8006/health || exit 1",
-    "provenance_sha256": "93685eea56100021307234dae0846b45048352210b5055c716d1b8ba7340c2ae"
+    "provenance_sha256": "ccbb171c0e5a0454a59439ef6093c6f90c21890d8b4294d91387a37af2134855"
   },
   "purpose": "Language-neutral feature floor for Python-image consolidation",
   "runtime": {
@@ -671,12 +705,8 @@
           "8006"
         ],
         "name": "api",
-        "source": "services/verification/main.py",
-        "transports": [
-          "http",
-          "postgresql",
-          "signing-keys-http"
-        ]
+        "port": "8006",
+        "source": "services/verification/Dockerfile"
       }
     ],
     "startup_validation_hooks": [

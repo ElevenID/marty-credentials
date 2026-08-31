@@ -15,16 +15,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVICE_ROOT = ROOT / "services" / "verification"
 MANIFEST = ROOT / "contracts" / "verification-runtime-surface.json"
 HTTP_METHODS = {"delete", "get", "head", "options", "patch", "post", "put"}
-MODEL_NAMES = {
-    "ClaimResult",
-    "CreateSessionRequest",
-    "PresentationDefinition",
-    "SessionResponse",
-    "SubmitPresentationRequest",
-    "VerificationResult",
-    "VerifyDirectRequest",
-    "VerifyVdsNcRequest",
-}
 
 
 class ContractError(RuntimeError):
@@ -104,6 +94,16 @@ def _router_prefixes(sources: list[PythonSource]) -> dict[str, str]:
     return prefixes
 
 
+def _model_names(sources: list[PythonSource]) -> set[str]:
+    return {
+        node.name
+        for source in sources
+        for node in source.tree.body
+        if isinstance(node, ast.ClassDef)
+        and any(_call_name(base) == "BaseModel" for base in node.bases)
+    }
+
+
 def _registered_routers(main: PythonSource) -> set[str]:
     registered: set[str] = set()
     for node in ast.walk(main.tree):
@@ -125,6 +125,7 @@ def _http_routes(sources: list[PythonSource]) -> list[dict[str, Any]]:
     missing = sorted(registered - prefixes.keys())
     if missing:
         raise ContractError(f"registered routers have no static prefix: {missing}")
+    model_names = _model_names(sources)
 
     routes: list[dict[str, Any]] = []
     for source in sources:
@@ -158,7 +159,7 @@ def _http_routes(sources: list[PythonSource]) -> list[dict[str, Any]]:
                         ast.unparse(argument.annotation)
                         for argument, default in zip(positional, defaults, strict=True)
                         if argument.annotation is not None
-                        and ast.unparse(argument.annotation) in MODEL_NAMES
+                        and ast.unparse(argument.annotation) in model_names
                         and not (
                             isinstance(default, ast.Call) and _call_name(default.func) == "Depends"
                         )
@@ -241,10 +242,11 @@ def _environment(sources: list[PythonSource]) -> tuple[list[str], list[dict[str,
 
 
 def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
+    model_names = _model_names(sources)
     result: list[dict[str, Any]] = []
     for source in sources:
         for node in source.tree.body:
-            if not isinstance(node, ast.ClassDef) or node.name not in MODEL_NAMES:
+            if not isinstance(node, ast.ClassDef) or node.name not in model_names:
                 continue
             fields: list[dict[str, Any]] = []
             model_config: str | None = None
@@ -264,11 +266,10 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
                     validators.append(
                         {
                             "name": item.name,
-                            "body_sha256": hashlib.sha256(
-                                ast.dump(ast.Module(body=item.body, type_ignores=[])).encode(
-                                    "utf-8"
-                                )
-                            ).hexdigest(),
+                            "function_sha256": hashlib.sha256(ast.dump(item).encode()).hexdigest(),
+                            "decorators": [
+                                ast.unparse(decorator) for decorator in item.decorator_list
+                            ],
                             "line": item.lineno,
                         }
                     )
@@ -295,8 +296,8 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
                 }
             )
     found = {model["name"] for model in result}
-    if found != MODEL_NAMES:
-        raise ContractError(f"DTO inventory drifted: missing={sorted(MODEL_NAMES - found)}")
+    if found != model_names:
+        raise ContractError(f"DTO inventory drifted: missing={sorted(model_names - found)}")
     result.sort(key=lambda model: model["name"])
     return result
 
@@ -333,7 +334,7 @@ def _migration_graph() -> dict[str, Any]:
                 "down_revisions": down,
                 "source": path.relative_to(ROOT).as_posix(),
                 "line": assignments["revision"][1],
-                "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "content_sha256": _normalized_text_sha256(path),
                 "upgrade_sha256": _function_body_sha256(tree, "upgrade"),
                 "downgrade_sha256": _function_body_sha256(tree, "downgrade"),
             }
@@ -351,11 +352,24 @@ def _migration_graph() -> dict[str, Any]:
 
 
 def _sha256(relative: str) -> str:
-    return hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    return _normalized_text_sha256(ROOT / relative)
+
+
+def _normalized_text_sha256(path: Path) -> str:
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _function_body_sha256(tree: ast.Module, name: str) -> str:
-    function = next(
+    function = _function_in_tree(tree, name)
+    if function is None:
+        raise ContractError(f"missing required function: {name}")
+    normalized = ast.dump(ast.Module(body=function.body, type_ignores=[]))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _function_in_tree(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    return next(
         (
             node
             for node in tree.body
@@ -363,10 +377,17 @@ def _function_body_sha256(tree: ast.Module, name: str) -> str:
         ),
         None,
     )
-    if function is None:
-        raise ContractError(f"missing required function: {name}")
-    normalized = ast.dump(ast.Module(body=function.body, type_ignores=[]))
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _required_function(
+    sources: list[PythonSource], name: str
+) -> ast.FunctionDef | ast.AsyncFunctionDef:
+    matches = [
+        node for source in sources if (node := _function_in_tree(source.tree, name)) is not None
+    ]
+    if len(matches) != 1:
+        raise ContractError(f"expected exactly one top-level function named {name}")
+    return matches[0]
 
 
 def _string_constants(sources: list[PythonSource]) -> dict[str, str]:
@@ -438,6 +459,63 @@ def _governance_contract(sources: list[PythonSource]) -> dict[str, Any]:
     }
 
 
+def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
+    constants = _string_constants(sources)
+    authorize = _required_function(sources, "_authorize")
+    arguments = [*authorize.args.args, *authorize.args.kwonlyargs]
+    defaults: list[ast.AST | None] = [
+        *([None] * (len(authorize.args.args) - len(authorize.args.defaults))),
+        *authorize.args.defaults,
+        *authorize.args.kw_defaults,
+    ]
+    header_alias: str | None = None
+    for argument, default in zip(arguments, defaults, strict=True):
+        if argument.arg != "x_api_key" or not isinstance(default, ast.Call):
+            continue
+        if _call_name(default.func) != "Header":
+            raise ContractError("_authorize x_api_key must use FastAPI Header")
+        header_alias = _literal_string(_keyword(default, "alias"))
+    if header_alias is None:
+        raise ContractError("_authorize must declare a literal x_api_key header alias")
+
+    errors = sorted(
+        {
+            (
+                ast.unparse(call.args[0] if call.args else _keyword(call, "status_code")),
+                _literal_string(_keyword(call, "detail")),
+            )
+            for call in ast.walk(authorize)
+            if isinstance(call, ast.Call)
+            and _call_name(call.func) == "HTTPException"
+            and (call.args or _keyword(call, "status_code") is not None)
+        }
+    )
+
+    wrappers: dict[str, str] = {}
+    for wrapper in (
+        "_authorize_session_create",
+        "_authorize_direct_verify",
+        "_authorize_vds_nc_verify",
+    ):
+        function = _required_function(sources, wrapper)
+        calls = [
+            call
+            for call in ast.walk(function)
+            if isinstance(call, ast.Call) and _call_name(call.func) == "_authorize"
+        ]
+        if len(calls) != 1 or not calls[0].args or not isinstance(calls[0].args[0], ast.Name):
+            raise ContractError(f"{wrapper} must call _authorize with one purpose constant")
+        constant = calls[0].args[0].id
+        if constant not in constants:
+            raise ContractError(f"{wrapper} purpose must resolve to a string constant")
+        wrappers[wrapper] = constants[constant]
+    return {
+        "api_key_header": header_alias,
+        "errors": [{"status": status_code, "detail": detail} for status_code, detail in errors],
+        "purpose_wrappers": wrappers,
+    }
+
+
 def _startup_hooks(sources: list[PythonSource]) -> list[str]:
     main = next(source for source in sources if source.relative == "services/verification/main.py")
     startup = next(
@@ -461,10 +539,18 @@ def _docker_contract() -> dict[str, Any]:
     relative = "services/verification/Dockerfile"
     lines = (ROOT / relative).read_text(encoding="utf-8").splitlines()
     expose = next((line.split(maxsplit=1)[1] for line in lines if line.startswith("EXPOSE ")), None)
-    command = next((line.removeprefix("CMD ") for line in lines if line.startswith("CMD ")), None)
+    command_text = next(
+        (line.removeprefix("CMD ") for line in lines if line.startswith("CMD ")), None
+    )
     health = next((line.strip() for line in lines if "curl -f http://" in line), None)
-    if expose is None or command is None or health is None:
+    if expose is None or command_text is None or health is None:
         raise ContractError("Dockerfile must declare EXPOSE, CMD, and HTTP health check")
+    try:
+        command = json.loads(command_text)
+    except json.JSONDecodeError as exc:
+        raise ContractError("Dockerfile CMD must use JSON exec form") from exc
+    if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
+        raise ContractError("Dockerfile CMD must be a string array")
     return {
         "dockerfile": relative,
         "provenance_sha256": _sha256(relative),
@@ -479,6 +565,7 @@ def build_contract() -> dict[str, Any]:
     sources = _sources()
     routes = _http_routes(sources)
     variables, dynamic = _environment(sources)
+    packaging = _docker_contract()
     return {
         "schema": "marty.verification-runtime-surface/v1",
         "purpose": "Language-neutral feature floor for Python-image consolidation",
@@ -495,24 +582,16 @@ def build_contract() -> dict[str, Any]:
             "modes": [
                 {
                     "name": "api",
-                    "command": [
-                        "python",
-                        "-m",
-                        "uvicorn",
-                        "main:app",
-                        "--host",
-                        "0.0.0.0",
-                        "--port",
-                        "8006",
-                    ],
-                    "transports": ["http", "postgresql", "signing-keys-http"],
-                    "source": "services/verification/main.py",
+                    "command": packaging["command"],
+                    "port": packaging["expose"],
+                    "source": packaging["dockerfile"],
                 }
             ],
         },
+        "authorization": _authorization_contract(sources),
         "governance": _governance_contract(sources),
         "migrations": _migration_graph(),
-        "packaging": _docker_contract(),
+        "packaging": packaging,
     }
 
 

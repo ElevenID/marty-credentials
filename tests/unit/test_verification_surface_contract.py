@@ -31,6 +31,8 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
     assert contract["migrations"]["heads"] == ["202608091200"]
     assert contract["runtime"]["modes"][0]["name"] == "api"
     assert contract["packaging"]["expose"] == "8006"
+    assert contract["runtime"]["modes"][0]["port"] == contract["packaging"]["expose"]
+    assert contract["runtime"]["modes"][0]["command"] == contract["packaging"]["command"]
     assert "http://localhost:8006/health" in contract["packaging"]["health_command"]
 
 
@@ -85,13 +87,14 @@ def test_contract_retains_request_and_result_shapes() -> None:
     assert [validator["name"] for validator in models["VerificationResult"]["validators"]] == [
         "derive_compatibility_projection"
     ]
+    assert models["VerificationResult"]["validators"][0]["decorators"] == [
+        "model_validator(mode='after')"
+    ]
 
 
 def test_contract_retains_authorization_and_error_mapping() -> None:
-    routes = {
-        (route["method"], route["path"]): route
-        for route in surface.build_contract()["http"]["routes"]
-    }
+    contract = surface.build_contract()
+    routes = {(route["method"], route["path"]): route for route in contract["http"]["routes"]}
 
     create = routes[("POST", "/v1/verification/sessions")]
     direct = routes[("POST", "/v1/verification/verify")]
@@ -111,6 +114,18 @@ def test_contract_retains_authorization_and_error_mapping() -> None:
         "status.HTTP_422_UNPROCESSABLE_ENTITY",
         "status.HTTP_500_INTERNAL_SERVER_ERROR",
     } <= submit_statuses
+    authorization = contract["authorization"]
+    assert authorization["api_key_header"] == "X-API-Key"
+    assert authorization["purpose_wrappers"] == {
+        "_authorize_direct_verify": "verification.direct",
+        "_authorize_session_create": "verification.session.create",
+        "_authorize_vds_nc_verify": "verification.vds-nc",
+    }
+    assert {(error["status"], error["detail"]) for error in authorization["errors"]} == {
+        ("401", "Invalid or unauthorized API key"),
+        ("401", "X-API-Key header is missing"),
+        ("status.HTTP_503_SERVICE_UNAVAILABLE", "Verification governance is unavailable"),
+    }
 
 
 def test_contract_retains_fail_closed_configuration() -> None:
@@ -206,6 +221,90 @@ def test_migration_semantic_mutation_is_detected(
         migration.read_text(encoding="utf-8").replace(
             "ux_verification_sessions_live_nonce", "ux_verification_sessions_live_nonce_changed"
         ),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
+def test_contract_hashes_are_line_ending_independent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    migration = (
+        service
+        / "infrastructure"
+        / "migrations"
+        / "versions"
+        / "20260809_1200_atomic_verification_sessions.py"
+    )
+    normalized = migration.read_text(encoding="utf-8").replace("\r\n", "\n")
+    migration.write_bytes(normalized.encode("utf-8"))
+    lf_contract = surface.build_contract()
+    migration.write_bytes(normalized.replace("\n", "\r\n").encode("utf-8"))
+    assert surface.build_contract() == lf_contract
+
+
+def test_authorization_header_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    routes = service / "infrastructure" / "api" / "routes.py"
+    routes.write_text(
+        routes.read_text(encoding="utf-8").replace(
+            'Header(None, alias="X-API-Key")', 'Header(None, alias="X-Changed-Key")', 1
+        ),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
+def test_authorization_error_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    routes = service / "infrastructure" / "api" / "routes.py"
+    routes.write_text(
+        routes.read_text(encoding="utf-8").replace("status_code=401", "status_code=403", 1),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
+def test_authorization_wrapper_purpose_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    routes = service / "infrastructure" / "api" / "routes.py"
+    routes.write_text(
+        routes.read_text(encoding="utf-8").replace(
+            "return await _authorize(DIRECT_VERIFY_PURPOSE, x_api_key)",
+            "return await _authorize(SESSION_CREATE_PURPOSE, x_api_key)",
+        ),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
+def test_validator_decorator_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    models = service / "infrastructure" / "api" / "models.py"
+    models.write_text(
+        models.read_text(encoding="utf-8").replace(
+            '@model_validator(mode="after")', '@model_validator(mode="before")', 1
+        ),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
+def test_added_dto_mutation_is_detected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    models = service / "infrastructure" / "api" / "models.py"
+    models.write_text(
+        models.read_text(encoding="utf-8")
+        + "\n\nclass AddedContractModel(BaseModel):\n    value: str\n",
         encoding="utf-8",
     )
     _assert_mutation_detected()
