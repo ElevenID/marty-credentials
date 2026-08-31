@@ -1,0 +1,911 @@
+{
+  "authorization": {
+    "api_key_header": {
+      "alias": "X-API-Key",
+      "annotation": "str | None",
+      "default": "None"
+    },
+    "errors": [
+      {
+        "detail": "Invalid or unauthorized API key",
+        "status": 401
+      },
+      {
+        "detail": "X-API-Key header is missing",
+        "status": 401
+      },
+      {
+        "detail": "Verification governance is unavailable",
+        "status": 503
+      }
+    ],
+    "purpose_wrappers": {
+      "_authorize_direct_verify": {
+        "forwarded_argument": "x_api_key",
+        "header": {
+          "alias": "X-API-Key",
+          "annotation": "str | None",
+          "default": "None"
+        },
+        "purpose": "verification.direct"
+      },
+      "_authorize_session_create": {
+        "forwarded_argument": "x_api_key",
+        "header": {
+          "alias": "X-API-Key",
+          "annotation": "str | None",
+          "default": "None"
+        },
+        "purpose": "verification.session.create"
+      },
+      "_authorize_vds_nc_verify": {
+        "forwarded_argument": "x_api_key",
+        "header": {
+          "alias": "X-API-Key",
+          "annotation": "str | None",
+          "default": "None"
+        },
+        "purpose": "verification.vds-nc"
+      }
+    }
+  },
+  "configuration": {
+    "dynamic_lookups": [
+      {
+        "line": 270,
+        "source": "services/verification/application/did_resolver.py"
+      },
+      {
+        "line": 273,
+        "source": "services/verification/application/did_resolver.py"
+      },
+      {
+        "line": 298,
+        "source": "services/verification/application/governance.py"
+      }
+    ],
+    "environment_variable_count": 9,
+    "environment_variables": [
+      "APP_ENV",
+      "DATABASE_URL",
+      "DID_WEB_ALLOWED_HOSTS",
+      "ENVIRONMENT",
+      "SIGNING_KEYS_INTERNAL_API_KEY",
+      "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
+      "SIGNING_KEYS_INTERNAL_URL",
+      "VERIFICATION_GOVERNANCE_JSON",
+      "VERIFICATION_PROCESSING_LEASE_SECONDS"
+    ],
+    "semantics": {
+      "database": {
+        "api": {
+          "accepted_postgresql_driver_aliases": [
+            "postgres",
+            "postgresql",
+            "postgresql+psycopg",
+            "postgresql+psycopg2"
+          ],
+          "behavior_sha256": "8936af62083677c50f02adc8c5da1c573829f725d3d8203ba6e399fff2b66553",
+          "normalized_driver": "postgresql+asyncpg"
+        },
+        "environment_variable": "DATABASE_URL",
+        "migrations": {
+          "config_behavior_sha256": "72c1af642d0ae0d49225d46a92b31e1ce8a774a00c76da40e301cc89f8c02b35",
+          "environment_sha256": "55b663c253d87e6c62751c641d9d1bc3d176b8f8536b5453080da23c6905772c",
+          "normalized_driver": "postgresql+psycopg",
+          "schema_behavior_sha256": "b99eca625acc726d15479cf696a1ba33d6a07d61e2d5a908e3180fd4c148cb2a",
+          "url_behavior_sha256": "ce94dbaeda89cfde31e9bfba23eb4f888534fb0b3ff41ad4a015501abd96481f",
+          "version_schema": "verification_service"
+        },
+        "missing_error": "DATABASE_URL environment variable is required"
+      },
+      "did_web_egress": {
+        "behavior_sha256": "3bf0104e8b6c10f47a5cbc716fa397bf35f957e143941e1e68958f93472c969b",
+        "default_port": 443,
+        "environment_variables": [
+          "APP_ENV",
+          "DID_WEB_ALLOWED_HOSTS",
+          "ENVIRONMENT"
+        ],
+        "production_aliases": [
+          "prod",
+          "production"
+        ],
+        "requires_production_allowlist": true,
+        "requires_production_default_https_port": true,
+        "scheme": "https"
+      },
+      "processing_lease_seconds": {
+        "behavior_sha256": "c27f97781dd247b69b4aa1276796228c17410c287651b115a25bae5063a13bf1",
+        "default": 60,
+        "environment_variable": "VERIFICATION_PROCESSING_LEASE_SECONDS",
+        "maximum": 300,
+        "minimum": 5
+      },
+      "signing_keys": {
+        "api_key_precedence": [
+          "name",
+          "f'{name}_FILE'"
+        ],
+        "base_url_default": "http://gateway:8000/internal/signing-keys",
+        "base_url_environment_variable": "SIGNING_KEYS_INTERNAL_URL",
+        "secret_reader_sha256": "cd423de34176d2f9ba0efa7e5b20ff4e25d2e0b97f650296299465c01dba8fb7"
+      }
+    }
+  },
+  "dto": {
+    "models": [
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 60,
+            "name": "claim_name",
+            "required": true
+          },
+          {
+            "annotation": "bool",
+            "default": "True",
+            "line": 61,
+            "name": "required",
+            "required": false
+          },
+          {
+            "annotation": "bool",
+            "default": "False",
+            "line": 62,
+            "name": "present",
+            "required": false
+          },
+          {
+            "annotation": "bool",
+            "default": "False",
+            "line": 63,
+            "name": "satisfies_predicate",
+            "required": false
+          },
+          {
+            "annotation": "str",
+            "default": "'SKIPPED'",
+            "line": 64,
+            "name": "result",
+            "required": false
+          }
+        ],
+        "line": 57,
+        "model_config": null,
+        "name": "ClaimResult",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 31,
+            "name": "verifier_did",
+            "required": true
+          },
+          {
+            "annotation": "PresentationDefinition",
+            "default": null,
+            "line": 32,
+            "name": "presentation_definition",
+            "required": true
+          },
+          {
+            "annotation": "int",
+            "default": "Field(default=600, ge=30, le=3600)",
+            "line": 33,
+            "name": "session_duration_seconds",
+            "required": false
+          }
+        ],
+        "line": 26,
+        "model_config": "ConfigDict(extra='forbid')",
+        "name": "CreateSessionRequest",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 21,
+            "name": "id",
+            "required": true
+          },
+          {
+            "annotation": "list[dict[str, Any]]",
+            "default": null,
+            "line": 22,
+            "name": "input_descriptors",
+            "required": true
+          },
+          {
+            "annotation": "dict[str, Any] | None",
+            "default": "None",
+            "line": 23,
+            "name": "format",
+            "required": false
+          }
+        ],
+        "line": 16,
+        "model_config": "ConfigDict(extra='forbid')",
+        "name": "PresentationDefinition",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 39,
+            "name": "id",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 40,
+            "name": "organization_id",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 41,
+            "name": "verifier_did",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 42,
+            "name": "status",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 43,
+            "name": "request_uri",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 44,
+            "name": "nonce",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 45,
+            "name": "expires_at",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 46,
+            "name": "created_at",
+            "required": true
+          }
+        ],
+        "line": 36,
+        "model_config": null,
+        "name": "SessionResponse",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 54,
+            "name": "presentation",
+            "required": true
+          }
+        ],
+        "line": 49,
+        "model_config": "ConfigDict(extra='forbid')",
+        "name": "SubmitPresentationRequest",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "dict[str, Any] | None",
+            "default": "None",
+            "line": 70,
+            "name": "canonical_result",
+            "required": false
+          },
+          {
+            "annotation": "str",
+            "default": "'UNAVAILABLE'",
+            "line": 71,
+            "name": "processing_status",
+            "required": false
+          },
+          {
+            "annotation": "str",
+            "default": "'INDETERMINATE'",
+            "line": 72,
+            "name": "decision",
+            "required": false
+          },
+          {
+            "annotation": "str",
+            "default": "'PROCESSING_NOT_COMPLETED'",
+            "line": 73,
+            "name": "decision_code",
+            "required": false
+          },
+          {
+            "annotation": "bool",
+            "default": null,
+            "line": 75,
+            "name": "valid",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": "'INDETERMINATE'",
+            "line": 77,
+            "name": "overall_result",
+            "required": false
+          },
+          {
+            "annotation": "list[ClaimResult]",
+            "default": "Field(default_factory=list)",
+            "line": 78,
+            "name": "claim_results",
+            "required": false
+          },
+          {
+            "annotation": "bool",
+            "default": "False",
+            "line": 79,
+            "name": "trust_chain_valid",
+            "required": false
+          },
+          {
+            "annotation": "bool",
+            "default": "False",
+            "line": 80,
+            "name": "revocation_checked",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 81,
+            "name": "revocation_status",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 82,
+            "name": "evaluated_at",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 83,
+            "name": "verifier_nonce",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 84,
+            "name": "flow_instance_id",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 85,
+            "name": "policy_id",
+            "required": false
+          },
+          {
+            "annotation": "dict[str, Any] | None",
+            "default": "None",
+            "line": 87,
+            "name": "verified_claims",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 88,
+            "name": "verification_method",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 89,
+            "name": "error",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 90,
+            "name": "verified_at",
+            "required": false
+          }
+        ],
+        "line": 67,
+        "model_config": null,
+        "name": "VerificationResult",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": [
+          {
+            "decorators": [
+              "model_validator(mode='after')"
+            ],
+            "function_sha256": "b2a1c911f4504908694cfd7f6ea263bf913b16ad5ec7464ce2e99c942b337a44",
+            "line": 93,
+            "name": "derive_compatibility_projection"
+          }
+        ]
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "dict[str, Any] | str",
+            "default": null,
+            "line": 117,
+            "name": "presentation",
+            "required": true
+          },
+          {
+            "annotation": "PresentationDefinition",
+            "default": null,
+            "line": 118,
+            "name": "presentation_definition",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 119,
+            "name": "verifier_did",
+            "required": true
+          }
+        ],
+        "line": 112,
+        "model_config": "ConfigDict(extra='forbid')",
+        "name": "VerifyDirectRequest",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      },
+      {
+        "bases": [
+          "BaseModel"
+        ],
+        "fields": [
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 127,
+            "name": "barcode",
+            "required": true
+          },
+          {
+            "annotation": "str",
+            "default": null,
+            "line": 128,
+            "name": "issuer_did",
+            "required": true
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 129,
+            "name": "verification_method_id",
+            "required": false
+          },
+          {
+            "annotation": "str | None",
+            "default": "None",
+            "line": 130,
+            "name": "algorithm",
+            "required": false
+          }
+        ],
+        "line": 122,
+        "model_config": "ConfigDict(extra='forbid')",
+        "name": "VerifyVdsNcRequest",
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
+      }
+    ]
+  },
+  "governance": {
+    "processing_states": [
+      "COMPLETED",
+      "ERROR",
+      "UNAVAILABLE",
+      "UNSUPPORTED"
+    ],
+    "purposes": [
+      "verification.direct",
+      "verification.session.create",
+      "verification.vds-nc"
+    ],
+    "required_checks_sha256": "1d7cecbd506e67ff3970a765dd45d2e0818264bb48732a4ff36fd432f4f2871c",
+    "required_native_capabilities": [
+      "governance_authorize",
+      "governance_canonical_digest",
+      "governance_from_snapshot",
+      "governance_require_purpose",
+      "governance_resume",
+      "governance_validate",
+      "governance_validate_request",
+      "oid4vp_verify_vp_token",
+      "vds_nc_verify",
+      "verification_build_decision_result",
+      "verify_presentation_structure",
+      "verify_vcdm_data_integrity",
+      "verify_vcdm_jwt"
+    ]
+  },
+  "http": {
+    "route_count": 7,
+    "routes": [
+      {
+        "declared_errors": [],
+        "dependencies": [],
+        "line": 48,
+        "literal_response_shape": {
+          "native_backend": {
+            "expression": "marty_rs_diagnostic(REQUIRED_MARTY_RS_CAPABILITIES)"
+          },
+          "service": {
+            "literal": "verification"
+          },
+          "status": {
+            "literal": "healthy"
+          }
+        },
+        "method": "GET",
+        "operation": "health",
+        "path": "/health",
+        "request_model": null,
+        "response_model": null,
+        "source": "services/verification/main.py"
+      },
+      {
+        "declared_errors": [],
+        "dependencies": [],
+        "line": 335,
+        "literal_response_shape": {
+          "status": {
+            "literal": "healthy"
+          }
+        },
+        "method": "GET",
+        "operation": "health_check",
+        "path": "/v1/verification/health",
+        "request_model": null,
+        "response_model": null,
+        "source": "services/verification/infrastructure/api/routes.py"
+      },
+      {
+        "declared_errors": [
+          {
+            "detail": "Verification request does not match its governed policy",
+            "line": 218,
+            "status": 422
+          },
+          {
+            "detail": "Failed to create verification session",
+            "line": 224,
+            "status": 500
+          }
+        ],
+        "dependencies": [
+          "_authorize_session_create",
+          "get_verification_service"
+        ],
+        "line": 191,
+        "literal_response_shape": null,
+        "method": "POST",
+        "operation": "create_verification_session",
+        "path": "/v1/verification/sessions",
+        "request_model": "CreateSessionRequest",
+        "response_model": "SessionResponse",
+        "source": "services/verification/infrastructure/api/routes.py"
+      },
+      {
+        "declared_errors": [
+          {
+            "detail": "Session not found",
+            "line": 290,
+            "status": 404
+          }
+        ],
+        "dependencies": [
+          "get_verification_service"
+        ],
+        "line": 283,
+        "literal_response_shape": null,
+        "method": "GET",
+        "operation": "get_session",
+        "path": "/v1/verification/sessions/{session_id}",
+        "request_model": null,
+        "response_model": "SessionResponse",
+        "source": "services/verification/infrastructure/api/routes.py"
+      },
+      {
+        "declared_errors": [
+          {
+            "detail": "Verification session not found",
+            "line": 251,
+            "status": 404
+          },
+          {
+            "detail": "Verification session has expired",
+            "line": 256,
+            "status": 410
+          },
+          {
+            "detail": "Verification session submission conflicts",
+            "line": 261,
+            "status": 409
+          },
+          {
+            "detail": "Session presentation cannot be bound to the verifier nonce",
+            "line": 266,
+            "status": 422
+          },
+          {
+            "detail": "Invalid presentation data",
+            "line": 271,
+            "status": 400
+          },
+          {
+            "detail": "Presentation submission failed",
+            "line": 277,
+            "status": 500
+          }
+        ],
+        "dependencies": [
+          "get_verification_service"
+        ],
+        "line": 230,
+        "literal_response_shape": null,
+        "method": "POST",
+        "operation": "submit_presentation",
+        "path": "/v1/verification/sessions/{session_id}/submit",
+        "request_model": "SubmitPresentationRequest",
+        "response_model": "VerificationResult",
+        "source": "services/verification/infrastructure/api/routes.py"
+      },
+      {
+        "declared_errors": [
+          {
+            "detail": "Verification request does not match its governed policy",
+            "line": 324,
+            "status": 422
+          },
+          {
+            "detail": "Verification failed",
+            "line": 330,
+            "status": 500
+          }
+        ],
+        "dependencies": [
+          "_authorize_direct_verify",
+          "get_verification_service"
+        ],
+        "line": 304,
+        "literal_response_shape": null,
+        "method": "POST",
+        "operation": "verify_presentation_direct",
+        "path": "/v1/verification/verify",
+        "request_model": "VerifyDirectRequest",
+        "response_model": "VerificationResult",
+        "source": "services/verification/infrastructure/api/routes.py"
+      },
+      {
+        "declared_errors": [
+          {
+            "detail": "issuer_did did not resolve to a usable public JWK",
+            "line": 372,
+            "status": 422
+          },
+          {
+            "detail": "VDS-NC verification failed",
+            "line": 403,
+            "status": 500
+          }
+        ],
+        "dependencies": [
+          "_authorize_vds_nc_verify",
+          "get_credential_verifier"
+        ],
+        "line": 341,
+        "literal_response_shape": null,
+        "method": "POST",
+        "operation": "verify_vds_nc_barcode",
+        "path": "/v1/verification/verify/vds-nc",
+        "request_model": "VerifyVdsNcRequest",
+        "response_model": "VerificationResult",
+        "source": "services/verification/infrastructure/api/routes.py"
+      }
+    ]
+  },
+  "migrations": {
+    "heads": [
+      "202608091200"
+    ],
+    "revision_count": 2,
+    "revisions": [
+      {
+        "content_sha256": "b41c2bd90dd259dfd2d12ab610a5f56adcd20292b2509419bbe84cc3b98441bc",
+        "down_revisions": [],
+        "downgrade_sha256": "11d126ac3f3044e84cd32c2c70eee64e851e63bbb42826e3a9c6d40d9c6b70ff",
+        "line": 10,
+        "revision": "202608081900",
+        "source": "services/verification/infrastructure/migrations/versions/20260808_1900_persist_verification_evidence.py",
+        "upgrade_sha256": "b42c0d4da7c74d8a857eeec639cf1caf383d528c0d411bcbf0894f2f72897a48"
+      },
+      {
+        "content_sha256": "6d15bf9813a7e2e9b9374d6d503b045169fa8e9d22d15b8f7629ee979cffc0f4",
+        "down_revisions": [
+          "202608081900"
+        ],
+        "downgrade_sha256": "a72d4d43770251ef9e7dbcb194e6edc6db8bbf60a7645ecd8c4d220643e9592a",
+        "line": 10,
+        "revision": "202608091200",
+        "source": "services/verification/infrastructure/migrations/versions/20260809_1200_atomic_verification_sessions.py",
+        "upgrade_sha256": "e21b19aacd123d28c84deb9bfea223462539c2b1936079003574a8014ea92b89"
+      }
+    ],
+    "roots": [
+      "202608081900"
+    ]
+  },
+  "packaging": {
+    "command": [
+      "python",
+      "-m",
+      "uvicorn",
+      "main:app",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "8006"
+    ],
+    "dockerfile": "services/verification/Dockerfile",
+    "expose": "8006",
+    "health_command": "CMD curl -f http://localhost:8006/health || exit 1",
+    "provenance_sha256": "ccbb171c0e5a0454a59439ef6093c6f90c21890d8b4294d91387a37af2134855"
+  },
+  "purpose": "Language-neutral feature floor for Python-image consolidation",
+  "runtime": {
+    "modes": [
+      {
+        "command": [
+          "python",
+          "-m",
+          "uvicorn",
+          "main:app",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8006"
+        ],
+        "name": "api",
+        "port": "8006",
+        "source": "services/verification/Dockerfile"
+      },
+      {
+        "command_prefix": [
+          "python",
+          "-m",
+          "verification.manage_migrations"
+        ],
+        "deployment_command": [
+          "python",
+          "-m",
+          "verification.manage_migrations",
+          "upgrade"
+        ],
+        "dispatch": {
+          "current": [
+            {
+              "arguments": [
+                "config"
+              ],
+              "handler": "command.current",
+              "keywords": {}
+            }
+          ],
+          "history": [
+            {
+              "arguments": [
+                "config"
+              ],
+              "handler": "command.history",
+              "keywords": {
+                "verbose": "True"
+              }
+            }
+          ],
+          "upgrade": [
+            {
+              "arguments": [
+                "database_url"
+              ],
+              "handler": "ensure_version_schema",
+              "keywords": {}
+            },
+            {
+              "arguments": [
+                "config",
+                "'head'"
+              ],
+              "handler": "command.upgrade",
+              "keywords": {}
+            }
+          ]
+        },
+        "documentation_sha256": "fd16fa91f2d2c565cb0bc831f4100b0f4a17ac87eff85cdd6787b8f2ec51cd3b",
+        "name": "migrations",
+        "source": "services/verification/manage_migrations.py",
+        "supported_operations": [
+          "current",
+          "history",
+          "upgrade"
+        ]
+      }
+    ],
+    "startup_validation_hooks": [
+      "load_governance",
+      "validate_internal_resolver_configuration",
+      "validate_marty_rs_capabilities"
+    ]
+  },
+  "schema": "marty.verification-runtime-surface/v1",
+  "source": {
+    "production_files": 14
+  }
+}
