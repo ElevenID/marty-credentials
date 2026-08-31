@@ -144,7 +144,7 @@ jobs:
           TAG: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
-          for service in issuance verification; do
+          for service in issuance; do
             package="marty-credentials-$service"
             gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
               "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
@@ -287,7 +287,7 @@ jobs:
           python -m pip install pytest==9.1.1
           pip install -e .[dev]
           PYTHONPATH="$GITHUB_WORKSPACE/services" python -c \
-            "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; from verification.application.rust_verifier import validate_marty_rs_capabilities as verification; issuance(); verification()"
+            "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; issuance()"
           pytest tests/ packages/tests/
 
   create-release-draft:

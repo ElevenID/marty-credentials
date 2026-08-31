@@ -75,9 +75,10 @@ This package depends on [marty-core](https://github.com/ElevenID/marty-core) for
 ## Verification Governance
 
 Verification management endpoints require purpose-scoped, organization-bound
-governance rather than caller-selected organization or trust inputs. See
-[`services/verification/GOVERNANCE.md`](services/verification/GOVERNANCE.md)
-for the deployment schema, mandatory checks, digest rules, and rollout notes.
+governance rather than caller-selected organization or trust inputs. The
+canonical implementation and deployment contract now live in the Rust
+verification service in `ElevenID/marty-ui`; this repository retains only
+Credentials package adapters that have separate caller-level deletion gates.
 
 ## Native Issuance Service
 
@@ -137,7 +138,7 @@ Each release produces:
 - **Python wheels** for multiple platforms (manylinux, macOS, Windows)
 - **WASM packages** for browser and Node.js
 - **Source distribution** (.tar.gz)
-- **Service images** for issuance and verification, pinned by digest in GHCR
+- **The issuance service image**, pinned by digest in GHCR
 - **SBOMs, SHA256 checksums, Sigstore signatures, and GitHub provenance**
 
 GitHub Releases and GHCR are the canonical artifact sources. PyPI publication

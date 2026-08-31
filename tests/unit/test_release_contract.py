@@ -97,7 +97,10 @@ def test_release_asset_contract_is_complete_and_disjoint() -> None:
     images = release_contract.image_evidence_names()
     assert stable == {"marty_credentials-0.1.7.tar.gz"}
     assert all(not name.startswith("marty_rs-") for name in stable)
-    assert len(images) == 4
+    assert images == {
+        "marty-credentials-issuance.digest",
+        "marty-credentials-issuance.spdx.json",
+    }
     assert stable.isdisjoint(images)
     assert release_contract.data_asset_names("0.1.7") == stable | images
     assert release_contract.final_asset_names("0.1.7") == stable | images | {
@@ -160,7 +163,7 @@ def test_checksum_manifest_covers_only_all_data_assets(tmp_path: Path) -> None:
     release_contract.verify_checksums(tmp_path, "0.1.7")
 
     lines = manifest.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 5
+    assert len(lines) == len(expected)
     assert [line.split("  ", 1)[1] for line in lines] == sorted(expected)
     assert all("SHA256SUMS" not in line for line in lines)
 

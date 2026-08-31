@@ -157,13 +157,6 @@ def test_ci_installs_exact_source_built_core_artifacts_with_released_features() 
     assert "authority-issuance" not in CI
     assert "authority-issuance" not in WARM_CACHES
 
-    verification_lane = CI.split("  verification-session-postgres:", 1)[1].split(
-        "\n  test-wasm:", 1
-    )[0]
-    assert "needs: build-core-python-wheels" in verification_lane
-    assert "name: core-python-${{ runner.os }}" in verification_lane
-    assert "python -m pip install release-deps/*.whl" in verification_lane
-
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:
     assert "workflow_call:" in PYPI
@@ -225,21 +218,18 @@ def test_versioned_image_tags_are_not_written_by_matrix_builds() -> None:
     assert "tags:" not in matrix_job
     assert "push: true" not in matrix_job
     assert "outputs: type=image" in matrix_job
-    assert "Promote both verified digests" not in matrix_job
+    assert "Promote the verified issuance digest" not in matrix_job
     assert "docker buildx imagetools create" not in matrix_job
     assert "--method PATCH" not in matrix_job
 
 
-def test_verification_image_is_started_before_attestation_and_publication() -> None:
+def test_retired_verification_image_is_not_republished() -> None:
     matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
-    build_position = matrix_job.index("- id: build")
-    smoke_position = matrix_job.index("python scripts/smoke_verification_image.py")
-    attest_position = matrix_job.index("- uses: actions/attest-build-provenance")
-
-    assert build_position < smoke_position < attest_position
-    assert "if: matrix.service == 'verification'" in matrix_job
-    assert "marty-credentials-verification@${{ steps.build.outputs.digest }}" in matrix_job
-    assert "docker.io/library/postgres@sha256:" in matrix_job
+    assert "service: issuance" in matrix_job
+    assert "service: verification" not in matrix_job
+    assert "marty-credentials-verification" not in IMAGES
+    assert "smoke_verification_image.py" not in IMAGES
+    assert "verification-session-postgres" not in CI
 
 
 def test_finalization_order_prevents_partial_release_publication() -> None:
@@ -247,7 +237,7 @@ def test_finalization_order_prevents_partial_release_publication() -> None:
     finalize_position = IMAGES.index("  finalize-release:")
     finalize = IMAGES[finalize_position:]
     complete_position = finalize.index("Validate complete draft before image tag promotion")
-    promote_position = finalize.index("Promote both verified digests to the stable tag")
+    promote_position = finalize.index("Promote the verified issuance digest to the stable tag")
     promotion_command_position = finalize.index("docker buildx imagetools create")
     publish_position = finalize.index("Publish the exact complete draft once")
     tag_ref_position = finalize.index("git/ref/tags/$TAG")

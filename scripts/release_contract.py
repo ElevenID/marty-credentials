@@ -19,7 +19,7 @@ from typing import Any
 TAG_PATTERN = re.compile(r"^v(?P<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PACKAGE_NAME_SEPARATOR_PATTERN = re.compile(r"[-_.]+")
-SERVICES = ("issuance", "verification")
+SERVICES = ("issuance",)
 
 
 class ReleaseContractError(RuntimeError):

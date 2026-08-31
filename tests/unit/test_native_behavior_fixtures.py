@@ -13,10 +13,6 @@ from issuance.domain.vcdm_validation import (
     validate_credential_document,
 )
 from marty_credentials.native_backend import require_marty_rs
-from verification.application.governance import (
-    GovernanceAuthorizationError,
-    parse_governance,
-)
 
 _native = require_marty_rs(
     (
@@ -78,19 +74,6 @@ def test_vcdm_adapter_matches_native_behavior_fixture() -> None:
         with pytest.raises(VcdmValidationError) as failure:
             validate_credential_document(case["credential"], issuer_did=case["issuer_did"])
         assert failure.value.code == case["expected_error"], case["name"]
-
-
-def test_governance_adapter_matches_native_authorization_fixture() -> None:
-    fixture = _fixture("governance")
-    registry = parse_governance(json.dumps(fixture["governance"]))
-    for case in fixture["authorization_cases"]:
-        if case["expected_client_id"] is not None:
-            context = registry.authorize(case["api_key"], case["purpose"])
-            assert context.client_id == case["expected_client_id"], case["name"]
-            continue
-        with pytest.raises(GovernanceAuthorizationError) as failure:
-            registry.authorize(case["api_key"], case["purpose"])
-        assert case["expected_error"] in str(failure.value), case["name"]
 
 
 def test_reconciliation_binding_matches_language_neutral_fixture() -> None:

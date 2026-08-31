@@ -109,7 +109,7 @@ jobs:
             --json release.json --release-id "$RELEASE_ID" --tag "$TAG" \
             --commit "$COMMIT" --phase resumable)"
           if [ "$STATE" = terminal ]; then
-            for service in issuance verification; do
+            for service in issuance; do
               name="marty-credentials-$service.digest"
               asset_count="$(jq -r --arg name "$name" \
                 '[.assets[] | select(.name == $name)] | length' release.json)"
@@ -157,8 +157,6 @@ jobs:
         include:
           - service: issuance
             dockerfile: services/Dockerfile
-          - service: verification
-            dockerfile: services/verification/Dockerfile
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -223,16 +221,6 @@ jobs:
             MARTY_COMMON_SHA256=${{ steps.deps.outputs.marty_common_sha256 }}
           provenance: mode=max
           sbom: true
-
-      - name: Prove the verification image migrates and starts
-        if: matrix.service == 'verification'
-        env:
-          IMAGE: ghcr.io/elevenid/marty-credentials-verification@${{ steps.build.outputs.digest }}
-          POSTGRES_IMAGE: docker.io/library/postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
-        run: |
-          python scripts/smoke_verification_image.py \
-            --image "$IMAGE" \
-            --postgres-image "$POSTGRES_IMAGE"
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
@@ -323,8 +311,6 @@ jobs:
             case "$asset_name" in
               marty-credentials-issuance.digest|\
               marty-credentials-issuance.spdx.json|\
-              marty-credentials-verification.digest|\
-              marty-credentials-verification.spdx.json|\
               SHA256SUMS|SHA256SUMS.sigstore.json)
                 destination="existing-assets/$asset_name"
                 ;;
@@ -339,9 +325,7 @@ jobs:
           done < <(jq -r '.assets[] | [.id, .name] | @tsv' release-before.json)
           for name in \
             marty-credentials-issuance.digest \
-            marty-credentials-issuance.spdx.json \
-            marty-credentials-verification.digest \
-            marty-credentials-verification.spdx.json
+            marty-credentials-issuance.spdx.json
           do
             if [ -f "existing-assets/$name" ]; then
               if [ -f "release-assets/$name" ]; then
@@ -449,8 +433,6 @@ jobs:
           for name in \
             marty-credentials-issuance.digest \
             marty-credentials-issuance.spdx.json \
-            marty-credentials-verification.digest \
-            marty-credentials-verification.spdx.json \
             SHA256SUMS \
             SHA256SUMS.sigstore.json
           do
@@ -524,13 +506,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Promote both verified digests to the stable tag
+      - name: Promote the verified issuance digest to the stable tag
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
-          for service in issuance verification; do
+          for service in issuance; do
             package="marty-credentials-$service"
             IMAGE="ghcr.io/elevenid/marty-credentials-$service"
             DIGEST="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
@@ -604,7 +586,7 @@ jobs:
             echo "::error::Remote tag no longer resolves to the approved commit"
             exit 1
           fi
-          for service in issuance verification; do
+          for service in issuance; do
             DIGEST="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
             package="marty-credentials-$service"
             gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
