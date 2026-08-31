@@ -812,6 +812,39 @@ def _docker_contract() -> dict[str, Any]:
     }
 
 
+def _migration_runtime_contract(sources: list[PythonSource]) -> dict[str, Any]:
+    main = _required_function(sources, "main")
+    command_argument = next(
+        call
+        for call in ast.walk(main)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr == "add_argument"
+        and _literal_string(call.args[0] if call.args else None) == "command"
+    )
+    operations = _literal_string_collection(_keyword(command_argument, "choices"))
+    if operations is None:
+        raise ContractError("migration CLI choices must remain a literal string collection")
+    documentation = (SERVICE_ROOT / "MIGRATIONS.md").read_text(encoding="utf-8")
+    match = re.search(
+        r"(?:DATABASE_URL=\S+ )?(python -m verification\.manage_migrations [a-z]+)",
+        documentation,
+    )
+    if match is None:
+        raise ContractError("MIGRATIONS.md must declare the deployment migration command")
+    deployment_command = match.group(1).split()
+    if deployment_command[-1] not in operations:
+        raise ContractError("documented migration operation is not supported by the CLI")
+    return {
+        "name": "migrations",
+        "command_prefix": ["python", "-m", "verification.manage_migrations"],
+        "deployment_command": deployment_command,
+        "supported_operations": operations,
+        "source": "services/verification/manage_migrations.py",
+        "documentation_sha256": _normalized_text_sha256(SERVICE_ROOT / "MIGRATIONS.md"),
+    }
+
+
 def build_contract() -> dict[str, Any]:
     """Build the deterministic verification feature floor from the Python oracle."""
     sources = _sources()
@@ -838,7 +871,8 @@ def build_contract() -> dict[str, Any]:
                     "command": packaging["command"],
                     "port": packaging["expose"],
                     "source": packaging["dockerfile"],
-                }
+                },
+                _migration_runtime_contract(sources),
             ],
         },
         "authorization": _authorization_contract(sources),

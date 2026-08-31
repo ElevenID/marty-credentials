@@ -64,6 +64,14 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
     assert contract["packaging"]["expose"] == "8006"
     assert contract["runtime"]["modes"][0]["port"] == contract["packaging"]["expose"]
     assert contract["runtime"]["modes"][0]["command"] == contract["packaging"]["command"]
+    assert contract["runtime"]["modes"][1] | {"documentation_sha256": "ignored"} == {
+        "name": "migrations",
+        "command_prefix": ["python", "-m", "verification.manage_migrations"],
+        "deployment_command": ["python", "-m", "verification.manage_migrations", "upgrade"],
+        "supported_operations": ["current", "history", "upgrade"],
+        "source": "services/verification/manage_migrations.py",
+        "documentation_sha256": "ignored",
+    }
     assert "http://localhost:8006/health" in contract["packaging"]["health_command"]
 
 
@@ -561,4 +569,19 @@ def test_database_contract_mutation_is_detected(
     service = _sandbox(tmp_path, monkeypatch)
     source = service / relative
     source.write_text(source.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+    _assert_mutation_detected()
+
+
+def test_migration_cli_operation_mutation_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    source = service / "manage_migrations.py"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            'choices=("upgrade", "current", "history")',
+            'choices=("upgrade", "current")',
+        ),
+        encoding="utf-8",
+    )
     _assert_mutation_detected()

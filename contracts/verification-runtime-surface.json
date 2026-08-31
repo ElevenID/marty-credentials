@@ -836,6 +836,27 @@
         "name": "api",
         "port": "8006",
         "source": "services/verification/Dockerfile"
+      },
+      {
+        "command_prefix": [
+          "python",
+          "-m",
+          "verification.manage_migrations"
+        ],
+        "deployment_command": [
+          "python",
+          "-m",
+          "verification.manage_migrations",
+          "upgrade"
+        ],
+        "documentation_sha256": "fd16fa91f2d2c565cb0bc831f4100b0f4a17ac87eff85cdd6787b8f2ec51cd3b",
+        "name": "migrations",
+        "source": "services/verification/manage_migrations.py",
+        "supported_operations": [
+          "current",
+          "history",
+          "upgrade"
+        ]
       }
     ],
     "startup_validation_hooks": [
