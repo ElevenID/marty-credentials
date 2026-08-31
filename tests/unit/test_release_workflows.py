@@ -15,6 +15,13 @@ PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 
 
+def _image_workflow_step(name: str) -> str:
+    marker = f"      - name: {name}"
+    start = IMAGES.index(marker)
+    end = IMAGES.find("\n      - ", start + len(marker))
+    return IMAGES[start:] if end == -1 else IMAGES[start:end]
+
+
 def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
     source_job = STABLE.split("  build-source-dist:", 1)[1].split("\n  test:", 1)[0]
     assert "validate-release-source:" in STABLE
@@ -120,6 +127,22 @@ def test_release_image_sbom_is_checked_before_evidence_upload() -> None:
     assert sbom_position < denylist_position < upload_position
 
 
+def test_historical_verification_smoke_gate_precedes_attestation() -> None:
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+    build_position = matrix_job.index("- id: build")
+    smoke_position = matrix_job.index("Prove the historical verification image migrates and starts")
+    attest_position = matrix_job.index("- uses: actions/attest-build-provenance@")
+
+    assert build_position < smoke_position < attest_position
+    assert "if: matrix.service == 'verification'" in matrix_job
+    assert "python scripts/smoke_verification_image.py" in matrix_job
+    assert "marty-credentials-verification@${{ steps.build.outputs.digest }}" in matrix_job
+    assert (
+        "postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f"
+        in matrix_job
+    )
+
+
 def test_release_tool_installs_are_version_pinned() -> None:
     assert "curl https://rustwasm.github.io/wasm-pack" not in STABLE
     assert "cargo install wasm-pack --version 0.15.0 --locked" in STABLE
@@ -201,6 +224,76 @@ def test_image_release_has_fail_closed_recovery_states() -> None:
     assert "Existing $name is identical; retaining it" in IMAGES
 
 
+def test_image_release_derives_one_canonical_handoff_from_the_checked_out_tag() -> None:
+    validate = IMAGES.split("  validate-draft:", 1)[1].split("\n  publish-by-digest:", 1)[0]
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+
+    assert "ref: ${{ github.sha }}" in validate
+    assert "ref: ${{ steps.contract.outputs.tag }}" in validate
+    assert "path: release-source" in validate
+    assert "Tag must be a canonical stable release tag" in validate
+    binding_position = validate.index("Validate the tag binding before running tag-scoped code")
+    handoff_position = validate.index("Derive the canonical tag-scoped service matrix")
+    tag_code_position = validate.index("release-source/scripts/release_contract.py validate-source")
+    assert binding_position < handoff_position < tag_code_position
+    assert 'rev-parse "refs/tags/$TAG^{commit}"' in validate
+    assert "merge-base --is-ancestor" in validate
+    assert "scripts/release_service_handoff.py" in validate
+    assert "--repository release-source" in validate
+    assert "service_matrix: ${{ steps.service_contract.outputs.service_matrix }}" in validate
+    assert "release-source/scripts/release_contract.py validate-source" in validate
+    assert "release-source/scripts/release_contract.py validate-release" in validate
+    assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
+    assert IMAGES.count("ref: ${{ needs.validate-draft.outputs.commit }}") == 2
+
+
+def test_every_service_specific_release_phase_consumes_the_same_handoff() -> None:
+    release_state = _image_workflow_step("Validate source and draft by numeric release ID")
+    terminal = IMAGES.split('if [ "$STATE" = terminal ]; then', 1)[1].split(
+        'elif [ "$STATE" = complete ]', 1
+    )[0]
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+    steps = [
+        _image_workflow_step("Revalidate and download draft assets by release ID"),
+        _image_workflow_step("Create and verify one final checksum manifest"),
+        _image_workflow_step("Upload only missing evidence to the exact draft"),
+        _image_workflow_step("Promote every verified service digest to the stable tag"),
+        _image_workflow_step("Publish the exact complete draft once"),
+    ]
+
+    assert "SERVICE_MATRIX: ${{ steps.service_contract.outputs.service_matrix }}" in release_state
+    assert ".include[].service" in release_state
+    assert 'done <<< "$service_lines"' in terminal
+    assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
+    assert matrix_job.count("${{ matrix.service }}") >= 8
+    for step in steps:
+        assert "SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}" in step
+        assert ".include[].service" in step
+    assert "< <(jq -er '.include[].service'" not in IMAGES
+    assert "for service in issuance" not in IMAGES
+    assert "service: issuance" not in matrix_job
+
+
+def test_partial_and_complete_draft_recovery_cover_every_handoff_service() -> None:
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+    reconcile = _image_workflow_step("Revalidate and download draft assets by release ID")
+    promote = _image_workflow_step("Promote every verified service digest to the stable tag")
+    prepublish = _image_workflow_step("Publish the exact complete draft once")
+
+    assert "if: needs.validate-draft.outputs.state == 'build'" in matrix_job
+    assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
+    assert "for suffix in digest spdx.json; do" in reconcile
+    assert "Existing $name differs from the rebuilt evidence" in reconcile
+    assert "needs.validate-draft.outputs.state == 'complete'" in IMAGES
+    assert "needs.publish-by-digest.result == 'skipped'" in IMAGES
+    assert "--phase complete-draft" in _image_workflow_step(
+        "Validate complete draft before image tag promotion"
+    )
+    assert "docker buildx imagetools create" in promote
+    assert "package-after-$service.json" in promote
+    assert "package-prepublish-$service.json" in prepublish
+
+
 def test_terminal_recovery_verifies_release_assets_and_image_tags() -> None:
     terminal = IMAGES.split('if [ "$STATE" = terminal ]; then', 1)[1].split(
         'elif [ "$STATE" = complete ]', 1
@@ -223,12 +316,12 @@ def test_versioned_image_tags_are_not_written_by_matrix_builds() -> None:
     assert "--method PATCH" not in matrix_job
 
 
-def test_retired_verification_image_is_not_republished() -> None:
+def test_current_contract_does_not_statically_republish_retired_verification_image() -> None:
     matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
-    assert "service: issuance" in matrix_job
+    assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
+    assert "service: issuance" not in matrix_job
     assert "service: verification" not in matrix_job
-    assert "marty-credentials-verification" not in IMAGES
-    assert "smoke_verification_image.py" not in IMAGES
+    assert "if: matrix.service == 'verification'" in matrix_job
     assert "verification-session-postgres" not in CI
 
 
@@ -237,10 +330,14 @@ def test_finalization_order_prevents_partial_release_publication() -> None:
     finalize_position = IMAGES.index("  finalize-release:")
     finalize = IMAGES[finalize_position:]
     complete_position = finalize.index("Validate complete draft before image tag promotion")
-    promote_position = finalize.index("Promote the verified issuance digest to the stable tag")
+    prepromotion_check_position = finalize.index(
+        "Revalidate the remote tag before image tag promotion"
+    )
+    prepromotion_tag_ref_position = finalize.index("git/ref/tags/$TAG", prepromotion_check_position)
+    promote_position = finalize.index("Promote every verified service digest to the stable tag")
     promotion_command_position = finalize.index("docker buildx imagetools create")
     publish_position = finalize.index("Publish the exact complete draft once")
-    tag_ref_position = finalize.index("git/ref/tags/$TAG")
+    prepublish_tag_ref_position = finalize.index("git/ref/tags/$TAG", publish_position)
     asset_digest_position = finalize.index(
         "Remote release digest for $name changed before publication"
     )
@@ -248,15 +345,22 @@ def test_finalization_order_prevents_partial_release_publication() -> None:
     patch_position = finalize.index("--method PATCH")
 
     assert build_position < finalize_position
-    assert complete_position < promote_position < promotion_command_position
+    assert (
+        complete_position
+        < prepromotion_check_position
+        < prepromotion_tag_ref_position
+        < promote_position
+        < promotion_command_position
+    )
     assert (
         promotion_command_position
         < publish_position
         < asset_digest_position
-        < tag_ref_position
+        < prepublish_tag_ref_position
         < package_recheck_position
         < patch_position
     )
+    assert finalize.count("git/ref/tags/$TAG") == 2
     assert finalize.count("docker buildx imagetools create") == 1
     assert finalize.count("--method PATCH") == 1
     assert "validate-package-tag-absent" not in finalize
