@@ -309,11 +309,9 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert "name: core-python-${{ runner.os }}" in ci_workflow
 
 
-def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
+def test_release_image_uses_the_pinned_canonical_core_wheels() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release-images.yml").read_text(encoding="utf-8")
-    verification_image = (ROOT / "services" / "verification" / "Dockerfile").read_text(
-        encoding="utf-8"
-    )
+    issuance_image = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
     dependency_loop = "for dependency in marty-rs marty-verification marty-common; do"
     assert dependency_loop in workflow
@@ -322,10 +320,10 @@ def test_release_images_use_the_pinned_canonical_core_wheel() -> None:
     assert "marty_rs_asset_id" not in workflow
     assert "marty_rs_sha256=$(jq -r" in workflow
     assert "marty_verification_sha256=$(jq -r" in workflow
-    assert "COPY python/marty_credentials /app/marty_credentials" in verification_image
-    assert "ARG MARTY_VERIFICATION_WHEEL" in verification_image
-    assert "ARG MARTY_VERIFICATION_SHA256" in verification_image
-    assert "validate_marty_rs_capabilities()" in verification_image
+    assert "COPY python/marty_credentials /app/marty_credentials" in issuance_image
+    assert "ARG MARTY_VERIFICATION_WHEEL" in issuance_image
+    assert "ARG MARTY_VERIFICATION_SHA256" in issuance_image
+    assert "validate_marty_rs_capabilities()" in issuance_image
 
 
 def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:
@@ -333,7 +331,6 @@ def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:
     dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text(encoding="utf-8"))
     runtime_inputs = [
         ROOT / "services" / "Dockerfile",
-        ROOT / "services" / "verification" / "Dockerfile",
         ROOT / "services" / "issuance" / "manage_migrations.py",
         ROOT / ".github" / "workflows" / "ci.yml",
         ROOT / ".github" / "workflows" / "release-images.yml",

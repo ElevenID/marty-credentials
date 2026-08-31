@@ -6,7 +6,7 @@
 > **Historical record:** This February 2026 report describes retired Python
 > MMF prototypes, including the superseded standalone Python verification
 > image, and is not a supported build, dependency, or operations guide. Current
-> service-plane behavior is implemented by Rust in `marty-ui` and shared
+> behavior belongs to the Rust service plane in `marty-ui` and shared
 > `marty-core` and `mmf-*` crates. Do not restore the Python `mmf.*` imports,
 > verifier image, or framework build contexts shown below. The remaining
 > Credentials verification adapter has a separate caller-level deletion gate.
