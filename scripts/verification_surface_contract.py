@@ -25,17 +25,6 @@ MODEL_NAMES = {
     "VerifyDirectRequest",
     "VerifyVdsNcRequest",
 }
-REQUIRED_CONFIGURATION = {
-    "APP_ENV",
-    "DATABASE_URL",
-    "DID_WEB_ALLOWED_HOSTS",
-    "ENVIRONMENT",
-    "SIGNING_KEYS_INTERNAL_API_KEY",
-    "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
-    "SIGNING_KEYS_INTERNAL_URL",
-    "VERIFICATION_GOVERNANCE_JSON",
-    "VERIFICATION_PROCESSING_LEASE_SECONDS",
-}
 
 
 class ContractError(RuntimeError):
@@ -160,12 +149,55 @@ def _http_routes(sources: list[PythonSource]) -> list[dict[str, Any]]:
                 if path is None:
                     raise ContractError(f"dynamic route at {source.relative}:{decorator.lineno}")
                 response_model = _call_name(_keyword(decorator, "response_model"))
+                positional = list(node.args.args)
+                defaults = [None] * (len(positional) - len(node.args.defaults)) + list(
+                    node.args.defaults
+                )
+                request_model = next(
+                    (
+                        ast.unparse(argument.annotation)
+                        for argument, default in zip(positional, defaults, strict=True)
+                        if argument.annotation is not None
+                        and ast.unparse(argument.annotation) in MODEL_NAMES
+                        and not (
+                            isinstance(default, ast.Call) and _call_name(default.func) == "Depends"
+                        )
+                    ),
+                    None,
+                )
+                dependencies = sorted(
+                    {
+                        _call_name(default.args[0])
+                        for default in defaults
+                        if isinstance(default, ast.Call)
+                        and _call_name(default.func) == "Depends"
+                        and default.args
+                        and _call_name(default.args[0]) is not None
+                    }
+                )
+                errors: list[dict[str, Any]] = []
+                for call in ast.walk(node):
+                    if not isinstance(call, ast.Call) or _call_name(call.func) != "HTTPException":
+                        continue
+                    status_node = call.args[0] if call.args else _keyword(call, "status_code")
+                    detail_node = _keyword(call, "detail")
+                    errors.append(
+                        {
+                            "status": ast.unparse(status_node) if status_node is not None else None,
+                            "detail": _literal_string(detail_node),
+                            "line": call.lineno,
+                        }
+                    )
+                errors.sort(key=lambda error: error["line"])
                 routes.append(
                     {
                         "method": method.upper(),
                         "path": _join_route("" if router == "app" else prefixes[router], path),
                         "operation": node.name,
+                        "request_model": request_model,
                         "response_model": response_model,
+                        "dependencies": dependencies,
+                        "declared_errors": errors,
                         "source": source.relative,
                         "line": decorator.lineno,
                     }
@@ -185,6 +217,10 @@ def _environment(sources: list[PythonSource]) -> tuple[list[str], list[dict[str,
             argument: ast.AST | None = None
             if isinstance(node, ast.Call):
                 call = _call_name(node.func)
+                if call == "_read_secret_value":
+                    secret = _literal_string(node.args[0] if node.args else None)
+                    if secret is not None:
+                        names.update({secret, f"{secret}_FILE"})
                 if call in {"os.environ.get", "os.getenv"} and node.args:
                     argument = node.args[0]
             elif isinstance(node, ast.Subscript) and _call_name(node.value) == "os.environ":
@@ -196,7 +232,10 @@ def _environment(sources: list[PythonSource]) -> tuple[list[str], list[dict[str,
                 dynamic.append({"source": source.relative, "line": node.lineno})
             else:
                 names.add(name)
-    names.update(REQUIRED_CONFIGURATION)
+    constants = _string_constants(sources)
+    governance_env = constants.get("GOVERNANCE_ENV")
+    if governance_env is not None:
+        names.add(governance_env)
     dynamic.sort(key=lambda item: (item["source"], item["line"]))
     return sorted(names), dynamic
 
@@ -208,7 +247,32 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
             if not isinstance(node, ast.ClassDef) or node.name not in MODEL_NAMES:
                 continue
             fields: list[dict[str, Any]] = []
+            model_config: str | None = None
+            validators: list[dict[str, Any]] = []
             for item in node.body:
+                if isinstance(item, ast.Assign) and any(
+                    isinstance(target, ast.Name) and target.id == "model_config"
+                    for target in item.targets
+                ):
+                    model_config = ast.unparse(item.value)
+                    continue
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                    isinstance(decorator, ast.Call)
+                    and _call_name(decorator.func) == "model_validator"
+                    for decorator in item.decorator_list
+                ):
+                    validators.append(
+                        {
+                            "name": item.name,
+                            "body_sha256": hashlib.sha256(
+                                ast.dump(ast.Module(body=item.body, type_ignores=[])).encode(
+                                    "utf-8"
+                                )
+                            ).hexdigest(),
+                            "line": item.lineno,
+                        }
+                    )
+                    continue
                 if not isinstance(item, ast.AnnAssign) or not isinstance(item.target, ast.Name):
                     continue
                 fields.append(
@@ -224,6 +288,8 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
                 {
                     "name": node.name,
                     "fields": fields,
+                    "model_config": model_config,
+                    "validators": validators,
                     "source": source.relative,
                     "line": node.lineno,
                 }
@@ -267,6 +333,9 @@ def _migration_graph() -> dict[str, Any]:
                 "down_revisions": down,
                 "source": path.relative_to(ROOT).as_posix(),
                 "line": assignments["revision"][1],
+                "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "upgrade_sha256": _function_body_sha256(tree, "upgrade"),
+                "downgrade_sha256": _function_body_sha256(tree, "downgrade"),
             }
         )
     ids = {revision["revision"] for revision in revisions}
@@ -285,18 +354,135 @@ def _sha256(relative: str) -> str:
     return hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
 
 
+def _function_body_sha256(tree: ast.Module, name: str) -> str:
+    function = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name
+        ),
+        None,
+    )
+    if function is None:
+        raise ContractError(f"missing required function: {name}")
+    normalized = ast.dump(ast.Module(body=function.body, type_ignores=[]))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _string_constants(sources: list[PythonSource]) -> dict[str, str]:
+    constants: dict[str, str] = {}
+    for source in sources:
+        for node in source.tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            value = _literal_string(node.value)
+            if value is None:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = value
+    return constants
+
+
+def _literal_string_collection(node: ast.AST | None) -> list[str] | None:
+    if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
+        values = [_literal_string(item) for item in node.elts]
+        if all(value is not None for value in values):
+            return sorted(value for value in values if value is not None)
+    if isinstance(node, ast.Call) and _call_name(node.func) == "frozenset" and node.args:
+        return _literal_string_collection(node.args[0])
+    return None
+
+
+def _collection_assignment(sources: list[PythonSource], name: str) -> list[str]:
+    for source in sources:
+        for node in source.tree.body:
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if not any(isinstance(target, ast.Name) and target.id == name for target in targets):
+                continue
+            values = _literal_string_collection(node.value)
+            if values is None:
+                raise ContractError(f"{name} must remain a literal string collection")
+            return values
+    raise ContractError(f"missing required collection: {name}")
+
+
+def _governance_contract(sources: list[PythonSource]) -> dict[str, Any]:
+    constants = _string_constants(sources)
+    purposes = sorted(
+        constants[name]
+        for name in ("SESSION_CREATE_PURPOSE", "DIRECT_VERIFY_PURPOSE", "VDS_NC_VERIFY_PURPOSE")
+    )
+    required_checks_source = next(
+        source for source in sources if source.relative.endswith("application/governance.py")
+    )
+    assignment = next(
+        node
+        for node in required_checks_source.tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "PURPOSE_REQUIRED_CHECKS"
+            for target in node.targets
+        )
+    )
+    return {
+        "purposes": purposes,
+        "required_checks_sha256": hashlib.sha256(ast.dump(assignment.value).encode()).hexdigest(),
+        "processing_states": _collection_assignment(sources, "CANONICAL_PROCESSING_STATUSES"),
+        "required_native_capabilities": _collection_assignment(
+            sources, "REQUIRED_MARTY_RS_CAPABILITIES"
+        ),
+    }
+
+
+def _startup_hooks(sources: list[PythonSource]) -> list[str]:
+    main = next(source for source in sources if source.relative == "services/verification/main.py")
+    startup = next(
+        node
+        for node in main.tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "startup"
+    )
+    hooks = [
+        name
+        for call in ast.walk(startup)
+        if isinstance(call, ast.Call)
+        and (name := _call_name(call.func)) is not None
+        and name.startswith(("validate_", "load_"))
+    ]
+    if not hooks:
+        raise ContractError("verification startup has no validation hooks")
+    return sorted(hooks)
+
+
+def _docker_contract() -> dict[str, Any]:
+    relative = "services/verification/Dockerfile"
+    lines = (ROOT / relative).read_text(encoding="utf-8").splitlines()
+    expose = next((line.split(maxsplit=1)[1] for line in lines if line.startswith("EXPOSE ")), None)
+    command = next((line.removeprefix("CMD ") for line in lines if line.startswith("CMD ")), None)
+    health = next((line.strip() for line in lines if "curl -f http://" in line), None)
+    if expose is None or command is None or health is None:
+        raise ContractError("Dockerfile must declare EXPOSE, CMD, and HTTP health check")
+    return {
+        "dockerfile": relative,
+        "provenance_sha256": _sha256(relative),
+        "expose": expose,
+        "command": command,
+        "health_command": health,
+    }
+
+
 def build_contract() -> dict[str, Any]:
     """Build the deterministic verification feature floor from the Python oracle."""
     sources = _sources()
     routes = _http_routes(sources)
     variables, dynamic = _environment(sources)
-    source_lines = sum(
-        len(source.path.read_text(encoding="utf-8").splitlines()) for source in sources
-    )
     return {
         "schema": "marty.verification-runtime-surface/v1",
         "purpose": "Language-neutral feature floor for Python-image consolidation",
-        "source": {"production_files": len(sources), "production_lines": source_lines},
+        "source": {"production_files": len(sources)},
         "http": {"route_count": len(routes), "routes": routes},
         "dto": {"models": _models(sources)},
         "configuration": {
@@ -305,6 +491,7 @@ def build_contract() -> dict[str, Any]:
             "dynamic_lookups": dynamic,
         },
         "runtime": {
+            "startup_validation_hooks": _startup_hooks(sources),
             "modes": [
                 {
                     "name": "api",
@@ -321,24 +508,11 @@ def build_contract() -> dict[str, Any]:
                     "transports": ["http", "postgresql", "signing-keys-http"],
                     "source": "services/verification/main.py",
                 }
-            ]
-        },
-        "governance": {
-            "purposes": [
-                "verification.direct",
-                "verification.session.create",
-                "verification.vds-nc",
             ],
-            "processing_states": ["COMPLETED", "ERROR", "UNAVAILABLE", "UNSUPPORTED"],
-            "contract_sha256": _sha256("services/verification/GOVERNANCE.md"),
         },
+        "governance": _governance_contract(sources),
         "migrations": _migration_graph(),
-        "packaging": {
-            "dockerfile": "services/verification/Dockerfile",
-            "dockerfile_sha256": _sha256("services/verification/Dockerfile"),
-            "port": 8006,
-            "health_path": "/health",
-        },
+        "packaging": _docker_contract(),
     }
 
 

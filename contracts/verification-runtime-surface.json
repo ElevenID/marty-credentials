@@ -68,8 +68,10 @@
           }
         ],
         "line": 57,
+        "model_config": null,
         "name": "ClaimResult",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       },
       {
         "fields": [
@@ -96,8 +98,10 @@
           }
         ],
         "line": 26,
+        "model_config": "ConfigDict(extra='forbid')",
         "name": "CreateSessionRequest",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       },
       {
         "fields": [
@@ -124,8 +128,10 @@
           }
         ],
         "line": 16,
+        "model_config": "ConfigDict(extra='forbid')",
         "name": "PresentationDefinition",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       },
       {
         "fields": [
@@ -187,8 +193,10 @@
           }
         ],
         "line": 36,
+        "model_config": null,
         "name": "SessionResponse",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       },
       {
         "fields": [
@@ -201,8 +209,10 @@
           }
         ],
         "line": 49,
+        "model_config": "ConfigDict(extra='forbid')",
         "name": "SubmitPresentationRequest",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       },
       {
         "fields": [
@@ -334,8 +344,16 @@
           }
         ],
         "line": 67,
+        "model_config": null,
         "name": "VerificationResult",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": [
+          {
+            "body_sha256": "4231006634199314a32b0a7f721a8b64313c13242a5d16d1590206ec103cddc9",
+            "line": 93,
+            "name": "derive_compatibility_projection"
+          }
+        ]
       },
       {
         "fields": [
@@ -362,8 +380,10 @@
           }
         ],
         "line": 112,
+        "model_config": "ConfigDict(extra='forbid')",
         "name": "VerifyDirectRequest",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       },
       {
         "fields": [
@@ -397,13 +417,14 @@
           }
         ],
         "line": 122,
+        "model_config": "ConfigDict(extra='forbid')",
         "name": "VerifyVdsNcRequest",
-        "source": "services/verification/infrastructure/api/models.py"
+        "source": "services/verification/infrastructure/api/models.py",
+        "validators": []
       }
     ]
   },
   "governance": {
-    "contract_sha256": "b57f1fe14ca045311349888f611efab29411d8c1c3ad087c82c0356a80aca286",
     "processing_states": [
       "COMPLETED",
       "ERROR",
@@ -414,64 +435,184 @@
       "verification.direct",
       "verification.session.create",
       "verification.vds-nc"
+    ],
+    "required_checks_sha256": "1d7cecbd506e67ff3970a765dd45d2e0818264bb48732a4ff36fd432f4f2871c",
+    "required_native_capabilities": [
+      "governance_authorize",
+      "governance_canonical_digest",
+      "governance_from_snapshot",
+      "governance_require_purpose",
+      "governance_resume",
+      "governance_validate",
+      "governance_validate_request",
+      "oid4vp_verify_vp_token",
+      "vds_nc_verify",
+      "verification_build_decision_result",
+      "verify_presentation_structure",
+      "verify_vcdm_data_integrity",
+      "verify_vcdm_jwt"
     ]
   },
   "http": {
     "route_count": 7,
     "routes": [
       {
+        "declared_errors": [],
+        "dependencies": [],
         "line": 48,
         "method": "GET",
         "operation": "health",
         "path": "/health",
+        "request_model": null,
         "response_model": null,
         "source": "services/verification/main.py"
       },
       {
+        "declared_errors": [],
+        "dependencies": [],
         "line": 335,
         "method": "GET",
         "operation": "health_check",
         "path": "/v1/verification/health",
+        "request_model": null,
         "response_model": null,
         "source": "services/verification/infrastructure/api/routes.py"
       },
       {
+        "declared_errors": [
+          {
+            "detail": "Verification request does not match its governed policy",
+            "line": 218,
+            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+          },
+          {
+            "detail": "Failed to create verification session",
+            "line": 224,
+            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+          }
+        ],
+        "dependencies": [
+          "_authorize_session_create",
+          "get_verification_service"
+        ],
         "line": 191,
         "method": "POST",
         "operation": "create_verification_session",
         "path": "/v1/verification/sessions",
+        "request_model": "CreateSessionRequest",
         "response_model": "SessionResponse",
         "source": "services/verification/infrastructure/api/routes.py"
       },
       {
+        "declared_errors": [
+          {
+            "detail": "Session not found",
+            "line": 290,
+            "status": "status.HTTP_404_NOT_FOUND"
+          }
+        ],
+        "dependencies": [
+          "get_verification_service"
+        ],
         "line": 283,
         "method": "GET",
         "operation": "get_session",
         "path": "/v1/verification/sessions/{session_id}",
+        "request_model": null,
         "response_model": "SessionResponse",
         "source": "services/verification/infrastructure/api/routes.py"
       },
       {
+        "declared_errors": [
+          {
+            "detail": "Verification session not found",
+            "line": 251,
+            "status": "status.HTTP_404_NOT_FOUND"
+          },
+          {
+            "detail": "Verification session has expired",
+            "line": 256,
+            "status": "status.HTTP_410_GONE"
+          },
+          {
+            "detail": "Verification session submission conflicts",
+            "line": 261,
+            "status": "status.HTTP_409_CONFLICT"
+          },
+          {
+            "detail": "Session presentation cannot be bound to the verifier nonce",
+            "line": 266,
+            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+          },
+          {
+            "detail": "Invalid presentation data",
+            "line": 271,
+            "status": "status.HTTP_400_BAD_REQUEST"
+          },
+          {
+            "detail": "Presentation submission failed",
+            "line": 277,
+            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+          }
+        ],
+        "dependencies": [
+          "get_verification_service"
+        ],
         "line": 230,
         "method": "POST",
         "operation": "submit_presentation",
         "path": "/v1/verification/sessions/{session_id}/submit",
+        "request_model": "SubmitPresentationRequest",
         "response_model": "VerificationResult",
         "source": "services/verification/infrastructure/api/routes.py"
       },
       {
+        "declared_errors": [
+          {
+            "detail": "Verification request does not match its governed policy",
+            "line": 324,
+            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+          },
+          {
+            "detail": "Verification failed",
+            "line": 330,
+            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+          }
+        ],
+        "dependencies": [
+          "_authorize_direct_verify",
+          "get_verification_service"
+        ],
         "line": 304,
         "method": "POST",
         "operation": "verify_presentation_direct",
         "path": "/v1/verification/verify",
+        "request_model": "VerifyDirectRequest",
         "response_model": "VerificationResult",
         "source": "services/verification/infrastructure/api/routes.py"
       },
       {
+        "declared_errors": [
+          {
+            "detail": "issuer_did did not resolve to a usable public JWK",
+            "line": 372,
+            "status": "status.HTTP_422_UNPROCESSABLE_ENTITY"
+          },
+          {
+            "detail": "VDS-NC verification failed",
+            "line": 403,
+            "status": "status.HTTP_500_INTERNAL_SERVER_ERROR"
+          }
+        ],
+        "dependencies": [
+          "_authorize_vds_nc_verify",
+          "get_credential_verifier"
+        ],
         "line": 341,
         "method": "POST",
         "operation": "verify_vds_nc_barcode",
         "path": "/v1/verification/verify/vds-nc",
+        "request_model": "VerifyVdsNcRequest",
         "response_model": "VerificationResult",
         "source": "services/verification/infrastructure/api/routes.py"
       }
@@ -484,18 +625,24 @@
     "revision_count": 2,
     "revisions": [
       {
+        "content_sha256": "b501fa30978d89e0c46d8b28aedaf819634bc78c04d4e097affb7092c6338a25",
         "down_revisions": [],
+        "downgrade_sha256": "11d126ac3f3044e84cd32c2c70eee64e851e63bbb42826e3a9c6d40d9c6b70ff",
         "line": 10,
         "revision": "202608081900",
-        "source": "services/verification/infrastructure/migrations/versions/20260808_1900_persist_verification_evidence.py"
+        "source": "services/verification/infrastructure/migrations/versions/20260808_1900_persist_verification_evidence.py",
+        "upgrade_sha256": "b42c0d4da7c74d8a857eeec639cf1caf383d528c0d411bcbf0894f2f72897a48"
       },
       {
+        "content_sha256": "e6ad998cfb919d89c1293cc967306b4a0dd799cdc3d4fcd428ac48b9ea42d5c9",
         "down_revisions": [
           "202608081900"
         ],
+        "downgrade_sha256": "a72d4d43770251ef9e7dbcb194e6edc6db8bbf60a7645ecd8c4d220643e9592a",
         "line": 10,
         "revision": "202608091200",
-        "source": "services/verification/infrastructure/migrations/versions/20260809_1200_atomic_verification_sessions.py"
+        "source": "services/verification/infrastructure/migrations/versions/20260809_1200_atomic_verification_sessions.py",
+        "upgrade_sha256": "e21b19aacd123d28c84deb9bfea223462539c2b1936079003574a8014ea92b89"
       }
     ],
     "roots": [
@@ -503,10 +650,11 @@
     ]
   },
   "packaging": {
+    "command": "[\"python\", \"-m\", \"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8006\"]",
     "dockerfile": "services/verification/Dockerfile",
-    "dockerfile_sha256": "93685eea56100021307234dae0846b45048352210b5055c716d1b8ba7340c2ae",
-    "health_path": "/health",
-    "port": 8006
+    "expose": "8006",
+    "health_command": "CMD curl -f http://localhost:8006/health || exit 1",
+    "provenance_sha256": "93685eea56100021307234dae0846b45048352210b5055c716d1b8ba7340c2ae"
   },
   "purpose": "Language-neutral feature floor for Python-image consolidation",
   "runtime": {
@@ -530,11 +678,15 @@
           "signing-keys-http"
         ]
       }
+    ],
+    "startup_validation_hooks": [
+      "load_governance",
+      "validate_internal_resolver_configuration",
+      "validate_marty_rs_capabilities"
     ]
   },
   "schema": "marty.verification-runtime-surface/v1",
   "source": {
-    "production_files": 14,
-    "production_lines": 3778
+    "production_files": 14
   }
 }
