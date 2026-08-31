@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +21,36 @@ SPEC.loader.exec_module(surface)
 
 def test_frozen_verification_surface_matches_python_oracle() -> None:
     surface.check_contract()
+
+
+def test_contract_is_identical_on_supported_python_ast_versions() -> None:
+    launcher = shutil.which("py")
+    if launcher is None:
+        pytest.skip("Python launcher is unavailable")
+    inventory = subprocess.run(
+        [launcher, "-0p"], capture_output=True, check=True, text=True
+    ).stdout.splitlines()
+    runtimes: dict[str, str] = {}
+    for line in inventory:
+        for version in ("3.11", "3.12"):
+            if version in line:
+                drive_separator = line.find(":\\")
+                if drive_separator > 0:
+                    runtimes[version] = line[drive_separator - 1 :].strip()
+    if set(runtimes) != {"3.11", "3.12"}:
+        pytest.skip("Both supported Python AST runtimes are unavailable")
+    code = (
+        "import runpy; "
+        f"scope=runpy.run_path({str(SCRIPT)!r}); "
+        "print(scope['_render'](scope['build_contract']()), end='')"
+    )
+    rendered = {
+        version: subprocess.run(
+            [runtime, "-c", code], capture_output=True, check=True, text=True, cwd=ROOT
+        ).stdout
+        for version, runtime in runtimes.items()
+    }
+    assert rendered["3.11"] == rendered["3.12"]
 
 
 def test_contract_covers_every_current_runtime_boundary() -> None:
@@ -188,6 +219,18 @@ def test_contract_retains_fail_closed_configuration() -> None:
     assert semantics["signing_keys"]["api_key_precedence"] == ["name", "f'{name}_FILE'"]
     assert semantics["did_web_egress"]["requires_production_allowlist"] is True
     assert semantics["did_web_egress"]["requires_production_default_https_port"] is True
+    assert semantics["database"]["api"] | {"behavior_sha256": "ignored"} == {
+        "accepted_postgresql_driver_aliases": [
+            "postgres",
+            "postgresql",
+            "postgresql+psycopg",
+            "postgresql+psycopg2",
+        ],
+        "normalized_driver": "postgresql+asyncpg",
+        "behavior_sha256": "ignored",
+    }
+    assert semantics["database"]["migrations"]["normalized_driver"] == "postgresql+psycopg"
+    assert semantics["database"]["migrations"]["version_schema"] == "verification_service"
 
 
 def _sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -355,6 +398,21 @@ def test_authorization_wrapper_forwarding_mutation_is_detected(
     _assert_mutation_detected()
 
 
+def test_authorization_dead_call_bypass_is_detected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    routes = service / "infrastructure" / "api" / "routes.py"
+    routes.write_text(
+        routes.read_text(encoding="utf-8").replace(
+            "return await _authorize(DIRECT_VERIFY_PURPOSE, x_api_key)",
+            "return await _authorize(DIRECT_VERIFY_PURPOSE, x_api_key) if False else None",
+        ),
+        encoding="utf-8",
+    )
+    _assert_mutation_detected()
+
+
 def test_validator_decorator_mutation_is_detected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -397,6 +455,12 @@ def test_inherited_dto_mutation_is_detected(
     )
     names = {model["name"] for model in surface.build_contract()["dto"]["models"]}
     assert {"CommonContractModel", "SpecializedContractModel"} <= names
+    models_by_name = {model["name"]: model for model in surface.build_contract()["dto"]["models"]}
+    assert models_by_name["SpecializedContractModel"]["bases"] == ["CommonContractModel"]
+    assert {field["name"] for field in models_by_name["SpecializedContractModel"]["fields"]} == {
+        "common",
+        "specialized",
+    }
     _assert_mutation_detected()
 
 
@@ -450,6 +514,44 @@ def test_health_response_mutation_is_detected(
     ],
 )
 def test_configuration_semantic_mutation_is_detected(
+    relative: str,
+    old: str,
+    new: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    source = service / relative
+    source.write_text(source.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
+    _assert_mutation_detected()
+
+
+@pytest.mark.parametrize(
+    ("relative", "old", "new"),
+    [
+        (
+            "infrastructure/persistence/database.py",
+            '"postgresql+psycopg2",',
+            '"postgresql+pg8000",',
+        ),
+        (
+            "infrastructure/persistence/database.py",
+            'drivername="postgresql+asyncpg"',
+            'drivername="postgresql+psycopg"',
+        ),
+        (
+            "manage_migrations.py",
+            'drivername="postgresql+psycopg"',
+            'drivername="postgresql+psycopg2"',
+        ),
+        (
+            "manage_migrations.py",
+            'VERSION_SCHEMA = "verification_service"',
+            'VERSION_SCHEMA = "public"',
+        ),
+    ],
+)
+def test_database_contract_mutation_is_detected(
     relative: str,
     old: str,
     new: str,

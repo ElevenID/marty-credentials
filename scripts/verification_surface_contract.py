@@ -303,7 +303,7 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
                     validators.append(
                         {
                             "name": item.name,
-                            "function_sha256": hashlib.sha256(ast.dump(item).encode()).hexdigest(),
+                            "function_sha256": _ast_sha256(item),
                             "decorators": [
                                 ast.unparse(decorator) for decorator in item.decorator_list
                             ],
@@ -325,6 +325,9 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
             result.append(
                 {
                     "name": node.name,
+                    "bases": [
+                        name for base in node.bases if (name := _call_name(base)) is not None
+                    ],
                     "fields": fields,
                     "model_config": model_config,
                     "validators": validators,
@@ -335,6 +338,38 @@ def _models(sources: list[PythonSource]) -> list[dict[str, Any]]:
     found = {model["name"] for model in result}
     if found != model_names:
         raise ContractError(f"DTO inventory drifted: missing={sorted(model_names - found)}")
+    by_name = {model["name"]: model for model in result}
+    resolved: set[str] = set()
+
+    def resolve(name: str, active: set[str]) -> None:
+        if name in resolved:
+            return
+        if name in active:
+            raise ContractError(f"cyclic DTO inheritance at {name}")
+        model = by_name[name]
+        inherited_fields: list[dict[str, Any]] = []
+        inherited_validators: list[dict[str, Any]] = []
+        inherited_config: str | None = None
+        for base in model["bases"]:
+            if base not in by_name:
+                continue
+            resolve(base, active | {name})
+            parent = by_name[base]
+            inherited_fields.extend(parent["fields"])
+            inherited_validators.extend(parent["validators"])
+            inherited_config = parent["model_config"] or inherited_config
+
+        fields = {field["name"]: field for field in inherited_fields}
+        fields.update({field["name"]: field for field in model["fields"]})
+        validators = {validator["name"]: validator for validator in inherited_validators}
+        validators.update({validator["name"]: validator for validator in model["validators"]})
+        model["fields"] = list(fields.values())
+        model["validators"] = list(validators.values())
+        model["model_config"] = model["model_config"] or inherited_config
+        resolved.add(name)
+
+    for name in by_name:
+        resolve(name, set())
     result.sort(key=lambda model: model["name"])
     return result
 
@@ -401,12 +436,17 @@ def _function_body_sha256(tree: ast.Module, name: str) -> str:
     function = _function_in_tree(tree, name)
     if function is None:
         raise ContractError(f"missing required function: {name}")
-    normalized = ast.dump(ast.Module(body=function.body, type_ignores=[]))
+    normalized = _canonical_ast_dump(ast.Module(body=function.body, type_ignores=[]))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _ast_sha256(node: ast.AST) -> str:
-    return hashlib.sha256(ast.dump(node).encode("utf-8")).hexdigest()
+    return hashlib.sha256(_canonical_ast_dump(node).encode("utf-8")).hexdigest()
+
+
+def _canonical_ast_dump(node: ast.AST) -> str:
+    """Remove empty AST fields added by newer supported Python runtimes."""
+    return ast.dump(node).replace(", type_params=[]", "")
 
 
 def _function_in_tree(tree: ast.Module, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
@@ -507,7 +547,7 @@ def _governance_contract(sources: list[PythonSource]) -> dict[str, Any]:
     )
     return {
         "purposes": purposes,
-        "required_checks_sha256": hashlib.sha256(ast.dump(assignment.value).encode()).hexdigest(),
+        "required_checks_sha256": _ast_sha256(assignment.value),
         "processing_states": _collection_assignment(sources, "CANONICAL_PROCESSING_STATUSES"),
         "required_native_capabilities": _collection_assignment(
             sources, "REQUIRED_MARTY_RS_CAPABILITIES"
@@ -566,6 +606,16 @@ def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
         "_authorize_vds_nc_verify",
     ):
         function = _required_function(sources, wrapper)
+        if (
+            len(function.body) != 1
+            or not isinstance(function.body[0], ast.Return)
+            or not isinstance(function.body[0].value, ast.Await)
+            or not isinstance(function.body[0].value.value, ast.Call)
+        ):
+            raise ContractError(
+                f"{wrapper} body must be exactly `return await _authorize(purpose, x_api_key)`"
+            )
+        returned_call = function.body[0].value.value
         calls = [
             call
             for call in ast.walk(function)
@@ -573,6 +623,7 @@ def _authorization_contract(sources: list[PythonSource]) -> dict[str, Any]:
         ]
         if (
             len(calls) != 1
+            or calls[0] is not returned_call
             or len(calls[0].args) != 2
             or not isinstance(calls[0].args[0], ast.Name)
             or not isinstance(calls[0].args[1], ast.Name)
@@ -603,6 +654,10 @@ def _configuration_semantics(sources: list[PythonSource]) -> dict[str, Any]:
     signing_url = _required_function(sources, "_internal_signing_base_url")
     lease = _required_function(sources, "processing_lease_seconds")
     did_web = _required_function(sources, "_did_web_url")
+    database_url = _required_function(sources, "_database_url")
+    sync_database_url = _required_function(sources, "_sync_database_url")
+    ensure_version_schema = _required_function(sources, "ensure_version_schema")
+    migration_config = _required_function(sources, "get_config")
 
     secret_lookups = [
         ast.unparse(call.args[0])
@@ -639,6 +694,30 @@ def _configuration_semantics(sources: list[PythonSource]) -> dict[str, Any]:
     if production_aliases != ["prod", "production"]:
         raise ContractError("did:web production aliases drifted")
 
+    database_aliases = next(
+        values
+        for node in ast.walk(database_url)
+        if (values := _literal_string_collection(node)) is not None and "postgresql" in values
+    )
+
+    def normalized_driver(function: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+        for call in ast.walk(function):
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+                continue
+            if call.func.attr != "set":
+                continue
+            value = _literal_string(_keyword(call, "drivername"))
+            if value is not None:
+                return value
+        raise ContractError(f"{function.name} must statically normalize a database driver")
+
+    version_schema = _string_constants(sources).get("VERSION_SCHEMA")
+    migration_env = (SERVICE_ROOT / "infrastructure" / "migrations" / "env.py").read_text(
+        encoding="utf-8"
+    )
+    if version_schema is None or f'version_table_schema="{version_schema}"' not in migration_env:
+        raise ContractError("migration version schema is not coherent")
+
     return {
         "processing_lease_seconds": {
             "environment_variable": "VERIFICATION_PROCESSING_LEASE_SECONDS",
@@ -666,6 +745,25 @@ def _configuration_semantics(sources: list[PythonSource]) -> dict[str, Any]:
                 "Production did:web resolution requires the default HTTPS port" in did_literals
             ),
             "behavior_sha256": _ast_sha256(did_web),
+        },
+        "database": {
+            "environment_variable": "DATABASE_URL",
+            "missing_error": "DATABASE_URL environment variable is required",
+            "api": {
+                "accepted_postgresql_driver_aliases": database_aliases,
+                "normalized_driver": normalized_driver(database_url),
+                "behavior_sha256": _ast_sha256(database_url),
+            },
+            "migrations": {
+                "normalized_driver": normalized_driver(sync_database_url),
+                "version_schema": version_schema,
+                "url_behavior_sha256": _ast_sha256(sync_database_url),
+                "schema_behavior_sha256": _ast_sha256(ensure_version_schema),
+                "config_behavior_sha256": _ast_sha256(migration_config),
+                "environment_sha256": _normalized_text_sha256(
+                    SERVICE_ROOT / "infrastructure" / "migrations" / "env.py"
+                ),
+            },
         },
     }
 

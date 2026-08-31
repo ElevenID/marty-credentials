@@ -77,8 +77,30 @@
       "VERIFICATION_PROCESSING_LEASE_SECONDS"
     ],
     "semantics": {
+      "database": {
+        "api": {
+          "accepted_postgresql_driver_aliases": [
+            "postgres",
+            "postgresql",
+            "postgresql+psycopg",
+            "postgresql+psycopg2"
+          ],
+          "behavior_sha256": "8936af62083677c50f02adc8c5da1c573829f725d3d8203ba6e399fff2b66553",
+          "normalized_driver": "postgresql+asyncpg"
+        },
+        "environment_variable": "DATABASE_URL",
+        "migrations": {
+          "config_behavior_sha256": "72c1af642d0ae0d49225d46a92b31e1ce8a774a00c76da40e301cc89f8c02b35",
+          "environment_sha256": "55b663c253d87e6c62751c641d9d1bc3d176b8f8536b5453080da23c6905772c",
+          "normalized_driver": "postgresql+psycopg",
+          "schema_behavior_sha256": "b99eca625acc726d15479cf696a1ba33d6a07d61e2d5a908e3180fd4c148cb2a",
+          "url_behavior_sha256": "ce94dbaeda89cfde31e9bfba23eb4f888534fb0b3ff41ad4a015501abd96481f",
+          "version_schema": "verification_service"
+        },
+        "missing_error": "DATABASE_URL environment variable is required"
+      },
       "did_web_egress": {
-        "behavior_sha256": "49fc7ad797f9764713e23545cabfd1f05cb3ae6530598c2703f9ac4184428d8a",
+        "behavior_sha256": "3bf0104e8b6c10f47a5cbc716fa397bf35f957e143941e1e68958f93472c969b",
         "default_port": 443,
         "environment_variables": [
           "APP_ENV",
@@ -94,7 +116,7 @@
         "scheme": "https"
       },
       "processing_lease_seconds": {
-        "behavior_sha256": "6103b1ba525571b21cb9e263a1fc403c595df6331372843076b057e824c1d6d5",
+        "behavior_sha256": "c27f97781dd247b69b4aa1276796228c17410c287651b115a25bae5063a13bf1",
         "default": 60,
         "environment_variable": "VERIFICATION_PROCESSING_LEASE_SECONDS",
         "maximum": 300,
@@ -107,13 +129,16 @@
         ],
         "base_url_default": "http://gateway:8000/internal/signing-keys",
         "base_url_environment_variable": "SIGNING_KEYS_INTERNAL_URL",
-        "secret_reader_sha256": "938b3ce37aefb52b84c3c376492b79a894b2aae2a377fa9d31d7b06b84d8ea1e"
+        "secret_reader_sha256": "cd423de34176d2f9ba0efa7e5b20ff4e25d2e0b97f650296299465c01dba8fb7"
       }
     }
   },
   "dto": {
     "models": [
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "str",
@@ -158,6 +183,9 @@
         "validators": []
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "str",
@@ -188,6 +216,9 @@
         "validators": []
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "str",
@@ -218,6 +249,9 @@
         "validators": []
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "str",
@@ -283,6 +317,9 @@
         "validators": []
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "str",
@@ -299,6 +336,9 @@
         "validators": []
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "dict[str, Any] | None",
@@ -436,13 +476,16 @@
             "decorators": [
               "model_validator(mode='after')"
             ],
-            "function_sha256": "2892aec5f5fb605fdbff983b38f613b2b13ccfdfdae7b46cf6cc3c1f2be0e468",
+            "function_sha256": "b2a1c911f4504908694cfd7f6ea263bf913b16ad5ec7464ce2e99c942b337a44",
             "line": 93,
             "name": "derive_compatibility_projection"
           }
         ]
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "dict[str, Any] | str",
@@ -473,6 +516,9 @@
         "validators": []
       },
       {
+        "bases": [
+          "BaseModel"
+        ],
         "fields": [
           {
             "annotation": "str",
