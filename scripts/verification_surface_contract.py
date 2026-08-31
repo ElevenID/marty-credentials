@@ -835,11 +835,61 @@ def _migration_runtime_contract(sources: list[PythonSource]) -> dict[str, Any]:
     deployment_command = match.group(1).split()
     if deployment_command[-1] not in operations:
         raise ContractError("documented migration operation is not supported by the CLI")
+
+    def condition_operation(node: ast.If) -> str:
+        compare = node.test
+        if (
+            not isinstance(compare, ast.Compare)
+            or len(compare.ops) != 1
+            or not isinstance(compare.ops[0], ast.Eq)
+            or len(compare.comparators) != 1
+        ):
+            raise ContractError("migration CLI dispatch must compare args.command exactly")
+        operation = _literal_string(compare.comparators[0])
+        if operation is None:
+            raise ContractError("migration CLI dispatch operation must be literal")
+        return operation
+
+    def actions(statements: list[ast.stmt]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for statement in statements:
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                raise ContractError("migration CLI branch must contain only explicit call actions")
+            call = statement.value
+            result.append(
+                {
+                    "handler": _call_name(call.func),
+                    "arguments": [ast.unparse(argument) for argument in call.args],
+                    "keywords": {
+                        keyword.arg: ast.unparse(keyword.value)
+                        for keyword in call.keywords
+                        if keyword.arg is not None
+                    },
+                }
+            )
+        return result
+
+    dispatch: dict[str, list[dict[str, Any]]] = {}
+    branch = next((statement for statement in main.body if isinstance(statement, ast.If)), None)
+    while branch is not None:
+        operation = condition_operation(branch)
+        dispatch[operation] = actions(branch.body)
+        if len(branch.orelse) == 1 and isinstance(branch.orelse[0], ast.If):
+            branch = branch.orelse[0]
+            continue
+        remaining = set(operations) - dispatch.keys()
+        if len(remaining) != 1:
+            raise ContractError("migration CLI else branch does not map one supported operation")
+        dispatch[remaining.pop()] = actions(branch.orelse)
+        branch = None
+    if set(dispatch) != set(operations) or any(not value for value in dispatch.values()):
+        raise ContractError("migration CLI dispatch does not implement every supported operation")
     return {
         "name": "migrations",
         "command_prefix": ["python", "-m", "verification.manage_migrations"],
         "deployment_command": deployment_command,
         "supported_operations": operations,
+        "dispatch": dispatch,
         "source": "services/verification/manage_migrations.py",
         "documentation_sha256": _normalized_text_sha256(SERVICE_ROOT / "MIGRATIONS.md"),
     }

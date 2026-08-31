@@ -849,6 +849,45 @@
           "verification.manage_migrations",
           "upgrade"
         ],
+        "dispatch": {
+          "current": [
+            {
+              "arguments": [
+                "config"
+              ],
+              "handler": "command.current",
+              "keywords": {}
+            }
+          ],
+          "history": [
+            {
+              "arguments": [
+                "config"
+              ],
+              "handler": "command.history",
+              "keywords": {
+                "verbose": "True"
+              }
+            }
+          ],
+          "upgrade": [
+            {
+              "arguments": [
+                "database_url"
+              ],
+              "handler": "ensure_version_schema",
+              "keywords": {}
+            },
+            {
+              "arguments": [
+                "config",
+                "'head'"
+              ],
+              "handler": "command.upgrade",
+              "keywords": {}
+            }
+          ]
+        },
         "documentation_sha256": "fd16fa91f2d2c565cb0bc831f4100b0f4a17ac87eff85cdd6787b8f2ec51cd3b",
         "name": "migrations",
         "source": "services/verification/manage_migrations.py",

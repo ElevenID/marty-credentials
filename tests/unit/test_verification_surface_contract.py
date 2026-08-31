@@ -69,6 +69,28 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
         "command_prefix": ["python", "-m", "verification.manage_migrations"],
         "deployment_command": ["python", "-m", "verification.manage_migrations", "upgrade"],
         "supported_operations": ["current", "history", "upgrade"],
+        "dispatch": {
+            "upgrade": [
+                {
+                    "handler": "ensure_version_schema",
+                    "arguments": ["database_url"],
+                    "keywords": {},
+                },
+                {
+                    "handler": "command.upgrade",
+                    "arguments": ["config", "'head'"],
+                    "keywords": {},
+                },
+            ],
+            "current": [{"handler": "command.current", "arguments": ["config"], "keywords": {}}],
+            "history": [
+                {
+                    "handler": "command.history",
+                    "arguments": ["config"],
+                    "keywords": {"verbose": "True"},
+                }
+            ],
+        },
         "source": "services/verification/manage_migrations.py",
         "documentation_sha256": "ignored",
     }
@@ -584,4 +606,23 @@ def test_migration_cli_operation_mutation_is_detected(
         ),
         encoding="utf-8",
     )
+    _assert_mutation_detected()
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ('command.upgrade(config, "head")', "command.current(config)"),
+        ("        command.current(config)\n", "        pass\n"),
+    ],
+)
+def test_migration_cli_dispatch_mutation_is_detected(
+    old: str,
+    new: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _sandbox(tmp_path, monkeypatch)
+    source = service / "manage_migrations.py"
+    source.write_text(source.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
     _assert_mutation_detected()
