@@ -243,10 +243,7 @@
             ],
             "proof_types_supported": {
               "jwt": {
-                "proof_signing_alg_values_supported": [
-                  "ES256",
-                  "EdDSA"
-                ],
+                "proof_signing_alg_values_supported": ["ES256"],
                 "key_attestations_required": {}
               }
             },
