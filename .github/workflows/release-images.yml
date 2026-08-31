@@ -39,6 +39,7 @@ jobs:
       tag: ${{ steps.contract.outputs.tag }}
       release_id: ${{ steps.contract.outputs.release_id }}
       commit: ${{ steps.contract.outputs.commit }}
+      service_matrix: ${{ steps.service_contract.outputs.service_matrix }}
       terminal: ${{ steps.release_state.outputs.terminal }}
       state: ${{ steps.release_state.outputs.state }}
     steps:
@@ -78,17 +79,57 @@ jobs:
             echo "::error::Commit must be a full lowercase SHA"
             exit 1
           fi
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Tag must be a canonical stable release tag"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Check out the protected-main workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+      - name: Check out the exact tag-scoped release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.contract.outputs.tag }}
           fetch-depth: 0
+          path: release-source
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
+
+      - name: Validate the tag binding before running tag-scoped code
+        shell: bash
+        env:
+          COMMIT: ${{ steps.contract.outputs.commit }}
+          TAG: ${{ steps.contract.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git -C release-source fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          head_commit="$(git -C release-source rev-parse 'HEAD^{commit}')"
+          tag_commit="$(git -C release-source rev-parse "refs/tags/$TAG^{commit}")"
+          if [ "$head_commit" != "$COMMIT" ] || [ "$tag_commit" != "$COMMIT" ]; then
+            echo "::error::Checked-out tag does not resolve to the approved commit"
+            exit 1
+          fi
+          if ! git -C release-source merge-base --is-ancestor \
+            "$COMMIT" refs/remotes/origin/main; then
+            echo "::error::Release commit is not reachable from protected main"
+            exit 1
+          fi
+
+      - name: Derive the canonical tag-scoped service matrix
+        id: service_contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          service_matrix="$(python scripts/release_service_handoff.py \
+            --repository release-source)"
+          echo "service_matrix=$service_matrix" >> "$GITHUB_OUTPUT"
 
       - name: Validate source and draft by numeric release ID
         id: release_state
@@ -96,20 +137,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ steps.contract.outputs.commit }}
           RELEASE_ID: ${{ steps.contract.outputs.release_id }}
+          SERVICE_MATRIX: ${{ steps.service_contract.outputs.service_matrix }}
           TAG: ${{ steps.contract.outputs.tag }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main
-          python scripts/release_contract.py validate-source \
-            --repository . --tag "$TAG" --commit "$COMMIT"
+          python release-source/scripts/release_contract.py validate-source \
+            --repository release-source --tag "$TAG" --commit "$COMMIT"
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
-          STATE="$(python scripts/release_contract.py validate-release \
+          STATE="$(python release-source/scripts/release_contract.py validate-release \
             --json release.json --release-id "$RELEASE_ID" --tag "$TAG" \
             --commit "$COMMIT" --phase resumable)"
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
           if [ "$STATE" = terminal ]; then
-            for service in issuance; do
+            while IFS= read -r service; do
               name="marty-credentials-$service.digest"
               asset_count="$(jq -r --arg name "$name" \
                 '[.assets[] | select(.name == $name)] | length' release.json)"
@@ -134,10 +175,10 @@ jobs:
               gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
                 "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
                 > "package-terminal-$service.json"
-              python scripts/release_contract.py validate-package-tag \
+              python release-source/scripts/release_contract.py validate-package-tag \
                 --json "package-terminal-$service.json" --tag "$TAG" \
                 --digest "$image_digest"
-            done
+            done <<< "$service_lines"
             echo "terminal=true" >> "$GITHUB_OUTPUT"
           elif [ "$STATE" = complete ] || [ "$STATE" = build ]; then
             echo "terminal=false" >> "$GITHUB_OUTPUT"
@@ -153,10 +194,7 @@ jobs:
     if: needs.validate-draft.outputs.state == 'build'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - service: issuance
-            dockerfile: services/Dockerfile
+      matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -167,7 +205,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ needs.validate-draft.outputs.tag }}
+          ref: ${{ needs.validate-draft.outputs.commit }}
 
       - name: Download and verify pinned release dependencies
         id: deps
@@ -221,6 +259,16 @@ jobs:
             MARTY_COMMON_SHA256=${{ steps.deps.outputs.marty_common_sha256 }}
           provenance: mode=max
           sbom: true
+
+      - name: Prove the historical verification image migrates and starts
+        if: matrix.service == 'verification'
+        env:
+          IMAGE: ghcr.io/elevenid/marty-credentials-verification@${{ steps.build.outputs.digest }}
+          POSTGRES_IMAGE: docker.io/library/postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+        run: |
+          python scripts/smoke_verification_image.py \
+            --image "$IMAGE" \
+            --postgres-image "$POSTGRES_IMAGE"
 
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
@@ -280,7 +328,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ needs.validate-draft.outputs.tag }}
+          ref: ${{ needs.validate-draft.outputs.commit }}
           fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -297,6 +345,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ needs.validate-draft.outputs.commit }}
           RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}
           TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
@@ -307,36 +356,41 @@ jobs:
             --commit "$COMMIT" --phase resumable
           jq -e '.draft == true' release-before.json >/dev/null
           mkdir -p existing-assets release-assets
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
+          mapfile -t services <<< "$service_lines"
           while IFS=$'\t' read -r asset_id asset_name; do
-            case "$asset_name" in
-              marty-credentials-issuance.digest|\
-              marty-credentials-issuance.spdx.json|\
-              SHA256SUMS|SHA256SUMS.sigstore.json)
-                destination="existing-assets/$asset_name"
-                ;;
-              *)
-                destination="release-assets/$asset_name"
-                ;;
-            esac
+            destination="release-assets/$asset_name"
+            if [ "$asset_name" = SHA256SUMS ] || \
+              [ "$asset_name" = SHA256SUMS.sigstore.json ]; then
+              destination="existing-assets/$asset_name"
+            else
+              for service in "${services[@]}"; do
+                if [ "$asset_name" = "marty-credentials-$service.digest" ] || \
+                  [ "$asset_name" = "marty-credentials-$service.spdx.json" ]; then
+                  destination="existing-assets/$asset_name"
+                  break
+                fi
+              done
+            fi
             gh api -H 'Accept: application/octet-stream' \
               -H 'X-GitHub-Api-Version: 2026-03-10' \
               "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
               > "$destination"
           done < <(jq -r '.assets[] | [.id, .name] | @tsv' release-before.json)
-          for name in \
-            marty-credentials-issuance.digest \
-            marty-credentials-issuance.spdx.json
-          do
-            if [ -f "existing-assets/$name" ]; then
-              if [ -f "release-assets/$name" ]; then
-                if ! cmp --silent "existing-assets/$name" "release-assets/$name"; then
-                  echo "::error::Existing $name differs from the rebuilt evidence"
-                  exit 1
+          for service in "${services[@]}"; do
+            for suffix in digest spdx.json; do
+              name="marty-credentials-$service.$suffix"
+              if [ -f "existing-assets/$name" ]; then
+                if [ -f "release-assets/$name" ]; then
+                  if ! cmp --silent "existing-assets/$name" "release-assets/$name"; then
+                    echo "::error::Existing $name differs from the rebuilt evidence"
+                    exit 1
+                  fi
+                else
+                  cp "existing-assets/$name" "release-assets/$name"
                 fi
-              else
-                cp "existing-assets/$name" "release-assets/$name"
               fi
-            fi
+            done
           done
 
       - name: Verify every stable artifact's GitHub provenance
@@ -360,9 +414,20 @@ jobs:
 
       - name: Create and verify one final checksum manifest
         env:
+          SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}
           TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
+          while IFS= read -r service; do
+            for suffix in digest spdx.json; do
+              name="marty-credentials-$service.$suffix"
+              if [ ! -f "release-assets/$name" ] || [ -L "release-assets/$name" ]; then
+                echo "::error::Checksum input is missing regular file $name"
+                exit 1
+              fi
+            done
+          done <<< "$service_lines"
           python scripts/release_contract.py write-checksums \
             --directory release-assets --tag "$TAG"
           if [ -f existing-assets/SHA256SUMS ] &&
@@ -421,6 +486,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ needs.validate-draft.outputs.commit }}
           RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}
           TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
@@ -430,12 +496,16 @@ jobs:
             --json release-current.json --release-id "$RELEASE_ID" \
             --tag "$TAG" --commit "$COMMIT" --phase resumable
           jq -e '.draft == true' release-current.json >/dev/null
-          for name in \
-            marty-credentials-issuance.digest \
-            marty-credentials-issuance.spdx.json \
-            SHA256SUMS \
-            SHA256SUMS.sigstore.json
-          do
+          names=()
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
+          while IFS= read -r service; do
+            names+=(
+              "marty-credentials-$service.digest"
+              "marty-credentials-$service.spdx.json"
+            )
+          done <<< "$service_lines"
+          names+=(SHA256SUMS SHA256SUMS.sigstore.json)
+          for name in "${names[@]}"; do
             local_digest="sha256:$(sha256sum "release-assets/$name" | cut -d ' ' -f1)"
             count="$(jq -r --arg name "$name" \
               '[.assets[] | select(.name == $name)] | length' release-current.json)"
@@ -506,13 +576,43 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Promote the verified issuance digest to the stable tag
+      - name: Revalidate the remote tag before image tag promotion
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
           TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
-          for service in issuance; do
+          tag_object="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")"
+          object_type="$(jq -r '.object.type' <<<"$tag_object")"
+          object_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+          depth=0
+          while [ "$object_type" = tag ]; do
+            depth=$((depth + 1))
+            if [ "$depth" -gt 5 ]; then
+              echo "::error::Release tag has an excessive indirection chain"
+              exit 1
+            fi
+            tag_object="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+            object_type="$(jq -r '.object.type' <<<"$tag_object")"
+            object_sha="$(jq -r '.object.sha' <<<"$tag_object")"
+          done
+          if [ "$object_type" != commit ] || [ "$object_sha" != "$COMMIT" ]; then
+            echo "::error::Remote tag no longer resolves to the approved commit"
+            exit 1
+          fi
+
+      - name: Promote every verified service digest to the stable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
+          while IFS= read -r service; do
             package="marty-credentials-$service"
             IMAGE="ghcr.io/elevenid/marty-credentials-$service"
             DIGEST="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
@@ -540,13 +640,14 @@ jobs:
             python scripts/release_contract.py validate-package-tag \
               --json "package-after-$service.json" --tag "$TAG" \
               --digest "$DIGEST"
-          done
+          done <<< "$service_lines"
 
       - name: Publish the exact complete draft once
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ needs.validate-draft.outputs.commit }}
           RELEASE_ID: ${{ needs.validate-draft.outputs.release_id }}
+          SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}
           TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
@@ -586,7 +687,8 @@ jobs:
             echo "::error::Remote tag no longer resolves to the approved commit"
             exit 1
           fi
-          for service in issuance; do
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
+          while IFS= read -r service; do
             DIGEST="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
             package="marty-credentials-$service"
             gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
@@ -595,7 +697,7 @@ jobs:
             python scripts/release_contract.py validate-package-tag \
               --json "package-prepublish-$service.json" --tag "$TAG" \
               --digest "$DIGEST"
-          done
+          done <<< "$service_lines"
           gh api --method PATCH -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
             -F draft=false -F prerelease=false -f make_latest=true > release-published.json
