@@ -614,6 +614,7 @@ def test_migration_cli_operation_mutation_is_detected(
     [
         ('command.upgrade(config, "head")', "command.current(config)"),
         ("        command.current(config)\n", "        pass\n"),
+        ('if args.command == "upgrade":', 'if False == "upgrade":'),
     ],
 )
 def test_migration_cli_dispatch_mutation_is_detected(

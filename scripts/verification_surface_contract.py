@@ -840,6 +840,7 @@ def _migration_runtime_contract(sources: list[PythonSource]) -> dict[str, Any]:
         compare = node.test
         if (
             not isinstance(compare, ast.Compare)
+            or _call_name(compare.left) != "args.command"
             or len(compare.ops) != 1
             or not isinstance(compare.ops[0], ast.Eq)
             or len(compare.comparators) != 1
