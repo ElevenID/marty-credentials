@@ -803,6 +803,128 @@ async def test_postgres_canvas_approval_reserves_transaction_under_application_l
 
 
 @pytest.mark.asyncio
+async def test_postgres_canvas_approval_refreshes_exact_active_pending_transaction() -> None:
+    now = datetime.now(UTC)
+    application = Application(
+        id="canvas-pending-application",
+        organization_id="org-1",
+        application_template_id="canvas-application-template",
+        applicant_identifier="learner-1",
+        integration_context={
+            "canvas": {
+                "canvas_platform_id": "platform-1",
+                "canvas_program_binding_id": "binding-1",
+            }
+        },
+        issuance_transaction_id="canvas-pending-transaction",
+    )
+    current = _transaction(
+        id=application.issuance_transaction_id,
+        application_id=application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce="preserved-nonce",
+        issuer_profile_id="stale-profile",
+        signing_service_id="stale-service",
+        delivery_mode="wallet_only",
+    )
+    prepared = IssuanceTransaction(**vars(current))
+    prepared.issuer_profile_id = "active-profile"
+    prepared.issuer_did_override = "did:web:active.example"
+    prepared.issuer_algorithm = "EdDSA"
+    prepared.signing_service_id = "active-service"
+    prepared.delivery_mode = "wallet_plus_canvas_mirror"
+    prepared.claims = {**prepared.claims, "_vct": "OpenBadgeCredential"}
+    approved = Application(**vars(application))
+    approved.status = ApplicationStatus.APPROVED
+    approved.review_notes = "Refreshed approval"
+    approved.reviewer_id = "canvas-approver"
+    approved.reviewed_at = now
+    approved.updated_at = now
+    session = _Session(
+        [
+            _Result(_application_row(application)),
+            _Result(_transaction_row(current)),
+            _Result(_transaction_row(prepared)),
+            _Result(_application_row(approved)),
+        ]
+    )
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    _, stored_transaction, already_issued = await repo.reserve_canvas_application_issuance(
+        prepared,
+        reviewer_id="canvas-approver",
+        review_notes="Refreshed approval",
+        reviewed_at=now,
+    )
+
+    assert already_issued is False
+    assert stored_transaction.id == current.id
+    assert stored_transaction.nonce == "preserved-nonce"
+    assert stored_transaction.issuer_profile_id == "active-profile"
+    assert stored_transaction.signing_service_id == "active-service"
+    assert session.committed is True
+    statements = [str(statement).upper() for statement in session.statements]
+    assert "SELECT" in statements[1]
+    assert "UPDATE ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in statements[2]
+    assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[3]
+    refresh_params = session.statements[2].compile().params
+    assert "preserved-nonce" not in refresh_params.values()
+    assert "active-profile" in refresh_params.values()
+    assert "active-service" in refresh_params.values()
+    assert "wallet_plus_canvas_mirror" in refresh_params.values()
+    assert prepared.claims in refresh_params.values()
+
+
+@pytest.mark.asyncio
+async def test_postgres_canvas_pending_refresh_loss_rolls_back_approval() -> None:
+    now = datetime.now(UTC)
+    application = Application(
+        id="canvas-refresh-race-application",
+        organization_id="org-1",
+        application_template_id="canvas-application-template",
+        applicant_identifier="learner-1",
+        integration_context={
+            "canvas": {
+                "canvas_platform_id": "platform-1",
+                "canvas_program_binding_id": "binding-1",
+            }
+        },
+        issuance_transaction_id="canvas-refresh-race-transaction",
+    )
+    pending = _transaction(
+        id=application.issuance_transaction_id,
+        application_id=application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce=None,
+    )
+    session = _Session(
+        [
+            _Result(_application_row(application)),
+            _Result(_transaction_row(pending)),
+            _Result(None, rowcount=0),
+        ]
+    )
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    with pytest.raises(
+        ValueError,
+        match="Canvas pending issuance transaction could not be refreshed",
+    ):
+        await repo.reserve_canvas_application_issuance(
+            pending,
+            reviewer_id="canvas-approver",
+            review_notes="must-not-commit",
+            reviewed_at=now,
+        )
+
+    assert session.committed is False
+    assert session.rolled_back is True
+    assert len(session.statements) == 3
+
+
+@pytest.mark.asyncio
 async def test_postgres_canvas_claim_projection_is_in_finalization_transaction() -> None:
     credential_id = "urn:uuid:canvas-postgres-credential"
     claimed = _transaction(

@@ -166,6 +166,30 @@ def _canvas_application_context(integration_context: Any) -> dict[str, Any] | No
     return canvas
 
 
+def _canvas_transaction_context_values(transaction: IssuanceTransaction) -> dict[str, Any]:
+    """Project mutable, non-capability Canvas issuance context for insert or refresh."""
+
+    return {
+        "credential_template_id": transaction.credential_template_id,
+        "revocation_profile_id": transaction.revocation_profile_id,
+        "claims": transaction.claims,
+        "credential_type": transaction.credential_type,
+        "zk_predicate_claims": transaction.zk_predicate_claims or [],
+        "selective_disclosure_claims": transaction.selective_disclosure_claims or [],
+        "credential_payload_format": transaction.credential_payload_format,
+        "wallet_configs": transaction.wallet_configs or [],
+        "validity_days": transaction.validity_days,
+        "renewable": transaction.renewable,
+        "renewal_window_days": transaction.renewal_window_days,
+        "issuer_profile_id": transaction.issuer_profile_id,
+        "issuer_mode": transaction.issuer_mode or "org_managed",
+        "issuer_did_override": transaction.issuer_did_override,
+        "issuer_algorithm": transaction.issuer_algorithm,
+        "signing_service_id": transaction.signing_service_id,
+        "delivery_mode": transaction.delivery_mode or "wallet_only",
+    }
+
+
 class PostgresIssuanceRepository(IIssuanceRepository):
     """PostgreSQL implementation of issuance repository."""
 
@@ -2185,12 +2209,33 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             if current_is_active:
                 reserved_row = current_row
+                if (
+                    current_row.status == IssuanceStatus.PENDING.value
+                    and current_row.id == prepared_transaction.id
+                ):
+                    refreshed = await session.execute(
+                        update(issuance_transactions_table)
+                        .where(
+                            issuance_transactions_table.c.id == current_row.id,
+                            issuance_transactions_table.c.organization_id
+                            == app_row.organization_id,
+                            issuance_transactions_table.c.application_id == app_row.id,
+                            issuance_transactions_table.c.status
+                            == IssuanceStatus.PENDING.value,
+                            issuance_transactions_table.c.expires_at > reviewed_at,
+                        )
+                        .values(**_canvas_transaction_context_values(prepared_transaction))
+                        .returning(issuance_transactions_table)
+                    )
+                    reserved_row = refreshed.first()
+                    if reserved_row is None:
+                        raise ValueError(
+                            "Canvas pending issuance transaction could not be refreshed"
+                        )
             else:
                 tx_data = {
                     "id": prepared_transaction.id,
                     "organization_id": prepared_transaction.organization_id,
-                    "credential_template_id": prepared_transaction.credential_template_id,
-                    "revocation_profile_id": prepared_transaction.revocation_profile_id,
                     "renewal_of_credential_id": prepared_transaction.renewal_of_credential_id,
                     "applicant_id": prepared_transaction.applicant_id,
                     "application_id": prepared_transaction.application_id,
@@ -2199,29 +2244,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     "pre_auth_code": prepared_transaction.pre_auth_code,
                     "access_token": _hash_token(prepared_transaction.access_token),
                     "c_nonce": prepared_transaction.nonce,
-                    "issuer_profile_id": prepared_transaction.issuer_profile_id,
-                    "issuer_mode": prepared_transaction.issuer_mode or "org_managed",
-                    "issuer_did_override": prepared_transaction.issuer_did_override,
-                    "issuer_algorithm": prepared_transaction.issuer_algorithm,
-                    "signing_service_id": prepared_transaction.signing_service_id,
                     "reserved_credential_id": prepared_transaction.reserved_credential_id,
                     "oid4vci_client_id": prepared_transaction.oid4vci_client_id,
-                    "delivery_mode": prepared_transaction.delivery_mode or "wallet_only",
-                    "claims": prepared_transaction.claims,
-                    "credential_type": prepared_transaction.credential_type,
-                    "zk_predicate_claims": prepared_transaction.zk_predicate_claims or [],
-                    "selective_disclosure_claims": prepared_transaction.selective_disclosure_claims
-                    or [],
-                    "credential_payload_format": prepared_transaction.credential_payload_format,
-                    "wallet_configs": prepared_transaction.wallet_configs or [],
-                    "validity_days": prepared_transaction.validity_days,
-                    "renewable": prepared_transaction.renewable,
-                    "renewal_window_days": prepared_transaction.renewal_window_days,
                     "created_at": prepared_transaction.created_at,
                     "expires_at": prepared_transaction.expires_at,
                     "issued_at": prepared_transaction.issued_at,
                     "revoked_at": prepared_transaction.revoked_at,
                     "revocation_reason": prepared_transaction.revocation_reason,
+                    **_canvas_transaction_context_values(prepared_transaction),
                 }
                 inserted = await session.execute(
                     issuance_transactions_table.insert()
