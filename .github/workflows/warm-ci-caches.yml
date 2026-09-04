@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MARTY_CORE_REVISION: 1e27c4d22853fa51ff7d6bda447d9690433edcff
+  MARTY_CORE_REVISION: 168e13b424ad26b300fb2c7ba58e14643c6d881a
 
 jobs:
   core-python-wheels:

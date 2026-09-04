@@ -3363,7 +3363,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 [[package]]
 name = "marty-crypto"
 version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=1e27c4d22853fa51ff7d6bda447d9690433edcff#1e27c4d22853fa51ff7d6bda447d9690433edcff"
+source = "git+https://github.com/ElevenID/marty-core?rev=168e13b424ad26b300fb2c7ba58e14643c6d881a#168e13b424ad26b300fb2c7ba58e14643c6d881a"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3410,7 +3410,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=1e27c4d22853fa51ff7d6bda447d9690433edcff#1e27c4d22853fa51ff7d6bda447d9690433edcff"
+source = "git+https://github.com/ElevenID/marty-core?rev=168e13b424ad26b300fb2c7ba58e14643c6d881a#168e13b424ad26b300fb2c7ba58e14643c6d881a"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3491,7 +3491,7 @@ dependencies = [
 [[package]]
 name = "marty-status"
 version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=1e27c4d22853fa51ff7d6bda447d9690433edcff#1e27c4d22853fa51ff7d6bda447d9690433edcff"
+source = "git+https://github.com/ElevenID/marty-core?rev=168e13b424ad26b300fb2c7ba58e14643c6d881a#168e13b424ad26b300fb2c7ba58e14643c6d881a"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -3503,7 +3503,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.1.61"
-source = "git+https://github.com/ElevenID/marty-core?rev=1e27c4d22853fa51ff7d6bda447d9690433edcff#1e27c4d22853fa51ff7d6bda447d9690433edcff"
+source = "git+https://github.com/ElevenID/marty-core?rev=168e13b424ad26b300fb2c7ba58e14643c6d881a#168e13b424ad26b300fb2c7ba58e14643c6d881a"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -5014,7 +5014,7 @@ dependencies = [
 [[package]]
 name = "sd-jwt-rs"
 version = "0.7.1"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7#c6199bfd61fb7e14b5d1a25a77ba9432cc36a0f7"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=2799b5fff011342aefe8ac5e9653d5b084e2a20c#2799b5fff011342aefe8ac5e9653d5b084e2a20c"
 dependencies = [
  "base64 0.21.7",
  "getrandom 0.2.17",
