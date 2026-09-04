@@ -1,0 +1,108 @@
+{
+  "schema": "elevenid.canvas-worker-configuration-oracle/v1",
+  "observed_source": "cbda2ac7e3376b858c1e8d5d010a304474c659cf",
+  "defaults": {
+    "worker_id": "oracle-worker",
+    "batch_size": 10,
+    "lease_seconds": 120,
+    "job_timeout_seconds": 600.0,
+    "schedule_limit": 100,
+    "oauth_revocation_limit": 25,
+    "poll_seconds": 5.0
+  },
+  "integer_environment": [
+    "CANVAS_SYNC_WORKER_BATCH_SIZE",
+    "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+    "CANVAS_SYNC_SCHEDULE_LIMIT",
+    "CANVAS_OAUTH_REVOCATION_BATCH_SIZE"
+  ],
+  "float_environment": [
+    "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS",
+    "CANVAS_SYNC_WORKER_POLL_SECONDS"
+  ],
+  "malformed_integer_values": ["", "not-a-number", "1.5"],
+  "malformed_float_values": ["", "not-a-number", "1.2.3"],
+  "cases": [
+    {"name": "defaults", "environment": {}, "expected": {}},
+    {
+      "name": "lower-bounds",
+      "environment": {
+        "CANVAS_SYNC_WORKER_BATCH_SIZE": "0",
+        "CANVAS_SYNC_WORKER_LEASE_SECONDS": "-1",
+        "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "-2.5",
+        "CANVAS_SYNC_SCHEDULE_LIMIT": "-3",
+        "CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "0",
+        "CANVAS_SYNC_WORKER_POLL_SECONDS": "0"
+      },
+      "expected": {"batch_size": 1, "lease_seconds": 30, "job_timeout_seconds": 30.0, "schedule_limit": 1, "oauth_revocation_limit": 1, "poll_seconds": 0.1}
+    },
+    {
+      "name": "upper-duration-bounds",
+      "environment": {"CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "3601", "CANVAS_SYNC_WORKER_POLL_SECONDS": "61"},
+      "expected": {"job_timeout_seconds": 3600.0, "poll_seconds": 60.0}
+    },
+    {
+      "name": "signed-whitespace-and-fractional-values",
+      "environment": {
+        "CANVAS_SYNC_WORKER_BATCH_SIZE": " +12 ",
+        "CANVAS_SYNC_WORKER_LEASE_SECONDS": " 31 ",
+        "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": " 31.25 ",
+        "CANVAS_SYNC_SCHEDULE_LIMIT": "+101",
+        "CANVAS_OAUTH_REVOCATION_BATCH_SIZE": "26",
+        "CANVAS_SYNC_WORKER_POLL_SECONDS": " 1.25 "
+      },
+      "expected": {"batch_size": 12, "lease_seconds": 31, "job_timeout_seconds": 31.25, "schedule_limit": 101, "oauth_revocation_limit": 26, "poll_seconds": 1.25}
+    },
+    {"name": "explicit-identity", "environment": {"CANVAS_SYNC_WORKER_ID": "worker-a"}, "expected": {"worker_id": "worker-a"}},
+    {"name": "empty-identity", "environment": {"CANVAS_SYNC_WORKER_ID": ""}, "expected": {}, "generated_identity": true},
+    {"name": "absent-identity", "environment": {"CANVAS_SYNC_WORKER_ID": null}, "expected": {}, "generated_identity": true},
+    {
+      "name": "identity-whitespace-is-preserved",
+      "environment": {"CANVAS_SYNC_WORKER_ID": " worker-a "},
+      "expected": {"worker_id": " worker-a "},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "whitespace-only-identity-is-configured",
+      "environment": {"CANVAS_SYNC_WORKER_ID": " "},
+      "expected": {"worker_id": " "},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "nan-durations-clamp-high",
+      "environment": {"CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "NaN", "CANVAS_SYNC_WORKER_POLL_SECONDS": "nan"},
+      "expected": {"job_timeout_seconds": 3600.0, "poll_seconds": 60.0},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "positive-infinity-durations-clamp-high",
+      "environment": {"CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "inf", "CANVAS_SYNC_WORKER_POLL_SECONDS": "+Infinity"},
+      "expected": {"job_timeout_seconds": 3600.0, "poll_seconds": 60.0},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "negative-infinity-durations-clamp-low",
+      "environment": {"CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "-inf", "CANVAS_SYNC_WORKER_POLL_SECONDS": "-Infinity"},
+      "expected": {"job_timeout_seconds": 30.0, "poll_seconds": 0.1},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "overflowing-exponent-clamps-high",
+      "environment": {"CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "1e999", "CANVAS_SYNC_WORKER_POLL_SECONDS": "1e999"},
+      "expected": {"job_timeout_seconds": 3600.0, "poll_seconds": 60.0},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "numeric-separators-are-accepted",
+      "environment": {"CANVAS_SYNC_WORKER_BATCH_SIZE": "1_2", "CANVAS_SYNC_WORKER_POLL_SECONDS": "1_2.5"},
+      "expected": {"batch_size": 12, "poll_seconds": 12.5},
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "integer-above-signed-64-bit-range-is-accepted",
+      "environment": {"CANVAS_SYNC_SCHEDULE_LIMIT": "9223372036854775808"},
+      "expected": {"schedule_limit": 9223372036854775808},
+      "rust_reconciliation_required": true
+    }
+  ]
+}
