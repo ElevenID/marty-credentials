@@ -1367,9 +1367,9 @@
   },
   "migrations": {
     "heads": [
-      "merge_issuance_heads"
+      "canvas_review_recovery_claim"
     ],
-    "revision_count": 44,
+    "revision_count": 45,
     "revisions": [
       {
         "down_revisions": [],
@@ -1721,6 +1721,14 @@
         "line": 11,
         "revision": "merge_issuance_heads",
         "source": "services/issuance/infrastructure/migrations/versions/20260810_0100_merge_issuance_heads.py"
+      },
+      {
+        "down_revisions": [
+          "merge_issuance_heads"
+        ],
+        "line": 12,
+        "revision": "canvas_review_recovery_claim",
+        "source": "services/issuance/infrastructure/migrations/versions/20260905_1900_allow_canvas_review_recovery_claim.py"
       }
     ],
     "roots": [

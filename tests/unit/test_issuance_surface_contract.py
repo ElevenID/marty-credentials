@@ -29,8 +29,8 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
         "api",
         "canvas-sync-worker",
     }
-    assert contract["migrations"]["revision_count"] == 44
-    assert contract["migrations"]["heads"] == ["merge_issuance_heads"]
+    assert contract["migrations"]["revision_count"] == 45
+    assert contract["migrations"]["heads"] == ["canvas_review_recovery_claim"]
 
 
 def test_contract_retains_critical_protocol_and_lifecycle_operations() -> None:

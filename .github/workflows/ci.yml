@@ -372,7 +372,7 @@ jobs:
         working-directory: marty-credentials
         run: |
           test "$(jq -r '.status' tests/artifacts/issuance-idempotency/contract-result.json)" = passed
-          test "$(jq -r '.migration_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = merge_issuance_heads
+          test "$(jq -r '.migration_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = canvas_review_recovery_claim
           test "$(jq -r '.created_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
           test "$(jq -r '.recovered_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
           test "$(jq -r '.same_transaction' tests/artifacts/issuance-idempotency/contract-result.json)" = true
@@ -561,6 +561,12 @@ jobs:
       - name: Exercise shared atomic PAR and proof-nonce consumption
         working-directory: marty-credentials
         run: pytest tests/test_oid4vci_ephemeral_capabilities_postgres.py -v
+
+      - name: Exercise Canvas review recovery with real migrations and audit rollback
+        working-directory: marty-credentials
+        env:
+          CANVAS_REVIEW_RECOVERY_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
+        run: pytest tests/test_canvas_review_recovery_postgres.py -v
 
   test-wasm:
     name: WASM Tests

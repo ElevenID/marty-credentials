@@ -1224,7 +1224,7 @@ evidence_policy_reviews_table = Table(
         "(resolution_claim_token IS NULL AND resolution_claim_action IS NULL "
         "AND resolution_claimed_at IS NULL) OR "
         "(status = 'open' AND resolution_claim_token IS NOT NULL "
-        "AND resolution_claim_action IN ('dismiss', 'suspend', 'revoke') "
+        "AND resolution_claim_action IN ('dismiss', 'suspend', 'revoke', 'evidence_recovered') "
         "AND resolution_claimed_at IS NOT NULL)",
         name="ck_evidence_policy_reviews_resolution_claim",
     ),
