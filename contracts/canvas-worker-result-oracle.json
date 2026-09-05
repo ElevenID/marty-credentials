@@ -72,6 +72,12 @@
       "rust_reconciliation_required": true
     },
     {
+      "name": "negative-integer-below-i64",
+      "input_json": "-18446744073709551616",
+      "expected_json": "0",
+      "rust_reconciliation_required": true
+    },
+    {
       "name": "empty-string",
       "input_json": "\"\"",
       "expected_json": "\"\""
@@ -104,6 +110,11 @@
     {
       "name": "fractional-float",
       "input_json": "1.5",
+      "omitted": true
+    },
+    {
+      "name": "exponent-float",
+      "input_json": "1e0",
       "omitted": true
     },
     {

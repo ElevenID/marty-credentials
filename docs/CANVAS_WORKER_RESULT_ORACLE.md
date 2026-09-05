@@ -19,7 +19,7 @@ floating-point numbers (including `1.0`) are omitted rather than coerced.
 The tests additionally prove no input mutation, the complete allowlist in one
 result, an empty result, and omission of representative non-JSON host values.
 
-The large-integer case explicitly requires Rust reconciliation: do not silently
+The large positive and negative integer cases require Rust reconciliation: do not silently
 round or drop an observed integer, or claim full JSON numeric parity based only
 on small counters. No runtime, dependency, crypto or consumer change is made by
 this oracle. This fixture is not recursive secret redaction, provider error
@@ -30,6 +30,6 @@ projection rather than copying Python implementation structure.
 
 Source review of the currently unrouted Rust candidate finds integer branches
 for `i64` and `u64`, but no branch that preserves integers beyond those ranges.
-The explicit beyond-`u64` fixture must therefore be included in the future
+The beyond-`u64` preservation and below-`i64` clamping fixtures must be included in the future
 executed differential, not filtered out to obtain a green result. This is a
 source-review finding; no Rust differential or cutover pass is claimed here.
