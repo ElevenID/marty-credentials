@@ -54,6 +54,19 @@ def error_identity(error):
     }
 
 
+def expected_migration_revisions(source):
+    if source == "published":
+        return FIXTURE["migration_revisions"]
+    require(source == "checkout", "Unknown source mode")
+    # Published evidence stays immutable. Current-source replay must qualify
+    # the independently frozen current runtime surface, including forward fixes.
+    surface = json.loads(
+        (ROOT / "contracts/issuance-runtime-surface.json").read_text(encoding="utf-8")
+    )
+    require(surface["schema"] == "marty.issuance-runtime-surface/v1", "Unknown runtime surface")
+    return sorted(surface["migrations"]["heads"])
+
+
 class ObservedRepository(postgres_repository.PostgresIssuanceRepository):
     def __init__(self, sessions, stop=None, stop_after=None):
         super().__init__(sessions)
@@ -168,7 +181,7 @@ async def verify(source):
             version.split(" ")[0] == FIXTURE["observed_postgres_version"],
             "PostgreSQL version changed",
         )
-        require(revisions == FIXTURE["migration_revisions"], "Migration heads changed")
+        require(revisions == expected_migration_revisions(source), "Migration heads changed")
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         for case in FIXTURE["cases"]:
             config = configuration(case)

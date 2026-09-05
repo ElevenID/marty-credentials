@@ -300,7 +300,7 @@ def main() -> None:
         version = connection.execute(
             "SELECT version_num FROM issuance_service.alembic_version"
         ).fetchone()[0]
-        assert version == "merge_issuance_heads"
+        assert version == "canvas_review_recovery_claim"
 
     created_count = sum(created for _, created in results)
     recovered_count = len(results) - created_count
@@ -313,7 +313,7 @@ def main() -> None:
             {
                 "status": "passed",
                 "source_revision": SOURCE_REVISION,
-                "migration_revision": "merge_issuance_heads",
+                "migration_revision": version,
                 "created_count": created_count,
                 "recovered_count": recovered_count,
                 "same_transaction": same_transaction,
