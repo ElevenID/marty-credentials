@@ -80,7 +80,7 @@ wasm = [
 # Explicitly opt in only for offline development and migration tools. ElevenID
 # production issuers use prepare -> remote KMS sign -> assemble and must not
 # compile or export APIs that accept issuer private keys.
-local-key-operations = ["marty-verification/authority-issuance"]
+local-key-operations = ["python", "marty-verification/authority-issuance"]
 wasm-full = [
     "wasm",
     # Include additional features for web wallet testing with Open Badges
