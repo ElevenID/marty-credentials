@@ -67,6 +67,9 @@ codegen-units = 1
 strip = true
 
 [patch.crates-io]
+# Reviewed SSI security fork. Its linked-data crate removes the unsound and
+# unmaintained im/sized-chunks container chain from production graphs.
+linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
 # Temporary security fork pending https://github.com/spruceid/ssi/pull/706.
 ssi-jwt = { git = "https://github.com/ElevenID/ssi-jwt-elevenid", rev = "957c8b0fbf3e4b967fe73c858a22b38e907b3023" }
 # Maintained ElevenID security/interoperability fork. The exact revision is
