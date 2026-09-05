@@ -7,14 +7,18 @@
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
+#[cfg(feature = "local-key-operations")]
 use marty_oid4vci::formats;
+#[cfg(feature = "local-key-operations")]
 use marty_oid4vci::issuance_input::normalize_zk_predicate_claims;
 use marty_oid4vci::issuer::IssuanceEngine;
 use marty_oid4vci::metadata;
 use marty_oid4vci::types::{
-    ClaimDefinition, CredentialClaims, CredentialFormat, CredentialTypeConfig, IssuerConfig,
-    IssuerKey, OfferConfig, SigningAlgorithm,
+    ClaimDefinition, CredentialFormat, CredentialTypeConfig, IssuerConfig, IssuerKey, OfferConfig,
+    SigningAlgorithm,
 };
+#[cfg(feature = "local-key-operations")]
+use marty_oid4vci::types::CredentialClaims;
 use marty_oid4vci::verifier::VerificationEngine;
 
 // ── Credential Issuance ──────────────────────────────────────────────
@@ -25,6 +29,7 @@ use marty_oid4vci::verifier::VerificationEngine;
 ///
 /// Returns (credential_string, credential_id).
 #[pyfunction]
+#[cfg(feature = "local-key-operations")]
 #[pyo3(signature = (
     issuer_did,
     issuer_jwk_json,
@@ -358,6 +363,7 @@ pub fn verify_presentation_structure(
 
 // This compatibility hint preserves the Python adapter's capability and exception
 // boundaries. Core signing independently validates the actual key family and alg.
+#[cfg(feature = "local-key-operations")]
 fn detect_algorithm_from_jwk(jwk_json: &str) -> PyResult<SigningAlgorithm> {
     let jwk: serde_json::Value = serde_json::from_str(jwk_json).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JWK JSON: {}", e))
@@ -425,6 +431,7 @@ pub fn verify_vp_token_jwt(
 
 /// Register OID4VCI/OID4VP functions as a sub-module.
 pub fn register_oid4vci_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "local-key-operations")]
     parent.add_function(pyo3::wrap_pyfunction!(
         create_verifiable_credential,
         parent
@@ -464,6 +471,7 @@ mod issuance_tests {
     }
 
     #[test]
+    #[cfg(feature = "local-key-operations")]
     fn algorithm_hint_keeps_python_capabilities() {
         Python::initialize();
         Python::attach(|py| {
@@ -488,6 +496,7 @@ mod issuance_tests {
     }
 
     #[test]
+    #[cfg(feature = "local-key-operations")]
     fn contradictory_key_metadata_keeps_the_runtime_error_boundary() {
         Python::initialize();
         Python::attach(|py| {
@@ -516,6 +525,7 @@ mod issuance_tests {
     }
 
     #[test]
+    #[cfg(feature = "local-key-operations")]
     fn python_issuance_preserves_tuple_and_signed_claims() {
         Python::initialize();
         Python::attach(|_| {

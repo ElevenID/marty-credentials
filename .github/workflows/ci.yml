@@ -201,11 +201,15 @@ jobs:
 
       - name: Exercise the local Python crypto boundaries
         working-directory: marty-credentials
-        run: >-
-          pytest rust/marty-rs/tests/python
-          tests/unit/test_legacy_service_native_boundary.py
-          tests/unit/test_verification_adapter_native_boundary.py
-          tests/unit/test_integration_secret_encryption.py -v
+        run: |
+          pytest rust/marty-rs/tests/python/test_production_kms_surface.py \
+            tests/unit/test_legacy_service_native_boundary.py \
+            tests/unit/test_verification_adapter_native_boundary.py \
+            tests/unit/test_integration_secret_encryption.py -v
+          maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features local-key-operations --out local-opt-in-wheels
+          python -m pip install --disable-pip-version-check --force-reinstall local-opt-in-wheels/*.whl
+          pytest rust/marty-rs/tests/python/test_core_boundaries.py \
+            rust/marty-rs/tests/python/test_sd_jwt_presentation.py -v
 
   security:
     name: Security Audit
@@ -665,6 +669,19 @@ jobs:
 
       - name: Build WASM (web target)
         run: wasm-pack build --locked --target web --no-default-features --features wasm
+
+      - name: Reject local-key exports from production WASM
+        shell: bash
+        run: |
+          for export_name in generate_p256_key generate_ed25519_key create_verifiable_credential open_badge_ob2_issue open_badge_ob3_issue dtc_sign create_presentation; do
+            if grep -Eq "export (async )?function ${export_name}\\b" pkg/marty_rs.js; then
+              echo "production WASM unexpectedly exports ${export_name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Check explicit local-key WASM opt-in
+        run: cargo check --locked --target wasm32-unknown-unknown --no-default-features --features wasm-local-key-operations
 
       - name: Build WASM (nodejs target)
         run: wasm-pack build --locked --target nodejs --no-default-features --features wasm

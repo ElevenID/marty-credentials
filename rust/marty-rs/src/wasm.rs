@@ -7,6 +7,7 @@
 
 use base64::Engine;
 use marty_verification::error::VerificationError;
+#[cfg(feature = "wasm-local-key-operations")]
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
@@ -37,6 +38,7 @@ fn verification_error_to_js(err: Box<VerificationError>) -> JsValue {
 
 /// Generate a P-256 key pair for OID4VCI
 /// Returns JSON: { "did": "did:jwk:...", "jwk": {...}, "keyId": "..." }
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub fn generate_p256_key() -> Result<String, JsValue> {
     let material = marty_oid4vci::generate_p256_did_jwk_holder_key()
@@ -60,6 +62,7 @@ pub fn generate_p256_key() -> Result<String, JsValue> {
 
 /// Generate an Ed25519 key pair
 /// Returns JSON: { "did": "did:key:...", "jwk": {...}, "keyId": "..." }
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub fn generate_ed25519_key() -> Result<String, JsValue> {
     use ssi_jwk::{Params, JWK};
@@ -107,6 +110,7 @@ pub fn generate_ed25519_key() -> Result<String, JsValue> {
 ///
 /// # Returns
 /// JSON: { "jwt": "...", "credentialId": "urn:uuid:..." }
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub fn create_verifiable_credential(
     issuer_did: &str,
@@ -239,6 +243,7 @@ pub fn create_credential_offer(
 ///
 /// # Returns
 /// JSON: { "issued": true, "version": "2.0", "credential": {...}, "warnings": [...] }
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub fn open_badge_ob2_issue(request_json: &str) -> Result<String, JsValue> {
     marty_verification::open_badges::issue_ob2_json(request_json).map_err(verification_error_to_js)
@@ -263,6 +268,7 @@ pub fn open_badge_ob2_verify(request_json: &str) -> Result<String, JsValue> {
 ///
 /// # Returns
 /// JSON: { "issued": true, "version": "3.0", "credential": {...}, "warnings": [...] }
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub async fn open_badge_ob3_issue(request_json: &str) -> Result<String, JsValue> {
     marty_verification::open_badges::issue_ob3_json_async(request_json)
@@ -307,6 +313,7 @@ pub fn dtc_create(request_json: &str) -> Result<String, JsValue> {
 ///
 /// # Returns
 /// JSON: signed DTC record
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub fn dtc_sign(request_json: &str) -> Result<String, JsValue> {
     marty_verification::dtc::sign_dtc_json(request_json).map_err(verification_error_to_js)
@@ -353,6 +360,7 @@ pub fn generate_offer_uri(issuer_url: &str, offer_id: &str, format: &str) -> Str
 ///
 /// # Returns
 /// VP JWT string
+#[cfg(feature = "wasm-local-key-operations")]
 #[wasm_bindgen]
 pub fn create_presentation(
     holder_did: &str,
@@ -564,6 +572,7 @@ pub fn extract_credentials_from_vp(vp_jwt: &str) -> Result<String, JsValue> {
 // Helper Functions
 // =============================================================================
 
+#[cfg(feature = "wasm-local-key-operations")]
 fn get_algorithm_for_jwk_wasm(jwk: &ssi_jwk::JWK) -> Result<&'static str, JsValue> {
     use marty_oid4vci::types::SigningAlgorithm;
     let algorithm = marty_oid4vci::signer::derive_typed_jwk_algorithm(jwk)
@@ -579,6 +588,7 @@ fn get_algorithm_for_jwk_wasm(jwk: &ssi_jwk::JWK) -> Result<&'static str, JsValu
     }
 }
 
+#[cfg(feature = "wasm-local-key-operations")]
 fn sign_jwt(
     jwk: &ssi_jwk::JWK,
     header: &serde_json::Value,
@@ -601,11 +611,23 @@ pub fn get_version() -> String {
 /// Check if WASM module is initialized correctly
 #[wasm_bindgen]
 pub fn health_check() -> String {
+    let features = if cfg!(feature = "wasm-local-key-operations") {
+        vec![
+            "credential_offers",
+            "verification",
+            "local_key_generation",
+            "local_credential_issuance",
+            "local_presentation_creation",
+        ]
+    } else {
+        vec!["credential_offers", "verification"]
+    };
     serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "features": ["key_generation", "credential_issuance", "presentation_creation", "jwt_verification"]
-    }).to_string()
+        "features": features
+    })
+    .to_string()
 }
 
 #[cfg(test)]

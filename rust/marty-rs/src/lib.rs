@@ -534,6 +534,7 @@ mod python_bindings {
                     "generate_p384_key",
                     "generate_rsa_key",
                     "create_presentation",
+                    "create_verifiable_credential",
                     "create_mdoc",
                     "SdJwtBuilder",
                     "SdJwtPresentation",

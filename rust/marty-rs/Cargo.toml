@@ -19,20 +19,11 @@ wasm-opt = false
 
 [features]
 default = ["python"]
-# The separately shipped local compatibility binding still exposes these
-# non-production issuer/demo capabilities against its older pinned Core API.
-# Production services install the canonical KMS-only marty-rs wheel recorded
-# in release/dependencies.json instead.
-local-key-operations = [
-    "marty-oid4vci/local-key-operations",
-    "marty-verification/local-key-operations",
-]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "marty-verification/default",
     "dep:marty-oid4vci",
-    "local-key-operations",
     "sd-jwt-rs",
     "jsonwebtoken",
     "dep:jsonwebtoken-legacy",
@@ -46,7 +37,6 @@ python = [
     "dep:marty-verification",
     "marty-verification/default",
     "dep:marty-oid4vci",
-    "local-key-operations",
     "tokio",
     "isomdl",
     "coset",
@@ -69,7 +59,6 @@ wasm = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "dep:marty-oid4vci",
-    "local-key-operations",
     "wasm-bindgen",
     "wasm-bindgen-futures",
     "js-sys",
@@ -80,7 +69,26 @@ wasm = [
 # Explicitly opt in only for offline development and migration tools. ElevenID
 # production issuers use prepare -> remote KMS sign -> assemble and must not
 # compile or export APIs that accept issuer private keys.
-local-key-operations = ["python", "marty-verification/authority-issuance"]
+local-key-operations = [
+    "python",
+    "marty-oid4vci/local-key-operations",
+    "marty-verification/local-key-operations",
+    "marty-verification/authority-issuance",
+]
+# Native tools that still need local signing must opt in explicitly.
+native-local-key-operations = [
+    "native",
+    "marty-oid4vci/local-key-operations",
+    "marty-verification/local-key-operations",
+    "marty-verification/authority-issuance",
+]
+# Browser-only development tooling that intentionally keeps holder or issuer
+# private keys in WASM memory. Production packages must use `wasm` alone.
+wasm-local-key-operations = [
+    "wasm",
+    "marty-oid4vci/local-key-operations",
+    "marty-verification/local-key-operations",
+]
 wasm-full = [
     "wasm",
     # Include additional features for web wallet testing with Open Badges
