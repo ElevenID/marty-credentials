@@ -324,6 +324,17 @@ jobs:
         working-directory: marty-credentials
         run: docker compose --file docker-compose.canvas-migration-contract.yml down --volumes --remove-orphans
 
+  canvas-worker-consumer-ranges:
+    name: Canvas Worker PostgreSQL Consumer Oracle
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - name: Replay every frozen consumer range against published and checkout sources
+        run: python scripts/run_canvas_worker_consumer_oracle.py --source both
+
   issuance-idempotency-contract:
     name: Issuance Idempotency PostgreSQL Contract
     runs-on: ubuntu-latest
@@ -582,7 +593,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, canvas-worker-consumer-ranges, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, test-wasm]
     runs-on: ubuntu-latest
     permissions:
       actions: read
