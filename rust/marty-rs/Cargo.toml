@@ -32,6 +32,7 @@ native = [
     "sha2",
 ]
 python = [
+    "dep:marty-python-adapters",
     "pyo3",
     "dep:marty-crypto",
     "dep:marty-verification",
@@ -76,6 +77,7 @@ wasm-full = [
 [dependencies]
 # Python bindings (optional)
 pyo3 = { workspace = true, optional = true }
+marty-python-adapters = { workspace = true, optional = true }
 
 # WASM bindings (optional)
 wasm-bindgen = { version = "0.2", optional = true }
