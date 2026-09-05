@@ -1,0 +1,24 @@
+{
+  "schema": "elevenid.canvas-worker-renewal-job-outcomes/v1",
+  "observed_source": "b027e834d71dee0cc3550aac1150cdb0c40946ae",
+  "worker_blob": "b516ed3d0855f16e9ec899a452a22df49d2cafe5",
+  "scope": "actual leased-job handler and maintainer with controlled processor and in-memory repository",
+  "renewal_failures": ["lease", "target", "process"],
+  "durable_fences_before_processor_exit": ["unchanged", "owner", "expiry", "attempt"],
+  "fenced_outcome": {"durable_status": "leased", "completed": false, "error_code": null},
+  "after_renewal_error": {
+    "processor_still_active": true,
+    "job_handler_still_pending": true,
+    "durable_job_status": "leased"
+  },
+  "processor_outcomes": [
+    {"name": "success", "durable_status": "succeeded", "completed": true, "error_code": null},
+    {"name": "retry", "durable_status": "retry", "completed": false, "error_code": "synthetic_processing_retry"},
+    {"name": "terminal", "durable_status": "dead_letter", "completed": true, "error_code": "synthetic_processing_terminal"},
+    {"name": "deadline", "durable_status": "retry", "completed": false, "error_code": "canvas_sync_deadline_exceeded"},
+    {"name": "cancel", "durable_status": "leased", "completed": false, "error_code": null}
+  ],
+  "handler_exit_after_processor_termination": "renewal_exception",
+  "processor_cleanup_acknowledged": true,
+  "cutover_authorized": false
+}
