@@ -12,6 +12,7 @@ use pyo3::prelude::*;
 ///
 /// Args:
 ///     ciphersuite: "BBS_BLS12381_SHA256" or "BBS_BLS12381_SHAKE256" (default)
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (ciphersuite="BBS_BLS12381_SHAKE256"))]
 pub fn generate_bls12381_key(ciphersuite: &str) -> PyResult<(Vec<u8>, Vec<u8>)> {
@@ -34,6 +35,7 @@ pub fn generate_bls12381_key(ciphersuite: &str) -> PyResult<(Vec<u8>, Vec<u8>)> 
 ///     ciphersuite: "BBS_BLS12381_SHA256" or "BBS_BLS12381_SHAKE256"
 ///
 /// Returns: Signature bytes (80 bytes)
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (secret_key, public_key, messages, header, ciphersuite="BBS_BLS12381_SHAKE256"))]
 pub fn bbs_sign(
@@ -167,8 +169,11 @@ pub fn bbs_verify_proof(
 
 /// Register BBS+ functions into the Python module.
 pub fn register_bbs_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(generate_bls12381_key, m)?)?;
-    m.add_function(wrap_pyfunction!(bbs_sign, m)?)?;
+    #[cfg(feature = "local-key-operations")]
+    {
+        m.add_function(wrap_pyfunction!(generate_bls12381_key, m)?)?;
+        m.add_function(wrap_pyfunction!(bbs_sign, m)?)?;
+    }
     m.add_function(wrap_pyfunction!(bbs_verify, m)?)?;
     m.add_function(wrap_pyfunction!(bbs_create_proof, m)?)?;
     m.add_function(wrap_pyfunction!(bbs_verify_proof, m)?)?;

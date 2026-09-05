@@ -31,7 +31,6 @@ native = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "marty-verification/default",
-    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "local-key-operations",
     "sd-jwt-rs",
@@ -46,7 +45,6 @@ python = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "marty-verification/default",
-    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "local-key-operations",
     "tokio",
@@ -70,7 +68,6 @@ python = [
 wasm = [
     "dep:marty-crypto",
     "dep:marty-verification",
-    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
     "local-key-operations",
     "wasm-bindgen",
@@ -80,6 +77,10 @@ wasm = [
     "console_error_panic_hook",
     "getrandom/js"
 ]
+# Explicitly opt in only for offline development and migration tools. ElevenID
+# production issuers use prepare -> remote KMS sign -> assemble and must not
+# compile or export APIs that accept issuer private keys.
+local-key-operations = ["marty-verification/authority-issuance"]
 wasm-full = [
     "wasm",
     # Include additional features for web wallet testing with Open Badges

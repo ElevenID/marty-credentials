@@ -5,15 +5,24 @@
 
 // sd-jwt-rs owns this type boundary and remains pinned to jsonwebtoken 10.
 // The workspace-facing jsonwebtoken dependency can move independently.
-use jsonwebtoken_legacy::{DecodingKey, EncodingKey, Header};
+#[cfg(feature = "local-key-operations")]
+use jsonwebtoken_legacy::EncodingKey;
+use jsonwebtoken_legacy::{DecodingKey, Header};
 use pyo3::prelude::*;
+#[cfg(feature = "local-key-operations")]
 use pyo3::types::PyDict;
+#[cfg(feature = "local-key-operations")]
 use sd_jwt_rs::issuer::ClaimsForSelectiveDisclosureStrategy;
-use sd_jwt_rs::{SDJWTHolder, SDJWTIssuer, SDJWTSerializationFormat, SDJWTVerifier};
+#[cfg(feature = "local-key-operations")]
+use sd_jwt_rs::{SDJWTHolder, SDJWTIssuer};
+use sd_jwt_rs::{SDJWTSerializationFormat, SDJWTVerifier};
+#[cfg(feature = "local-key-operations")]
 use serde_json::{json, Map, Value};
+#[cfg(feature = "local-key-operations")]
 use std::collections::HashMap;
 
 /// Builder for creating SD-JWT credentials with selective disclosure
+#[cfg(feature = "local-key-operations")]
 #[pyclass]
 pub struct SdJwtBuilder {
     issuer_claim: String,
@@ -23,6 +32,7 @@ pub struct SdJwtBuilder {
     expiration_seconds: Option<i64>,
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pymethods]
 impl SdJwtBuilder {
     #[new]
@@ -131,12 +141,14 @@ impl SdJwtBuilder {
 }
 
 /// SD-JWT presentation creator (holder side)
+#[cfg(feature = "local-key-operations")]
 #[pyclass]
 pub struct SdJwtPresentation {
     sd_jwt: String,
     claims_to_disclose: Map<String, Value>,
 }
 
+#[cfg(feature = "local-key-operations")]
 #[pymethods]
 impl SdJwtPresentation {
     #[new]
@@ -269,6 +281,7 @@ impl SdJwtVerifier {
 // Helper functions
 
 /// Convert Python value to JSON
+#[cfg(feature = "local-key-operations")]
 fn python_to_json(py_value: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(s) = py_value.extract::<String>() {
         Ok(json!(s))
@@ -304,6 +317,7 @@ fn python_to_json(py_value: &Bound<'_, PyAny>) -> PyResult<Value> {
 }
 
 /// Create encoding key from PEM based on algorithm
+#[cfg(feature = "local-key-operations")]
 fn create_encoding_key(pem: &str, algorithm: &str) -> PyResult<EncodingKey> {
     match algorithm {
         "ES256" | "ES384" => EncodingKey::from_ec_pem(pem.as_bytes()).map_err(|e| {
@@ -366,6 +380,7 @@ fn create_decoding_key(pem: &str, algorithm: &str) -> PyResult<DecodingKey> {
 // Python module functions
 
 /// Create an SD-JWT with selective disclosure
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (issuer, subject_id, claims, disclosable_claims, private_key_pem, algorithm=None, expiration_seconds=None))]
 pub fn create_sd_jwt(
@@ -416,9 +431,12 @@ pub fn verify_sd_jwt(
 
 /// Register SD-JWT functions and classes with Python module
 pub(crate) fn register_sd_jwt_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "local-key-operations")]
     parent.add_class::<SdJwtBuilder>()?;
+    #[cfg(feature = "local-key-operations")]
     parent.add_class::<SdJwtPresentation>()?;
     parent.add_class::<SdJwtVerifier>()?;
+    #[cfg(feature = "local-key-operations")]
     parent.add_function(wrap_pyfunction!(create_sd_jwt, parent)?)?;
     parent.add_function(wrap_pyfunction!(verify_sd_jwt, parent)?)?;
     Ok(())

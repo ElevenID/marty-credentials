@@ -6,6 +6,7 @@ use isomdl::definitions::device_key::cose_key::{CoseKey, EC2Curve};
 use isomdl::definitions::helpers::ByteStr;
 use isomdl::definitions::issuer_signed::IssuerSignedItem;
 use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, Mso, ValidityInfo};
+#[cfg(feature = "local-key-operations")]
 use p256::pkcs8::DecodePrivateKey;
 use pyo3::prelude::*;
 use sha2::{Digest, Sha256, Sha384, Sha512};
@@ -258,6 +259,7 @@ pub fn der_to_cose_signature(der_sig: &[u8]) -> PyResult<Vec<u8>> {
 }
 
 /// Sign data with DER-encoded private key (P-256)
+#[cfg(feature = "local-key-operations")]
 pub fn sign_with_der_key(key_der: &[u8], data: &[u8]) -> PyResult<Vec<u8>> {
     use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 

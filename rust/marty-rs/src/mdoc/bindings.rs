@@ -2,12 +2,14 @@
 
 use super::builder::MdocBuilder;
 use super::document::MdocPreparedForHsm;
+#[cfg(feature = "local-key-operations")]
 use super::helpers::sign_with_der_key;
 use super::types::create_issuer_signed_items;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 /// Create an mDoc credential (full signing in Rust)
+#[cfg(feature = "local-key-operations")]
 #[pyfunction]
 #[pyo3(signature = (doc_type, namespaces, validity, signing_key_der, device_key_der=None, digest_algorithm=None))]
 pub fn create_mdoc(

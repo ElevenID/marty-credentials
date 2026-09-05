@@ -17,7 +17,9 @@ mod canonical_verification;
 #[cfg(feature = "python")]
 pub mod mdoc;
 
-// eMRTD (electronic Machine Readable Travel Document) issuance module
+// eMRTD issuance currently requires in-process private keys and is therefore
+// available only to explicitly opted-in offline tooling.
+#[cfg(feature = "local-key-operations")]
 pub mod emrtd;
 
 // SD-JWT module (only for python - has PyO3 and sd-jwt-rs dependencies)
@@ -54,7 +56,9 @@ pub use marty_verification::{
 mod python_bindings {
     use super::*;
     use pyo3::prelude::*;
+    #[cfg(feature = "local-key-operations")]
     use ssi_crypto::{AlgorithmInstance, SecretKey};
+    #[cfg(feature = "local-key-operations")]
     use ssi_jwk::{Params, JWK};
 
     /// Formats the sum of two numbers as string.
@@ -77,6 +81,7 @@ mod python_bindings {
     }
 
     /// Generates a new Ed25519 key and returns (did, jwk_json)
+    #[cfg(feature = "local-key-operations")]
     #[pyfunction]
     pub fn generate_did_key() -> PyResult<(String, String)> {
         let jwk = JWK::generate_ed25519()
@@ -100,6 +105,7 @@ mod python_bindings {
     }
 
     /// Generates a new P-256 key and returns (did, jwk_json) - preferred for OID4VCI
+    #[cfg(feature = "local-key-operations")]
     #[pyfunction]
     pub fn generate_p256_key() -> PyResult<(String, String)> {
         let material = marty_oid4vci::generate_p256_did_jwk_holder_key()
@@ -108,6 +114,7 @@ mod python_bindings {
     }
 
     /// Generates a P-256 private JWK and its public-only JWK.
+    #[cfg(feature = "local-key-operations")]
     #[pyfunction]
     pub fn generate_p256_jwk() -> PyResult<(String, String)> {
         marty_oid4vci::issuer::generate_p256_jwk_pair()
@@ -115,6 +122,7 @@ mod python_bindings {
     }
 
     /// Generates a new P-384 key and returns (did, jwk_json) - for ES384
+    #[cfg(feature = "local-key-operations")]
     #[pyfunction]
     pub fn generate_p384_key() -> PyResult<(String, String)> {
         let jwk = JWK::generate_p384();
@@ -128,6 +136,7 @@ mod python_bindings {
     /// Generates a new RSA key and returns (did, jwk_json)
     /// key_size: RSA key size in bits (2048, 3072, or 4096). Default is 2048 (fastest).
     /// use_pss: If true, marks the key for RSA-PSS (PS256/384/512). If false, PKCS#1 v1.5 (RS256/384/512).
+    #[cfg(feature = "local-key-operations")]
     #[pyfunction]
     #[pyo3(signature = (key_size=2048, use_pss=false))]
     pub fn generate_rsa_key(
@@ -209,6 +218,7 @@ mod python_bindings {
     }
 
     /// Extract SecretKey from JWK for signing
+    #[cfg(feature = "local-key-operations")]
     fn jwk_to_secret_key(jwk: &JWK) -> Result<SecretKey, String> {
         match &jwk.params {
             Params::OKP(params) => {
@@ -240,6 +250,7 @@ mod python_bindings {
     }
 
     /// Get algorithm instance based on JWK type
+    #[cfg(feature = "local-key-operations")]
     fn get_algorithm_for_jwk(jwk: &JWK) -> Result<(AlgorithmInstance, &'static str), String> {
         match &jwk.params {
             Params::OKP(_) => Ok((AlgorithmInstance::EdDSA, "EdDSA")),
@@ -256,6 +267,7 @@ mod python_bindings {
     }
 
     /// Sign a message using the JWK
+    #[cfg(feature = "local-key-operations")]
     fn sign_message(jwk: &JWK, message: &[u8]) -> Result<String, String> {
         let secret_key = jwk_to_secret_key(jwk)?;
         let (alg_instance, _) = get_algorithm_for_jwk(jwk)?;
@@ -268,6 +280,7 @@ mod python_bindings {
     }
 
     /// Creates a verifiable presentation from credentials
+    #[cfg(feature = "local-key-operations")]
     #[pyfunction]
     #[pyo3(signature = (holder_did, holder_jwk_json, credential_jwts, audience, nonce=None))]
     pub fn create_presentation(
@@ -458,12 +471,15 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
         m.add_function(wrap_pyfunction!(get_ssi_version, m)?)?;
         m.add_function(wrap_pyfunction!(check_isomdl, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
-        m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
-        m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
+        #[cfg(feature = "local-key-operations")]
+        {
+            m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
+            m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
+            m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
+            m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
+            m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
+            m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
+        }
         m.add_function(wrap_pyfunction!(verify_jwt, m)?)?;
         m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
         m.add_function(wrap_pyfunction!(
@@ -481,6 +497,7 @@ mod python_bindings {
         crate::mdoc::register_mdoc_module(m)?;
 
         // eMRTD classes and functions for ICAO 9303 passport issuance
+        #[cfg(feature = "local-key-operations")]
         crate::emrtd::register_emrtd_module(m)?;
 
         // SD-JWT classes and functions for Selective Disclosure JWT
@@ -503,6 +520,52 @@ mod python_bindings {
         use super::*;
 
         #[test]
+        #[cfg(not(feature = "local-key-operations"))]
+        fn production_module_excludes_private_key_operations() {
+            Python::initialize();
+            Python::attach(|py| {
+                let module = PyModule::new(py, "_marty_rs").unwrap();
+                _marty_rs(&module).unwrap();
+
+                for private_operation in [
+                    "generate_did_key",
+                    "generate_p256_key",
+                    "generate_p256_jwk",
+                    "generate_p384_key",
+                    "generate_rsa_key",
+                    "create_presentation",
+                    "create_mdoc",
+                    "SdJwtBuilder",
+                    "SdJwtPresentation",
+                    "create_sd_jwt",
+                    "generate_bls12381_key",
+                    "bbs_sign",
+                    "issue_emrtd_passport",
+                    "issue_emrtd_passport_self_signed",
+                ] {
+                    assert!(
+                        !module.hasattr(private_operation).unwrap(),
+                        "{private_operation}"
+                    );
+                }
+
+                for public_operation in [
+                    "prepare_mdoc_for_hsm",
+                    "complete_mdoc_with_signature",
+                    "SdJwtVerifier",
+                    "verify_sd_jwt",
+                    "bbs_verify",
+                ] {
+                    assert!(
+                        module.hasattr(public_operation).unwrap(),
+                        "{public_operation}"
+                    );
+                }
+            });
+        }
+
+        #[test]
+        #[cfg(feature = "local-key-operations")]
         fn p256_binding_keeps_private_key_out_of_did_jwk() {
             let (did, private_jwk) = generate_p256_key().unwrap();
             let encoded = did.strip_prefix("did:jwk:").unwrap();
