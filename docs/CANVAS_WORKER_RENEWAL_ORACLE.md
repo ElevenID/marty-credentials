@@ -1,5 +1,10 @@
 # Canvas worker lease-renewal oracle
 
+The separate [whole-job renewal outcome oracle](CANVAS_WORKER_RENEWAL_JOB_OUTCOMES.md)
+now records what the actual job handler persists after its maintainer fails,
+including later owner/expiry/attempt fences and cancellation masking. The
+maintainer-only observations below do not imply whole-job parity.
+
 `tests/unit/test_canvas_worker_renewal_oracle.py` calls the real legacy renewal
 loop with the real in-memory repository and detached worker copies. Existing
 worker configuration/target helpers are reused; no production implementation
