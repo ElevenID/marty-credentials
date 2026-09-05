@@ -1,0 +1,147 @@
+{
+  "schema": "elevenid.canvas-worker-result-oracle/v1",
+  "observed_source": "d6b6dd67fd9674eb14388320e65d3ae9642b3b42",
+  "worker_blob": "b516ed3d0855f16e9ec899a452a22df49d2cafe5",
+  "allowed_fields": [
+    "application_id",
+    "candidate_id",
+    "candidate_state",
+    "config_version",
+    "requirements_checked",
+    "facts_observed",
+    "facts_changed",
+    "negative_observations",
+    "review_created",
+    "identity_link_required",
+    "candidates_seen",
+    "pending_claim",
+    "observations_written",
+    "facts_created",
+    "facts_reused",
+    "policy_allowed",
+    "no_change"
+  ],
+  "unknown_fields": [
+    "provider_payload",
+    "access_token",
+    "error_detail",
+    "Application_id",
+    "application_id ",
+    "future_counter"
+  ],
+  "value_cases": [
+    {
+      "name": "null",
+      "input_json": "null",
+      "expected_json": "null"
+    },
+    {
+      "name": "true-is-not-one",
+      "input_json": "true",
+      "expected_json": "true"
+    },
+    {
+      "name": "false-is-not-zero",
+      "input_json": "false",
+      "expected_json": "false"
+    },
+    {
+      "name": "negative-integer",
+      "input_json": "-3",
+      "expected_json": "0"
+    },
+    {
+      "name": "zero",
+      "input_json": "0",
+      "expected_json": "0"
+    },
+    {
+      "name": "positive-integer",
+      "input_json": "42",
+      "expected_json": "42"
+    },
+    {
+      "name": "large-portable-integer",
+      "input_json": "9007199254740991",
+      "expected_json": "9007199254740991"
+    },
+    {
+      "name": "integer-beyond-u64",
+      "input_json": "18446744073709551616",
+      "expected_json": "18446744073709551616",
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "negative-integer-below-i64",
+      "input_json": "-18446744073709551616",
+      "expected_json": "0",
+      "rust_reconciliation_required": true
+    },
+    {
+      "name": "empty-string",
+      "input_json": "\"\"",
+      "expected_json": "\"\""
+    },
+    {
+      "name": "exact-ascii-limit",
+      "input_json": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+      "expected_json": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+    },
+    {
+      "name": "over-ascii-limit",
+      "input_json": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+      "expected_json": "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+    },
+    {
+      "name": "unicode-scalar-limit",
+      "input_json": "\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\"",
+      "expected_json": "\"😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀\""
+    },
+    {
+      "name": "combining-codepoint-limit",
+      "input_json": "\"ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\"",
+      "expected_json": "\"éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé\""
+    },
+    {
+      "name": "integral-float",
+      "input_json": "1.0",
+      "omitted": true
+    },
+    {
+      "name": "fractional-float",
+      "input_json": "1.5",
+      "omitted": true
+    },
+    {
+      "name": "exponent-float",
+      "input_json": "1e0",
+      "omitted": true
+    },
+    {
+      "name": "empty-array",
+      "input_json": "[]",
+      "omitted": true
+    },
+    {
+      "name": "nonempty-array",
+      "input_json": "[\"synthetic\"]",
+      "omitted": true
+    },
+    {
+      "name": "empty-object",
+      "input_json": "{}",
+      "omitted": true
+    },
+    {
+      "name": "nonempty-object",
+      "input_json": "{\"count\":1}",
+      "omitted": true
+    }
+  ],
+  "limits": {
+    "string_length_unit": "Unicode code points, not UTF-8 bytes or grapheme clusters",
+    "maximum_string_codepoints": 200,
+    "negative_integer_minimum": 0
+  },
+  "scope": "Observed result projection only; not complete worker parity, recursive redaction or authorization for Python deletion."
+}
