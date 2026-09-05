@@ -1,9 +1,11 @@
 """Keep the schema model, forward migration and mandatory database gate aligned."""
 
 from importlib import import_module
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from issuance.infrastructure.models import evidence_policy_reviews_table
 
 
@@ -36,3 +38,15 @@ def test_real_postgres_recovery_is_mandatory_in_existing_required_job() -> None:
     assert "CANVAS_REVIEW_RECOVERY_TEST_DATABASE_URL:" in step
     assert "pytest tests/test_canvas_review_recovery_postgres.py -v" in step
     assert "if:" not in step and "continue-on-error" not in step
+
+
+def test_consumer_oracle_distinguishes_published_and_current_schema_heads() -> None:
+    path = Path(__file__).resolve().parents[2] / "scripts/verify_canvas_worker_consumer_ranges.py"
+    spec = spec_from_file_location("review_recovery_consumer_probe", path)
+    assert spec is not None and spec.loader is not None
+    probe = module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    assert probe.expected_migration_revisions("published") == ["merge_issuance_heads"]
+    assert probe.expected_migration_revisions("checkout") == ["canvas_review_recovery_claim"]
+    with pytest.raises(probe.OracleMismatch, match="Unknown source mode"):
+        probe.expected_migration_revisions("unqualified")

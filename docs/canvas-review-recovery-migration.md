@@ -20,8 +20,10 @@ one winner from competing repository claims, stale/foreign/action-mismatch
 fences, audit-insert rollback, and unchanged credential/transaction rows.
 External credential handling is a controlled failing port, not a signing or
 external provider qualification. The pinned historical worker oracle remains
-unchanged; only the current runtime surface and current-head idempotency gate
-advance to the new revision.
+unchanged. Published consumer replay still requires its historical migration
+head; checkout replay requires the independently frozen current runtime surface
+head. All 36 cycle and three loop expectations remain identical. The current
+runtime inventory and current-head idempotency gate advance to the new revision.
 
 Downgrade must run only after recovery claims drain. If a recovery claim is
 still active, PostgreSQL rejects the old constraint and rolls back the whole
