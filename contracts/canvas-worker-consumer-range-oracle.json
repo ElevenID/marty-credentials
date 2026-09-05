@@ -1,0 +1,410 @@
+{
+  "schema": "elevenid.canvas-worker-consumer-range-oracle/v1",
+  "integer_encoding": "base-10-string",
+  "observed_source": "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8",
+  "observed_image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176",
+  "observed_source_sha256": "c5a7a692af7a808486b0a42d379699222bdf01f3995181c16da9d3466666e90a",
+  "observed_repository_sha256": "34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb",
+  "observed_postgres_image": "postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+  "observed_postgres_version": "15.17",
+  "migration_revisions": [
+    "merge_issuance_heads"
+  ],
+  "observation_sha256": "67a26629d39ca1cb98a8be9732fcdf7a7386d005b563127beafc6dd308367925",
+  "database_scope": "disposable network-none database; empty published migrated tables; synthetic organization dependency table",
+  "fields": {
+    "batch_size": "CANVAS_SYNC_WORKER_BATCH_SIZE",
+    "lease_seconds": "CANVAS_SYNC_WORKER_LEASE_SECONDS",
+    "schedule_limit": "CANVAS_SYNC_SCHEDULE_LIMIT",
+    "oauth_revocation_limit": "CANVAS_OAUTH_REVOCATION_BATCH_SIZE"
+  },
+  "inputs": {
+    "ordinary": "120",
+    "i32_max": "2147483647",
+    "above_i32": "2147483648",
+    "i64_max": "9223372036854775807",
+    "above_i64": "9223372036854775808",
+    "above_u64": "18446744073709551616",
+    "thirty_one_digits": "1000000000000000000000000000000",
+    "above_float_range": "10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "integer_digit_limit": "1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "outcomes": {
+    "empty_cycle_completed": {
+      "configuration": "accepted",
+      "cycle": "completed",
+      "events": [
+        {
+          "phase": "heartbeat",
+          "event": "scheduling"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "start"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "scheduling",
+          "event": "start"
+        },
+        {
+          "phase": "scheduling",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "leasing",
+          "event": "start"
+        },
+        {
+          "phase": "leasing",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "heartbeat",
+          "event": "idle"
+        },
+        {
+          "phase": "heartbeat",
+          "event": "idle"
+        }
+      ]
+    },
+    "leasing_integer_sql_range": {
+      "configuration": "accepted",
+      "cycle": "error",
+      "category": "integer_sql_range",
+      "legacy_error": {
+        "class": "DBAPIError",
+        "driver_class": "Error",
+        "sqlstate": "22000"
+      },
+      "events": [
+        {
+          "phase": "heartbeat",
+          "event": "scheduling"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "start"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "scheduling",
+          "event": "start"
+        },
+        {
+          "phase": "scheduling",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "leasing",
+          "event": "start"
+        },
+        {
+          "phase": "leasing",
+          "event": "error",
+          "class": "DBAPIError",
+          "driver_class": "Error",
+          "sqlstate": "22000"
+        }
+      ]
+    },
+    "leasing_duration_range": {
+      "configuration": "accepted",
+      "cycle": "error",
+      "category": "duration_range",
+      "legacy_error": {
+        "class": "OverflowError",
+        "driver_class": null,
+        "sqlstate": null
+      },
+      "events": [
+        {
+          "phase": "heartbeat",
+          "event": "scheduling"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "start"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "scheduling",
+          "event": "start"
+        },
+        {
+          "phase": "scheduling",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "leasing",
+          "event": "start"
+        },
+        {
+          "phase": "leasing",
+          "event": "error",
+          "class": "OverflowError",
+          "driver_class": null,
+          "sqlstate": null
+        }
+      ]
+    },
+    "scheduling_integer_sql_range": {
+      "configuration": "accepted",
+      "cycle": "error",
+      "category": "integer_sql_range",
+      "legacy_error": {
+        "class": "DBAPIError",
+        "driver_class": "Error",
+        "sqlstate": "22000"
+      },
+      "events": [
+        {
+          "phase": "heartbeat",
+          "event": "scheduling"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "start"
+        },
+        {
+          "phase": "oauth_queue",
+          "event": "complete",
+          "row_count": 0
+        },
+        {
+          "phase": "scheduling",
+          "event": "start"
+        },
+        {
+          "phase": "scheduling",
+          "event": "error",
+          "class": "DBAPIError",
+          "driver_class": "Error",
+          "sqlstate": "22000"
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "field": "batch_size",
+      "input": "ordinary",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "batch_size",
+      "input": "i32_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "batch_size",
+      "input": "above_i32",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "batch_size",
+      "input": "i64_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "batch_size",
+      "input": "above_i64",
+      "expected": "leasing_integer_sql_range"
+    },
+    {
+      "field": "batch_size",
+      "input": "above_u64",
+      "expected": "leasing_integer_sql_range"
+    },
+    {
+      "field": "batch_size",
+      "input": "thirty_one_digits",
+      "expected": "leasing_integer_sql_range"
+    },
+    {
+      "field": "batch_size",
+      "input": "above_float_range",
+      "expected": "leasing_integer_sql_range"
+    },
+    {
+      "field": "batch_size",
+      "input": "integer_digit_limit",
+      "expected": "leasing_integer_sql_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "ordinary",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "i32_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "above_i32",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "i64_max",
+      "expected": "leasing_duration_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "above_i64",
+      "expected": "leasing_duration_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "above_u64",
+      "expected": "leasing_duration_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "thirty_one_digits",
+      "expected": "leasing_duration_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "above_float_range",
+      "expected": "leasing_duration_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "integer_digit_limit",
+      "expected": "leasing_duration_range"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "ordinary",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "i32_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "above_i32",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "i64_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "above_i64",
+      "expected": "scheduling_integer_sql_range"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "above_u64",
+      "expected": "scheduling_integer_sql_range"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "thirty_one_digits",
+      "expected": "scheduling_integer_sql_range"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "above_float_range",
+      "expected": "scheduling_integer_sql_range"
+    },
+    {
+      "field": "schedule_limit",
+      "input": "integer_digit_limit",
+      "expected": "scheduling_integer_sql_range"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "ordinary",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "i32_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "above_i32",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "i64_max",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "above_i64",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "above_u64",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "thirty_one_digits",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "above_float_range",
+      "expected": "empty_cycle_completed"
+    },
+    {
+      "field": "oauth_revocation_limit",
+      "input": "integer_digit_limit",
+      "expected": "empty_cycle_completed"
+    }
+  ],
+  "loop_cases": [
+    {
+      "field": "schedule_limit",
+      "input": "above_i64",
+      "cycles": 2,
+      "stopped_normally": true,
+      "cycle_events_from": "scheduling_integer_sql_range"
+    },
+    {
+      "field": "batch_size",
+      "input": "above_i64",
+      "cycles": 2,
+      "stopped_normally": true,
+      "cycle_events_from": "leasing_integer_sql_range"
+    },
+    {
+      "field": "lease_seconds",
+      "input": "above_i64",
+      "cycles": 2,
+      "stopped_normally": true,
+      "cycle_events_from": "leasing_duration_range"
+    }
+  ]
+}
