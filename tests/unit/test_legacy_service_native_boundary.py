@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -26,6 +27,25 @@ RETIRED_OR_NATIVE_KERNEL_FILES = SERVICE_FILES + (
     ROOT / "services/issuance/infrastructure/api/routes.py",
     ROOT / "python/marty_credentials/adapters/adapters/credentials/multipaz.py",
 )
+
+
+def test_production_service_package_exposes_verification_only() -> None:
+    services = importlib.import_module("marty_credentials.adapters.services")
+
+    assert services.__all__ == ["VerificationService"]
+    assert services.VerificationService is verification_service.VerificationService
+    with pytest.raises(AttributeError, match="explicit local-key compatibility adapter"):
+        services.__getattr__("IssuanceService")
+
+
+def test_local_issuance_adapter_fails_explicitly_without_local_build(monkeypatch) -> None:
+    def unavailable(_capabilities) -> None:
+        raise NativeBackendUnavailable("local capability omitted")
+
+    monkeypatch.setattr(issuance_service, "require_marty_rs", unavailable)
+
+    with pytest.raises(NativeOperationError, match="explicit local-key-operations build"):
+        issuance_service.IssuanceService(object())
 
 
 def test_standalone_python_verifier_does_not_return() -> None:

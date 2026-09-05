@@ -1,24 +1,22 @@
-"""Example usage patterns for production-ready credential operations"""
-import asyncio
+"""Offline/local-key compatibility examples; not for production deployment."""
 from datetime import datetime
 from uuid import uuid4
-
-from redis.asyncio import Redis
-from sqlalchemy.orm import Session
 
 from marty_credentials.adapters.services.issuance_service import IssuanceService
 from marty_credentials.adapters.services.verification_service import VerificationService
 from marty_credentials.config import get_config
 from marty_credentials.infrastructure.events import (
     CredentialIssuedEvent,
-    CredentialVerifiedEvent,
     CredentialVerificationFailedEvent,
+    CredentialVerifiedEvent,
 )
 from marty_credentials.infrastructure.events.publisher import create_event_publisher
 from marty_credentials.infrastructure.observability.rate_limiter import (
     RateLimiter,
     RateLimitExceededError,
 )
+from redis.asyncio import Redis
+from sqlalchemy.orm import Session
 
 
 async def example_credential_issuance_with_rate_limiting(
@@ -209,7 +207,7 @@ async def example_multi_operation_with_all_features(
     issuer_did: str,
     subject_did: str,
 ):
-    """Example: Complete flow with all production features"""
+    """Example: Complete local compatibility flow with supporting services."""
     
     config = get_config()
     redis_client = Redis.from_url(config.redis_url, decode_responses=False)

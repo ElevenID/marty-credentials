@@ -1,8 +1,9 @@
-"""Issuance service for creating digital identity credentials"""
+"""Local-key compatibility adapter; never use in production issuer services."""
 import json
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Protocol
+from types import ModuleType
+from typing import Any, Dict, List, Optional, Protocol, cast
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,7 @@ from marty_credentials.infrastructure.observability.metrics import (
     credentials_issued_total,
 )
 from marty_credentials.native_backend import (
+    NativeBackendUnavailable,
     NativeOperationError,
     require_marty_rs,
     require_marty_verification,
@@ -38,26 +40,43 @@ class CredentialStatusService(Protocol):
         self, entries: list[Any]
     ) -> list[dict[str, Any]] | dict[str, Any]: ...
 
-_marty_rs = require_marty_rs(
-    (
-        "create_verifiable_credential",
-        "generate_p256_jwk",
-        "sd_jwt_create_presentation",
-    )
-)
-_marty_verification = require_marty_verification(
-    (
-        "open_badge_ob2_issue",
-        "open_badge_ob3_issue",
-        "p256_public_jwk_to_pem",
-    )
-)
+
+_marty_rs = cast(ModuleType, None)
+_marty_verification = cast(ModuleType, None)
+
+
+def _load_local_key_backends() -> None:
+    """Require the deliberately omitted local-key extension capabilities."""
+    global _marty_rs, _marty_verification
+    try:
+        marty_rs = require_marty_rs(
+            (
+                "create_verifiable_credential",
+                "generate_p256_jwk",
+                "sd_jwt_create_presentation",
+            )
+        )
+        marty_verification = require_marty_verification(
+            (
+                "open_badge_ob2_issue",
+                "open_badge_ob3_issue",
+                "p256_public_jwk_to_pem",
+            )
+        )
+    except NativeBackendUnavailable as exc:
+        raise NativeOperationError(
+            "IssuanceService requires the explicit local-key-operations build; "
+            "production issuers must use the KMS-backed issuance service"
+        ) from exc
+    _marty_rs = marty_rs
+    _marty_verification = marty_verification
 
 
 class IssuanceService:
-    """Service for issuing various types of digital identity credentials"""
+    """Offline/local compatibility service that holds private keys in process."""
     
     def __init__(self, db_session: Session, credential_status_service: Optional[CredentialStatusService] = None):
+        _load_local_key_backends()
         self.db = db_session
         self.credential_status_service = credential_status_service
         
