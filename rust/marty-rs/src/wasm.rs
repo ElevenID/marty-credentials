@@ -336,16 +336,7 @@ pub fn dtc_verify(request_json: &str) -> Result<String, JsValue> {
 /// URI string for QR code encoding
 #[wasm_bindgen]
 pub fn generate_offer_uri(issuer_url: &str, offer_id: &str, format: &str) -> String {
-    match format {
-        "microsoft" => format!(
-            "openid-vc://?request_uri={}/issuance-requests/{}",
-            issuer_url, offer_id
-        ),
-        _ => format!(
-            "openid-credential-offer://?credential_offer_uri={}/offers/{}",
-            issuer_url, offer_id
-        ),
-    }
+    marty_oid4vci::issuer::generate_offer_uri(issuer_url, offer_id, format)
 }
 
 // =============================================================================
@@ -681,4 +672,18 @@ pub fn health_check() -> String {
         "version": env!("CARGO_PKG_VERSION"),
         "features": ["key_generation", "credential_issuance", "presentation_creation", "jwt_verification"]
     }).to_string()
+}
+
+#[cfg(test)]
+mod offer_uri_tests {
+    #[test]
+    fn wasm_wrapper_preserves_offer_wire_contract() {
+        for (format, expected) in [
+            ("microsoft", "openid-vc://?request_uri=https://issuer.example/base/issuance-requests/id"),
+            ("oid4vci", "openid-credential-offer://?credential_offer_uri=https://issuer.example/base/offers/id"),
+            ("unknown", "openid-credential-offer://?credential_offer_uri=https://issuer.example/base/offers/id"),
+        ] {
+            assert_eq!(super::generate_offer_uri("https://issuer.example/base", "id", format), expected);
+        }
+    }
 }
