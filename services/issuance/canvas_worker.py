@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import importlib
+import json
 import logging
 import os
 import secrets
@@ -48,6 +49,44 @@ from issuance.domain.entities import (
 from issuance.domain.ports import IIssuanceRepository
 
 logger = logging.getLogger(__name__)
+
+_WORKER_ERROR_MESSAGES = {
+    "canvas_oauth_disconnect_marker_failed": "Canvas OAuth platform disconnect marker failed",
+    "canvas_sync_job_failed": "Canvas sync job failed",
+    "canvas_sync_job_outcome_failed": "Canvas sync job escaped outcome handling",
+    "canvas_sync_cycle_failed": "Canvas synchronization worker cycle failed",
+}
+
+
+def _log_worker_error(
+    event: str,
+    *,
+    exception: BaseException,
+    job_id: str | None = None,
+    organization_id: str | None = None,
+    platform_id: str | None = None,
+) -> None:
+    """Only static events, exception classes and explicit identifiers may escape.
+
+    Never attach the exception itself: formatters can serialize its message,
+    response, chained exceptions or traceback even with a constant log message.
+    """
+    fields = {"event": event, "exception_class": type(exception).__name__}
+    for name, value in (
+        ("job_id", job_id),
+        ("organization_id", organization_id),
+        ("platform_id", platform_id),
+    ):
+        if value is not None:
+            fields[name] = value
+    logger.error(
+        # The standalone entrypoint uses basicConfig. Keep identifiers/classes
+        # observable even there, while also supporting structured formatters.
+        json.dumps({"message": _WORKER_ERROR_MESSAGES[event], **fields}, sort_keys=True),
+        extra=fields,
+        exc_info=None,
+        stack_info=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -248,11 +287,12 @@ async def process_canvas_oauth_revocation_retries(
                     },
                     remove_keys=("oauth_pending_authorization_id",),
                 )
-        except Exception:  # noqa: BLE001 - remote revoke/local connection deletion already succeeded
-            logger.exception(
-                "Canvas OAuth platform disconnect marker failed org=%s platform=%s",
-                connection.organization_id,
-                connection.platform_id,
+        except Exception as exc:  # noqa: BLE001 - remote revoke/local connection deletion already succeeded
+            _log_worker_error(
+                "canvas_oauth_disconnect_marker_failed",
+                exception=exc,
+                organization_id=connection.organization_id,
+                platform_id=connection.platform_id,
             )
         finally:
             # The remote token is already revoked and the connection record is
@@ -517,7 +557,7 @@ async def _process_leased_job(
         except CanvasSyncLeaseLostError:
             logger.warning("Discarded stale Canvas sync exception for job %s", job.id)
             return CanvasEvidenceSyncJobStatus.LEASED
-        logger.exception("Canvas sync job %s failed with %s", job.id, type(exc).__name__)
+        _log_worker_error("canvas_sync_job_failed", exception=exc, job_id=job.id)
         return failed.status
     else:
         try:
@@ -598,10 +638,8 @@ async def run_canvas_sync_worker_cycle(
         if isinstance(outcome, BaseException):
             # The lease remains durable and will be reclaimed after expiry;
             # wait for every sibling task so no work escapes into a later cycle.
-            logger.error(
-                "Canvas sync job %s escaped outcome handling with %s",
-                job.id,
-                type(outcome).__name__,
+            _log_worker_error(
+                "canvas_sync_job_outcome_failed", exception=outcome, job_id=job.id,
             )
             continue
         statuses.append(outcome)
@@ -643,8 +681,8 @@ async def run_canvas_sync_worker_loop(
             )
         except asyncio.CancelledError:
             raise
-        except Exception:  # noqa: BLE001 - one scheduler failure must not kill the worker
-            logger.exception("Canvas synchronization worker cycle failed")
+        except Exception as exc:  # noqa: BLE001 - one scheduler failure must not kill the worker
+            _log_worker_error("canvas_sync_cycle_failed", exception=exc)
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=config.poll_seconds)
         except TimeoutError:
