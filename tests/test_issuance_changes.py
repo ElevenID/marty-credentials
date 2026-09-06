@@ -116,6 +116,13 @@ def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
+def _sign_es256_test_payload(payload: bytes) -> str:
+    """Return a real P1363 signature from a fixed test-only P-256 key."""
+    key = ec.derive_private_key(1, ec.SECP256R1())
+    r, s = decode_dss_signature(key.sign(payload, ec.ECDSA(hashes.SHA256())))
+    return _b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+
+
 def _dpop_proof(
     *, access_token: str, htu: str = "https://issuer.example/v1/issuance/credential"
 ) -> str:
@@ -3427,15 +3434,15 @@ class TestRustIntegrationOrgIdValidation:
         async def fake_remote_sign(payload: bytes, algorithm: str | None):
             captured["payload"] = payload.decode("ascii")
             captured["algorithm"] = algorithm
-            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+            return {"signature_raw_b64": _sign_es256_test_payload(payload), "algorithm": algorithm}
 
         verification_method_id = "did:web:beta.elevenidllc.com:orgs:acme#issuer-profile-v1"
+        holder_numbers = ec.derive_private_key(2, ec.SECP256R1()).public_key().public_numbers()
         holder_jwk = {
             "kty": "EC",
             "crv": "P-256",
-            "x": "holder-x",
-            "y": "holder-y",
-            "d": "must-not-be-issued",
+            "x": _b64url(holder_numbers.x.to_bytes(32, "big")),
+            "y": _b64url(holder_numbers.y.to_bytes(32, "big")),
         }
 
         credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
@@ -3465,11 +3472,29 @@ class TestRustIntegrationOrgIdValidation:
         assert payload["cnf"]["jwk"] == {
             "kty": "EC",
             "crv": "P-256",
-            "x": "holder-x",
-            "y": "holder-y",
+            "x": _b64url(holder_numbers.x.to_bytes(32, "big")),
+            "y": _b64url(holder_numbers.y.to_bytes(32, "big")),
         }
         assert captured["algorithm"] == "ES256"
         assert credential_id.startswith("urn:uuid:")
+
+    async def test_remote_sd_jwt_rejects_private_holder_key_before_signing(self):
+        from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
+
+        async def unexpected_sign(_payload: bytes, _algorithm: str | None):
+            raise AssertionError("private holder keys must be rejected before signing")
+
+        with pytest.raises(RuntimeError, match="holder JWK must not contain private member"):
+            await create_sd_jwt_vc_with_remote_signing(
+                issuer_did="did:web:issuer.example",
+                remote_sign=unexpected_sign,
+                subject_id="did:example:holder",
+                holder_jwk={"kty": "EC", "crv": "P-256", "d": _b64url(bytes([1]) * 32)},
+                credential_type="https://issuer.example/credential",
+                claims_json="{}",
+                algorithm="ES256",
+                verification_method_id="did:web:issuer.example#key-1",
+            )
 
     async def test_remote_sd_jwt_accepts_caller_supplied_credential_status(self):
         from issuance.application.rust_integration import (
@@ -3478,7 +3503,7 @@ class TestRustIntegrationOrgIdValidation:
         )
 
         async def fake_remote_sign(payload: bytes, algorithm: str | None):
-            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+            return {"signature_raw_b64": _sign_es256_test_payload(payload), "algorithm": algorithm}
 
         supplied_credential_id = "urn:uuid:00000000-0000-0000-0000-000000000123"
         credential, credential_id = await create_sd_jwt_vc_with_remote_signing(
@@ -3540,7 +3565,7 @@ class TestRustIntegrationOrgIdValidation:
         async def fake_remote_sign(payload: bytes, algorithm: str | None):
             captured["input"] = payload.decode("ascii")
             captured["algorithm"] = algorithm
-            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+            return {"signature_raw_b64": _sign_es256_test_payload(payload), "algorithm": algorithm}
 
         credential, credential_id = await create_jwt_vc_with_remote_signing(
             issuer_did="did:web:issuer.example",
@@ -3555,7 +3580,12 @@ class TestRustIntegrationOrgIdValidation:
         )
 
         header, payload, signature = credential.split(".")
-        assert signature == "AQID"
+        raw_signature = base64url_decode(signature)
+        r = int.from_bytes(raw_signature[:32], "big")
+        s = int.from_bytes(raw_signature[32:], "big")
+        ec.derive_private_key(1, ec.SECP256R1()).public_key().verify(
+            encode_dss_signature(r, s), f"{header}.{payload}".encode(), ec.ECDSA(hashes.SHA256())
+        )
         assert captured["input"] == f"{header}.{payload}"
         assert captured["algorithm"] == "ES256"
         assert json.loads(base64url_decode(header)) == {
@@ -3577,6 +3607,24 @@ class TestRustIntegrationOrgIdValidation:
         }
         assert decoded["vc"]["validFrom"].endswith("Z")
         assert decoded["vc"]["validUntil"].endswith("Z")
+
+    @pytest.mark.parametrize("signature", [b"\x01\x02\x03", bytes(64)])
+    async def test_remote_jwt_vc_rejects_malformed_remote_signature(self, signature):
+        from issuance.application.rust_integration import create_jwt_vc_with_remote_signing
+
+        async def invalid_sign(_payload: bytes, algorithm: str | None):
+            return {"signature_raw_b64": _b64url(signature), "algorithm": algorithm}
+
+        with pytest.raises(RuntimeError, match="invalid ES256 remote signature encoding"):
+            await create_jwt_vc_with_remote_signing(
+                issuer_did="did:web:issuer.example",
+                remote_sign=invalid_sign,
+                subject_id="did:example:holder",
+                credential_type="ExampleCredential",
+                claims_json="{}",
+                algorithm="ES256",
+                verification_method_id="did:web:issuer.example#key-1",
+            )
 
     async def test_remote_jwt_vc_delegates_open_badge_profile_to_native_binding(self, monkeypatch):
         from issuance.application import rust_integration
@@ -3639,7 +3687,7 @@ class TestRustIntegrationOrgIdValidation:
         )
 
         async def fake_remote_sign(payload: bytes, algorithm: str | None):
-            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+            return {"signature_raw_b64": _sign_es256_test_payload(payload), "algorithm": algorithm}
 
         credential_subject = [
             {"id": "did:example:subject"},
@@ -3675,7 +3723,7 @@ class TestRustIntegrationOrgIdValidation:
         )
 
         async def fake_remote_sign(payload: bytes, algorithm: str | None):
-            return {"signature_raw_b64": "AQID", "algorithm": algorithm}
+            return {"signature_raw_b64": _sign_es256_test_payload(payload), "algorithm": algorithm}
 
         credential, _ = await create_jwt_vc_with_remote_signing(
             issuer_did="did:web:issuer.example",
@@ -4150,7 +4198,10 @@ class TestRustIntegrationOrgIdValidation:
 
         async def fake_sign_payload_with_issuer_did(**kwargs):
             captured["sign"] = kwargs
-            return {"signature_raw_b64": "AQID", "algorithm": kwargs.get("algorithm")}
+            return {
+                "signature_raw_b64": _sign_es256_test_payload(kwargs["payload"]),
+                "algorithm": kwargs.get("algorithm"),
+            }
 
         monkeypatch.setattr(
             signing_context, "resolve_remote_issuer_context", reject_second_resolution

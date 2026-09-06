@@ -5,9 +5,17 @@ import json
 import pytest
 from _marty_rs import (
     create_verifiable_credential,
+    create_zk_age_verification,
     generate_issuer_metadata,
     generate_p256_key,
 )
+
+
+def test_zk_request_requires_a_native_zk_enabled_verifier() -> None:
+    with pytest.raises(NotImplementedError, match="native ZK-enabled verifier"):
+        create_zk_age_verification(
+            "did:example:verifier", "https://verifier.example.test/response"
+        )
 
 
 def test_local_core_metadata_advertises_only_es256_for_mdoc_proofs() -> None:

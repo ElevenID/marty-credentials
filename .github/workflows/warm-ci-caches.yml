@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MARTY_CORE_REVISION: 168e13b424ad26b300fb2c7ba58e14643c6d881a
+  MARTY_CORE_REVISION: 08a0d435390f13186cb6f6278b9a15f9020067a7
 
 jobs:
   core-python-wheels:
@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: core-wheels
-          key: core-python-wheels-v2-${{ runner.os }}-${{ runner.arch }}-py311-rust1971-maturin1141-${{ env.MARTY_CORE_REVISION }}
+          key: core-python-wheels-v3-${{ runner.os }}-${{ runner.arch }}-py311-rust1971-maturin1141-${{ env.MARTY_CORE_REVISION }}
       - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -77,8 +77,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install maturin==1.14.1
-          maturin build --release --compatibility off --manifest-path marty-core/marty-bindings/Cargo.toml --features pyo3/extension-module --out core-wheels
-          maturin build --release --compatibility off --manifest-path marty-core/marty-verification/Cargo.toml --features pyo3/extension-module,python,csca,eudi --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core/marty-bindings/Cargo.toml --no-default-features --features extension-module,didcomm-local-keys,local-key-operations,ephemeral-session-keys --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core/marty-verification/Cargo.toml --no-default-features --features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi --out core-wheels
       - name: Require both native distributions
         shell: bash
         run: |

@@ -19,12 +19,19 @@ wasm-opt = false
 
 [features]
 default = ["python"]
+# Existing binding profiles expose local signing. Keep that compatibility
+# capability explicit and shared across native, Python and browser builds.
+local-key-operations = [
+    "marty-oid4vci/local-key-operations",
+    "marty-verification/local-key-operations",
+]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",
     "marty-verification/default",
     "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
+    "local-key-operations",
     "sd-jwt-rs",
     "jsonwebtoken",
     "dep:jsonwebtoken-legacy",
@@ -39,6 +46,7 @@ python = [
     "marty-verification/default",
     "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
+    "local-key-operations",
     "tokio",
     "isomdl",
     "coset",
@@ -62,6 +70,7 @@ wasm = [
     "dep:marty-verification",
     "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
+    "local-key-operations",
     "wasm-bindgen",
     "wasm-bindgen-futures",
     "js-sys",
