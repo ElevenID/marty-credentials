@@ -367,17 +367,47 @@ pub fn verify_presentation_structure(
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
+// This compatibility hint preserves the Python adapter's capability and exception
+// boundaries. Core signing independently validates the actual key family and alg.
 fn detect_algorithm_from_jwk(jwk_json: &str) -> PyResult<SigningAlgorithm> {
-    let algorithm = marty_oid4vci::issuer::detect_algorithm(jwk_json)
-        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
-    // Keep the Python adapter's established capability set.
-    match algorithm {
-        SigningAlgorithm::ES256 | SigningAlgorithm::EdDSA | SigningAlgorithm::RS256 => {
-            Ok(algorithm)
+    let jwk: serde_json::Value = serde_json::from_str(jwk_json).map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JWK JSON: {}", e))
+    })?;
+
+    // Check explicit alg field first
+    if let Some(alg) = jwk.get("alg").and_then(|v| v.as_str()) {
+        return match alg {
+            "ES256" => Ok(SigningAlgorithm::ES256),
+            "EdDSA" => Ok(SigningAlgorithm::EdDSA),
+            "RS256" => Ok(SigningAlgorithm::RS256),
+            other => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Unsupported algorithm: {}",
+                other
+            ))),
+        };
+    }
+
+    // Infer from key type
+    match jwk.get("kty").and_then(|v| v.as_str()) {
+        Some("EC") => {
+            match jwk.get("crv").and_then(|v| v.as_str()) {
+                Some("P-256") => Ok(SigningAlgorithm::ES256),
+                Some(crv) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Unsupported EC curve: {}",
+                    crv
+                ))),
+                None => Ok(SigningAlgorithm::ES256), // default EC to P-256
+            }
         }
-        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "Unsupported algorithm: {other}"
+        Some("OKP") => Ok(SigningAlgorithm::EdDSA),
+        Some("RSA") => Ok(SigningAlgorithm::RS256),
+        Some(kty) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "Unsupported key type: {}",
+            kty
         ))),
+        None => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+            "JWK missing 'kty' and 'alg' fields",
+        )),
     }
 }
 
@@ -431,7 +461,7 @@ mod issuance_tests {
     use super::*;
 
     #[test]
-    fn algorithm_admission_keeps_python_capabilities_and_rejects_inconsistent_metadata() {
+    fn algorithm_hint_keeps_python_capabilities() {
         Python::initialize();
         Python::attach(|py| {
             for (key, expected) in [
@@ -442,18 +472,43 @@ mod issuance_tests {
                 assert_eq!(detect_algorithm_from_jwk(key).unwrap(), expected);
             }
             for key in [
-                r#"{"alg":"ES256"}"#,
-                r#"{"kty":"EC"}"#,
-                r#"{"kty":"EC","crv":"P-256","alg":"EdDSA"}"#,
-                r#"{"kty":"OKP","crv":"X25519"}"#,
                 r#"{"kty":"EC","crv":"secp256k1"}"#,
                 r#"{"kty":"EC","crv":"P-384"}"#,
+                r#"{"alg":"unsupported"}"#,
                 "invalid",
             ] {
                 assert!(detect_algorithm_from_jwk(key)
                     .unwrap_err()
                     .is_instance_of::<pyo3::exceptions::PyValueError>(py));
             }
+        });
+    }
+
+    #[test]
+    fn contradictory_key_metadata_keeps_the_runtime_error_boundary() {
+        Python::initialize();
+        Python::attach(|py| {
+            let jwk = ssi_jwk::JWK::generate_p256();
+            let mut value = serde_json::to_value(jwk).unwrap();
+            value["alg"] = serde_json::json!("EdDSA");
+            let error = create_verifiable_credential(
+                "did:example:issuer".into(),
+                value.to_string(),
+                Some("did:example:holder".into()),
+                "ExampleCredential".into(),
+                r#"{"name":"test"}"#.into(),
+                "jwt_vc_json",
+                Some(3600),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+            assert!(error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
+            let message = error.to_string();
+            assert!(message.contains("does not match"));
+            assert!(!message.contains(value["d"].as_str().unwrap()));
         });
     }
 
