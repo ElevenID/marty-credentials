@@ -116,7 +116,7 @@ pub fn create_verifiable_credential(
     claims_json: &str,
     expiration_seconds: Option<i64>,
 ) -> Result<String, JsValue> {
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
     use ssi_jwk::JWK;
 
     let jwk: JWK = serde_json::from_str(issuer_jwk_json)
@@ -129,11 +129,10 @@ pub fn create_verifiable_credential(
     let now = Utc::now();
     let issuance_date = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
 
-    let expiration_date = expiration_seconds.map(|secs| {
-        (now + Duration::seconds(secs))
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string()
-    });
+    let expires_at =
+        marty_oid4vci::formats::jwt_vc::checked_jwt_vc_expiration(now, expiration_seconds)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    let expiration_date = expires_at.map(|date| date.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
     let credential_subject = serde_json::json!({
         "id": subject_id,
@@ -159,8 +158,8 @@ pub fn create_verifiable_credential(
         "vc": vc_data
     });
 
-    if let Some(exp_secs) = expiration_seconds {
-        payload["exp"] = serde_json::json!(now.timestamp() + exp_secs);
+    if let Some(expires_at) = expires_at {
+        payload["exp"] = serde_json::json!(expires_at.timestamp());
     }
 
     let alg_str = get_algorithm_for_jwk_wasm(&jwk)?;
@@ -566,19 +565,19 @@ pub fn extract_credentials_from_vp(vp_jwt: &str) -> Result<String, JsValue> {
 // =============================================================================
 
 fn get_algorithm_for_jwk_wasm(jwk: &ssi_jwk::JWK) -> Result<&'static str, JsValue> {
-    use ssi_jwk::Params;
-
-    match &jwk.params {
-        Params::OKP(_) => Ok("EdDSA"),
-        Params::EC(ec) => match ec.curve.as_deref() {
-            Some("P-256") => Ok("ES256"),
-            Some("secp256k1") => Ok("ES256K"),
-            curve => Err(JsValue::from_str(&format!(
-                "Unsupported curve: {:?}. Supported: P-256, secp256k1",
-                curve
-            ))),
-        },
-        _ => Err(JsValue::from_str("Unsupported key type")),
+    use marty_oid4vci::types::SigningAlgorithm;
+    let json = serde_json::to_string(jwk)
+        .map_err(|error| JsValue::from_str(&format!("Invalid JWK: {error}")))?;
+    let algorithm = marty_oid4vci::issuer::detect_algorithm(&json)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?;
+    // Preserve the browser adapter's existing signing capability set.
+    match algorithm {
+        SigningAlgorithm::EdDSA => Ok("EdDSA"),
+        SigningAlgorithm::ES256 => Ok("ES256"),
+        SigningAlgorithm::ES256K => Ok("ES256K"),
+        other => Err(JsValue::from_str(&format!(
+            "Unsupported algorithm: {other}"
+        ))),
     }
 }
 
@@ -587,71 +586,8 @@ fn sign_jwt(
     header: &serde_json::Value,
     payload: &serde_json::Value,
 ) -> Result<String, JsValue> {
-    use ssi_crypto::{AlgorithmInstance, SecretKey};
-    use ssi_jwk::Params;
-
-    let header_str = serde_json::to_string(header)
-        .map_err(|e| JsValue::from_str(&format!("Failed to serialize header: {}", e)))?;
-    let payload_str = serde_json::to_string(payload)
-        .map_err(|e| JsValue::from_str(&format!("Failed to serialize payload: {}", e)))?;
-
-    let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_str.as_bytes());
-    let payload_b64 =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_str.as_bytes());
-
-    let message = format!("{}.{}", header_b64, payload_b64);
-
-    // Extract secret key
-    let secret_key = match &jwk.params {
-        Params::OKP(params) => {
-            if let Some(d) = &params.private_key {
-                SecretKey::new_ed25519(&d.0)
-                    .map_err(|e| JsValue::from_str(&format!("Invalid Ed25519 key: {:?}", e)))?
-            } else {
-                return Err(JsValue::from_str("Missing private key (d) in OKP JWK"));
-            }
-        }
-        Params::EC(params) => {
-            if let Some(d) = &params.ecc_private_key {
-                match params.curve.as_deref() {
-                    Some("P-256") => SecretKey::new_p256(&d.0)
-                        .map_err(|e| JsValue::from_str(&format!("Invalid P-256 key: {:?}", e)))?,
-                    Some("secp256k1") => SecretKey::new_secp256k1(&d.0).map_err(|e| {
-                        JsValue::from_str(&format!("Invalid secp256k1 key: {:?}", e))
-                    })?,
-                    curve => {
-                        return Err(JsValue::from_str(&format!(
-                            "Unsupported curve: {:?}",
-                            curve
-                        )))
-                    }
-                }
-            } else {
-                return Err(JsValue::from_str("Missing private key (d) in EC JWK"));
-            }
-        }
-        _ => return Err(JsValue::from_str("Unsupported key type")),
-    };
-
-    // Get algorithm instance
-    let alg_instance = match &jwk.params {
-        Params::OKP(_) => AlgorithmInstance::EdDSA,
-        Params::EC(ec) => match ec.curve.as_deref() {
-            Some("P-256") => AlgorithmInstance::ES256,
-            Some("secp256k1") => AlgorithmInstance::ES256K,
-            _ => return Err(JsValue::from_str("Unsupported curve")),
-        },
-        _ => return Err(JsValue::from_str("Unsupported key type")),
-    };
-
-    // Sign
-    let signature = secret_key
-        .sign(alg_instance, message.as_bytes())
-        .map_err(|e| JsValue::from_str(&format!("Signing failed: {:?}", e)))?;
-
-    let signature_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature);
-
-    Ok(format!("{}.{}", message, signature_b64))
+    marty_oid4vci::jose::sign_compact_jwt(jwk, header, payload)
+        .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
 // =============================================================================
@@ -684,6 +620,52 @@ mod offer_uri_tests {
             ("unknown", "openid-credential-offer://?credential_offer_uri=https://issuer.example/base/offers/id"),
         ] {
             assert_eq!(super::generate_offer_uri("https://issuer.example/base", "id", format), expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod issuance_tests {
+    #[test]
+    fn browser_issuance_keeps_legacy_envelope_and_valid_signature() {
+        let jwk = ssi_jwk::JWK::generate_ed25519().unwrap();
+        for expiration in [None, Some(3600)] {
+            let result = super::create_verifiable_credential(
+                "did:example:issuer",
+                &serde_json::to_string(&jwk).unwrap(),
+                None,
+                "ExampleCredential",
+                r#"{"name":"test"}"#,
+                expiration,
+            )
+            .unwrap();
+            let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let verified = marty_oid4vci::jose::verify_compact_jwt_with_public_jwk(
+                result["jwt"].as_str().unwrap(),
+                &serde_json::to_string(&jwk.to_public()).unwrap(),
+                "EdDSA",
+            )
+            .unwrap();
+            assert_eq!(verified.claims["vc"]["id"], result["credentialId"]);
+            assert_eq!(
+                verified.claims["vc"]["credentialSubject"]["claims"]["name"],
+                "test"
+            );
+            assert!(verified.claims["vc"]["credentialSubject"]["id"].is_null());
+            assert_eq!(
+                verified.claims["vc"]["@context"][0],
+                "https://www.w3.org/2018/credentials/v1"
+            );
+            if let Some(seconds) = expiration {
+                assert_eq!(
+                    verified.claims["exp"].as_i64().unwrap()
+                        - verified.claims["iat"].as_i64().unwrap(),
+                    seconds
+                );
+            } else {
+                assert!(verified.claims.get("exp").is_none());
+                assert!(verified.claims["vc"]["expirationDate"].is_null());
+            }
         }
     }
 }

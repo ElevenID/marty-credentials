@@ -8,11 +8,12 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use marty_oid4vci::formats;
+use marty_oid4vci::issuance_input::normalize_zk_predicate_claims;
 use marty_oid4vci::issuer::IssuanceEngine;
 use marty_oid4vci::metadata;
 use marty_oid4vci::types::{
     ClaimDefinition, CredentialClaims, CredentialFormat, CredentialTypeConfig, IssuerConfig,
-    IssuerKey, OfferConfig, SigningAlgorithm, ZkPredicateBinding,
+    IssuerKey, OfferConfig, SigningAlgorithm,
 };
 use marty_oid4vci::verifier::VerificationEngine;
 
@@ -92,100 +93,9 @@ pub fn create_verifiable_credential(
     let signed = formats::sign_credential(&cred_format, &issuer_key, &cred_claims)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-    let credential_str = match &signed {
-        marty_oid4vci::types::SignedCredential::JwtVcJson { jwt, .. } => jwt.clone(),
-        marty_oid4vci::types::SignedCredential::SdJwt { compact, .. } => compact.clone(),
-        marty_oid4vci::types::SignedCredential::MsoMdoc {
-            issuer_signed_b64, ..
-        } => issuer_signed_b64.clone(),
-        marty_oid4vci::types::SignedCredential::ZkMdoc {
-            issuer_signed_b64, ..
-        } => issuer_signed_b64.clone(),
-        marty_oid4vci::types::SignedCredential::VdsNc { barcode_data, .. } => barcode_data.clone(),
-    };
+    let credential_str = signed.encoded_credential().to_owned();
 
     Ok((credential_str, signed.credential_id().to_string()))
-}
-
-/// Normalize legacy Python input (`List[str]`) into typed ZK predicate bindings.
-///
-/// Backward-compatible input shapes:
-/// - ["birth_date", "age_over_18", "age_over_21"]
-/// - ["age_over_18", "age_over_21"] (binds to `birth_date` when present)
-/// - ["{\"claim_name\":\"birth_date\",\"supported_predicates\":[\"age_over_18\"]}"]
-fn normalize_zk_predicate_claims(
-    claims: &HashMap<String, serde_json::Value>,
-    raw: Vec<String>,
-) -> Vec<ZkPredicateBinding> {
-    if raw.is_empty() {
-        return vec![];
-    }
-
-    // New-style payload tunneled through the legacy List[str] API: each item is
-    // a JSON-encoded ZkPredicateBinding.
-    let mut json_bindings: Vec<ZkPredicateBinding> = Vec::new();
-    let mut all_json_bindings = true;
-    for item in &raw {
-        match serde_json::from_str::<ZkPredicateBinding>(item) {
-            Ok(binding)
-                if !binding.claim_name.is_empty() && !binding.supported_predicates.is_empty() =>
-            {
-                json_bindings.push(binding);
-            }
-            _ => {
-                all_json_bindings = false;
-                break;
-            }
-        }
-    }
-    if all_json_bindings {
-        return json_bindings;
-    }
-
-    // Legacy mixed form: claim names + predicate names in one list.
-    let mut claim_names: Vec<String> = Vec::new();
-    let mut predicates: Vec<String> = Vec::new();
-
-    for item in &raw {
-        if claims.contains_key(item) {
-            claim_names.push(item.clone());
-        } else {
-            predicates.push(item.clone());
-        }
-    }
-
-    // If explicit claim names were provided, apply predicates to each claim.
-    if !claim_names.is_empty() {
-        let fallback_predicates = if predicates.is_empty() {
-            claim_names.clone()
-        } else {
-            predicates.clone()
-        };
-
-        return claim_names
-            .into_iter()
-            .map(|claim_name| ZkPredicateBinding::multi(claim_name, fallback_predicates.clone()))
-            .collect();
-    }
-
-    // Predicate-only legacy form: prefer birth_date for backward compatibility,
-    // otherwise bind to the first available claim when possible.
-    if !predicates.is_empty() {
-        if claims.contains_key("birth_date") {
-            return vec![ZkPredicateBinding::multi("birth_date", predicates)];
-        }
-        if let Some(first_claim_name) = claims.keys().next() {
-            return vec![ZkPredicateBinding::multi(
-                first_claim_name.clone(),
-                predicates,
-            )];
-        }
-    }
-
-    // Last-resort passthrough: maintain one-to-one mapping.
-    raw.into_iter()
-        .map(|name| ZkPredicateBinding::single(name.clone(), name))
-        .collect()
 }
 
 // ── Credential Offer ─────────────────────────────────────────────────
@@ -458,44 +368,16 @@ pub fn verify_presentation_structure(
 // ── Helpers ──────────────────────────────────────────────────────────
 
 fn detect_algorithm_from_jwk(jwk_json: &str) -> PyResult<SigningAlgorithm> {
-    let jwk: serde_json::Value = serde_json::from_str(jwk_json).map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JWK JSON: {}", e))
-    })?;
-
-    // Check explicit alg field first
-    if let Some(alg) = jwk.get("alg").and_then(|v| v.as_str()) {
-        return match alg {
-            "ES256" => Ok(SigningAlgorithm::ES256),
-            "EdDSA" => Ok(SigningAlgorithm::EdDSA),
-            "RS256" => Ok(SigningAlgorithm::RS256),
-            other => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Unsupported algorithm: {}",
-                other
-            ))),
-        };
-    }
-
-    // Infer from key type
-    match jwk.get("kty").and_then(|v| v.as_str()) {
-        Some("EC") => {
-            match jwk.get("crv").and_then(|v| v.as_str()) {
-                Some("P-256") => Ok(SigningAlgorithm::ES256),
-                Some(crv) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "Unsupported EC curve: {}",
-                    crv
-                ))),
-                None => Ok(SigningAlgorithm::ES256), // default EC to P-256
-            }
+    let algorithm = marty_oid4vci::issuer::detect_algorithm(jwk_json)
+        .map_err(|error| pyo3::exceptions::PyValueError::new_err(error.to_string()))?;
+    // Keep the Python adapter's established capability set.
+    match algorithm {
+        SigningAlgorithm::ES256 | SigningAlgorithm::EdDSA | SigningAlgorithm::RS256 => {
+            Ok(algorithm)
         }
-        Some("OKP") => Ok(SigningAlgorithm::EdDSA),
-        Some("RSA") => Ok(SigningAlgorithm::RS256),
-        Some(kty) => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-            "Unsupported key type: {}",
-            kty
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Unsupported algorithm: {other}"
         ))),
-        None => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            "JWK missing 'kty' and 'alg' fields",
-        )),
     }
 }
 
@@ -542,4 +424,66 @@ pub fn register_oid4vci_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     parent.add_function(pyo3::wrap_pyfunction!(verify_vp_token_jwt, parent)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod issuance_tests {
+    use super::*;
+
+    #[test]
+    fn algorithm_admission_keeps_python_capabilities_and_rejects_inconsistent_metadata() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (key, expected) in [
+                (r#"{"kty":"EC","crv":"P-256"}"#, SigningAlgorithm::ES256),
+                (r#"{"kty":"OKP","crv":"Ed25519"}"#, SigningAlgorithm::EdDSA),
+                (r#"{"kty":"RSA"}"#, SigningAlgorithm::RS256),
+            ] {
+                assert_eq!(detect_algorithm_from_jwk(key).unwrap(), expected);
+            }
+            for key in [
+                r#"{"alg":"ES256"}"#,
+                r#"{"kty":"EC"}"#,
+                r#"{"kty":"EC","crv":"P-256","alg":"EdDSA"}"#,
+                r#"{"kty":"OKP","crv":"X25519"}"#,
+                r#"{"kty":"EC","crv":"secp256k1"}"#,
+                r#"{"kty":"EC","crv":"P-384"}"#,
+                "invalid",
+            ] {
+                assert!(detect_algorithm_from_jwk(key)
+                    .unwrap_err()
+                    .is_instance_of::<pyo3::exceptions::PyValueError>(py));
+            }
+        });
+    }
+
+    #[test]
+    fn python_issuance_preserves_tuple_and_signed_claims() {
+        Python::initialize();
+        Python::attach(|_| {
+            let jwk = ssi_jwk::JWK::generate_ed25519().unwrap();
+            let (jwt, id) = create_verifiable_credential(
+                "did:example:issuer".into(),
+                serde_json::to_string(&jwk).unwrap(),
+                Some("did:example:holder".into()),
+                "ExampleCredential".into(),
+                r#"{"name":"test"}"#.into(),
+                "jwt_vc_json",
+                Some(3600),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let verified = marty_oid4vci::jose::verify_compact_jwt_with_public_jwk(
+                &jwt,
+                &serde_json::to_string(&jwk.to_public()).unwrap(),
+                "EdDSA",
+            )
+            .unwrap();
+            assert_eq!(verified.claims["vc"]["id"], id);
+            assert_eq!(verified.claims["vc"]["credentialSubject"]["name"], "test");
+        });
+    }
 }
