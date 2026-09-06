@@ -14,8 +14,13 @@ def test_duplicate_python_status_list_package_is_absent() -> None:
     status_package = ROOT / "python" / "status_list"
     assert not status_package.exists() or not any(status_package.rglob("*.py"))
     binding = (ROOT / "rust" / "marty-rs" / "src" / "status_list.rs").read_text(encoding="utf-8")
-    assert "marty_status::BitstringStatusList" in binding
-    assert "marty_status::TokenStatusList" in binding
+    assert (
+        "pub use marty_python_adapters::status_list::compressed::register "
+        "as register_status_list_module;"
+    ) in binding
+    production_binding = binding.split("#[cfg(test)]", 1)[0]
+    assert "#[pyclass" not in production_binding
+    assert "#[pymethods" not in production_binding
 
 
 def test_integration_secret_crypto_delegates_to_rust() -> None:

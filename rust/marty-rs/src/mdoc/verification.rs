@@ -1,8 +1,8 @@
 // Python bindings for mDoc verification using marty-verification
 
+use marty_python_adapters::json_to_python;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pyo3::IntoPyObjectExt;
 
 use coset_isomdl::{cbor::value::Value as CoseValue, iana, Label, RegisteredLabelWithPrivate};
 use isomdl::definitions::device_response::{DeviceResponse as IsoDeviceResponse, Status};
@@ -130,44 +130,6 @@ pub fn verify_mdoc_cbor(cbor_bytes: Vec<u8>, py: Python) -> PyResult<Py<PyAny>> 
         result.set_item(key, py_value)?;
     }
     Ok(result.into())
-}
-
-/// Convert serde_json::Value to Python object
-fn json_to_python(py: Python, value: &serde_json::Value) -> PyResult<Py<PyAny>> {
-    use serde_json::Value;
-
-    match value {
-        Value::Null => Ok(py.None()),
-        Value::Bool(b) => Ok(b.into_py_any(py)?),
-        Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(i.into_py_any(py)?)
-            } else if let Some(u) = n.as_u64() {
-                Ok(u.into_py_any(py)?)
-            } else if let Some(f) = n.as_f64() {
-                Ok(f.into_py_any(py)?)
-            } else {
-                Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid number",
-                ))
-            }
-        }
-        Value::String(s) => Ok(s.into_py_any(py)?),
-        Value::Array(arr) => {
-            let py_list = pyo3::types::PyList::empty(py);
-            for item in arr {
-                py_list.append(json_to_python(py, item)?)?;
-            }
-            Ok(py_list.into())
-        }
-        Value::Object(obj) => {
-            let py_dict = PyDict::new(py);
-            for (k, v) in obj {
-                py_dict.set_item(k, json_to_python(py, v)?)?;
-            }
-            Ok(py_dict.into())
-        }
-    }
 }
 
 /// Result of mDoc signature verification
