@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from dataclasses import replace
@@ -24,13 +25,43 @@ def _enable_pilot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
 
 
+@pytest.fixture(params=[False, True], ids=["standalone", "ambient-correlation"])
+def worker_logs(request: pytest.FixtureRequest, caplog: pytest.LogCaptureFixture):
+    records: list[logging.LogRecord] = []
+
+    class CaptureWorkerErrors(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            # Snapshot the producer-owned fields before root handlers add API
+            # request correlation or other ambient formatter metadata.
+            records.append(copy.copy(record))
+
+    handler = CaptureWorkerErrors(level=logging.ERROR)
+    class CorrelationFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            record.request_id = "synthetic-correlation"
+            return True
+
+    correlation = CorrelationFilter()
+    if request.param:
+        caplog.handler.addFilter(correlation)
+    canvas_worker.logger.addHandler(handler)
+    try:
+        yield records
+        if request.param:
+            assert any(
+                getattr(record, "request_id", None) == "synthetic-correlation"
+                for record in caplog.get_records("call")
+            ), "the ambient formatter path must actually execute"
+    finally:
+        canvas_worker.logger.removeHandler(handler)
+        caplog.handler.removeFilter(correlation)
+        handler.close()
+
+
 def _assert_private_record(
-    caplog: pytest.LogCaptureFixture, event: str, exception_class: str, **identifiers: str
+    records: list[logging.LogRecord], caplog: pytest.LogCaptureFixture,
+    event: str, exception_class: str, **identifiers: str,
 ) -> None:
-    records = [
-        record for record in caplog.records
-        if record.name == canvas_worker.__name__ and record.levelno == logging.ERROR
-    ]
     assert len(records) == 1
     record = records[0]
     assert record.exc_info is None
@@ -55,7 +86,7 @@ def _assert_private_record(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [None, 429, 503])
 async def test_unexpected_processing_error_is_private_and_keeps_retry_semantics(
-    status: int | None, caplog: pytest.LogCaptureFixture
+    status: int | None, caplog: pytest.LogCaptureFixture, worker_logs: list[logging.LogRecord]
 ) -> None:
     repo = InMemoryIssuanceRepository()
     target = await _worker_target(repo)
@@ -82,12 +113,15 @@ async def test_unexpected_processing_error_is_private_and_keeps_retry_semantics(
     assert job.result == {}
     assert job.lease_owner is None
     assert target.enabled
-    _assert_private_record(caplog, "canvas_sync_job_failed", type(error).__name__, job_id=job.id)
+    _assert_private_record(
+        worker_logs, caplog, "canvas_sync_job_failed", type(error).__name__, job_id=job.id,
+    )
 
 
 @pytest.mark.asyncio
 async def test_disconnect_marker_error_keeps_remote_revoke_and_local_cleanup(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+    worker_logs: list[logging.LogRecord],
 ) -> None:
     repo = InMemoryIssuanceRepository()
     connection = await _pending_oauth_revocation(repo)
@@ -109,14 +143,15 @@ async def test_disconnect_marker_error_keeps_remote_revoke_and_local_cleanup(
     for secret in ["access-secret-1", "refresh-secret-1"]:
         assert await repo.get_integration_secret_value("org-1", secret) is None
     _assert_private_record(
-        caplog, "canvas_oauth_disconnect_marker_failed", "RuntimeError",
+        worker_logs, caplog, "canvas_oauth_disconnect_marker_failed", "RuntimeError",
         organization_id="org-1", platform_id=connection.platform_id,
     )
 
 
 @pytest.mark.asyncio
 async def test_escaped_job_error_is_private_and_does_not_cancel_successful_sibling(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+    worker_logs: list[logging.LogRecord],
 ) -> None:
     repo = InMemoryIssuanceRepository()
     failing = await _worker_target(repo)
@@ -140,13 +175,15 @@ async def test_escaped_job_error_is_private_and_does_not_cancel_successful_sibli
     assert jobs[failing.id].status == CanvasEvidenceSyncJobStatus.LEASED
     assert jobs[failing.id].lease_owner == _config().worker_id
     _assert_private_record(
-        caplog, "canvas_sync_job_outcome_failed", "RuntimeError", job_id=jobs[failing.id].id,
+        worker_logs, caplog, "canvas_sync_job_outcome_failed", "RuntimeError",
+        job_id=jobs[failing.id].id,
     )
 
 
 @pytest.mark.asyncio
 async def test_cycle_failure_is_private_and_next_real_cycle_reaches_idle(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
+    worker_logs: list[logging.LogRecord],
 ) -> None:
     repo = InMemoryIssuanceRepository()
     stop = asyncio.Event()
@@ -172,4 +209,4 @@ async def test_cycle_failure_is_private_and_next_real_cycle_reaches_idle(
     heartbeat = await repo.get_fresh_canvas_worker_heartbeat(role="canvas_sync", max_age_seconds=120)
     assert heartbeat is not None
     assert heartbeat.metadata["phase"] == "idle"
-    _assert_private_record(caplog, "canvas_sync_cycle_failed", "RuntimeError")
+    _assert_private_record(worker_logs, caplog, "canvas_sync_cycle_failed", "RuntimeError")

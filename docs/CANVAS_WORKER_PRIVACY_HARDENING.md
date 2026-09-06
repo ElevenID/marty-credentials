@@ -48,6 +48,9 @@ Six new worker observations exercise these actual error branches using the
 existing in-memory repository and controlled failing boundaries. They assert
 exact structured fields, rendered safe diagnostics and absent exception/stack
 metadata, while checking job/target/connection/secret or heartbeat outcomes.
+Each now runs standalone and with ambient correlation injection (12 executions).
+An owned handler snapshots producer fields before root handlers mutate records;
+the actual downstream rendered logs remain part of the redaction assertions.
 They are not PostgreSQL crash/concurrency or deployed-log-collector acceptance.
 Existing warning/info messages and cancellation/fencing behavior are retained.
 
@@ -61,6 +64,15 @@ Existing warning/info messages and cancellation/fencing behavior are retained.
 - After repair, all 716 affected worker/detail tests and 200 subtests passed on
   Python 3.12 in 7.13 seconds, retaining configuration, loader, lifecycle,
   result, consumer-range, renewal and renewal/job-outcome coverage.
+- The first hosted Python run (CI34057702111, job101552533945) passed 1661 tests
+  and 200 subtests, with two existing skips, but failed six privacy assertions:
+  API tests register a root-handler filter adding `request_id` to the same
+  mutable LogRecords. This did not occur in the focused local run. The tests
+  now snapshot worker-owned records before root-handler enrichment, retaining
+  the exact allowlist rather than ignoring arbitrary extra fields. Dedicated
+  ambient-correlation cases verify the enrichment actually executes. The
+  corrected affected suite passes 722 tests and 200 subtests in 7.11 seconds;
+  Ruff passes. This is a test-only correction and requires fresh hosted CI.
 - Ruff passes for all four affected source/test files. The existing redundant
   `open(..., "r")` mode was removed without changing file-secret behavior.
 - Expanded local issuance run: 857 passed, 200 subtests passed, three failed.
