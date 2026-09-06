@@ -305,27 +305,16 @@ pub fn create_presentation_definition(
 
 /// Create a ZK age verification presentation definition.
 ///
-/// Returns JSON string with (presentation_definition, challenge_session_id, nonce).
+/// Raises NotImplementedError because this binding does not include native ZK verification.
 #[pyfunction]
 pub fn create_zk_age_verification(verifier_id: String, response_uri: String) -> PyResult<String> {
-    let engine = VerificationEngine::new(verifier_id, response_uri);
-
-    let challenge = engine
-        .create_zk_challenge("age_over_18")
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-    let pd = marty_oid4vci::verifier::age_verification_definition(&engine, &challenge.nonce)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-    let result = serde_json::json!({
-        "presentation_definition": pd,
-        "challenge_session_id": challenge.session_id,
-        "nonce": challenge.nonce,
-        "expires_in_seconds": challenge.expires_in_seconds,
-    });
-
-    serde_json::to_string(&result)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    // This binding does not include the native ZK verifier capability. Core now
+    // requires that capability to construct a verifiable, bound challenge.
+    // Keep the Python entry point, but never advertise an unsupported request.
+    let _ = (verifier_id, response_uri);
+    Err(pyo3::exceptions::PyNotImplementedError::new_err(
+        "ZK age verification requires a native ZK-enabled verifier build",
+    ))
 }
 
 /// Verify presentation submission structure (format and descriptor matching).
@@ -459,6 +448,20 @@ pub fn register_oid4vci_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod issuance_tests {
     use super::*;
+
+    #[test]
+    fn unavailable_zk_capability_does_not_advertise_a_request() {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = create_zk_age_verification(
+                "did:example:verifier".into(),
+                "https://verifier.example/response".into(),
+            )
+            .unwrap_err();
+            assert!(error.is_instance_of::<pyo3::exceptions::PyNotImplementedError>(py));
+            assert!(error.to_string().contains("native ZK-enabled verifier"));
+        });
+    }
 
     #[test]
     fn algorithm_hint_keeps_python_capabilities() {
