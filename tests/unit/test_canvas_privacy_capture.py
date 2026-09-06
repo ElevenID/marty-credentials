@@ -1,6 +1,7 @@
 """Fail closed on incomplete capture, source drift, or failed test cleanup."""
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -106,6 +107,57 @@ def test_existing_capture_cannot_be_overwritten(monkeypatch, tmp_path) -> None:
     assert caught.value.code == 2
     assert destination.read_text(encoding="utf-8") == "retained"
     observe.assert_not_called()
+
+
+@pytest.mark.parametrize("matches", [False, True])
+def test_verification_compares_regenerated_document_without_rewriting(monkeypatch, tmp_path, matches) -> None:
+    destination = tmp_path / "frozen.json"
+    original = b'{"observed": "retained"}\n'
+    destination.write_bytes(original)
+    observe = Mock(return_value={"observed": "retained" if matches else "different"})
+    monkeypatch.setattr(CAPTURE, "capture", observe)
+    monkeypatch.setattr(CAPTURE.sys, "argv", ["capture", "--verify", str(destination)])
+    if matches:
+        assert CAPTURE.main() == 0
+    else:
+        with pytest.raises(RuntimeError, match="differ from frozen reference"):
+            CAPTURE.main()
+    observe.assert_called_once_with()
+    assert destination.read_bytes() == original
+
+
+def test_new_capture_serializes_actual_observations_stably(monkeypatch, tmp_path) -> None:
+    destination = tmp_path / "new.json"
+    observed = {"z": "é🙂", "a": {"status": None, "completed": True}}
+    monkeypatch.setattr(CAPTURE, "capture", Mock(return_value=observed))
+    monkeypatch.setattr(CAPTURE.sys, "argv", ["capture", "--output", str(destination)])
+    assert CAPTURE.main() == 0
+    expected = json.dumps(observed, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
+    assert destination.read_bytes() == expected.encode("utf-8")
+    assert json.loads(destination.read_text(encoding="utf-8")) == observed
+
+
+@pytest.mark.parametrize("outside", [
+    "issuance.canvas_worker", "issuance.infrastructure.api.signing_context",
+])
+def test_import_from_another_checkout_cannot_produce_a_document(monkeypatch, tmp_path, outside) -> None:
+    monkeypatch.setattr(CAPTURE, "git", _matching_git)
+    monkeypatch.setattr(pytest, "main", lambda *_args, **_kwargs: pytest.ExitCode.OK)
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.delenv("PYTEST_ADDOPTS", raising=False)
+    monkeypatch.setattr(CAPTURE.sys, "path", list(CAPTURE.sys.path))
+    for module, path in (
+        ("issuance.canvas_worker", "services/issuance/canvas_worker.py"),
+        ("issuance.infrastructure.api.signing_context",
+         "services/issuance/infrastructure/api/signing_context.py"),
+    ):
+        source = tmp_path / "outside.py" if module == outside else CAPTURE.ROOT / path
+        monkeypatch.setitem(CAPTURE.sys.modules, module, SimpleNamespace(__file__=str(source)))
+    document = Mock()
+    monkeypatch.setattr(CAPTURE.Observations, "document", document)
+    with pytest.raises(RuntimeError, match="loaded outside the owned source"):
+        CAPTURE.capture()
+    document.assert_not_called()
 
 
 def test_python_quality_suite_requires_regeneration_from_pinned_source() -> None:

@@ -68,11 +68,17 @@ Before removing the Python runtime source at completed cutover, preserve this
 pinned reference checkout/image as test tooling; do not retain a Python
 production service merely to regenerate historical evidence.
 
-Local qualification passed 736 affected tests and 200 subtests in 7.30 seconds,
-then a separate full regeneration passed all 63 observations. Ruff and diff
-checks passed. Fresh hosted Python-version/platform qualification is still
-required for this capture follow-up. The underlying privacy repair's protected
-main CI34059299079 passed independently after PR269 merged.
+Initial local qualification passed 736 affected tests and 200 subtests in 7.30
+seconds, then a separate full regeneration passed all 63 observations.
+CI34060445313 subsequently passed at `3e500accfecc064c5987cc4cd9118ec0c350f9c6`.
+Maintainer review added five capture-tool regressions: matching/mismatched
+verification retains the input bytes, new captures serialize actual observations
+stably, and imports from either wrong checkout are rejected before document
+creation. All 741 affected tests and 200 subtests passed in 7.11 seconds, then
+all 63 frozen observations regenerated unchanged in 0.20 seconds. Ruff and diff
+checks passed. Fresh exact-head hosted qualification is still required for these
+review additions. The underlying privacy repair's protected-main CI34059299079
+passed independently after PR269 merged.
 
 Native Rust replay/adoption and full worker/consumer acceptance remain required.
 No production runtime, dependency pin, deployment consumer or previous frozen
