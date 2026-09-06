@@ -482,76 +482,50 @@ impl MartyError {
         }
     }
 
+    /// Borrow both diagnostics from the same error variant.
+    fn diagnostics(&self) -> (&CapturedBacktrace, &SpanTrace) {
+        match self {
+            MartyError::CredentialIssuanceFailed { bt, span_trace, .. }
+            | MartyError::CredentialVerificationFailed { bt, span_trace, .. }
+            | MartyError::CredentialRevoked { bt, span_trace, .. }
+            | MartyError::CredentialExpired { bt, span_trace, .. }
+            | MartyError::CredentialInvalidFormat { bt, span_trace, .. }
+            | MartyError::CredentialSerializationError { bt, span_trace, .. }
+            | MartyError::KeyNotFound { bt, span_trace, .. }
+            | MartyError::KeyGenerationFailed { bt, span_trace, .. }
+            | MartyError::KeyInvalidFormat { bt, span_trace, .. }
+            | MartyError::KeyUnsupportedAlgorithm { bt, span_trace, .. }
+            | MartyError::KeyImportFailed { bt, span_trace, .. }
+            | MartyError::StatusIndexOutOfBounds { bt, span_trace, .. }
+            | MartyError::StatusInvalidFormat { bt, span_trace, .. }
+            | MartyError::StatusCompressionError { bt, span_trace, .. }
+            | MartyError::StatusEncodingError { bt, span_trace, .. }
+            | MartyError::ValidationRequiredField { bt, span_trace, .. }
+            | MartyError::ValidationInvalidFormat { bt, span_trace, .. }
+            | MartyError::ValidationOutOfRange { bt, span_trace, .. }
+            | MartyError::ValidationConstraintViolated { bt, span_trace, .. }
+            | MartyError::CryptoSignatureFailed { bt, span_trace, .. }
+            | MartyError::CryptoVerificationFailed { bt, span_trace, .. }
+            | MartyError::CryptoEncryptionFailed { bt, span_trace, .. }
+            | MartyError::CryptoDecryptionFailed { bt, span_trace, .. }
+            | MartyError::CryptoHashFailed { bt, span_trace, .. }
+            | MartyError::DidResolutionFailed { bt, span_trace, .. }
+            | MartyError::DidInvalidFormat { bt, span_trace, .. }
+            | MartyError::DidUnsupportedMethod { bt, span_trace, .. }
+            | MartyError::InternalError { bt, span_trace, .. }
+            | MartyError::ExternalServiceError { bt, span_trace, .. }
+            | MartyError::IoError { bt, span_trace, .. } => (bt, span_trace),
+        }
+    }
+
     /// Get the backtrace for this error (if captured).
     pub fn backtrace(&self) -> &CapturedBacktrace {
-        match self {
-            MartyError::CredentialIssuanceFailed { bt, .. } => bt,
-            MartyError::CredentialVerificationFailed { bt, .. } => bt,
-            MartyError::CredentialRevoked { bt, .. } => bt,
-            MartyError::CredentialExpired { bt, .. } => bt,
-            MartyError::CredentialInvalidFormat { bt, .. } => bt,
-            MartyError::CredentialSerializationError { bt, .. } => bt,
-            MartyError::KeyNotFound { bt, .. } => bt,
-            MartyError::KeyGenerationFailed { bt, .. } => bt,
-            MartyError::KeyInvalidFormat { bt, .. } => bt,
-            MartyError::KeyUnsupportedAlgorithm { bt, .. } => bt,
-            MartyError::KeyImportFailed { bt, .. } => bt,
-            MartyError::StatusIndexOutOfBounds { bt, .. } => bt,
-            MartyError::StatusInvalidFormat { bt, .. } => bt,
-            MartyError::StatusCompressionError { bt, .. } => bt,
-            MartyError::StatusEncodingError { bt, .. } => bt,
-            MartyError::ValidationRequiredField { bt, .. } => bt,
-            MartyError::ValidationInvalidFormat { bt, .. } => bt,
-            MartyError::ValidationOutOfRange { bt, .. } => bt,
-            MartyError::ValidationConstraintViolated { bt, .. } => bt,
-            MartyError::CryptoSignatureFailed { bt, .. } => bt,
-            MartyError::CryptoVerificationFailed { bt, .. } => bt,
-            MartyError::CryptoEncryptionFailed { bt, .. } => bt,
-            MartyError::CryptoDecryptionFailed { bt, .. } => bt,
-            MartyError::CryptoHashFailed { bt, .. } => bt,
-            MartyError::DidResolutionFailed { bt, .. } => bt,
-            MartyError::DidInvalidFormat { bt, .. } => bt,
-            MartyError::DidUnsupportedMethod { bt, .. } => bt,
-            MartyError::InternalError { bt, .. } => bt,
-            MartyError::ExternalServiceError { bt, .. } => bt,
-            MartyError::IoError { bt, .. } => bt,
-        }
+        self.diagnostics().0
     }
 
     /// Get the span trace for this error (if captured).
     pub fn span_trace(&self) -> &SpanTrace {
-        match self {
-            MartyError::CredentialIssuanceFailed { span_trace, .. } => span_trace,
-            MartyError::CredentialVerificationFailed { span_trace, .. } => span_trace,
-            MartyError::CredentialRevoked { span_trace, .. } => span_trace,
-            MartyError::CredentialExpired { span_trace, .. } => span_trace,
-            MartyError::CredentialInvalidFormat { span_trace, .. } => span_trace,
-            MartyError::CredentialSerializationError { span_trace, .. } => span_trace,
-            MartyError::KeyNotFound { span_trace, .. } => span_trace,
-            MartyError::KeyGenerationFailed { span_trace, .. } => span_trace,
-            MartyError::KeyInvalidFormat { span_trace, .. } => span_trace,
-            MartyError::KeyUnsupportedAlgorithm { span_trace, .. } => span_trace,
-            MartyError::KeyImportFailed { span_trace, .. } => span_trace,
-            MartyError::StatusIndexOutOfBounds { span_trace, .. } => span_trace,
-            MartyError::StatusInvalidFormat { span_trace, .. } => span_trace,
-            MartyError::StatusCompressionError { span_trace, .. } => span_trace,
-            MartyError::StatusEncodingError { span_trace, .. } => span_trace,
-            MartyError::ValidationRequiredField { span_trace, .. } => span_trace,
-            MartyError::ValidationInvalidFormat { span_trace, .. } => span_trace,
-            MartyError::ValidationOutOfRange { span_trace, .. } => span_trace,
-            MartyError::ValidationConstraintViolated { span_trace, .. } => span_trace,
-            MartyError::CryptoSignatureFailed { span_trace, .. } => span_trace,
-            MartyError::CryptoVerificationFailed { span_trace, .. } => span_trace,
-            MartyError::CryptoEncryptionFailed { span_trace, .. } => span_trace,
-            MartyError::CryptoDecryptionFailed { span_trace, .. } => span_trace,
-            MartyError::CryptoHashFailed { span_trace, .. } => span_trace,
-            MartyError::DidResolutionFailed { span_trace, .. } => span_trace,
-            MartyError::DidInvalidFormat { span_trace, .. } => span_trace,
-            MartyError::DidUnsupportedMethod { span_trace, .. } => span_trace,
-            MartyError::InternalError { span_trace, .. } => span_trace,
-            MartyError::ExternalServiceError { span_trace, .. } => span_trace,
-            MartyError::IoError { span_trace, .. } => span_trace,
-        }
+        self.diagnostics().1
     }
 
     /// Get a full debug report including backtrace and span trace.
@@ -583,68 +557,72 @@ impl MartyError {
     // Builder Functions
     // =========================================================================
 
+    fn with_diagnostics(build: impl FnOnce(CapturedBacktrace, SpanTrace) -> Self) -> Self {
+        build(CapturedBacktrace::capture(), SpanTrace::capture())
+    }
+
     /// Create a credential issuance failed error.
     pub fn credential_issuance_failed(reason: impl Into<String>) -> Self {
-        Self::CredentialIssuanceFailed {
+        MartyError::with_diagnostics(|bt, span_trace| Self::CredentialIssuanceFailed {
             reason: reason.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 
     /// Create a credential serialization error.
     pub fn serialization_error(reason: impl Into<String>) -> Self {
-        Self::CredentialSerializationError {
+        MartyError::with_diagnostics(|bt, span_trace| Self::CredentialSerializationError {
             reason: reason.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 
     /// Create a key not found error.
     pub fn key_not_found(key_id: impl Into<String>) -> Self {
-        Self::KeyNotFound {
+        MartyError::with_diagnostics(|bt, span_trace| Self::KeyNotFound {
             key_id: key_id.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 
     /// Create an internal error.
     pub fn internal(reason: impl Into<String>) -> Self {
-        Self::InternalError {
+        MartyError::with_diagnostics(|bt, span_trace| Self::InternalError {
             reason: reason.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 
     /// Create a validation required field error.
     pub fn required_field(field: impl Into<String>) -> Self {
-        Self::ValidationRequiredField {
+        MartyError::with_diagnostics(|bt, span_trace| Self::ValidationRequiredField {
             field: field.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 
     /// Create a validation invalid format error.
     pub fn invalid_format(field: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::ValidationInvalidFormat {
+        MartyError::with_diagnostics(|bt, span_trace| Self::ValidationInvalidFormat {
             field: field.into(),
             reason: reason.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 
     /// Create a crypto signature failed error.
     pub fn signature_failed(reason: impl Into<String>) -> Self {
-        Self::CryptoSignatureFailed {
+        MartyError::with_diagnostics(|bt, span_trace| Self::CryptoSignatureFailed {
             reason: reason.into(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 }
 
@@ -704,32 +682,23 @@ impl From<MartyError> for PyErr {
 
 impl From<std::io::Error> for MartyError {
     fn from(err: std::io::Error) -> Self {
-        MartyError::IoError {
+        MartyError::with_diagnostics(|bt, span_trace| MartyError::IoError {
             reason: err.to_string(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+            bt,
+            span_trace,
+        })
     }
 }
 
 impl From<serde_json::Error> for MartyError {
     fn from(err: serde_json::Error) -> Self {
-        MartyError::CredentialSerializationError {
-            reason: err.to_string(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+        Self::serialization_error(err.to_string())
     }
 }
 
 impl From<base64::DecodeError> for MartyError {
     fn from(err: base64::DecodeError) -> Self {
-        MartyError::ValidationInvalidFormat {
-            field: "base64".to_string(),
-            reason: err.to_string(),
-            bt: CapturedBacktrace::capture(),
-            span_trace: SpanTrace::capture(),
-        }
+        Self::invalid_format("base64", err.to_string())
     }
 }
 
@@ -764,6 +733,102 @@ pub fn init_tracing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builders_and_conversions_preserve_error_contracts() {
+        let cases = [
+            (
+                MartyError::credential_issuance_failed("reason"),
+                "CRED.ISSUANCE_FAILED",
+                false,
+            ),
+            (
+                MartyError::serialization_error("reason"),
+                "CRED.SERIALIZATION_ERROR",
+                false,
+            ),
+            (MartyError::key_not_found("reason"), "KEY.NOT_FOUND", false),
+            (MartyError::internal("reason"), "SRV.INTERNAL_ERROR", false),
+            (
+                MartyError::required_field("reason"),
+                "VAL.REQUIRED_FIELD",
+                false,
+            ),
+            (
+                MartyError::invalid_format("field", "reason"),
+                "VAL.INVALID_FORMAT",
+                false,
+            ),
+            (
+                MartyError::signature_failed("reason"),
+                "CRYPTO.SIGNATURE_FAILED",
+                false,
+            ),
+            (
+                MartyError::from(std::io::Error::other("reason")),
+                "SRV.IO_ERROR",
+                true,
+            ),
+        ];
+        for (error, code, retryable) in cases {
+            assert_eq!(error.code(), code);
+            assert_eq!(error.is_retryable(), retryable);
+            assert!(error.to_string().contains("reason"));
+            assert!(!error.user_message().is_empty());
+            assert!(error.debug_report().contains(&format!("Code: {code}")));
+        }
+        let json_error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let message = json_error.to_string();
+        let error = MartyError::from(json_error);
+        assert_eq!(error.code(), "CRED.SERIALIZATION_ERROR");
+        assert!(error.to_string().contains(&message));
+        let error = MartyError::from(base64::DecodeError::InvalidLength(1));
+        assert_eq!(error.code(), "VAL.INVALID_FORMAT");
+        assert!(error.to_string().contains("base64"));
+    }
+
+    #[test]
+    fn diagnostic_accessors_borrow_the_original_public_fields() {
+        let error = MartyError::internal("reason");
+        let MartyError::InternalError { bt, span_trace, .. } = &error else {
+            unreachable!()
+        };
+        assert!(std::ptr::eq(error.backtrace(), bt));
+        assert!(std::ptr::eq(error.span_trace(), span_trace));
+    }
+
+    #[test]
+    fn python_exception_types_and_codes_remain_stable() {
+        pyo3::Python::initialize();
+        pyo3::Python::attach(|py| {
+            let cases = [
+                (
+                    MartyError::key_not_found("key"),
+                    "KeyError",
+                    "KEY.NOT_FOUND",
+                ),
+                (
+                    MartyError::invalid_format("field", "reason"),
+                    "ValueError",
+                    "VAL.INVALID_FORMAT",
+                ),
+                (
+                    MartyError::internal("reason"),
+                    "RuntimeError",
+                    "SRV.INTERNAL_ERROR",
+                ),
+            ];
+            for (error, exception, code) in cases {
+                let error: PyErr = error.into();
+                use pyo3::types::{PyStringMethods, PyTypeMethods};
+                assert_eq!(
+                    error.get_type(py).name().unwrap().to_str().unwrap(),
+                    exception
+                );
+                assert!(error.to_string().contains(&format!("[{code}]")));
+            }
+        });
+    }
 
     #[test]
     fn test_error_codes() {
