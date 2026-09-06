@@ -16,7 +16,7 @@ def _read_secret_value(name: str) -> str:
     if not file_path:
         return ""
     try:
-        with open(file_path, "r", encoding="utf-8") as handle:
+        with open(file_path, encoding="utf-8") as handle:
             return handle.read().strip()
     except OSError:
         return ""
@@ -37,15 +37,17 @@ def _response_error_detail(response: httpx.Response) -> str:
     except ValueError:
         payload = None
 
+    text = response.text.strip() or response.reason_phrase
     if isinstance(payload, dict):
         detail = payload.get("detail") or payload.get("error_description") or payload.get("error")
         if isinstance(detail, str) and detail.strip():
-            return detail.strip()
-        if isinstance(detail, dict):
-            return str(detail)
+            text = detail.strip()
+        elif isinstance(detail, dict):
+            text = str(detail)
 
-    text = response.text.strip()
-    return text[:500] if text else response.reason_phrase
+    # One character bound for every representation and every remote operation.
+    # Keep short diagnostics and the existing field-selection order unchanged.
+    return text[:500]
 
 
 async def resolve_remote_issuer_context(
