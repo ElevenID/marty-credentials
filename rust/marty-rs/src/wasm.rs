@@ -566,9 +566,7 @@ pub fn extract_credentials_from_vp(vp_jwt: &str) -> Result<String, JsValue> {
 
 fn get_algorithm_for_jwk_wasm(jwk: &ssi_jwk::JWK) -> Result<&'static str, JsValue> {
     use marty_oid4vci::types::SigningAlgorithm;
-    let json = serde_json::to_string(jwk)
-        .map_err(|error| JsValue::from_str(&format!("Invalid JWK: {error}")))?;
-    let algorithm = marty_oid4vci::issuer::detect_algorithm(&json)
+    let algorithm = marty_oid4vci::signer::derive_typed_jwk_algorithm(jwk)
         .map_err(|error| JsValue::from_str(&error.to_string()))?;
     // Preserve the browser adapter's existing signing capability set.
     match algorithm {
