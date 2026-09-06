@@ -6,7 +6,7 @@ import asyncio
 import copy
 import json
 import logging
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import httpx
 import pytest
@@ -61,7 +61,7 @@ def worker_logs(request: pytest.FixtureRequest, caplog: pytest.LogCaptureFixture
 def _assert_private_record(
     records: list[logging.LogRecord], caplog: pytest.LogCaptureFixture,
     event: str, exception_class: str, **identifiers: str,
-) -> None:
+) -> dict:
     assert len(records) == 1
     record = records[0]
     assert record.exc_info is None
@@ -81,12 +81,40 @@ def _assert_private_record(
         "canvas_sync_cycle_failed": "Canvas synchronization worker cycle failed",
     }
     assert rendered == {"message": messages[event], **structured}
+    # Random generated job IDs are portable only after their exact equality to
+    # the real outcome ID has been asserted above. Do not normalize other data.
+    def portable(fields: dict) -> dict:
+        return {key: "<matching-job-id>" if key == "job_id" else value
+                for key, value in fields.items()}
+
+    return {
+        "level": record.levelname,
+        "fields": portable(structured),
+        "rendered": portable(rendered),
+        "exception_attached": record.exc_info is not None,
+        "stack_attached": record.stack_info is not None,
+    }
+
+
+def _job_observation(job) -> dict:
+    return {
+        "status": job.status.value,
+        "attempt_count": job.attempt_count,
+        "max_attempts": job.max_attempts,
+        "error_code": job.last_error_code,
+        "error_summary": job.last_error_summary,
+        "result": job.result,
+        "completed": job.completed_at is not None,
+        "lease_owned": job.lease_owner == _config().worker_id,
+        "lease_released": job.lease_owner is None and job.lease_expires_at is None,
+    }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [None, 429, 503])
 async def test_unexpected_processing_error_is_private_and_keeps_retry_semantics(
-    status: int | None, caplog: pytest.LogCaptureFixture, worker_logs: list[logging.LogRecord]
+    status: int | None, caplog: pytest.LogCaptureFixture, worker_logs: list[logging.LogRecord],
+    record_property,
 ) -> None:
     repo = InMemoryIssuanceRepository()
     target = await _worker_target(repo)
@@ -113,15 +141,21 @@ async def test_unexpected_processing_error_is_private_and_keeps_retry_semantics(
     assert job.result == {}
     assert job.lease_owner is None
     assert target.enabled
-    _assert_private_record(
+    log = _assert_private_record(
         worker_logs, caplog, "canvas_sync_job_failed", type(error).__name__, job_id=job.id,
     )
+    record_property("canvas_privacy", {
+        "boundary": "worker_error",
+        "input": {"branch": "processing", "status": status},
+        "observed": {"cycle": asdict(result), "job": _job_observation(job),
+                     "target_enabled": target.enabled, "log": log},
+    })
 
 
 @pytest.mark.asyncio
 async def test_disconnect_marker_error_keeps_remote_revoke_and_local_cleanup(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
-    worker_logs: list[logging.LogRecord],
+    worker_logs: list[logging.LogRecord], record_property,
 ) -> None:
     repo = InMemoryIssuanceRepository()
     connection = await _pending_oauth_revocation(repo)
@@ -142,20 +176,31 @@ async def test_disconnect_marker_error_keeps_remote_revoke_and_local_cleanup(
     assert await repo.get_canvas_oauth_connection("org-1", connection.platform_id) is None
     for secret in ["access-secret-1", "refresh-secret-1"]:
         assert await repo.get_integration_secret_value("org-1", secret) is None
-    _assert_private_record(
+    log = _assert_private_record(
         worker_logs, caplog, "canvas_oauth_disconnect_marker_failed", "RuntimeError",
         organization_id="org-1", platform_id=connection.platform_id,
     )
+    record_property("canvas_privacy", {
+        "boundary": "worker_error", "input": {"branch": "disconnect_marker"},
+        "observed": {
+            "succeeded": result[0], "retried": result[1], "remote_revoke_count": len(revoked),
+            "connection_absent": await repo.get_canvas_oauth_connection(
+                "org-1", connection.platform_id) is None,
+            "secrets_absent": {secret: await repo.get_integration_secret_value("org-1", secret) is None
+                               for secret in ["access-secret-1", "refresh-secret-1"]},
+            "log": log,
+        },
+    })
 
 
 @pytest.mark.asyncio
 async def test_escaped_job_error_is_private_and_does_not_cancel_successful_sibling(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
-    worker_logs: list[logging.LogRecord],
+    worker_logs: list[logging.LogRecord], record_property,
 ) -> None:
     repo = InMemoryIssuanceRepository()
     failing = await _worker_target(repo)
-    await _worker_target(repo, suffix="-sibling")
+    sibling = await _worker_target(repo, suffix="-sibling")
     read_target = repo.get_canvas_sync_target_for_org
 
     async def read_or_fail(organization_id, target_id):
@@ -174,16 +219,21 @@ async def test_escaped_job_error_is_private_and_does_not_cancel_successful_sibli
     jobs = {job.target_id: job for job in await repo.list_canvas_sync_jobs("org-1")}
     assert jobs[failing.id].status == CanvasEvidenceSyncJobStatus.LEASED
     assert jobs[failing.id].lease_owner == _config().worker_id
-    _assert_private_record(
+    log = _assert_private_record(
         worker_logs, caplog, "canvas_sync_job_outcome_failed", "RuntimeError",
         job_id=jobs[failing.id].id,
     )
+    record_property("canvas_privacy", {
+        "boundary": "worker_error", "input": {"branch": "escaped_job"},
+        "observed": {"cycle": asdict(result), "failed_job": _job_observation(jobs[failing.id]),
+                     "sibling_job": _job_observation(jobs[sibling.id]), "log": log},
+    })
 
 
 @pytest.mark.asyncio
 async def test_cycle_failure_is_private_and_next_real_cycle_reaches_idle(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
-    worker_logs: list[logging.LogRecord],
+    worker_logs: list[logging.LogRecord], record_property,
 ) -> None:
     repo = InMemoryIssuanceRepository()
     stop = asyncio.Event()
@@ -209,4 +259,9 @@ async def test_cycle_failure_is_private_and_next_real_cycle_reaches_idle(
     heartbeat = await repo.get_fresh_canvas_worker_heartbeat(role="canvas_sync", max_age_seconds=120)
     assert heartbeat is not None
     assert heartbeat.metadata["phase"] == "idle"
-    _assert_private_record(worker_logs, caplog, "canvas_sync_cycle_failed", "RuntimeError")
+    log = _assert_private_record(worker_logs, caplog, "canvas_sync_cycle_failed", "RuntimeError")
+    record_property("canvas_privacy", {
+        "boundary": "worker_error", "input": {"branch": "cycle_failure"},
+        "observed": {"cycle_attempts": attempts, "heartbeat_phase": heartbeat.metadata["phase"],
+                     "worker_id": heartbeat.worker_id, "log": log},
+    })
