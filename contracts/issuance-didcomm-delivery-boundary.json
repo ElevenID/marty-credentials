@@ -1,0 +1,198 @@
+{
+  "schema": "marty.issuance-didcomm-delivery-boundary/v1",
+  "baseline_commit": "9bd2747f040f203188529758ec38f0a5dce5ac5f",
+  "classification": "source-and-controlled-adapter-contract-inventory-not-runtime-oracle",
+  "execution_order": {
+    "decision_date": "2026-09-08",
+    "first": "feature-preserving-Rust-consumer-migration",
+    "deferred": "DIDComm-KMS-layer-corrections",
+    "outstanding_work": "docs/rust-migrations/didcomm-kms-outstanding.md",
+    "custody_claim": "Rust-port-alone-is-not-KMS-only"
+  },
+  "authorities": ["contracts/issuance-runtime-surface.json", "contracts/issuance-initiation.json"],
+  "source": {
+    "routes": "services/issuance/infrastructure/api/routes.py",
+    "encryption": "services/issuance/application/rust_integration.py",
+    "boundary_tests": "tests/unit/test_didcomm_boundary.py",
+    "initiation_tests": "tests/unit/test_issuance_initiation_contract.py"
+  },
+  "surface": {
+    "method": "POST",
+    "path": "/v1/issuance/didcomm/deliver",
+    "operation": "didcomm_deliver",
+    "management_key_required": true,
+    "request_fields": ["organization_id", "transaction_id", "holder_did"],
+    "extra_request_fields": "forbid",
+    "minimum_field_length": 1,
+    "holder_did_pattern": "^did:",
+    "response_fields": ["transaction_id", "credential_id", "holder_did", "service_endpoint", "didcomm_message_id", "status", "error"],
+    "success_http_status": 200,
+    "delivery_statuses": ["delivered", "delivery_failed"],
+    "error_default": null,
+    "allowed_transaction_states": ["pending", "authorized"],
+    "missing_or_cross_tenant_transaction_status": 404,
+    "already_issued_status": 409,
+    "other_transaction_state_status": 400,
+    "tenant_order": ["request_claim_before_lookup", "transaction_owner_after_lookup", "state_before_delivery"]
+  },
+  "encryption": {
+    "required_modes": ["anoncrypt", "authcrypt"],
+    "missing_policy_mode": "anoncrypt",
+    "configured_policy": "exhaustive-exact-active-issuer-entry",
+    "failure_fallback": "none-neither-anoncrypt-nor-plaintext",
+    "crypto_owner": "canonical-marty-core-DIDComm",
+    "authcrypt_success": "sender-authenticated-recipient-encrypted-message",
+    "issuer_binding": "resolved-sender-document-id-equals-active-issuer-DID; native-crypto-validates-private/public-binding",
+    "recipient_binding": "resolved-document-id-equals-requested-holder; use-frozen-document-keyAgreement-for-entire-attempt",
+    "native_binding_evidence": "existing-tests-mock-native-crypto; not-independent-cryptographic-proof",
+    "legacy_policy_secret_field": "sender_x25519_private_key",
+    "legacy_secret_custody": "transition-required-not-preserved-raw-key-API",
+    "target_custody": "opaque-KMS-operation; no-consumer-private-key-bytes",
+    "target_KMS_API": "design-pending-do-not-invent-or-disable-authcrypt",
+    "prepared_context": {
+      "read_policy_once": true,
+      "resolve_sender_once": true,
+      "recipient_document": "immutable-serialized-snapshot",
+      "sender_document": "immutable-serialized-snapshot",
+      "policy_changed_after_preflight": "does-not-downgrade-current-attempt",
+      "preflight_then_delivery_native_calls": 2,
+      "redacted_repr_fields": ["recipient_did_document_json", "sender_did_document_json", "sender_x25519_private_key"],
+      "opaque_handle_lifetime_and_rotation": "new-KMS-contract-required"
+    }
+  },
+  "policy": {
+    "source": "deployment-file-only",
+    "version": 1,
+    "boolean_version_rejected": true,
+    "root_fields": ["version", "issuers"],
+    "max_bytes": 65536,
+    "max_issuers": 1000,
+    "issuer_prefix": "did:",
+    "max_issuer_characters": 2048,
+    "duplicate_JSON_members": "reject-at-every-object",
+    "unknown_fields_or_modes": "reject",
+    "all_entries_validated_before_active_entry_selection": true,
+    "legacy_authcrypt_key": "canonical-unpadded-base64url-exactly-32-bytes-no-cross-issuer-reuse",
+    "opaque_KMS_replacement": "preserve-mode-selection-issuer-exclusivity-and-fail-closed-validation-without-preserving-raw-secret-input"
+  },
+  "policy_rejection_vectors": [
+    {
+      "name": "duplicate-mode",
+      "JSON": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"anoncrypt\",\"mode\":\"authcrypt\"}}}",
+      "error": "DIDComm encryption policy contains a duplicate JSON member"
+    },
+    {
+      "name": "boolean-version",
+      "JSON": "{\"version\":true,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"anoncrypt\"}}}",
+      "error": "DIDComm encryption policy version is unsupported"
+    },
+    {
+      "name": "padded-invalid-synthetic-key",
+      "JSON": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"authcrypt\",\"sender_x25519_private_key\":\"AA==\"}}}",
+      "error": "DIDComm authcrypt private key must be canonical unpadded base64url"
+    },
+    {
+      "name": "unknown-entry-field",
+      "JSON": "{\"version\":1,\"issuers\":{\"did:web:issuer.example\":{\"mode\":\"anoncrypt\",\"unexpected\":true}}}",
+      "error": "DIDComm encryption policy entry has invalid fields or mode"
+    }
+  ],
+  "attempt_order": [
+    "didcomm_resolve_did",
+    "_validated_didcomm_delivery_endpoint",
+    "apply_remote_issuer_context",
+    "prepare_didcomm_delivery_encryption",
+    "_allocate_credential_status_list_entries",
+    "create_sd_jwt_vc_with_remote_signing",
+    "didcomm_pack_credential",
+    "didcomm_encrypt_prepared_delivery",
+    "_didcomm_tls_verifier",
+    "post",
+    "finalize_direct_credential_issuance"
+  ],
+  "ordering_limits": {
+    "issuer_context_can_save_before_encryption_preflight": true,
+    "encryption_preflight_failure": "no-status-allocation-signing-packing-or-transport",
+    "TLS_CA_load": "currently-after-allocation-signing-encryption; do-not-claim-all-validation-precedes-mutation",
+    "credential_commit": "after-successful-transport-only",
+    "format_limit": "current-direct-delivery-signs-SD-JWT-only; other-formats-have-existing-503-guards"
+  },
+  "transport": {
+    "resolver_configuration": "deployment-only-not-request-input",
+    "resolved_document_id": "must-equal-requested-DID",
+    "HTTPS_required": true,
+    "maximum_endpoint_characters": 2048,
+    "endpoint_credentials": "forbidden",
+    "private_addresses": "forbidden-unless-explicit-deployment-opt-in; HTTPS-still-required",
+    "DNS_results": "every-resolved-address-must-be-global-unless-opted-in",
+    "TLS": "system-Web-PKI-plus-optional-operator-CA; never-disable-verification",
+    "content_type": "application/didcomm-encrypted+json",
+    "timeout_seconds": 30,
+    "HTTP_status_at_least_400": "delivery_failed; error-is-HTTP-plus-status-only",
+    "HTTP_status_below_400": "currently-delivered-including-3xx; no-independent-redirect-oracle",
+    "exception": "delivery_failed; error-is-DIDComm transport failed"
+  },
+  "errors": {
+    "missing_endpoint": {"status": 422, "detail": "Holder DID has no DIDComm service endpoint"},
+    "incompatible_recipient": {"status": 422, "detail": "Holder DID does not provide a compatible DIDComm key agreement method"},
+    "policy_or_authcrypt": {"status": 503, "detail": "DIDComm sender-authentication configuration is unavailable"},
+    "TLS_CA": {"status": 503, "detail": "DIDComm TLS trust configuration is unavailable"},
+    "already_issued": {"status": 409, "detail": "Credential already issued"}
+  },
+  "retry_and_idempotence": {
+    "stable_credential_id": "derived-from-transaction-id",
+    "signing_or_transport_failure": "transaction-remains-retryable; no-issued-credential",
+    "status_reservation_retries": "same-credential-id-on-all-attempts",
+    "successful_finalize": "atomic-credential-and-issued-state; post-issuance-hooks-only-if-newly-created",
+    "duplicate_public_delivery_after_issue": "409-before-network",
+    "concurrent_attempts": "database-and-remote-wallet-exactly-once-proof-missing",
+    "initiation_idempotency": "reuse-contracts/issuance-initiation.json#/idempotency/didcomm_push_with_idempotency; DIDComm-push-not-supported-with-idempotency-key",
+    "offer_projection": "reuse-contracts/issuance-initiation.json:committed-snapshot-and-pending-DIDComm-URI"
+  },
+  "secret_redaction": {
+    "failure_stages": ["auto-delivery", "encryption-preflight", "encryption", "transport"],
+    "failure_log_fields": ["didcomm_stage", "didcomm_exception_type"],
+    "failure_log_message": "DIDComm {stage} failed ({exception_type})",
+    "failure_log_arguments": "empty",
+    "failure_log_exception_info": "none",
+    "forbidden_failure_diagnostics": ["holder-DID", "private-key-material", "native-exception-text", "transport-exception-text", "remote-response-body"],
+    "response_is_not_identity_free": "successful-response-intentionally-contains-holder-DID-and-endpoint",
+    "prepared_context_repr": "documents-and-secret-fields-excluded; exact-runtime-redaction-test-still-required"
+  },
+  "boundary_test_inventory": [
+    "test_delivery_contract_rejects_caller_selected_resolver",
+    "test_resolver_uses_only_deployment_managed_configuration",
+    "test_resolver_rejects_a_mismatched_native_document",
+    "test_authcrypt_binding_delegates_all_crypto_to_rust",
+    "test_delivery_defaults_to_anoncrypt_without_a_policy",
+    "test_configured_authcrypt_resolves_and_binds_the_sender",
+    "test_prepared_authcrypt_context_is_validated_once_and_frozen_for_delivery",
+    "test_configured_policy_requires_an_exact_active_issuer_entry",
+    "test_policy_rejects_ambiguous_or_noncanonical_entries",
+    "test_authcrypt_failure_never_falls_back_to_anoncrypt",
+    "test_policy_rejects_cross_issuer_authcrypt_key_reuse",
+    "test_delivery_uses_normal_web_pki_by_default",
+    "test_delivery_adds_operator_ca_to_default_trust",
+    "test_delivery_fails_closed_when_operator_ca_is_unavailable",
+    "test_auto_delivery_logs_only_sanitized_stage_and_exception_type",
+    "test_missing_endpoint_detail_does_not_echo_holder_did",
+    "test_encryption_logs_do_not_retain_holder_or_exception_details",
+    "test_delivery_error_omits_remote_body_and_transport_exception_text",
+    "test_delivery_rechecks_gateway_tenant_against_transaction",
+    "test_delivery_hides_cross_tenant_transaction",
+    "test_delivery_rejects_claimed_tenant_before_transaction_lookup",
+    "test_delivery_rejects_private_or_unavailable_encryption",
+    "test_delivery_validates_holder_endpoint_before_context_or_status_mutation",
+    "test_signing_and_delivery_failures_retry_one_stable_status_reservation",
+    "test_private_test_agent_still_requires_https"
+  ],
+  "missing_runtime_oracles": [
+    "Real anoncrypt encryption followed by wallet decryption and atomic PostgreSQL finalization",
+    "Real authcrypt via opaque KMS, sender authentication, recipient decryption and same delivery effects",
+    "Wrong sender public/private identity, recipient key substitution and low-order/invalid-key rejection through the actual native binding",
+    "Policy/key rotation between preflight and encryption with retained opaque operation context",
+    "Network redirect/DNS-rebinding boundaries and real custom-CA TLS transport",
+    "Public HTTP management-key, missing/issued/other-state and concurrent-delivery behavior without direct-function shortcuts",
+    "Full policy size/count/DID-length/UTF8/type boundary corpus and prepared-context diagnostic redaction"
+  ]
+}
