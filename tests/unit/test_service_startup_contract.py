@@ -75,6 +75,53 @@ def test_native_extension_capability_contract_accepts_complete_module(monkeypatc
     rust_integration.validate_marty_rs_capabilities()
 
 
+def test_native_extension_does_not_require_retired_internal_didcomm_adapters(monkeypatch) -> None:
+    from issuance.application import rust_integration
+
+    retired = {"didcomm_decrypt", "didcomm_unpack_message"}
+    assert retired.isdisjoint(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
+    assert all(not hasattr(rust_integration, name) for name in retired)
+    # Outbound delivery remains supported, including authenticated encryption.
+    assert {
+        "didcomm_encrypt",
+        "didcomm_encrypt_authcrypt",
+        "didcomm_pack_credential",
+        "didcomm_extract_endpoint",
+        "didcomm_resolve_did_with_metadata",
+    }.issubset(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
+    module = SimpleNamespace(
+        **{name: (lambda: None) for name in rust_integration.REQUIRED_MARTY_RS_CAPABILITIES}
+    )
+    assert all(not hasattr(module, name) for name in retired)
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: module)
+
+    rust_integration.validate_marty_rs_capabilities()
+
+
+@pytest.mark.parametrize("missing", [True, False], ids=["missing", "noncallable"])
+def test_native_extension_still_rejects_every_remaining_invalid_capability(
+    monkeypatch,
+    missing: bool,
+) -> None:
+    from issuance.application import rust_integration
+    from marty_credentials.native_backend import NativeBackendUnavailable
+
+    required = rust_integration.REQUIRED_MARTY_RS_CAPABILITIES
+    assert required
+    for capability in sorted(required):
+        module = SimpleNamespace(**{name: (lambda: None) for name in required})
+        if missing:
+            delattr(module, capability)
+        else:
+            setattr(module, capability, object())
+        monkeypatch.setattr(rust_integration, "get_marty_rs", lambda current=module: current)
+        with pytest.raises(NativeBackendUnavailable) as failure:
+            rust_integration.validate_marty_rs_capabilities()
+        assert str(failure.value) == (
+            "marty-rs native extension is missing required capabilities: " + capability
+        )
+
+
 def test_native_extension_rejects_nested_compatibility_package(monkeypatch) -> None:
     from issuance.application import rust_integration
     from marty_credentials.native_backend import NativeBackendUnavailable

@@ -162,6 +162,7 @@ def test_import_from_another_checkout_cannot_produce_a_document(monkeypatch, tmp
 
 def test_python_quality_suite_requires_regeneration_from_pinned_source() -> None:
     script = (CAPTURE.ROOT / "scripts/run-python-ci.sh").read_text(encoding="utf-8")
-    assert "capture_canvas_privacy_reference.py --source-commit" in script
-    assert 'git fetch --no-tags --depth=1 origin "$privacy_source_commit"' in script
-    assert "capture_canvas_privacy_reference.py --verify contracts/canvas-worker-privacy-reference.json" in script
+    assert "python scripts/verify_canvas_privacy_reference.py" in script
+    assert script.index("python -m pytest tests/ packages/tests/ -v") < script.index(
+        "python scripts/verify_canvas_privacy_reference.py"
+    )
