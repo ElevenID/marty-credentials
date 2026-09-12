@@ -76,13 +76,11 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
         "canvas_normalize_base_url",
         "canvas_probe_lti_platform",
         "complete_vcdm_data_integrity_credential",
-        "didcomm_decrypt",
         "didcomm_encrypt",
         "didcomm_encrypt_authcrypt",
         "didcomm_extract_endpoint",
         "didcomm_pack_credential",
         "didcomm_resolve_did_with_metadata",
-        "didcomm_unpack_message",
         "evidence_reconciliation_plan",
         "evidence_reconciliation_stale_reasons",
         "lti_verify_launch_jwt",
@@ -891,12 +889,6 @@ def didcomm_pack_credential(
     )
 
 
-def didcomm_unpack_message(message_json: str) -> dict:
-    """Parse and validate a DIDComm v2 message envelope."""
-    marty_rs = get_marty_rs()
-    return json.loads(marty_rs.didcomm_unpack_message(message_json))
-
-
 def didcomm_encrypt(plaintext_json: str, recipient_did_document: dict) -> str:
     """Encrypt a DIDComm v2 plaintext message for a recipient (anoncrypt).
 
@@ -1224,16 +1216,6 @@ def didcomm_encrypt_prepared_delivery(
         raise DidcommAuthcryptError(
             "DIDComm authcrypt encryption failed without fallback"
         ) from exc
-
-
-def didcomm_decrypt(jwe_json: str, recipient_x25519_private_key: bytes) -> dict:
-    """Decrypt a DIDComm v2 JWE (anoncrypt) using the recipient's X25519 private key.
-
-    Returns the decrypted DIDComm plaintext message as a dict.
-    """
-    marty_rs = get_marty_rs()
-    plaintext = marty_rs.didcomm_decrypt(jwe_json, recipient_x25519_private_key)
-    return json.loads(plaintext)
 
 
 # ---------------------------------------------------------------------------
