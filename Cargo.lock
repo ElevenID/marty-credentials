@@ -1325,9 +1325,9 @@ dependencies = [
 
 [[package]]
 name = "der"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a69dedd701da44b0536442edf09c81a64b0ab97a7a4a5e3d1971f00027cbc63d"
+checksum = "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"
 dependencies = [
  "const-oid 0.10.2",
  "der_derive 0.8.0",
@@ -1612,7 +1612,7 @@ version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0681a4fc24c767085329728d8dfba959af91228aa4610cca4f8ce317ba46ae0"
 dependencies = [
- "der 0.8.1",
+ "der 0.8.2",
  "digest 0.11.3",
  "elliptic-curve 0.14.1",
  "rfc6979 0.6.0",
@@ -3460,7 +3460,7 @@ dependencies = [
  "coset 0.3.8",
  "coset 0.4.2",
  "der 0.7.10",
- "der 0.8.1",
+ "der 0.8.2",
  "ed25519-dalek 3.0.0",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
@@ -4211,7 +4211,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
 dependencies = [
- "der 0.8.1",
+ "der 0.8.2",
  "spki 0.8.0",
 ]
 
@@ -5029,7 +5029,7 @@ checksum = "d56d437c2f19203ce5f7122e507831de96f3d2d4d3be5af44a0b0a09d8a80e4d"
 dependencies = [
  "base16ct 1.0.0",
  "ctutils",
- "der 0.8.1",
+ "der 0.8.2",
  "hybrid-array",
  "subtle",
  "zeroize",
@@ -5448,7 +5448,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d9efca8738c78ee9484207732f728b1ef517bbb1833d6fc0879ca898a522f6f"
 dependencies = [
  "base64ct",
- "der 0.8.1",
+ "der 0.8.2",
 ]
 
 [[package]]
@@ -6779,9 +6779,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.24.1"
+version = "1.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
+checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",
@@ -7171,7 +7171,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
  "const-oid 0.10.2",
- "der 0.8.1",
+ "der 0.8.2",
  "spki 0.8.0",
  "tls_codec",
 ]
