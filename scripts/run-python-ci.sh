@@ -11,8 +11,4 @@ python -c "from issuance.application.rust_integration import validate_marty_rs_c
   python -m alembic -c alembic.ini heads
 )
 python -m pytest tests/ packages/tests/ -v
-privacy_source_commit="$(python scripts/capture_canvas_privacy_reference.py --source-commit)"
-if ! git cat-file -e "${privacy_source_commit}^{commit}" 2>/dev/null; then
-  git fetch --no-tags --depth=1 origin "$privacy_source_commit"
-fi
-python scripts/capture_canvas_privacy_reference.py --verify contracts/canvas-worker-privacy-reference.json
+python scripts/verify_canvas_privacy_reference.py
