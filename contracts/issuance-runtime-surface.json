@@ -18,7 +18,7 @@
         "source": "services/issuance/application/external_evidence_api.py"
       },
       {
-        "line": 146,
+        "line": 144,
         "source": "services/issuance/application/rust_integration.py"
       },
       {

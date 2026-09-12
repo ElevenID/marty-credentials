@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -17,6 +19,20 @@ SPEC.loader.exec_module(surface)
 
 def test_frozen_issuance_surface_matches_python_parity_oracle() -> None:
     surface.check_contract()
+
+
+def test_internal_adapter_retirement_preserves_the_complete_semantic_surface() -> None:
+    # Baseline: reviewed pre-retirement main 501977d. Only dynamic-lookup
+    # source-line metadata is excluded; source paths, ordering and every HTTP,
+    # RPC, configuration, runtime and migration field remain in the digest.
+    # check_contract above still requires exact current source-line metadata.
+    contract = surface.build_contract()
+    for lookup in contract["configuration"]["dynamic_lookups"]:
+        del lookup["line"]
+    encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "7a4b60678259033b0262d13d294648049639a31c24d48b3c4bec1033a4052295"
+    )
 
 
 def test_contract_covers_every_current_runtime_boundary() -> None:
