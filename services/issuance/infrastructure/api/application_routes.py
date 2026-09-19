@@ -236,6 +236,24 @@ async def _managed_application(
     return app
 
 
+async def _managed_application_template(
+    *,
+    repo: IIssuanceRepository,
+    template_id: str,
+    trusted_organization_id: Any,
+) -> ApplicationTemplate:
+    """Return a tenant-owned template without disclosing foreign resources."""
+
+    template = await repo.get_application_template(template_id)
+    if template is None or (
+        isinstance(trusted_organization_id, str)
+        and trusted_organization_id.strip()
+        and template.organization_id != trusted_organization_id.strip()
+    ):
+        raise HTTPException(status_code=404, detail="Application template not found")
+    return template
+
+
 class IssuanceEventResponse(BaseModel):
     id: str
     transaction_id: str | None
@@ -576,11 +594,16 @@ async def _application_template_validation_errors(
 @application_template_router.post("", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def create_application_template(
     request: ApplicationTemplateCreate,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationTemplateResponse:
     """Create an Application Template defining how users apply for credentials."""
+    organization_id = _application_management_organization_id(
+        trusted_organization_id,
+        request.organization_id,
+    )
     template = ApplicationTemplate(
-        organization_id=request.organization_id,
+        organization_id=organization_id,
         name=request.name,
         description=request.description,
         credential_template_id=request.credential_template_id,
@@ -605,9 +628,14 @@ async def create_application_template(
 @application_template_router.get("", response_model=list[ApplicationTemplateResponse], dependencies=[Depends(_verify_management_api_key)])
 async def list_application_templates(
     organization_id: str = Query(...),
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> list[ApplicationTemplateResponse]:
     """List all application templates for an organization."""
+    organization_id = _application_management_organization_id(
+        trusted_organization_id,
+        organization_id,
+    )
     templates = await repo.list_application_templates(organization_id)
     
     return [_template_response(template) for template in templates]
@@ -616,12 +644,15 @@ async def list_application_templates(
 @application_template_router.get("/{template_id}", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def get_application_template(
     template_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationTemplateResponse:
     """Get an application template by ID."""
-    template = await repo.get_application_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Application template not found")
+    template = await _managed_application_template(
+        repo=repo,
+        template_id=template_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     
     return _template_response(template)
 
@@ -630,12 +661,15 @@ async def get_application_template(
 async def update_application_template(
     template_id: str,
     request: ApplicationTemplatePatch,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationTemplateResponse:
     """Patch a draft Application Template."""
-    template = await repo.get_application_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Application template not found")
+    template = await _managed_application_template(
+        repo=repo,
+        template_id=template_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     if template.status != "DRAFT":
         raise HTTPException(status_code=409, detail="Only draft Application Templates can be edited")
 
@@ -659,11 +693,14 @@ async def update_application_template(
 @application_template_router.post("/{template_id}/validate", dependencies=[Depends(_verify_management_api_key)])
 async def validate_application_template(
     template_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> dict[str, Any]:
-    template = await repo.get_application_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Application template not found")
+    template = await _managed_application_template(
+        repo=repo,
+        template_id=template_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     errors = await _application_template_validation_errors(template, repo)
     return {"valid": not errors, "errors": errors}
 
@@ -671,11 +708,14 @@ async def validate_application_template(
 @application_template_router.post("/{template_id}/activate", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def activate_application_template(
     template_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationTemplateResponse:
-    template = await repo.get_application_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Application template not found")
+    template = await _managed_application_template(
+        repo=repo,
+        template_id=template_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     if template.status != "DRAFT":
         raise HTTPException(status_code=409, detail="Only draft Application Templates can be activated")
     errors = await _application_template_validation_errors(template, repo)
@@ -693,11 +733,14 @@ async def activate_application_template(
 @application_template_router.post("/{template_id}/deprecate", response_model=ApplicationTemplateResponse, dependencies=[Depends(_verify_management_api_key)])
 async def deprecate_application_template(
     template_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> ApplicationTemplateResponse:
-    template = await repo.get_application_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Application template not found")
+    template = await _managed_application_template(
+        repo=repo,
+        template_id=template_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     if template.status != "ACTIVE":
         raise HTTPException(status_code=409, detail="Only active Application Templates can be deprecated")
     template.status = "DEPRECATED"
@@ -709,11 +752,14 @@ async def deprecate_application_template(
 @application_template_router.delete("/{template_id}", status_code=204, dependencies=[Depends(_verify_management_api_key)])
 async def delete_application_template(
     template_id: str,
+    trusted_organization_id: str = Depends(_trusted_application_organization_id),
     repo: IIssuanceRepository = Depends(),
 ) -> Response:
-    template = await repo.get_application_template(template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="Application template not found")
+    template = await _managed_application_template(
+        repo=repo,
+        template_id=template_id,
+        trusted_organization_id=trusted_organization_id,
+    )
     if template.status != "DRAFT":
         raise HTTPException(status_code=409, detail="Only draft Application Templates can be deleted")
     await repo.delete_application_template(template_id)

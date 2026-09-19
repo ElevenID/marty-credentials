@@ -1,0 +1,359 @@
+{
+  "schema": "marty.issuance-application-templates/v1",
+  "purpose": "Language-neutral behavior and security floor for replacing the Python Application Template lifecycle with the shared Rust issuance service",
+  "source_revision": {
+    "repository": "ElevenID/marty-credentials",
+    "baseline": "ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a",
+    "approved_repairs": ["enforce the trusted organization on all eight routes"]
+  },
+  "surface": {
+    "base_path": "/v1/application-templates",
+    "routes": [
+      {"method": "POST", "path": "/v1/application-templates", "operation": "create_application_template", "success_status": 200},
+      {"method": "GET", "path": "/v1/application-templates", "operation": "list_application_templates", "success_status": 200},
+      {"method": "GET", "path": "/v1/application-templates/{template_id}", "operation": "get_application_template", "success_status": 200},
+      {"method": "PATCH", "path": "/v1/application-templates/{template_id}", "operation": "update_application_template", "success_status": 200},
+      {"method": "POST", "path": "/v1/application-templates/{template_id}/validate", "operation": "validate_application_template", "success_status": 200},
+      {"method": "POST", "path": "/v1/application-templates/{template_id}/activate", "operation": "activate_application_template", "success_status": 200},
+      {"method": "POST", "path": "/v1/application-templates/{template_id}/deprecate", "operation": "deprecate_application_template", "success_status": 200},
+      {"method": "DELETE", "path": "/v1/application-templates/{template_id}", "operation": "delete_application_template", "success_status": 204}
+    ]
+  },
+  "security": {
+    "authentication": "X-API-Key management key on every route",
+    "trusted_tenant_header": "X-Organization-ID",
+    "missing_trusted_tenant": {"status": 400, "detail": "X-Organization-ID is required for application management"},
+    "collection_tenant_mismatch": {"status": 404, "detail": "Application resource not found"},
+    "item_tenant_mismatch": {"status": 404, "detail": "Application template not found"},
+    "rules": [
+      "create body organization_id must equal the trusted tenant",
+      "list query organization_id must equal the trusted tenant",
+      "get, patch, validate, activate, deprecate, and delete hide foreign resources as not found"
+    ]
+  },
+  "models": {
+    "create": {
+      "unknown_fields": "reject",
+      "fields": [
+        {"name": "organization_id", "type": "string", "required": true},
+        {"name": "name", "type": "string", "required": true, "min_length": 1, "max_length": 128},
+        {"name": "description", "type": "nullable-string", "required": false, "default": null},
+        {"name": "credential_template_id", "type": "nullable-string", "required": false, "default": null},
+        {"name": "form_fields", "type": "array<ApplicationFormField>", "required": false, "default": []},
+        {"name": "evidence_requirements", "type": "array<ApplicationEvidenceRequirement>", "required": false, "default": []},
+        {"name": "claim_collection_rules", "type": "array<ClaimCollectionRule>", "required": false, "default": []},
+        {"name": "required_checks", "type": "array<RequiredApplicationCheck>", "required": false, "default": []},
+        {"name": "approval_strategy", "type": "enum", "required": false, "default": "MANUAL"},
+        {"name": "approval_policy_set_id", "type": "nullable-string", "required": false, "default": null},
+        {"name": "application_validity_days", "type": "integer", "required": false, "default": 30, "minimum": 1, "maximum": 3650},
+        {"name": "ui_config", "type": "object", "required": false, "default": {}},
+        {"name": "notification_config", "type": "object", "required": false, "default": {}}
+      ]
+    },
+    "patch": {
+      "unknown_fields": "reject",
+      "fields": [
+        "name",
+        "description",
+        "credential_template_id",
+        "form_fields",
+        "evidence_requirements",
+        "claim_collection_rules",
+        "required_checks",
+        "approval_strategy",
+        "approval_policy_set_id",
+        "application_validity_days",
+        "ui_config",
+        "notification_config"
+      ],
+      "semantics": "apply only explicitly supplied fields; null remains distinct from absent"
+    },
+    "application_form_field": {
+      "unknown_fields": "reject",
+      "field_id_pattern": "^[a-z][a-z0-9_]*$",
+      "field_types": ["TEXT", "DATE", "DATETIME", "SELECT", "FILE_UPLOAD", "INTEGER", "NUMBER", "BOOLEAN", "EMAIL", "URL"],
+      "required_fields": ["field_id", "label", "field_type", "required"],
+      "optional_fields": ["claim_mapping", "validation_pattern", "options", "minimum", "maximum", "placeholder", "hint"]
+    },
+    "select_option": {
+      "accepted_shapes": ["non-empty string", "object with exactly non-empty label and value"],
+      "label_max_length": 256,
+      "value_max_length": 256
+    },
+    "evidence_requirement": {
+      "unknown_fields": "reject",
+      "evidence_types": ["DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION", "EXTERNAL_FACT", "EXTERNAL_API"],
+      "required_fields": ["evidence_id", "evidence_type", "description", "required"],
+      "optional_fields": ["accepted_formats", "max_file_size_bytes", "provider", "fact_type", "scope", "pass_rule", "verification_method", "freshness", "manual_fallback", "api", "expected_response", "response_mapping", "auto_issue_on_permit"],
+      "removed_aliases": ["auto_approve_on_evidence"]
+    },
+    "claim_collection_rule": {
+      "unknown_fields": "reject",
+      "sources": ["FORM_FIELD", "EVIDENCE_EXTRACTION", "EXTERNAL_API", "SYSTEM"],
+      "required_fields": ["claim_name", "source"],
+      "source_config_default": {},
+      "removed_aliases": ["source_field"]
+    },
+    "required_check": {
+      "unknown_fields": "reject",
+      "required_fields": ["check_type", "order"],
+      "optional_fields": ["is_required", "config", "external_provider"],
+      "is_required_default": true,
+      "config_default": {},
+      "minimum_order": 1
+    },
+    "approval_strategies": ["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"],
+    "response_fields": [
+      "id",
+      "organization_id",
+      "name",
+      "description",
+      "credential_template_id",
+      "form_fields",
+      "evidence_requirements",
+      "claim_collection_rules",
+      "required_checks",
+      "approval_strategy",
+      "approval_policy_set_id",
+      "application_validity_days",
+      "ui_config",
+      "notification_config",
+      "status",
+      "created_at",
+      "updated_at"
+    ]
+  },
+  "lifecycle": {
+    "initial_status": "DRAFT",
+    "transitions": [
+      {"operation": "patch", "from": ["DRAFT"], "to": "DRAFT", "otherwise": {"status": 409, "detail": "Only draft Application Templates can be edited"}},
+      {"operation": "activate", "from": ["DRAFT"], "to": "ACTIVE", "precondition": "validation has no errors", "otherwise": {"status": 409, "detail": "Only draft Application Templates can be activated"}},
+      {"operation": "deprecate", "from": ["ACTIVE"], "to": "DEPRECATED", "otherwise": {"status": 409, "detail": "Only active Application Templates can be deprecated"}},
+      {"operation": "delete", "from": ["DRAFT"], "to": "deleted", "otherwise": {"status": 409, "detail": "Only draft Application Templates can be deleted"}}
+    ],
+    "activation_validation_failure": {
+      "status": 422,
+      "detail_shape": {"error": "APPLICATION_TEMPLATE_INVALID", "errors": "ordered validation errors"}
+    },
+    "missing_item": {"status": 404, "detail": "Application template not found"}
+  },
+  "validation": {
+    "response_shape": {"valid": "boolean", "errors": "ordered array"},
+    "error_shape": ["section", "field", "code", "message"],
+    "ordered_phases": [
+      "credential_template_reference",
+      "credential_template_properties",
+      "form_fields_presence",
+      "form_fields_in_input_order",
+      "evidence_requirements_in_input_order",
+      "claim_collection_rules_in_input_order",
+      "required_checks_in_input_order",
+      "approval_policy",
+      "application_validity_days",
+      "notification_config",
+      "ui_config"
+    ],
+    "credential_template_dependency": {
+      "transport": "authenticated internal gRPC",
+      "target_environment": "CT_GRPC_TARGET",
+      "default_target": "credential-template:9003",
+      "not_found": {"section": "credential_template", "field": "credential_template_id", "code": "NOT_FOUND", "message": "Credential Template was not found."},
+      "unavailable": {"section": "credential_template", "field": "credential_template_id", "code": "UNAVAILABLE", "message": "Credential Template validation is unavailable."},
+      "requirements": ["same organization", "ACTIVE status", "non-empty revocation_profile_id"]
+    },
+    "form_field_rules": [
+      "at least one form field",
+      "canonical object shape",
+      "non-empty field_id and label",
+      "canonical field type",
+      "unique field_id",
+      "SELECT has options",
+      "minimum does not exceed maximum",
+      "validation_pattern compiles as a regular expression",
+      "claim_mapping names a live credential-template claim when claims are published"
+    ],
+    "evidence_rules": [
+      "canonical object shape",
+      "non-empty unique evidence_id",
+      "canonical evidence_type",
+      "non-empty description",
+      "required is an explicit boolean",
+      "EXTERNAL_FACT and EXTERNAL_API require provider and fact_type",
+      "EXTERNAL_API requires api.url"
+    ],
+    "claim_rule_rules": [
+      "canonical object shape",
+      "non-empty claim_name",
+      "canonical source",
+      "source_config is an object",
+      "FORM_FIELD references a configured field_id",
+      "SYSTEM references a supported system field",
+      "SYSTEM constant includes value"
+    ],
+    "system_claim_sources": [
+      "applicant.user_id",
+      "applicant.email",
+      "applicant.given_name",
+      "applicant.family_name",
+      "application.id",
+      "application.reference_number",
+      "application.organization_id",
+      "current.date",
+      "current.datetime",
+      "validity.expiry_date",
+      "template.name",
+      "template.description",
+      "constant"
+    ],
+    "required_check_rules": ["non-empty check_type", "positive integer order", "unique order"],
+    "rules_based_approval": ["approval_policy_set_id is present", "policy exists in the same organization", "policy_type is APPROVAL_RULES", "policy status is ACTIVE"],
+    "validity_range_days": [1, 3650],
+    "configuration_shapes": {"notification_config": "object", "ui_config": "object"}
+  },
+  "persistence": {
+    "create": "persist one DRAFT template after transport and tenant validation",
+    "patch": "persist the modified DRAFT template and refresh updated_at",
+    "validate": "read only",
+    "activate": "persist ACTIVE and refresh updated_at only after successful validation",
+    "deprecate": "persist DEPRECATED and refresh updated_at",
+    "delete": "remove only a DRAFT template",
+    "list_scope": "trusted organization only"
+  },
+  "native_cutover_repairs": {
+    "create_idempotency": {
+      "required_header": "Idempotency-Key",
+      "key_pattern": "^[A-Za-z0-9._:-]{1,128}$",
+      "scope": ["organization_id", "key_hash"],
+      "plaintext_persisted": false,
+      "request_canonicalization": "utf8-json-sorted-keys-compact-no-nan",
+      "same_key_same_request": "return the original committed template",
+      "same_key_different_request": {"status": 409, "detail": "Idempotency key was already used for a different Application Template request"},
+      "missing_header": {"status": 400, "detail": "Idempotency-Key header is required"}
+    },
+    "atomic_lifecycle": {
+      "required": true,
+      "rule": "patch, activate, deprecate, and delete use tenant-qualified compare-and-set persistence against the observed status and version",
+      "conflict": {"status": 409, "detail": "Application Template changed concurrently; refresh and retry"},
+      "failure_effect": "no partial mutation"
+    },
+    "postgres_queries": [
+      "get, update, transition, and delete qualify by organization_id",
+      "list maps one ordered query without per-row reads",
+      "list order is created_at ascending then id ascending"
+    ],
+    "catalog_lookup": "validation uses strict authenticated credential-template gRPC and does not fall back to HTTP"
+  },
+  "required_case_groups": [
+    "management API key unconfigured, missing, and incorrect",
+    "trusted tenant missing, claimed tenant mismatch, and foreign item hiding",
+    "malformed transport and every request-model constraint",
+    "create defaults, idempotent replay, and conflicting replay",
+    "ordered list and item get",
+    "sparse and explicit-null patch",
+    "every deterministic validation branch",
+    "valid and invalid activation",
+    "active-only deprecation",
+    "draft-only empty-body deletion",
+    "no mutation on every failure",
+    "concurrent lifecycle compare-and-set conflict"
+  ],
+  "cases": [
+    {
+      "name": "create-defaults",
+      "arrange": {"application_templates": []},
+      "request": {
+        "method": "POST",
+        "path": "/v1/application-templates",
+        "headers": {"X-API-Key": "valid", "X-Organization-ID": "org-123", "Idempotency-Key": "application-template:create:1"},
+        "json_ref": "#/vectors/canonical_create/request"
+      },
+      "expected": {"status": 200, "body_contains_ref": "#/vectors/canonical_create/projected_defaults", "persisted_template_count": 1}
+    },
+    {
+      "name": "create-claimed-tenant-mismatch",
+      "arrange": {"application_templates": []},
+      "request": {
+        "method": "POST",
+        "path": "/v1/application-templates",
+        "headers": {"X-API-Key": "valid", "X-Organization-ID": "org-other", "Idempotency-Key": "application-template:create:2"},
+        "json_ref": "#/vectors/canonical_create/request"
+      },
+      "expected": {"status": 404, "json": {"detail": "Application resource not found"}, "persisted_template_count": 0, "dependency_calls": []}
+    },
+    {
+      "name": "foreign-item-hidden-before-validation",
+      "arrange": {"application_templates": [{"id": "template-1", "organization_id": "org-123", "status": "DRAFT"}]},
+      "request": {
+        "method": "POST",
+        "path": "/v1/application-templates/template-1/validate",
+        "headers": {"X-API-Key": "valid", "X-Organization-ID": "org-other"},
+        "json": {}
+      },
+      "expected": {"status": 404, "json": {"detail": "Application template not found"}, "persisted_state": "unchanged", "dependency_calls": []}
+    },
+    {
+      "name": "validate-errors-preserve-order",
+      "arrange": {"application_templates": [{"id": "template-1", "organization_id": "org-123", "status": "DRAFT", "overlay_ref": "#/vectors/missing_activation_dependencies/template"}]},
+      "request": {
+        "method": "POST",
+        "path": "/v1/application-templates/template-1/validate",
+        "headers": {"X-API-Key": "valid", "X-Organization-ID": "org-123"},
+        "json": {}
+      },
+      "expected": {"status": 200, "json": {"valid": false, "errors_ref": "#/vectors/missing_activation_dependencies/errors"}, "persisted_state": "unchanged"}
+    },
+    {
+      "name": "delete-draft",
+      "arrange": {"application_templates": [{"id": "template-1", "organization_id": "org-123", "status": "DRAFT"}]},
+      "request": {
+        "method": "DELETE",
+        "path": "/v1/application-templates/template-1",
+        "headers": {"X-API-Key": "valid", "X-Organization-ID": "org-123"}
+      },
+      "expected": {"status": 204, "body_empty": true, "persisted_template_count": 0}
+    }
+  ],
+  "vectors": {
+    "canonical_create": {
+      "request": {
+        "organization_id": "org-123",
+        "name": "Membership application",
+        "credential_template_id": "credential-template-1",
+        "form_fields": [
+          {
+            "field_id": "clearance_status",
+            "label": "Clearance status",
+            "field_type": "SELECT",
+            "required": true,
+            "claim_mapping": "clearance_status",
+            "options": ["PENDING", {"label": "Cleared", "value": "CLEARED"}]
+          }
+        ],
+        "required_checks": [{"check_type": "EMAIL_VERIFICATION", "is_required": true, "order": 1}]
+      },
+      "projected_defaults": {
+        "approval_strategy": "MANUAL",
+        "approval_policy_set_id": null,
+        "application_validity_days": 30,
+        "evidence_requirements": [],
+        "claim_collection_rules": [],
+        "ui_config": {},
+        "notification_config": {},
+        "status": "DRAFT"
+      }
+    },
+    "missing_activation_dependencies": {
+      "template": {
+        "credential_template_id": null,
+        "form_fields": [],
+        "approval_strategy": "RULES_BASED",
+        "approval_policy_set_id": null
+      },
+      "errors": [
+        {"section": "credential_template", "field": "credential_template_id", "code": "REQUIRED", "message": "Select a Credential Template."},
+        {"section": "form_fields", "field": "form_fields", "code": "REQUIRED", "message": "Add at least one form field."},
+        {"section": "approval", "field": "approval_policy_set_id", "code": "REQUIRED", "message": "Rules-based approval requires an approval Policy Set."}
+      ]
+    }
+  }
+}
