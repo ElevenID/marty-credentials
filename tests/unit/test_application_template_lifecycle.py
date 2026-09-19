@@ -112,6 +112,95 @@ async def test_create_is_draft_and_uses_only_canonical_fields() -> None:
         _create_request(auto_approval_rules=[])
 
 
+async def test_template_collection_rejects_cross_tenant_create_and_list() -> None:
+    repo = InMemoryIssuanceRepository()
+
+    with pytest.raises(HTTPException) as create_error:
+        await application_routes.create_application_template(
+            _create_request(),
+            trusted_organization_id="org-other",
+            repo=repo,
+        )
+    assert (create_error.value.status_code, create_error.value.detail) == (
+        404,
+        "Application resource not found",
+    )
+    assert await repo.list_application_templates("org-123") == []
+
+    created = await application_routes.create_application_template(
+        _create_request(),
+        trusted_organization_id="org-123",
+        repo=repo,
+    )
+    assert created.organization_id == "org-123"
+
+    with pytest.raises(HTTPException) as list_error:
+        await application_routes.list_application_templates(
+            organization_id="org-123",
+            trusted_organization_id="org-other",
+            repo=repo,
+        )
+    assert (list_error.value.status_code, list_error.value.detail) == (
+        404,
+        "Application resource not found",
+    )
+
+
+async def test_template_item_routes_hide_cross_tenant_resources() -> None:
+    repo = InMemoryIssuanceRepository()
+    created = await application_routes.create_application_template(
+        _create_request(),
+        trusted_organization_id="org-123",
+        repo=repo,
+    )
+
+    operations = [
+        lambda: application_routes.get_application_template(
+            created.id,
+            trusted_organization_id="org-other",
+            repo=repo,
+        ),
+        lambda: application_routes.update_application_template(
+            created.id,
+            ApplicationTemplatePatch(name="Cross-tenant update"),
+            trusted_organization_id="org-other",
+            repo=repo,
+        ),
+        lambda: application_routes.validate_application_template(
+            created.id,
+            trusted_organization_id="org-other",
+            repo=repo,
+        ),
+        lambda: application_routes.activate_application_template(
+            created.id,
+            trusted_organization_id="org-other",
+            repo=repo,
+        ),
+        lambda: application_routes.deprecate_application_template(
+            created.id,
+            trusted_organization_id="org-other",
+            repo=repo,
+        ),
+        lambda: application_routes.delete_application_template(
+            created.id,
+            trusted_organization_id="org-other",
+            repo=repo,
+        ),
+    ]
+    for operation in operations:
+        with pytest.raises(HTTPException) as error:
+            await operation()
+        assert (error.value.status_code, error.value.detail) == (
+            404,
+            "Application template not found",
+        )
+
+    unchanged = await repo.get_application_template(created.id)
+    assert unchanged is not None
+    assert unchanged.name == "Membership application"
+    assert unchanged.status == "DRAFT"
+
+
 async def test_select_options_preserve_structured_labels_and_legacy_strings() -> None:
     repo = InMemoryIssuanceRepository()
     form_fields = [

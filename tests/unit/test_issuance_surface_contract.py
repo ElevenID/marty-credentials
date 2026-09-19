@@ -31,7 +31,7 @@ def test_internal_adapter_retirement_preserves_the_complete_semantic_surface() -
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "7a4b60678259033b0262d13d294648049639a31c24d48b3c4bec1033a4052295"
+        "bb0acf6ee2626f004b75e5465885be9cf0f30cefd143f70e6e6e6714da264092"
     )
 
 
@@ -45,8 +45,8 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
         "api",
         "canvas-sync-worker",
     }
-    assert contract["migrations"]["revision_count"] == 45
-    assert contract["migrations"]["heads"] == ["canvas_review_recovery_claim"]
+    assert contract["migrations"]["revision_count"] == 46
+    assert contract["migrations"]["heads"] == ["application_template_management"]
 
 
 def test_contract_retains_critical_protocol_and_lifecycle_operations() -> None:

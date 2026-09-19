@@ -300,7 +300,7 @@ def main() -> None:
         version = connection.execute(
             "SELECT version_num FROM issuance_service.alembic_version"
         ).fetchone()[0]
-        assert version == "canvas_review_recovery_claim"
+        assert version == "application_template_management"
 
     created_count = sum(created for _, created in results)
     recovered_count = len(results) - created_count

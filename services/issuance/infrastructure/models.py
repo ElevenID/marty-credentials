@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     CheckConstraint,
     Column,
@@ -389,9 +390,36 @@ application_templates_table = Table(
     Column("status", String, nullable=False, default="active"),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("management_version", BigInteger, nullable=False, default=1),
+    Column("idempotency_key_hash", String(64), nullable=True),
+    Column("idempotency_request_hash", String(64), nullable=True),
+    CheckConstraint(
+        "management_version > 0",
+        name="ck_application_templates_management_version",
+    ),
+    CheckConstraint(
+        "(idempotency_key_hash IS NULL AND idempotency_request_hash IS NULL) "
+        "OR (idempotency_key_hash IS NOT NULL AND idempotency_request_hash IS NOT NULL)",
+        name="ck_application_templates_idempotency_pair",
+    ),
+    CheckConstraint(
+        "idempotency_key_hash IS NULL OR idempotency_key_hash ~ '^[0-9a-f]{64}$'",
+        name="ck_application_templates_idempotency_key_hash",
+    ),
+    CheckConstraint(
+        "idempotency_request_hash IS NULL OR idempotency_request_hash ~ '^[0-9a-f]{64}$'",
+        name="ck_application_templates_idempotency_request_hash",
+    ),
     Index("ix_application_templates_organization_id", "organization_id"),
     Index("ix_application_templates_status", "status"),
     Index("ux_application_templates_tenant_id", "organization_id", "id", unique=True),
+    Index(
+        "ux_application_templates_org_idempotency_key_hash",
+        "organization_id",
+        "idempotency_key_hash",
+        unique=True,
+        postgresql_where=text("idempotency_key_hash IS NOT NULL"),
+    ),
     schema="issuance_service",
 )
 

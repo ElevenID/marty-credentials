@@ -47,6 +47,6 @@ def test_consumer_oracle_distinguishes_published_and_current_schema_heads() -> N
     probe = module_from_spec(spec)
     spec.loader.exec_module(probe)
     assert probe.expected_migration_revisions("published") == ["merge_issuance_heads"]
-    assert probe.expected_migration_revisions("checkout") == ["canvas_review_recovery_claim"]
+    assert probe.expected_migration_revisions("checkout") == ["application_template_management"]
     with pytest.raises(probe.OracleMismatch, match="Unknown source mode"):
         probe.expected_migration_revisions("unqualified")
