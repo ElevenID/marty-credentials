@@ -396,7 +396,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 780,
+        "line": 826,
         "method": "GET",
         "operation": "list_applications",
         "path": "/internal/applications",
@@ -404,7 +404,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 727,
+        "line": 773,
         "method": "POST",
         "operation": "create_application",
         "path": "/internal/applications",
@@ -412,7 +412,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 997,
+        "line": 1043,
         "method": "POST",
         "operation": "reconcile_application_evidence",
         "path": "/internal/applications/evidence/reconcile",
@@ -420,7 +420,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1027,
+        "line": 1073,
         "method": "GET",
         "operation": "get_application_evidence_reconciliation_report",
         "path": "/internal/applications/evidence/reconciliation-report",
@@ -428,7 +428,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 821,
+        "line": 867,
         "method": "GET",
         "operation": "get_application",
         "path": "/internal/applications/{application_id}",
@@ -436,7 +436,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1091,
+        "line": 1137,
         "method": "POST",
         "operation": "approve_application",
         "path": "/internal/applications/{application_id}/approve",
@@ -444,7 +444,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 852,
+        "line": 898,
         "method": "GET",
         "operation": "list_application_evidence_facts",
         "path": "/internal/applications/{application_id}/evidence-facts",
@@ -452,7 +452,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 869,
+        "line": 915,
         "method": "GET",
         "operation": "get_application_evidence_summary",
         "path": "/internal/applications/{application_id}/evidence-summary",
@@ -460,7 +460,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 899,
+        "line": 945,
         "method": "POST",
         "operation": "run_external_evidence_api_check",
         "path": "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
@@ -468,7 +468,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1711,
+        "line": 1757,
         "method": "GET",
         "operation": "list_issuance_events",
         "path": "/internal/applications/{application_id}/issuance-events",
@@ -476,7 +476,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1610,
+        "line": 1656,
         "method": "GET",
         "operation": "get_issuance_offer",
         "path": "/internal/applications/{application_id}/issuance-offer",
@@ -484,7 +484,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1511,
+        "line": 1557,
         "method": "POST",
         "operation": "generate_issuance_offer",
         "path": "/internal/applications/{application_id}/issuance-offer",
@@ -492,7 +492,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1204,
+        "line": 1250,
         "method": "POST",
         "operation": "reject_application",
         "path": "/internal/applications/{application_id}/reject",
@@ -500,7 +500,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1047,
+        "line": 1093,
         "method": "POST",
         "operation": "submit_evidence",
         "path": "/internal/applications/{application_id}/submit-evidence",
@@ -532,7 +532,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 605,
+        "line": 628,
         "method": "GET",
         "operation": "list_application_templates",
         "path": "/v1/application-templates",
@@ -540,7 +540,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 576,
+        "line": 594,
         "method": "POST",
         "operation": "create_application_template",
         "path": "/v1/application-templates",
@@ -548,7 +548,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 709,
+        "line": 752,
         "method": "DELETE",
         "operation": "delete_application_template",
         "path": "/v1/application-templates/{template_id}",
@@ -556,7 +556,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 616,
+        "line": 644,
         "method": "GET",
         "operation": "get_application_template",
         "path": "/v1/application-templates/{template_id}",
@@ -564,7 +564,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 629,
+        "line": 660,
         "method": "PATCH",
         "operation": "update_application_template",
         "path": "/v1/application-templates/{template_id}",
@@ -572,7 +572,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 671,
+        "line": 708,
         "method": "POST",
         "operation": "activate_application_template",
         "path": "/v1/application-templates/{template_id}/activate",
@@ -580,7 +580,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 693,
+        "line": 733,
         "method": "POST",
         "operation": "deprecate_application_template",
         "path": "/v1/application-templates/{template_id}/deprecate",
@@ -588,7 +588,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 659,
+        "line": 693,
         "method": "POST",
         "operation": "validate_application_template",
         "path": "/v1/application-templates/{template_id}/validate",
@@ -1367,9 +1367,9 @@
   },
   "migrations": {
     "heads": [
-      "canvas_review_recovery_claim"
+      "application_template_management"
     ],
-    "revision_count": 45,
+    "revision_count": 46,
     "revisions": [
       {
         "down_revisions": [],
@@ -1729,6 +1729,14 @@
         "line": 12,
         "revision": "canvas_review_recovery_claim",
         "source": "services/issuance/infrastructure/migrations/versions/20260905_1900_allow_canvas_review_recovery_claim.py"
+      },
+      {
+        "down_revisions": [
+          "canvas_review_recovery_claim"
+        ],
+        "line": 9,
+        "revision": "application_template_management",
+        "source": "services/issuance/infrastructure/migrations/versions/20260919_2200_application_template_management.py"
       }
     ],
     "roots": [
