@@ -33,6 +33,10 @@ from issuance.application.external_evidence_api import (
     find_external_api_requirement,
     requirement_check_id,
 )
+from issuance.application.issuance_idempotency import (
+    hash_idempotency_key,
+    issuance_request_hash,
+)
 from issuance.domain.entities import (
     Application,
     ApplicationStatus,
@@ -1158,6 +1162,7 @@ async def _get_or_refresh_transaction(
         return tx
 
     # Create a fresh transaction
+    generation_anchor = app.issuance_transaction_id or "initial"
     tx = IssuanceTransaction(
         organization_id=app.organization_id,
         credential_template_id=credential_template_id,
@@ -1171,10 +1176,43 @@ async def _get_or_refresh_transaction(
         issuer_algorithm=(credential_context.issuer_algorithm if credential_context else None),
     )
     await apply_required_remote_issuer_context(tx)
-    await repo.save_transaction(tx)
+    tx.idempotency_key_hash = hash_idempotency_key(
+        f"internal-application-offer:{app.id}:{generation_anchor}"
+    )
+    tx.idempotency_request_hash = issuance_request_hash(
+        {
+            "purpose": "internal_application_offer",
+            "generation_anchor": generation_anchor,
+            "organization_id": tx.organization_id,
+            "application_id": tx.application_id,
+            "credential_template_id": tx.credential_template_id,
+            "applicant_id": tx.applicant_id,
+            "delivery_mode": tx.delivery_mode,
+            "claims": tx.claims,
+            "credential_type": tx.credential_type,
+            "credential_payload_format": tx.credential_payload_format,
+            "revocation_profile_id": tx.revocation_profile_id,
+            "wallet_configs": tx.wallet_configs,
+            "selective_disclosure_claims": tx.selective_disclosure_claims,
+            "zk_predicate_claims": tx.zk_predicate_claims,
+            "validity_days": tx.validity_days,
+            "renewable": tx.renewable,
+            "renewal_window_days": tx.renewal_window_days,
+            "issuer_profile_id": tx.issuer_profile_id,
+            "issuer_did_override": tx.issuer_did_override,
+            "issuer_algorithm": tx.issuer_algorithm,
+            "signing_service_id": tx.signing_service_id,
+        }
+    )
+    tx, created = await repo.reserve_transaction_idempotently(tx)
     app.issuance_transaction_id = tx.id
     await repo.save_application(app)
-    logger.info(f"Created fresh issuance transaction {tx.id} for application {app.id}")
+    logger.info(
+        "%s issuance transaction %s for application %s",
+        "Created fresh" if created else "Reused reserved",
+        tx.id,
+        app.id,
+    )
     return tx
 
 

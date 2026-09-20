@@ -169,6 +169,10 @@
     "offer_replay_success": {
       "application_status": "approved",
       "transaction_count_after_two_generations": 1,
+      "transaction_count_after_concurrent_generation": 1,
+      "concurrent_responses_share_offer": true,
+      "reservation_hash_length": 64,
+      "raw_reservation_key_persisted": false,
       "transaction_status_still_readable": "issued",
       "offer_status": "active",
       "offer_scheme": "openid-credential-offer://?credential_offer=",

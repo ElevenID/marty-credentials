@@ -17,6 +17,10 @@ The external-evidence audit also removed provider exception text from public
 502 responses. Provider failures now retain the application/check identifiers
 and exception type in server logs without reflecting a token, URL, or provider
 message into the management API response.
+The offer replay audit also replaced the non-atomic read-then-create path with
+the repository's existing tenant-scoped idempotent reservation primitive. Two
+concurrent initial or refresh requests now share one transaction and offer
+instead of leaving an unreachable duplicate transaction behind.
 
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The
