@@ -496,17 +496,6 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_events_atomically(
-        self,
-        application_id: str,
-        organization_id: str,
-        *,
-        audit_events: tuple[IssuanceEvent, ...],
-    ) -> None:
-        """Append a tenant-bound application audit write set atomically."""
-        pass
-
-    @abstractmethod
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         """Return all events recorded for a given application, oldest first."""
         pass

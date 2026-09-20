@@ -2643,30 +2643,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             await session.execute(stmt)
             await session.commit()
 
-    async def save_events_atomically(
-        self,
-        application_id: str,
-        organization_id: str,
-        *,
-        audit_events: tuple[IssuanceEvent, ...],
-    ) -> None:
-        async with self._session_factory() as session, session.begin():
-            current = await session.execute(
-                select(applications_table.c.id)
-                .where(
-                    applications_table.c.id == application_id,
-                    applications_table.c.organization_id == organization_id,
-                )
-                .with_for_update()
-            )
-            if current.first() is None:
-                raise ValueError("Audit application was not found for this organization")
-            await self._save_application_events_in_session(
-                session,
-                application_id,
-                audit_events,
-            )
-
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         async with self._session_factory() as session:
             stmt = (

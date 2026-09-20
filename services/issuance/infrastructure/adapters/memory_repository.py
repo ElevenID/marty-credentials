@@ -1084,25 +1084,6 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     async def save_event(self, event: IssuanceEvent) -> None:
         self._events.append(event)
 
-    async def save_events_atomically(
-        self,
-        application_id: str,
-        organization_id: str,
-        *,
-        audit_events: tuple[IssuanceEvent, ...],
-    ) -> None:
-        lock = self._application_issuance_locks.setdefault(application_id, asyncio.Lock())
-        async with lock:
-            app = self._applications.get(application_id)
-            if app is None or app.organization_id != organization_id:
-                raise ValueError("Audit application was not found for this organization")
-            events_snapshot = list(self._events)
-            try:
-                await self._save_application_events(application_id, audit_events)
-            except Exception:
-                self._events = events_snapshot
-                raise
-
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         return sorted(
             [e for e in self._events if e.application_id == application_id],
