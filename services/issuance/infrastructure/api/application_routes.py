@@ -594,7 +594,16 @@ async def run_external_evidence_api_check(
     except ExternalEvidenceApiError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=f"External evidence API request failed: {exc}") from exc
+        logger.warning(
+            "[external-evidence] provider request failed app=%s check=%s error_type=%s",
+            application_id,
+            check_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="External evidence API request failed",
+        ) from None
 
     evidence_fact = check_result.evidence_fact
     external_context = {

@@ -6,7 +6,8 @@
     "baseline": "f127f55b",
     "approved_repairs": [
       "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
-      "843c0e5: restore name, email, then generated applicant identifier precedence"
+      "843c0e5: restore name, email, then generated applicant identifier precedence",
+      "redact provider transport exception details from external evidence API responses"
     ]
   },
   "coverage": {
@@ -175,6 +176,12 @@
       "email_subject": "Your credential is ready",
       "event_types": ["offer_generated", "offer_generated", "offer_viewed"]
     },
+    "external_api_failure_cases": [
+      {"id": "api-check-missing-template", "arrange": "missing_template", "status": 404, "detail": "Application template not found"},
+      {"id": "api-check-missing-requirement", "arrange": "missing_requirement", "status": 404, "detail": "External evidence API check not found on application template"},
+      {"id": "api-check-invalid-configuration", "arrange": "invalid_configuration", "status": 400, "detail": "External evidence requirement is missing api configuration"},
+      {"id": "api-check-provider-transport", "arrange": "provider_transport", "status": 502, "detail": "External evidence API request failed", "forbidden_detail": "Bearer secret-token"}
+    ],
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},
@@ -190,6 +197,10 @@
       {"id": "reject-approved", "operation": "reject", "application_status": "approved", "status": 400, "detail": "Cannot reject application in ApplicationStatus.APPROVED status"},
       {"id": "reject-rejected", "operation": "reject", "application_status": "rejected", "status": 400, "detail": "Cannot reject application in ApplicationStatus.REJECTED status"},
       {"id": "reject-withdrawn", "operation": "reject", "application_status": "withdrawn", "status": 400, "detail": "Cannot reject application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "api-check-under-review", "operation": "run_external_evidence_api_check", "application_status": "under_review", "status": 400, "detail": "Cannot run evidence check for application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "api-check-rejected", "operation": "run_external_evidence_api_check", "application_status": "rejected", "status": 400, "detail": "Cannot run evidence check for application in ApplicationStatus.REJECTED status"},
+      {"id": "api-check-withdrawn", "operation": "run_external_evidence_api_check", "application_status": "withdrawn", "status": 400, "detail": "Cannot run evidence check for application in ApplicationStatus.WITHDRAWN status"},
 
       {"id": "generate-offer-pending", "operation": "generate_issuance_offer", "application_status": "pending", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is pending"},
       {"id": "generate-offer-under-review", "operation": "generate_issuance_offer", "application_status": "under_review", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is under_review"},

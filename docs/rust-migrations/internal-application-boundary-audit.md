@@ -13,6 +13,10 @@ The same audit restored the intended application identifier precedence: a
 trimmed given/family name, then email, then a generated opaque identifier. The
 old formatted empty-name expression was always `_`, making both fallbacks
 unreachable for email-only and anonymous submissions.
+The external-evidence audit also removed provider exception text from public
+502 responses. Provider failures now retain the application/check identifiers
+and exception type in server logs without reflecting a token, URL, or provider
+message into the management API response.
 
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The

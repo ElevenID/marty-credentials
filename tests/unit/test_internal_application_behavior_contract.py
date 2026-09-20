@@ -3,6 +3,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -486,6 +487,14 @@ async def _invoke_invalid_transition(
             trusted_organization_id=app.organization_id,
             repo=repo,
         )
+    elif operation == "run_external_evidence_api_check":
+        await application_routes.run_external_evidence_api_check(
+            application_id=app.id,
+            check_id="check-1",
+            request=ExternalEvidenceApiCheckRequest(),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
     elif operation == "generate_issuance_offer":
         await application_routes.generate_issuance_offer(
             application_id=app.id,
@@ -573,6 +582,76 @@ async def test_pending_evidence_and_rejection_successes_match_contract() -> None
     assert rejection_response.review_notes == "insufficient evidence"
     assert rejection_response.reviewer_id == CONTRACT["lifecycle"]["reviewer_id"]
     assert rejection_response.reviewed_at is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    CONTRACT["lifecycle"]["external_api_failure_cases"],
+    ids=lambda case: case["id"],
+)
+async def test_external_api_failures_are_atomic_and_do_not_leak_secrets(
+    monkeypatch, case
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-1",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+    )
+    await repo.save_application(app)
+    if case["arrange"] != "missing_template":
+        requirements = []
+        if case["arrange"] != "missing_requirement":
+            requirement = {
+                "evidence_id": "check-1",
+                "evidence_type": "EXTERNAL_API",
+            }
+            if case["arrange"] != "invalid_configuration":
+                requirement["api"] = {
+                    "method": "POST",
+                    "url": "https://provider.example/check",
+                }
+            requirements = [requirement]
+        await repo.save_application_template(
+            ApplicationTemplate(
+                id=app.application_template_id,
+                organization_id=app.organization_id,
+                name="Membership",
+                evidence_requirements=requirements,
+                status="ACTIVE",
+            )
+        )
+
+    if case["arrange"] == "provider_transport":
+
+        async def execute_check(**_kwargs):
+            raise httpx.ReadTimeout("Bearer secret-token")
+
+        monkeypatch.setattr(
+            application_routes, "execute_external_evidence_api_check", execute_check
+        )
+    before = asdict(deepcopy(app))
+
+    with pytest.raises(HTTPException) as raised:
+        await application_routes.run_external_evidence_api_check(
+            application_id=app.id,
+            check_id="check-1",
+            request=ExternalEvidenceApiCheckRequest(),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+
+    assert raised.value.status_code == case["status"]
+    assert raised.value.detail == case["detail"]
+    if forbidden := case.get("forbidden_detail"):
+        assert forbidden not in str(raised.value.detail)
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert asdict(stored) == before
+    assert await repo.list_evidence_facts_for_application(app.id) == []
+    assert await repo.list_transactions(app.organization_id) == []
 
 
 def test_contract_does_not_authorize_rust_before_behavior_freeze_is_complete() -> None:
