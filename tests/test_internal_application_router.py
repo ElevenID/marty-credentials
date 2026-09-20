@@ -11,6 +11,7 @@ from issuance.infrastructure.api import application_routes
 from issuance.infrastructure.api.application_routes import internal_application_router
 from issuance.infrastructure.api.routes import (
     ApplicationApproval,
+    ApplicationCreate,
     ApplicationRejection,
 )
 from pydantic import ValidationError
@@ -90,3 +91,34 @@ async def test_approved_application_offer_read_uses_transaction_issuance_state(
     assert response.status == "active"
     assert response.offer_url == response.qr_payload
     assert response.credential_offer_uris == {}
+
+
+@pytest.mark.asyncio
+async def test_application_identifier_uses_name_email_then_generated_fallback() -> None:
+    repo = InMemoryIssuanceRepository()
+    template = ApplicationTemplate(
+        id="template-1",
+        organization_id="org-123",
+        name="Membership",
+        status="ACTIVE",
+    )
+    await repo.save_application_template(template)
+
+    async def create(applicant_data: dict[str, str]):
+        return await application_routes.create_application(
+            request=ApplicationCreate(
+                application_template_id=template.id,
+                applicant_data=applicant_data,
+            ),
+            trusted_organization_id="org-123",
+            repo=repo,
+        )
+
+    named = await create({"given_name": " Ada ", "family_name": " Lovelace "})
+    email_only = await create({"email": "ada@example.test"})
+    anonymous = await create({})
+
+    assert named.applicant_identifier == "Ada_Lovelace"
+    assert email_only.applicant_identifier == "ada@example.test"
+    assert anonymous.applicant_identifier.startswith("applicant_")
+    assert len(anonymous.applicant_identifier) == len("applicant_") + 8

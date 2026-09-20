@@ -9,6 +9,10 @@ boundary: the wallet-invite GET handler referenced a nonexistent
 reached its status check. Applications remain `approved`; issuance completion
 belongs to `IssuanceTransaction`. A focused regression now exercises an
 approved application and its transaction through the actual offer-read handler.
+The same audit restored the intended application identifier precedence: a
+trimmed given/family name, then email, then a generated opaque identifier. The
+old formatted empty-name expression was always `_`, making both fallbacks
+unreachable for email-only and anonymous submissions.
 
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The

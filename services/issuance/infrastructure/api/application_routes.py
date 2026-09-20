@@ -47,7 +47,6 @@ from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.adapters.delivery_records import (
     delivery_mode_from_integration_context,
 )
-from issuance.infrastructure.grpc_security import create_service_channel
 from issuance.infrastructure.api.routes import (
     ApplicationApproval,
     ApplicationCreate,
@@ -60,6 +59,7 @@ from issuance.infrastructure.api.routes import (
     apply_required_remote_issuer_context,
     internal_application_router,
 )
+from issuance.infrastructure.grpc_security import create_service_channel
 
 logger = logging.getLogger(__name__)
 _INTERNAL_REVIEWER_ID = "issuance-management-api"
@@ -395,9 +395,17 @@ async def create_application(
         raise HTTPException(status_code=422, detail="Application template must be active")
     
     applicant_data = request.applicant_data
+    name_identifier = "_".join(
+        part
+        for part in (
+            str(applicant_data.get("given_name") or "").strip(),
+            str(applicant_data.get("family_name") or "").strip(),
+        )
+        if part
+    )
     applicant_identifier = (
-        f"{applicant_data.get('given_name', '')}_{applicant_data.get('family_name', '')}"
-        or applicant_data.get('email')
+        name_identifier
+        or str(applicant_data.get("email") or "").strip()
         or f"applicant_{uuid.uuid4().hex[:8]}"
     )
     
