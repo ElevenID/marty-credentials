@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -14,7 +16,13 @@ for _path in (_SERVICES, _PYTHON):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from issuance.domain.entities import Application, ApplicationStatus, ApplicationTemplate
+CONTRACT = json.loads(
+    (Path(_REPO_ROOT) / "contracts" / "issuance-internal-applications.json").read_text(
+        encoding="utf-8"
+    )
+)
+
+from issuance.domain.entities import Application, ApplicationTemplate
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api.application_routes import (
     ExternalEvidenceApiCheckRequest,
@@ -130,6 +138,7 @@ async def _seed_application(repo: InMemoryIssuanceRepository, requirement: dict[
 
 
 async def test_external_api_check_creates_fact_and_auto_issues(monkeypatch) -> None:
+    expected = CONTRACT["lifecycle"]["external_api_outcomes"]["permit"]
     monkeypatch.setenv("PASSPORT_VERIFY_API_TOKEN", "Bearer secret-token")
     monkeypatch.setattr(
         "issuance.application.external_evidence_api.httpx.AsyncClient",
@@ -156,30 +165,38 @@ async def test_external_api_check_creates_fact_and_auto_issues(monkeypatch) -> N
     stored_app = await repo.get_application(app.id)
     facts = await repo.list_evidence_facts_for_application(app.id)
 
-    assert response.application_status == "approved"
-    assert response.issuance_transaction_id is not None
-    assert response.policy_decision["allowed"] is True
-    assert response.policy_decision["context"]["evidence_provider"] == "passport_verifier"
+    assert response.application_status == expected["application_status"]
+    assert (response.issuance_transaction_id is not None) is expected["transaction_created"]
+    assert response.policy_decision["allowed"] is expected["policy_allowed"]
+    assert response.policy_decision["context"]["evidence_provider"] == expected["provider"]
     assert response.policy_decision["context"]["all_required_evidence_satisfied"] is True
     assert stored_app is not None
-    assert stored_app.status == ApplicationStatus.APPROVED
+    assert stored_app.status.value == expected["application_status"]
     assert stored_app.issuance_transaction_id == response.issuance_transaction_id
     assert len(facts) == 1
-    assert facts[0].provider == "passport_verifier"
-    assert facts[0].fact_type == "passport.document_verified"
-    assert facts[0].scope == {"document_type": "passport", "issuing_country": "US"}
+    assert facts[0].provider == expected["provider"]
+    assert facts[0].fact_type == expected["fact_type"]
+    assert facts[0].scope == expected["scope"]
     assert facts[0].assertion["face_match_score"] == 0.91
-    assert facts[0].verification["status"] == "VERIFIED"
-    assert _FakeAsyncClient.requests[0]["json"]["passport_number"] == "X1234567"
-    assert _FakeAsyncClient.requests[0]["headers"]["authorization"] == "Bearer secret-token"
+    assert facts[0].verification["status"] == expected["verification_status"]
+    assert (
+        _FakeAsyncClient.requests[0]["json"]["passport_number"]
+        == expected["request_passport_number"]
+    )
+    assert (
+        _FakeAsyncClient.requests[0]["headers"]["authorization"]
+        == expected["request_authorization"]
+    )
 
     summary = await get_application_evidence_summary(app.id, repo=repo)
-    assert summary.available_api_checks[0]["check_id"] == "passport-document-check"
-    assert summary.available_api_checks[0]["provider"] == "passport_verifier"
-    assert "secret_headers" not in summary.available_api_checks[0]
+    assert summary.available_api_checks[0]["check_id"] == expected["summary_check_id"]
+    assert summary.available_api_checks[0]["provider"] == expected["provider"]
+    for forbidden_field in expected["summary_forbidden_fields"]:
+        assert forbidden_field not in summary.available_api_checks[0]
 
 
 async def test_external_api_check_denies_when_expected_response_fails(monkeypatch) -> None:
+    expected = CONTRACT["lifecycle"]["external_api_outcomes"]["deny"]
     monkeypatch.setattr(
         "issuance.application.external_evidence_api.httpx.AsyncClient",
         _FakeAsyncClient,
@@ -205,12 +222,12 @@ async def test_external_api_check_denies_when_expected_response_fails(monkeypatc
     stored_app = await repo.get_application(app.id)
     facts = await repo.list_evidence_facts_for_application(app.id)
 
-    assert response.application_status == "pending"
-    assert response.issuance_transaction_id is None
-    assert response.policy_decision["allowed"] is False
+    assert response.application_status == expected["application_status"]
+    assert (response.issuance_transaction_id is not None) is expected["transaction_created"]
+    assert response.policy_decision["allowed"] is expected["policy_allowed"]
     assert response.policy_decision["context"]["all_required_evidence_satisfied"] is False
     assert stored_app is not None
-    assert stored_app.status == ApplicationStatus.PENDING
+    assert stored_app.status.value == expected["application_status"]
     assert stored_app.issuance_transaction_id is None
     assert len(facts) == 1
-    assert facts[0].verification["status"] == "UNVERIFIED"
+    assert facts[0].verification["status"] == expected["verification_status"]

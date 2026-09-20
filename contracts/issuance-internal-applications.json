@@ -182,6 +182,27 @@
       {"id": "api-check-invalid-configuration", "arrange": "invalid_configuration", "status": 400, "detail": "External evidence requirement is missing api configuration"},
       {"id": "api-check-provider-transport", "arrange": "provider_transport", "status": 502, "detail": "External evidence API request failed", "forbidden_detail": "Bearer secret-token"}
     ],
+    "external_api_outcomes": {
+      "permit": {
+        "application_status": "approved",
+        "transaction_created": true,
+        "policy_allowed": true,
+        "provider": "passport_verifier",
+        "fact_type": "passport.document_verified",
+        "scope": {"document_type": "passport", "issuing_country": "US"},
+        "verification_status": "VERIFIED",
+        "request_passport_number": "X1234567",
+        "request_authorization": "Bearer secret-token",
+        "summary_check_id": "passport-document-check",
+        "summary_forbidden_fields": ["secret_headers"]
+      },
+      "deny": {
+        "application_status": "pending",
+        "transaction_created": false,
+        "policy_allowed": false,
+        "verification_status": "UNVERIFIED"
+      }
+    },
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},
