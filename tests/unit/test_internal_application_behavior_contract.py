@@ -219,6 +219,7 @@ async def test_application_evidence_and_event_reads_match_contract() -> None:
     previous_fact_value = expected["previous_evidence_fact"]
     fact_value = expected["evidence_fact"]
     event_value = expected["issuance_event"]
+    summary_value = expected["evidence_summary"]
     repo = InMemoryIssuanceRepository()
     app = Application(
         id=application_value["id"],
@@ -246,6 +247,27 @@ async def test_application_evidence_and_event_reads_match_contract() -> None:
         metadata=event_value["metadata"],
         created_at=datetime.fromisoformat(event_value["created_at"]),
     )
+    template = ApplicationTemplate(
+        id=app.application_template_id,
+        organization_id=app.organization_id,
+        name="Contract template",
+        status="ACTIVE",
+        evidence_requirements=[
+            {
+                "evidence_id": "check-1",
+                "evidence_type": "EXTERNAL_API",
+                "description": "Contract API check",
+                "provider": "contract-provider",
+                "fact_type": "identity.document",
+                "required": True,
+                "verification_method": "CONTRACT_API",
+                "auto_issue_on_permit": False,
+                "api": {"method": "GET", "url": "https://provider.example/check"},
+                "scope": {"document_type": "passport"},
+            }
+        ],
+    )
+    await repo.save_application_template(template)
     await repo.save_application(app)
     await repo.save_evidence_fact(previous_fact)
     await repo.save_evidence_fact(fact)
@@ -273,6 +295,11 @@ async def test_application_evidence_and_event_reads_match_contract() -> None:
         trusted_organization_id=app.organization_id,
         repo=repo,
     )
+    summary = await application_routes.get_application_evidence_summary(
+        application_id=app.id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
 
     assert [value.model_dump(mode="json") for value in listed] == [application_value]
     assert fetched.model_dump(mode="json") == application_value
@@ -281,6 +308,10 @@ async def test_application_evidence_and_event_reads_match_contract() -> None:
         fact_value,
     ]
     assert [value.model_dump(mode="json") for value in events] == [event_value]
+    assert summary.model_dump(mode="json") == {
+        **summary_value,
+        "evidence_facts": [previous_fact_value, fact_value],
+    }
 
 
 @pytest.mark.asyncio

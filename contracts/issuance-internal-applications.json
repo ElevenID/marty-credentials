@@ -257,7 +257,11 @@
         "applicant_identifier": "ada@example.test",
         "form_data": {"given_name": "Ada", "family_name": "Lovelace"},
         "evidence_submissions": [{"evidence_type": "DOCUMENT_SCAN", "evidence_data": {"digest": "sha256:1"}}],
-        "integration_context": {"source": "contract"},
+        "integration_context": {
+          "source": "contract",
+          "policy": {"allowed": true, "policy_source": "contract", "policy_set_id": "policy-1"},
+          "canvas": {"course_id": "course-1"}
+        },
         "status": "under_review",
         "review_notes": "Reviewing",
         "reviewer_id": "reviewer-1",
@@ -313,6 +317,30 @@
         "event_type": "offer_viewed",
         "metadata": {"channel": "contract"},
         "created_at": "2026-09-19T12:39:56+00:00"
+      },
+      "evidence_summary": {
+        "application_id": "application-read",
+        "organization_id": "org-123",
+        "status": "under_review",
+        "policy_decision": {"allowed": true, "policy_source": "contract", "policy_set_id": "policy-1"},
+        "policy_source": "contract",
+        "policy_set_id": "policy-1",
+        "issuance_transaction_id": "transaction-1",
+        "canvas": {"course_id": "course-1"},
+        "available_api_checks": [
+          {
+            "check_id": "check-1",
+            "evidence_type": "EXTERNAL_API",
+            "description": "Contract API check",
+            "provider": "contract-provider",
+            "fact_type": "identity.document",
+            "required": true,
+            "verification_method": "CONTRACT_API",
+            "auto_issue_on_permit": false,
+            "api_method": "GET",
+            "scope": {"document_type": "passport"}
+          }
+        ]
       },
       "invalid_status": {"value": "not-a-status", "status": 422, "detail": "Invalid application status"}
     },
