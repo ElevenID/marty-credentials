@@ -13,7 +13,9 @@
       "3bee6f7: fail closed on missing offer dependencies and issuer context",
       "validate active tenant-owned revocation bindings before ordinary approval",
       "commit manual lifecycle transitions and non-Canvas issuance reservations atomically",
-      "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically"
+      "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically",
+      "preserve issuance-specific Canvas offer readiness errors separately from approval errors",
+      "retain secret-safe structured diagnostics for provider, Canvas, issuer-context, and wallet-catalog failures"
     ]
   },
   "coverage": {
@@ -33,7 +35,8 @@
       "external_evidence_concurrent_lifecycle_write_set",
       "reconciliation_concurrent_lifecycle_write_set",
       "external_evidence_failure_injection_and_postgres_write_set_replay",
-      "reconciliation_failure_injection_and_postgres_write_set_replay"
+      "reconciliation_failure_injection_and_postgres_write_set_replay",
+      "secret_safe_operational_diagnostics"
     ],
     "required_before_rust_implementation": [],
     "rust_implementation_authorized": true
@@ -91,6 +94,40 @@
       {"operation": "get_issuance_offer", "method": "GET", "path": "/internal/applications/application-1/issuance-offer"},
       {"operation": "list_issuance_events", "method": "GET", "path": "/internal/applications/application-1/issuance-events"}
     ]
+  },
+  "operational_diagnostics": {
+    "event": "internal_application_failure",
+    "fields": ["event", "stage", "category", "application_correlation_sha256", "check_correlation_sha256", "resource_correlation_sha256"],
+    "stages": [
+      "external_evidence_transport",
+      "canvas_approval_readiness",
+      "canvas_approval_issuer_context",
+      "canvas_offer_readiness",
+      "canvas_offer_issuer_context",
+      "ordinary_issuer_context",
+      "wallet_catalog_template",
+      "wallet_catalog_configuration",
+      "wallet_catalog_list",
+      "wallet_catalog_get"
+    ],
+    "categories": [
+      "dependency_unavailable",
+      "invalid_response",
+      "invalid_configuration",
+      "not_found",
+      "rollout_disabled",
+      "invalid_status",
+      "not_ready",
+      "transaction_plan_unavailable",
+      "issuer_context_invalid"
+    ],
+    "correlation": {
+      "algorithm": "sha256",
+      "encoding": "lowercase_hex",
+      "length": 64,
+      "domain_separated": true
+    },
+    "forbidden_fields": ["application_id", "check_id", "resource_id", "url", "headers", "body", "token", "error_message", "applicant_data"]
   },
   "request_models": {
     "ApplicationCreate": {"unknown_fields": "ignore", "fields": ["application_template_id", "applicant_data", "integration_context"]},
@@ -384,6 +421,14 @@
         "status": 409,
         "detail": "Canvas application is not ready for approval",
         "application_status": "pending",
+        "transaction_created": false
+      }
+    },
+    "canvas_offer_outcomes": {
+      "stale_readiness": {
+        "status": 409,
+        "detail": "Canvas application is not ready for issuance",
+        "application_status": "approved",
         "transaction_created": false
       }
     },

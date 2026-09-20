@@ -12,7 +12,7 @@ ISSUANCE = ROOT / "services" / "issuance"
 ROUTES = ISSUANCE / "infrastructure" / "api" / "routes.py"
 CONTRACT = ROOT / "contracts" / "issuance-internal-applications.json"
 PAIRED_RUST_CONTRACT_CANONICAL_SHA256 = (
-    "3ad842310d81c3c01a72c5712cae46ac4dec16305c1373e3a1ad52fbe8fda09e"
+    "11bac34429733ad3658fbe6650809705ef86ce4b83d12d2198be56d4170f0a0d"
 )
 
 FROZEN_ROUTE_IDENTITIES = frozenset(
