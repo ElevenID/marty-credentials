@@ -129,6 +129,49 @@ def test_every_internal_application_route_keeps_both_security_dependencies() -> 
         assert required <= dependencies, route.name
 
 
+@pytest.mark.parametrize(
+    "case", CONTRACT["security"]["route_probes"], ids=lambda case: case["operation"]
+)
+def test_every_route_enforces_key_then_tenant_at_http_boundary(
+    monkeypatch, case
+) -> None:
+    from issuance.infrastructure.api import routes
+
+    monkeypatch.setattr(routes, "_ISSUANCE_API_KEY", "secret")
+    app = FastAPI()
+    app.include_router(internal_application_router)
+    client = TestClient(app)
+    request_kwargs = {"json": case["json"]} if "json" in case else {}
+
+    missing_key = client.request(
+        case["method"],
+        case["path"],
+        headers={"X-Organization-ID": "org-123"},
+        **request_kwargs,
+    )
+    assert missing_key.status_code == 401
+    assert missing_key.json() == {"detail": "X-API-Key header is missing"}
+
+    invalid_key = client.request(
+        case["method"],
+        case["path"],
+        headers={"X-API-Key": "wrong", "X-Organization-ID": "org-123"},
+        **request_kwargs,
+    )
+    assert invalid_key.status_code == 401
+    assert invalid_key.json() == {"detail": "Invalid API Key"}
+
+    missing_tenant = client.request(
+        case["method"],
+        case["path"],
+        headers={"X-API-Key": "secret"},
+        **request_kwargs,
+    )
+    tenant_failure = CONTRACT["security"]["tenant_cases"]["missing_header"]
+    assert missing_tenant.status_code == tenant_failure["status"]
+    assert missing_tenant.json() == {"detail": tenant_failure["detail"]}
+
+
 def test_unsupported_sibling_routes_remain_unowned() -> None:
     app = FastAPI()
     app.include_router(internal_application_router)

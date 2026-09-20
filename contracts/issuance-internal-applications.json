@@ -64,7 +64,23 @@
       "missing_header": {"status": 400, "detail": "X-Organization-ID is required for application management"},
       "claimed_mismatch": {"status": 404, "detail": "Application resource not found"},
       "foreign_item": {"status": 404, "detail": "Application not found"}
-    }
+    },
+    "route_probes": [
+      {"operation": "create_application", "method": "POST", "path": "/internal/applications", "json": {"application_template_id": "template-1", "applicant_data": {}}},
+      {"operation": "list_applications", "method": "GET", "path": "/internal/applications?organization_id=org-123"},
+      {"operation": "get_application", "method": "GET", "path": "/internal/applications/application-1"},
+      {"operation": "list_application_evidence_facts", "method": "GET", "path": "/internal/applications/application-1/evidence-facts"},
+      {"operation": "get_application_evidence_summary", "method": "GET", "path": "/internal/applications/application-1/evidence-summary"},
+      {"operation": "run_external_evidence_api_check", "method": "POST", "path": "/internal/applications/application-1/evidence/api-checks/check-1/run", "json": {}},
+      {"operation": "reconcile_application_evidence", "method": "POST", "path": "/internal/applications/evidence/reconcile", "json": {"organization_id": "org-123"}},
+      {"operation": "get_application_evidence_reconciliation_report", "method": "GET", "path": "/internal/applications/evidence/reconciliation-report?organization_id=org-123"},
+      {"operation": "submit_evidence", "method": "POST", "path": "/internal/applications/application-1/submit-evidence", "json": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}},
+      {"operation": "approve_application", "method": "POST", "path": "/internal/applications/application-1/approve", "json": {}},
+      {"operation": "reject_application", "method": "POST", "path": "/internal/applications/application-1/reject", "json": {"review_notes": "Rejected"}},
+      {"operation": "generate_issuance_offer", "method": "POST", "path": "/internal/applications/application-1/issuance-offer"},
+      {"operation": "get_issuance_offer", "method": "GET", "path": "/internal/applications/application-1/issuance-offer"},
+      {"operation": "list_issuance_events", "method": "GET", "path": "/internal/applications/application-1/issuance-events"}
+    ]
   },
   "request_models": {
     "ApplicationCreate": {"unknown_fields": "ignore", "fields": ["application_template_id", "applicant_data", "integration_context"]},
