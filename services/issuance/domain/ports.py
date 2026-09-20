@@ -406,6 +406,7 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def reserve_application_issuance(
         self,
+        application: Application,
         prepared_transaction: IssuanceTransaction,
         *,
         expected_status: ApplicationStatus,
@@ -416,8 +417,9 @@ class IIssuanceRepository(ABC):
         """Atomically approve a non-Canvas application and bind one transaction.
 
         Implementations must lock the application, reject a stale lifecycle
-        state without inserting or updating a transaction, and commit the
-        application and transaction together.
+        state or updated-at revision without inserting or updating a
+        transaction, and commit the complete candidate application and
+        transaction together.
         """
         pass
 

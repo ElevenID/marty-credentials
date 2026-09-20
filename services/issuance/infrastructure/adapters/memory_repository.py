@@ -733,7 +733,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         return self._application_templates.pop(template_id, None) is not None
 
     async def save_application(self, app: Application) -> None:
-        self._applications[app.id] = app
+        self._applications[app.id] = copy.deepcopy(app)
 
     async def save_application_if_status(
         self,
@@ -755,6 +755,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
 
     async def reserve_application_issuance(
         self,
+        application: Application,
         prepared_transaction: IssuanceTransaction,
         *,
         expected_status: ApplicationStatus,
@@ -770,9 +771,12 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             app = self._applications.get(application_id)
             if (
                 app is None
+                or application.id != application_id
+                or application.organization_id != prepared_transaction.organization_id
                 or app.organization_id != prepared_transaction.organization_id
                 or self._canvas_context(app) is not None
                 or app.status != expected_status
+                or app.updated_at != application.updated_at
             ):
                 return None
 
@@ -790,7 +794,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 prepared_transaction
             )
 
-            canonical = copy.deepcopy(app)
+            canonical = copy.deepcopy(application)
             canonical.status = ApplicationStatus.APPROVED
             canonical.review_notes = review_notes
             canonical.reviewer_id = reviewer_id
@@ -931,7 +935,8 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             return copy.deepcopy(app)
 
     async def get_application(self, app_id: str) -> Application | None:
-        return self._applications.get(app_id)
+        app = self._applications.get(app_id)
+        return copy.deepcopy(app) if app is not None else None
 
     async def list_applications(
         self,
@@ -948,7 +953,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         if template_id:
             apps = [a for a in apps if a.application_template_id == template_id]
 
-        return apps
+        return copy.deepcopy(apps)
 
     # Lifecycle event methods
     async def save_event(self, event: IssuanceEvent) -> None:

@@ -245,6 +245,7 @@ async def approve_application_for_issuance(
         return tx
 
     reserved = await repo.reserve_application_issuance(
+        app,
         tx,
         expected_status=expected_status,
         reviewer_id=reviewer_id,

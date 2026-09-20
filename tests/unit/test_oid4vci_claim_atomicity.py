@@ -805,12 +805,15 @@ async def test_postgres_canvas_approval_reserves_transaction_under_application_l
 @pytest.mark.asyncio
 async def test_postgres_non_canvas_approval_commits_application_and_transaction_together() -> None:
     now = datetime.now(UTC)
-    application = Application(
+    stored_application = Application(
         id="ordinary-approval-application",
         organization_id="org-1",
         application_template_id="ordinary-application-template",
         applicant_identifier="holder-1",
     )
+    application = Application(**vars(stored_application))
+    application.evidence_submissions = [{"evidence_type": "EXTERNAL_API"}]
+    application.integration_context = {"policy": {"allowed": True}}
     prepared = _transaction(
         id="ordinary-approval-transaction",
         application_id=application.id,
@@ -827,7 +830,7 @@ async def test_postgres_non_canvas_approval_commits_application_and_transaction_
     approved.issuance_transaction_id = prepared.id
     session = _Session(
         [
-            _Result(_application_row(application)),
+            _Result(_application_row(stored_application)),
             _Result(_transaction_row(prepared)),
             _Result(_application_row(approved)),
         ]
@@ -835,6 +838,7 @@ async def test_postgres_non_canvas_approval_commits_application_and_transaction_
     repo = PostgresIssuanceRepository(_SessionFactory(session))
 
     reserved = await repo.reserve_application_issuance(
+        application,
         prepared,
         expected_status=ApplicationStatus.PENDING,
         reviewer_id="management-approver",
@@ -853,6 +857,9 @@ async def test_postgres_non_canvas_approval_commits_application_and_transaction_
     assert "FOR UPDATE" in statements[0]
     assert "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in statements[1]
     assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[2]
+    update_params = session.statements[2].compile().params.values()
+    assert application.evidence_submissions in update_params
+    assert application.integration_context in update_params
 
 
 @pytest.mark.asyncio
@@ -875,6 +882,7 @@ async def test_postgres_non_canvas_approval_stale_status_writes_nothing() -> Non
     repo = PostgresIssuanceRepository(_SessionFactory(session))
 
     reserved = await repo.reserve_application_issuance(
+        application,
         prepared,
         expected_status=ApplicationStatus.PENDING,
         reviewer_id="management-approver",

@@ -2085,6 +2085,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
 
     async def reserve_application_issuance(
         self,
+        application: Application,
         prepared_transaction: IssuanceTransaction,
         *,
         expected_status: ApplicationStatus,
@@ -2109,8 +2110,11 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             app_row = application_result.first()
             if (
                 app_row is None
+                or application.id != application_id
+                or application.organization_id != prepared_transaction.organization_id
                 or _canvas_application_context(app_row.integration_context) is not None
                 or app_row.status != expected_status.value
+                or app_row.updated_at != application.updated_at
             ):
                 return None
 
@@ -2142,21 +2146,29 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     f"Stale issuance transaction transition to {prepared_transaction.status.value}"
                 )
 
+            application_values = self._application_values(application)
+            application_values.update(
+                status=ApplicationStatus.APPROVED.value,
+                review_notes=review_notes,
+                reviewer_id=reviewer_id,
+                reviewed_at=reviewed_at,
+                issuance_transaction_id=reserved_row.id,
+                updated_at=reviewed_at,
+            )
+            update_values = {
+                key: value
+                for key, value in application_values.items()
+                if key not in {"id", "organization_id"}
+            }
             updated = await session.execute(
                 update(applications_table)
                 .where(
                     applications_table.c.id == app_row.id,
                     applications_table.c.organization_id == app_row.organization_id,
                     applications_table.c.status == expected_status.value,
+                    applications_table.c.updated_at == application.updated_at,
                 )
-                .values(
-                    status=ApplicationStatus.APPROVED.value,
-                    review_notes=review_notes,
-                    reviewer_id=reviewer_id,
-                    reviewed_at=reviewed_at,
-                    issuance_transaction_id=reserved_row.id,
-                    updated_at=reviewed_at,
-                )
+                .values(**update_values)
                 .returning(applications_table)
             )
             updated_row = updated.first()

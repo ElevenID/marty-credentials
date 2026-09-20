@@ -566,9 +566,11 @@ async def test_manual_canvas_approval_uses_persisted_snapshot_and_required_kms(
     assert tx.issuer_did_override == expected["issuer_did_override"]
     assert tx.signing_service_id == expected["signing_service_id"]
 
-    template = await repo.get_application_template(app.application_template_id)
+    approved_app = await repo.get_application(app.id)
+    assert approved_app is not None
+    template = await repo.get_application_template(approved_app.application_template_id)
     refreshed = await application_routes._get_or_refresh_transaction(
-        app,
+        approved_app,
         repo,
         template,
     )
@@ -592,6 +594,8 @@ async def test_manual_canvas_approval_fails_closed_on_stale_readiness(
     app.status = ApplicationStatus.PENDING
     app.issuance_transaction_id = None
     binding.config_version += 1
+    await repo.save_application(app)
+    await repo.save_canvas_program_binding(binding)
 
     monkeypatch.setattr(
         application_routes.httpx,
