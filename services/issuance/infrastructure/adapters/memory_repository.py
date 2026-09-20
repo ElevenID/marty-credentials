@@ -922,11 +922,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         lock = self._application_issuance_locks.setdefault(application_id, asyncio.Lock())
         async with lock:
             app = self._applications.get(application_id)
-            if (
-                app is None
-                or app.organization_id != prepared_transaction.organization_id
-                or self._canvas_context(app) is None
-            ):
+            if app is None or app.organization_id != prepared_transaction.organization_id:
                 raise ValueError("Canvas application was not found for issuance")
             if application is not None and (
                 application.id != app.id
@@ -937,6 +933,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 )
             ):
                 return None
+            canvas_application = application if application is not None else app
+            if self._canvas_context(canvas_application) is None:
+                raise ValueError("Canvas application was not found for issuance")
             if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
                 if application is not None:
                     return None

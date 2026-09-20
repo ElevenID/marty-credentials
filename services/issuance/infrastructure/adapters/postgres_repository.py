@@ -2349,7 +2349,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .with_for_update()
             )
             app_row = application_result.first()
-            if app_row is None or _canvas_application_context(app_row.integration_context) is None:
+            if app_row is None:
                 raise ValueError("Canvas application was not found for issuance")
             if application is not None and (
                 application.id != app_row.id
@@ -2360,6 +2360,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 )
             ):
                 return None
+            canvas_integration_context = (
+                application.integration_context
+                if application is not None
+                else app_row.integration_context
+            )
+            if _canvas_application_context(canvas_integration_context) is None:
+                raise ValueError("Canvas application was not found for issuance")
             if app_row.status not in {
                 ApplicationStatus.PENDING.value,
                 ApplicationStatus.APPROVED.value,

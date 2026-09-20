@@ -813,6 +813,69 @@ async def test_postgres_canvas_approval_reserves_transaction_under_application_l
 
 
 @pytest.mark.asyncio
+async def test_postgres_canvas_approval_accepts_atomic_candidate_context() -> None:
+    now = datetime.now(UTC)
+    stored_application = Application(
+        id="canvas-evidence-application",
+        organization_id="org-1",
+        application_template_id="canvas-application-template",
+        applicant_identifier="learner-1",
+    )
+    candidate = Application(**vars(stored_application))
+    candidate.integration_context = {
+        "canvas": {
+            "canvas_platform_id": "platform-1",
+            "canvas_program_binding_id": "binding-1",
+        },
+        "policy": {"allowed": True},
+    }
+    prepared = _transaction(
+        id="canvas-evidence-transaction",
+        application_id=stored_application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce=None,
+    )
+    approved = Application(**vars(candidate))
+    approved.status = ApplicationStatus.APPROVED
+    approved.review_notes = "Evidence permitted"
+    approved.reviewer_id = "canvas:auto-approval"
+    approved.reviewed_at = now
+    approved.updated_at = now
+    approved.issuance_transaction_id = prepared.id
+    session = _Session(
+        [
+            _Result(_application_row(stored_application)),
+            _Result(_transaction_row(prepared)),
+            _Result(_application_row(approved)),
+        ]
+    )
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    reserved = await repo.reserve_canvas_application_issuance(
+        prepared,
+        application=candidate,
+        expected_updated_at=stored_application.updated_at,
+        reviewer_id="canvas:auto-approval",
+        review_notes="Evidence permitted",
+        reviewed_at=now,
+    )
+
+    assert reserved is not None
+    stored, transaction, already_issued = reserved
+    assert stored.status == ApplicationStatus.APPROVED
+    assert stored.integration_context == candidate.integration_context
+    assert transaction.id == prepared.id
+    assert already_issued is False
+    assert session.committed is True
+    assert session.rolled_back is False
+    statements = [str(statement).upper() for statement in session.statements]
+    assert "FOR UPDATE" in statements[0]
+    assert "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in statements[1]
+    assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[2]
+
+
+@pytest.mark.asyncio
 async def test_postgres_non_canvas_approval_commits_application_and_transaction_together() -> None:
     now = datetime.now(UTC)
     stored_application = Application(
