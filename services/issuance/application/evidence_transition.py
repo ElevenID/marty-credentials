@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from issuance.application.application_approval import (
+    ApplicationTransitionConflictError,
     IssuerContextApplier,
     approve_application_for_issuance,
 )
@@ -17,6 +18,7 @@ from issuance.application.evidence_policy import (
 from issuance.application.evidence_reconciliation import record_evidence_policy_audit_event
 from issuance.domain.entities import (
     Application,
+    ApplicationStatus,
     ApplicationTemplate,
     EventType,
     EvidenceFact,
@@ -33,6 +35,23 @@ class EvidenceTransitionResult:
     facts: list[EvidenceFact]
     policy_decision: EvidencePolicyDecision | None = None
     issuance_transaction: IssuanceTransaction | None = None
+
+
+async def _save_application_revision(
+    *,
+    repo: IIssuanceRepository,
+    app: Application,
+    expected_status: ApplicationStatus,
+    expected_updated_at: datetime,
+) -> None:
+    if not await repo.save_application_if_status(
+        app,
+        expected_status=expected_status,
+        expected_updated_at=expected_updated_at,
+    ):
+        raise ApplicationTransitionConflictError(
+            "Application lifecycle changed during evidence processing"
+        )
 
 
 def _merge_context(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +108,8 @@ async def persist_evidence_fact_and_apply_policy(
 
     now = datetime.now(timezone.utc)
     metadata = dict(audit_metadata or {})
+    expected_status = app.status
+    expected_updated_at = app.updated_at
 
     if not isinstance(app.evidence_submissions, list):
         app.evidence_submissions = []
@@ -180,6 +201,25 @@ async def persist_evidence_fact_and_apply_policy(
                         **metadata,
                     },
                 )
+            except ApplicationTransitionConflictError as exc:
+                policy_decision = replace(
+                    policy_decision,
+                    allowed=False,
+                    errors=[*policy_decision.errors, str(exc)],
+                )
+                await record_evidence_policy_audit_event(
+                    repo=repo,
+                    app=app,
+                    event_type=EventType.APPROVAL_ISSUANCE_FAILED,
+                    metadata={
+                        "source": source,
+                        "policy_decision": policy_decision.to_dict(),
+                        "evidence_fact_ids": [fact.id for fact in facts],
+                        "errors": [str(exc)],
+                        **metadata,
+                    },
+                )
+                raise
             except ValueError as exc:
                 policy_decision = replace(
                     policy_decision,
@@ -191,7 +231,12 @@ async def persist_evidence_fact_and_apply_policy(
                     {"policy": policy_decision.to_dict()},
                 )
                 app.updated_at = now
-                await repo.save_application(app)
+                await _save_application_revision(
+                    repo=repo,
+                    app=app,
+                    expected_status=expected_status,
+                    expected_updated_at=expected_updated_at,
+                )
                 await record_evidence_policy_audit_event(
                     repo=repo,
                     app=app,
@@ -206,10 +251,20 @@ async def persist_evidence_fact_and_apply_policy(
                 )
         else:
             app.updated_at = now
-            await repo.save_application(app)
+            await _save_application_revision(
+                repo=repo,
+                app=app,
+                expected_status=expected_status,
+                expected_updated_at=expected_updated_at,
+            )
     else:
         app.updated_at = now
-        await repo.save_application(app)
+        await _save_application_revision(
+            repo=repo,
+            app=app,
+            expected_status=expected_status,
+            expected_updated_at=expected_updated_at,
+        )
 
     return EvidenceTransitionResult(
         evidence_fact=evidence_fact,

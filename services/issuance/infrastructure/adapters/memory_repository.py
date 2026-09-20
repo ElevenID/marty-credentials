@@ -740,6 +740,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         app: Application,
         *,
         expected_status: ApplicationStatus,
+        expected_updated_at: datetime | None = None,
     ) -> bool:
         lock = self._application_issuance_locks.setdefault(app.id, asyncio.Lock())
         async with lock:
@@ -748,6 +749,10 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 stored is None
                 or stored.organization_id != app.organization_id
                 or stored.status != expected_status
+                or (
+                    expected_updated_at is not None
+                    and stored.updated_at != expected_updated_at
+                )
             ):
                 return False
             self._applications[app.id] = copy.deepcopy(app)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -36,6 +37,8 @@ from issuance.domain.entities import (
     EvidenceFact,
 )
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
+from issuance.infrastructure.api.application_routes import reject_application
+from issuance.infrastructure.api.routes import ApplicationRejection
 
 
 def _verified_canvas_fact(
@@ -239,3 +242,48 @@ async def test_reconciliation_report_flags_stale_receipt_without_mutating_applic
     assert (stored_app.issuance_transaction_id is not None) is expected[
         "application_mutated"
     ]
+
+
+async def test_reconciliation_loses_rejection_race_without_resurrecting_application() -> None:
+    expected = CONTRACT["lifecycle"]["reconciliation_outcomes"][
+        "lifecycle_conflict"
+    ]
+    repo = InMemoryIssuanceRepository()
+    app = await _seed_canvas_application(repo, app_id="app-reconciliation-race")
+    approval_reached_signing = asyncio.Event()
+    allow_approval_reservation = asyncio.Event()
+
+    async def pause_issuer_context(_transaction) -> None:
+        approval_reached_signing.set()
+        await allow_approval_reservation.wait()
+
+    reconciliation_task = asyncio.create_task(
+        reconcile_canvas_evidence_transitions(
+            repo=repo,
+            organization_id=app.organization_id,
+            application_id=app.id,
+            issuer_context_applier=pause_issuer_context,
+        )
+    )
+    await approval_reached_signing.wait()
+    rejected = await reject_application(
+        application_id=app.id,
+        rejection=ApplicationRejection(review_notes="Reject while reconciling"),
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    assert rejected.status == expected["final_application_status"]
+    allow_approval_reservation.set()
+
+    result = await reconciliation_task
+    record = result.records[0]
+    assert record.action == expected["action"]
+    assert record.errors == expected["errors"]
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["final_application_status"]
+    assert len(await repo.list_transactions(app.organization_id)) == expected[
+        "transaction_count"
+    ]
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type.value for event in events] == expected["event_types"]

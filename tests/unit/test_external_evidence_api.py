@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Any
+
+import pytest
+from fastapi import HTTPException
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
@@ -27,8 +31,10 @@ from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceR
 from issuance.infrastructure.api.application_routes import (
     ExternalEvidenceApiCheckRequest,
     get_application_evidence_summary,
+    reject_application,
     run_external_evidence_api_check,
 )
+from issuance.infrastructure.api.routes import ApplicationRejection
 
 
 class _FakeResponse:
@@ -231,3 +237,77 @@ async def test_external_api_check_denies_when_expected_response_fails(monkeypatc
     assert stored_app.issuance_transaction_id is None
     assert len(facts) == 1
     assert facts[0].verification["status"] == expected["verification_status"]
+
+
+async def test_external_api_check_loses_rejection_race_without_resurrecting_application(
+    monkeypatch,
+) -> None:
+    from issuance.infrastructure.api import application_routes
+
+    expected = CONTRACT["lifecycle"]["external_api_outcomes"]["lifecycle_conflict"]
+    monkeypatch.setenv("PASSPORT_VERIFY_API_TOKEN", "Bearer secret-token")
+    monkeypatch.setattr(
+        "issuance.application.external_evidence_api.httpx.AsyncClient",
+        _FakeAsyncClient,
+    )
+    _FakeAsyncClient.requests = []
+    _FakeAsyncClient.response_payload = {
+        "id": "passport-event-race",
+        "status": "verified",
+        "checks": {"passive_auth_valid": True},
+        "biometric": {"face_match_score": 0.91},
+        "document": {"issuing_country": "US", "not_expired": True},
+    }
+    repo = InMemoryIssuanceRepository()
+    app = await _seed_application(repo, _passport_requirement())
+    approval_reached_signing = asyncio.Event()
+    allow_approval_reservation = asyncio.Event()
+
+    async def pause_remote_issuer_context(_transaction) -> None:
+        approval_reached_signing.set()
+        await allow_approval_reservation.wait()
+
+    monkeypatch.setattr(
+        application_routes,
+        "apply_remote_issuer_context",
+        pause_remote_issuer_context,
+    )
+
+    evidence_task = asyncio.create_task(
+        run_external_evidence_api_check(
+            application_id=app.id,
+            check_id="passport-document-check",
+            request=ExternalEvidenceApiCheckRequest(),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    )
+    await approval_reached_signing.wait()
+    rejected = await reject_application(
+        application_id=app.id,
+        rejection=ApplicationRejection(review_notes="Reject while evidence runs"),
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    assert rejected.status == expected["final_application_status"]
+    allow_approval_reservation.set()
+
+    with pytest.raises(HTTPException) as raised:
+        await evidence_task
+    assert raised.value.status_code == expected["status"]
+    assert raised.value.detail == expected["detail"]
+
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["final_application_status"]
+    assert len(stored.evidence_submissions) == expected[
+        "application_evidence_submission_count"
+    ]
+    assert len(await repo.list_transactions(app.organization_id)) == expected[
+        "transaction_count"
+    ]
+    assert len(await repo.list_evidence_facts_for_application(app.id)) == expected[
+        "retained_fact_count"
+    ]
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type.value for event in events] == expected["event_types"]

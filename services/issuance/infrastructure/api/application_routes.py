@@ -625,35 +625,41 @@ async def run_external_evidence_api_check(
         "checked_at": evidence_fact.created_at.isoformat(),
     }
     auto_issue_enabled = bool(requirement.get("auto_issue_on_permit"))
-    transition = await persist_evidence_fact_and_apply_policy(
-        repo=repo,
-        app=app,
-        template=template,
-        evidence_fact=evidence_fact,
-        evidence_submission={
-            "evidence_type": requirement.get("evidence_type") or "EXTERNAL_API",
-            "evidence_data": {
-                "provider": evidence_fact.provider,
-                "fact_type": evidence_fact.fact_type,
-                "scope": evidence_fact.scope,
-                "assertion": evidence_fact.assertion,
+    try:
+        transition = await persist_evidence_fact_and_apply_policy(
+            repo=repo,
+            app=app,
+            template=template,
+            evidence_fact=evidence_fact,
+            evidence_submission={
+                "evidence_type": requirement.get("evidence_type") or "EXTERNAL_API",
+                "evidence_data": {
+                    "provider": evidence_fact.provider,
+                    "fact_type": evidence_fact.fact_type,
+                    "scope": evidence_fact.scope,
+                    "assertion": evidence_fact.assertion,
+                },
+                "source": evidence_fact.source,
+                "evidence_fact_ids": [evidence_fact.id],
+                "verification": evidence_fact.verification,
             },
-            "source": evidence_fact.source,
-            "evidence_fact_ids": [evidence_fact.id],
-            "verification": evidence_fact.verification,
-        },
-        integration_context_updates={"external_evidence_api": external_context},
-        requirements=template.evidence_requirements,
-        source="external_evidence_api",
-        audit_metadata={"check_id": check_id},
-        binding=None,
-        evaluate_policy=True,
-        issue_on_permit=request.issue_on_permit,
-        auto_issue_on_permit=auto_issue_enabled,
-        reviewer_id="external-evidence:auto-approval",
-        review_notes="Auto-approved by MIP policy after user-defined external evidence API check",
-        issuer_context_applier=apply_remote_issuer_context,
-    )
+            integration_context_updates={"external_evidence_api": external_context},
+            requirements=template.evidence_requirements,
+            source="external_evidence_api",
+            audit_metadata={"check_id": check_id},
+            binding=None,
+            evaluate_policy=True,
+            issue_on_permit=request.issue_on_permit,
+            auto_issue_on_permit=auto_issue_enabled,
+            reviewer_id="external-evidence:auto-approval",
+            review_notes="Auto-approved by MIP policy after user-defined external evidence API check",
+            issuer_context_applier=apply_remote_issuer_context,
+        )
+    except ApplicationTransitionConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Application lifecycle changed during evidence processing",
+        ) from None
     policy_decision = transition.policy_decision
     tx = transition.issuance_transaction
 
@@ -740,6 +746,7 @@ async def submit_evidence(
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot submit evidence for application in {app.status} status")
     
+    expected_updated_at = app.updated_at
     updated_app = deepcopy(app)
     updated_app.evidence_submissions.append({
         "evidence_type": evidence.evidence_type,
@@ -749,6 +756,7 @@ async def submit_evidence(
     if not await repo.save_application_if_status(
         updated_app,
         expected_status=ApplicationStatus.PENDING,
+        expected_updated_at=expected_updated_at,
     ):
         raise HTTPException(
             status_code=409,
@@ -923,6 +931,7 @@ async def reject_application(
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot reject application in {app.status} status")
     
+    expected_updated_at = app.updated_at
     updated_app = deepcopy(app)
     updated_app.status = ApplicationStatus.REJECTED
     updated_app.review_notes = rejection.review_notes
@@ -931,6 +940,7 @@ async def reject_application(
     if not await repo.save_application_if_status(
         updated_app,
         expected_status=ApplicationStatus.PENDING,
+        expected_updated_at=expected_updated_at,
     ):
         raise HTTPException(
             status_code=409,

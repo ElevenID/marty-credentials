@@ -127,16 +127,18 @@ lifecycle concurrency. A single authenticated HTTP replay now exercises every
 one of the fourteen successful route operations against the Python owner. The
 forced concurrency cases prove one non-Canvas approval transaction, no orphan
 transaction when rejection wins, and no stale evidence submission when
-rejection wins.
+rejection wins. External evidence and reconciliation now also use application
+revision compare-and-set semantics: a concurrent rejection remains terminal,
+no issuance transaction is created, and the exact retained audit/fact write
+set is frozen rather than silently overwriting the lifecycle decision.
 
 Rust implementation remains deliberately unauthorized. The remaining
 behavior-freeze work is narrower but substantive:
 
-1. make external-evidence fact, policy, application, event, and optional
-   issuance writes atomic, including a concurrent lifecycle-decision case;
-2. make reconciliation policy/application/event/issuance writes atomic and
-   freeze its concurrent lifecycle behavior;
-3. replay those evidence and reconciliation write sets against PostgreSQL,
+1. inject failures at every external-evidence persistence boundary and replay
+   its exact success, denial, conflict, and failure write sets against
+   PostgreSQL;
+2. do the same for reconciliation policy/application/event/issuance writes,
    not only the in-memory owner and statement-level approval tests.
 
 The Rust implementation may start only after that contract replays against the

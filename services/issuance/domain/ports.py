@@ -399,8 +399,9 @@ class IIssuanceRepository(ABC):
         app: Application,
         *,
         expected_status: ApplicationStatus,
+        expected_updated_at: datetime | None = None,
     ) -> bool:
-        """Persist an application only while its lifecycle status is unchanged."""
+        """Persist only while lifecycle status and optional revision are unchanged."""
         pass
 
     @abstractmethod

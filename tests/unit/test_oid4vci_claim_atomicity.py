@@ -906,7 +906,12 @@ async def test_postgres_application_status_cas_locks_then_updates() -> None:
     )
     session = _Session(
         [
-            _Result(SimpleNamespace(status=ApplicationStatus.PENDING.value)),
+            _Result(
+                SimpleNamespace(
+                    status=ApplicationStatus.PENDING.value,
+                    updated_at=application.updated_at,
+                )
+            ),
             _Result(rowcount=1),
         ]
     )
@@ -915,6 +920,7 @@ async def test_postgres_application_status_cas_locks_then_updates() -> None:
     saved = await repo.save_application_if_status(
         application,
         expected_status=ApplicationStatus.PENDING,
+        expected_updated_at=application.updated_at,
     )
 
     assert saved is True

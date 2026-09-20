@@ -2053,10 +2053,11 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         app: Application,
         *,
         expected_status: ApplicationStatus,
+        expected_updated_at: datetime | None = None,
     ) -> bool:
         async with self._session_factory() as session, session.begin():
             current = await session.execute(
-                select(applications_table.c.status)
+                select(applications_table.c.status, applications_table.c.updated_at)
                 .where(
                     applications_table.c.id == app.id,
                     applications_table.c.organization_id == app.organization_id,
@@ -2064,7 +2065,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 .with_for_update()
             )
             row = current.first()
-            if row is None or row.status != expected_status.value:
+            if (
+                row is None
+                or row.status != expected_status.value
+                or (
+                    expected_updated_at is not None
+                    and row.updated_at != expected_updated_at
+                )
+            ):
                 return False
             app_data = self._application_values(app)
             update_data = {
@@ -2072,14 +2080,15 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 for key, value in app_data.items()
                 if key not in {"id", "organization_id"}
             }
+            predicates = [
+                applications_table.c.id == app.id,
+                applications_table.c.organization_id == app.organization_id,
+                applications_table.c.status == expected_status.value,
+            ]
+            if expected_updated_at is not None:
+                predicates.append(applications_table.c.updated_at == expected_updated_at)
             updated = await session.execute(
-                update(applications_table)
-                .where(
-                    applications_table.c.id == app.id,
-                    applications_table.c.organization_id == app.organization_id,
-                    applications_table.c.status == expected_status.value,
-                )
-                .values(**update_data)
+                update(applications_table).where(*predicates).values(**update_data)
             )
             return updated.rowcount == 1
 

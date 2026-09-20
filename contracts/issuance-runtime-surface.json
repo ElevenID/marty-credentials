@@ -412,7 +412,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 676,
+        "line": 682,
         "method": "POST",
         "operation": "reconcile_application_evidence",
         "path": "/internal/applications/evidence/reconcile",
@@ -420,7 +420,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 706,
+        "line": 712,
         "method": "GET",
         "operation": "get_application_evidence_reconciliation_report",
         "path": "/internal/applications/evidence/reconciliation-report",
@@ -436,7 +436,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 779,
+        "line": 787,
         "method": "POST",
         "operation": "approve_application",
         "path": "/internal/applications/{application_id}/approve",
@@ -468,7 +468,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1484,
+        "line": 1494,
         "method": "GET",
         "operation": "list_issuance_events",
         "path": "/internal/applications/{application_id}/issuance-events",
@@ -476,7 +476,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1379,
+        "line": 1389,
         "method": "GET",
         "operation": "get_issuance_offer",
         "path": "/internal/applications/{application_id}/issuance-offer",
@@ -484,7 +484,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1280,
+        "line": 1290,
         "method": "POST",
         "operation": "generate_issuance_offer",
         "path": "/internal/applications/{application_id}/issuance-offer",
@@ -492,7 +492,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 909,
+        "line": 917,
         "method": "POST",
         "operation": "reject_application",
         "path": "/internal/applications/{application_id}/reject",
@@ -500,7 +500,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 726,
+        "line": 732,
         "method": "POST",
         "operation": "submit_evidence",
         "path": "/internal/applications/{application_id}/submit-evidence",

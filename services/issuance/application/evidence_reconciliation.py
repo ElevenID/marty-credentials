@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from issuance.application.application_approval import (
+    ApplicationTransitionConflictError,
     IssuerContextApplier,
     approve_application_for_issuance,
 )
@@ -276,6 +277,8 @@ async def _reconcile_application(
     issuer_context_applier: IssuerContextApplier | None = None,
 ) -> EvidenceReconciliationRecord:
     status_before = _status_value(app)
+    expected_status = app.status
+    expected_updated_at = app.updated_at
     facts = await repo.list_evidence_facts_for_application(app.id)
     canvas_facts = [fact for fact in facts if fact.provider == "canvas"]
     if not canvas_facts:
@@ -360,8 +363,9 @@ async def _reconcile_application(
     for name, increment in plan["metric_increments"].items():
         metrics[name] += int(increment)
 
+    policy_event_type = None
     if plan["policy_event"] is not None:
-        event_type = (
+        policy_event_type = (
             EventType.EVIDENCE_POLICY_PERMITTED
             if plan["policy_event"] == "permitted"
             else EventType.EVIDENCE_POLICY_DENIED
@@ -372,19 +376,74 @@ async def _reconcile_application(
                 policy_decision=policy,
                 action="policy_evaluated",
             )
-            await repo.save_application(app)
+
+    if policy_event_type is not None and not dry_run and plan["next"] != "complete":
+        app.updated_at = datetime.now(UTC)
+        saved = await repo.save_application_if_status(
+            app,
+            expected_status=expected_status,
+            expected_updated_at=expected_updated_at,
+        )
+        if not saved:
+            current = await repo.get_application(app.id)
+            metrics["skipped"] += 1
+            return EvidenceReconciliationRecord(
+                application_id=app.id,
+                status_before=status_before,
+                status_after=_status_value(current or app),
+                action="skipped_concurrent_application_change",
+                fact_count=len(canvas_facts),
+                policy_decision=policy,
+                errors=["Application lifecycle changed during reconciliation"],
+            )
+        await record_evidence_policy_audit_event(
+            repo=repo,
+            app=app,
+            event_type=policy_event_type,
+            metadata={
+                "source": "reconciliation",
+                "policy_decision": policy,
+                "evidence_fact_ids": [fact.id for fact in canvas_facts],
+            },
+        )
+        refreshed = await repo.get_application(app.id)
+        if refreshed is None:
+            raise ValueError("Application disappeared during reconciliation")
+        app = refreshed
+        expected_status = app.status
+        expected_updated_at = app.updated_at
+        policy_event_type = None
+
+    if plan["next"] == "complete":
+        if policy_event_type is not None and not dry_run:
+            app.updated_at = datetime.now(UTC)
+            saved = await repo.save_application_if_status(
+                app,
+                expected_status=expected_status,
+                expected_updated_at=expected_updated_at,
+            )
+            if not saved:
+                current = await repo.get_application(app.id)
+                metrics["skipped"] += 1
+                return EvidenceReconciliationRecord(
+                    application_id=app.id,
+                    status_before=status_before,
+                    status_after=_status_value(current or app),
+                    action="skipped_concurrent_application_change",
+                    fact_count=len(canvas_facts),
+                    policy_decision=policy,
+                    errors=["Application lifecycle changed during reconciliation"],
+                )
             await record_evidence_policy_audit_event(
                 repo=repo,
                 app=app,
-                event_type=event_type,
+                event_type=policy_event_type,
                 metadata={
                     "source": "reconciliation",
                     "policy_decision": policy,
                     "evidence_fact_ids": [fact.id for fact in canvas_facts],
                 },
             )
-
-    if plan["next"] == "complete":
         return EvidenceReconciliationRecord(
             application_id=app.id,
             status_before=status_before,
@@ -405,6 +464,42 @@ async def _reconcile_application(
             review_notes="Recovered by MIP evidence policy reconciliation",
             issuer_context_applier=issuer_context_applier,
         )
+    except ApplicationTransitionConflictError:
+        metrics["approval_issuance_failures"] += 1
+        errors = ["Application lifecycle changed during reconciliation"]
+        current = await repo.get_application(app.id)
+        if policy_event_type is not None:
+            await record_evidence_policy_audit_event(
+                repo=repo,
+                app=app,
+                event_type=policy_event_type,
+                metadata={
+                    "source": "reconciliation",
+                    "policy_decision": policy,
+                    "evidence_fact_ids": [fact.id for fact in canvas_facts],
+                },
+            )
+        await record_evidence_policy_audit_event(
+            repo=repo,
+            app=app,
+            event_type=EventType.APPROVAL_ISSUANCE_FAILED,
+            metadata={
+                "source": "reconciliation",
+                "policy_decision": policy,
+                "errors": errors,
+                "evidence_fact_ids": [fact.id for fact in canvas_facts],
+            },
+        )
+        return EvidenceReconciliationRecord(
+            application_id=app.id,
+            status_before=status_before,
+            status_after=_status_value(current or app),
+            action="skipped_concurrent_application_change",
+            fact_count=len(canvas_facts),
+            policy_decision=policy,
+            issuance_transaction_id=(current.issuance_transaction_id if current else None),
+            errors=errors,
+        )
     except ValueError as exc:
         metrics["approval_issuance_failures"] += 1
         errors = [str(exc)]
@@ -414,7 +509,47 @@ async def _reconcile_application(
             action="approval_issuance_failed",
             errors=errors,
         )
-        await repo.save_application(app)
+        app.updated_at = datetime.now(UTC)
+        saved = await repo.save_application_if_status(
+            app,
+            expected_status=expected_status,
+            expected_updated_at=expected_updated_at,
+        )
+        if not saved:
+            current = await repo.get_application(app.id)
+            conflict_errors = ["Application lifecycle changed during reconciliation"]
+            await record_evidence_policy_audit_event(
+                repo=repo,
+                app=app,
+                event_type=EventType.APPROVAL_ISSUANCE_FAILED,
+                metadata={
+                    "source": "reconciliation",
+                    "policy_decision": policy,
+                    "errors": conflict_errors,
+                    "evidence_fact_ids": [fact.id for fact in canvas_facts],
+                },
+            )
+            return EvidenceReconciliationRecord(
+                application_id=app.id,
+                status_before=status_before,
+                status_after=_status_value(current or app),
+                action="skipped_concurrent_application_change",
+                fact_count=len(canvas_facts),
+                policy_decision=policy,
+                issuance_transaction_id=(current.issuance_transaction_id if current else None),
+                errors=conflict_errors,
+            )
+        if policy_event_type is not None:
+            await record_evidence_policy_audit_event(
+                repo=repo,
+                app=app,
+                event_type=policy_event_type,
+                metadata={
+                    "source": "reconciliation",
+                    "policy_decision": policy,
+                    "evidence_fact_ids": [fact.id for fact in canvas_facts],
+                },
+            )
         await record_evidence_policy_audit_event(
             repo=repo,
             app=app,
@@ -438,6 +573,17 @@ async def _reconcile_application(
         )
 
     metrics["approval_issuance_successes"] += 1
+    if policy_event_type is not None:
+        await record_evidence_policy_audit_event(
+            repo=repo,
+            app=app,
+            event_type=policy_event_type,
+            metadata={
+                "source": "reconciliation",
+                "policy_decision": policy,
+                "evidence_fact_ids": [fact.id for fact in canvas_facts],
+            },
+        )
     await record_evidence_policy_audit_event(
         repo=repo,
         app=app,

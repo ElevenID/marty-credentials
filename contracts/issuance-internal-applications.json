@@ -28,12 +28,13 @@
       "offer_replay_and_concurrency",
       "external_api_failure_and_secret_redaction",
       "canvas_and_non_canvas_approval_lifecycle",
-      "complete_http_success_lifecycle_replay"
+      "complete_http_success_lifecycle_replay",
+      "external_evidence_concurrent_lifecycle_write_set",
+      "reconciliation_concurrent_lifecycle_write_set"
     ],
     "required_before_rust_implementation": [
-      "external_evidence_atomic_write_set_and_concurrent_lifecycle",
-      "reconciliation_atomic_write_set_and_concurrent_lifecycle",
-      "postgres_repository_replay_for_evidence_and_reconciliation"
+      "external_evidence_failure_injection_and_postgres_write_set_replay",
+      "reconciliation_failure_injection_and_postgres_write_set_replay"
     ],
     "rust_implementation_authorized": false
   },
@@ -295,6 +296,20 @@
         "transaction_created": false,
         "policy_allowed": false,
         "verification_status": "UNVERIFIED"
+      },
+      "lifecycle_conflict": {
+        "forced_winner": "rejection",
+        "status": 409,
+        "detail": "Application lifecycle changed during evidence processing",
+        "final_application_status": "rejected",
+        "transaction_count": 0,
+        "retained_fact_count": 1,
+        "application_evidence_submission_count": 0,
+        "event_types": [
+          "evidence_fact_created",
+          "evidence_policy_permitted",
+          "approval_issuance_failed"
+        ]
       }
     },
     "reconciliation_outcomes": {
@@ -319,6 +334,17 @@
         "stale_receipts": 1,
         "reasons": ["receipt_without_evidence_fact_metadata", "receipt_without_policy_decision"],
         "application_mutated": false
+      },
+      "lifecycle_conflict": {
+        "forced_winner": "rejection",
+        "action": "skipped_concurrent_application_change",
+        "final_application_status": "rejected",
+        "transaction_count": 0,
+        "errors": ["Application lifecycle changed during reconciliation"],
+        "event_types": [
+          "evidence_policy_permitted",
+          "approval_issuance_failed"
+        ]
       }
     },
     "canvas_approval_outcomes": {

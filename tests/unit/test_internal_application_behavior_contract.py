@@ -1114,11 +1114,20 @@ async def test_rejection_wins_forced_evidence_race_without_retaining_submission(
     evidence_reached_commit = asyncio.Event()
     allow_evidence_commit = asyncio.Event()
 
-    async def controlled_save(candidate, *, expected_status):
+    async def controlled_save(
+        candidate,
+        *,
+        expected_status,
+        expected_updated_at=None,
+    ):
         if candidate.status == ApplicationStatus.PENDING and candidate.evidence_submissions:
             evidence_reached_commit.set()
             await allow_evidence_commit.wait()
-        return await original_save(candidate, expected_status=expected_status)
+        return await original_save(
+            candidate,
+            expected_status=expected_status,
+            expected_updated_at=expected_updated_at,
+        )
 
     repo.save_application_if_status = controlled_save  # type: ignore[method-assign]
     evidence_task = asyncio.create_task(
