@@ -803,6 +803,120 @@ async def test_postgres_canvas_approval_reserves_transaction_under_application_l
 
 
 @pytest.mark.asyncio
+async def test_postgres_non_canvas_approval_commits_application_and_transaction_together() -> None:
+    now = datetime.now(UTC)
+    application = Application(
+        id="ordinary-approval-application",
+        organization_id="org-1",
+        application_template_id="ordinary-application-template",
+        applicant_identifier="holder-1",
+    )
+    prepared = _transaction(
+        id="ordinary-approval-transaction",
+        application_id=application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce=None,
+    )
+    approved = Application(**vars(application))
+    approved.status = ApplicationStatus.APPROVED
+    approved.review_notes = "Concurrent approval"
+    approved.reviewer_id = "management-approver"
+    approved.reviewed_at = now
+    approved.updated_at = now
+    approved.issuance_transaction_id = prepared.id
+    session = _Session(
+        [
+            _Result(_application_row(application)),
+            _Result(_transaction_row(prepared)),
+            _Result(_application_row(approved)),
+        ]
+    )
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    reserved = await repo.reserve_application_issuance(
+        prepared,
+        expected_status=ApplicationStatus.PENDING,
+        reviewer_id="management-approver",
+        review_notes="Concurrent approval",
+        reviewed_at=now,
+    )
+
+    assert reserved is not None
+    stored_application, stored_transaction = reserved
+    assert stored_application.issuance_transaction_id == prepared.id
+    assert stored_transaction.id == prepared.id
+    assert session.committed is True
+    assert session.rolled_back is False
+    assert all(session.transaction_states)
+    statements = [str(statement).upper() for statement in session.statements]
+    assert "FOR UPDATE" in statements[0]
+    assert "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in statements[1]
+    assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[2]
+
+
+@pytest.mark.asyncio
+async def test_postgres_non_canvas_approval_stale_status_writes_nothing() -> None:
+    application = Application(
+        id="ordinary-stale-application",
+        organization_id="org-1",
+        application_template_id="ordinary-application-template",
+        applicant_identifier="holder-1",
+        status=ApplicationStatus.REJECTED,
+    )
+    prepared = _transaction(
+        id="ordinary-stale-transaction",
+        application_id=application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce=None,
+    )
+    session = _Session([_Result(_application_row(application))])
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    reserved = await repo.reserve_application_issuance(
+        prepared,
+        expected_status=ApplicationStatus.PENDING,
+        reviewer_id="management-approver",
+        review_notes="must-not-commit",
+        reviewed_at=datetime.now(UTC),
+    )
+
+    assert reserved is None
+    assert len(session.statements) == 1
+    assert "FOR UPDATE" in str(session.statements[0]).upper()
+
+
+@pytest.mark.asyncio
+async def test_postgres_application_status_cas_locks_then_updates() -> None:
+    application = Application(
+        id="application-status-cas",
+        organization_id="org-1",
+        application_template_id="ordinary-application-template",
+        applicant_identifier="holder-1",
+        status=ApplicationStatus.REJECTED,
+    )
+    session = _Session(
+        [
+            _Result(SimpleNamespace(status=ApplicationStatus.PENDING.value)),
+            _Result(rowcount=1),
+        ]
+    )
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+
+    saved = await repo.save_application_if_status(
+        application,
+        expected_status=ApplicationStatus.PENDING,
+    )
+
+    assert saved is True
+    assert all(session.transaction_states)
+    statements = [str(statement).upper() for statement in session.statements]
+    assert "FOR UPDATE" in statements[0]
+    assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[1]
+
+
+@pytest.mark.asyncio
 async def test_postgres_canvas_approval_refreshes_exact_active_pending_transaction() -> None:
     now = datetime.now(UTC)
     application = Application(

@@ -683,6 +683,226 @@ async def test_ordinary_approval_success_matches_contract(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejection_wins_forced_race_without_orphaning_approval_transaction(
+    monkeypatch,
+) -> None:
+    expected = CONTRACT["lifecycle"]["concurrent_transition"][
+        "approval_rejection_race"
+    ]
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-race",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+        form_data={"employee_id": "E-1"},
+    )
+    await repo.save_application_template(
+        ApplicationTemplate(
+            id=app.application_template_id,
+            organization_id=app.organization_id,
+            name="Membership",
+            credential_template_id="credential-template-1",
+            status="ACTIVE",
+        )
+    )
+    await repo.save_application(app)
+
+    approval_reached_dependency_gate = asyncio.Event()
+    allow_approval_to_reserve = asyncio.Event()
+
+    async def fetch_template(_template_id: str):
+        return _valid_live_credential_template()
+
+    async def require_revocation_binding(**_kwargs) -> None:
+        approval_reached_dependency_gate.set()
+        await allow_approval_to_reserve.wait()
+
+    async def apply_issuer_context(_transaction) -> None:
+        return None
+
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
+
+    approval_task = asyncio.create_task(
+        application_routes.approve_application(
+            application_id=app.id,
+            approval=ApplicationApproval(review_notes="Approve"),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    )
+    await approval_reached_dependency_gate.wait()
+    rejection = await application_routes.reject_application(
+        application_id=app.id,
+        rejection=ApplicationRejection(review_notes="Reject"),
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    assert rejection.status == expected["final_application_status"]
+
+    allow_approval_to_reserve.set()
+    with pytest.raises(HTTPException) as raised:
+        await approval_task
+    assert raised.value.status_code == expected["approval_loser_status"]
+    assert raised.value.detail == expected["approval_loser_detail"]
+
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["final_application_status"]
+    assert len(await repo.list_transactions(app.organization_id)) == expected[
+        "transaction_count"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approvals_reserve_exactly_one_transaction(monkeypatch) -> None:
+    expected = CONTRACT["lifecycle"]["concurrent_transition"][
+        "approval_approval_race"
+    ]
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-double-approval",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+        form_data={"employee_id": "E-1"},
+    )
+    await repo.save_application_template(
+        ApplicationTemplate(
+            id=app.application_template_id,
+            organization_id=app.organization_id,
+            name="Membership",
+            credential_template_id="credential-template-1",
+            status="ACTIVE",
+        )
+    )
+    await repo.save_application(app)
+
+    issuer_context_waiters = 0
+    both_prepared = asyncio.Event()
+    release_reservations = asyncio.Event()
+
+    async def fetch_template(_template_id: str):
+        return _valid_live_credential_template()
+
+    async def require_revocation_binding(**_kwargs) -> None:
+        return None
+
+    async def apply_issuer_context(transaction) -> None:
+        nonlocal issuer_context_waiters
+        issuer_context_waiters += 1
+        if issuer_context_waiters == 2:
+            both_prepared.set()
+        await release_reservations.wait()
+        transaction.issuer_profile_id = "issuer-profile-1"
+        transaction.signing_service_id = "kms-service-1"
+
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
+
+    tasks = [
+        asyncio.create_task(
+            application_routes.approve_application(
+                application_id=app.id,
+                approval=ApplicationApproval(review_notes=f"Approve {index}"),
+                trusted_organization_id=app.organization_id,
+                repo=repo,
+            )
+        )
+        for index in range(2)
+    ]
+    await both_prepared.wait()
+    release_reservations.set()
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    successes = [outcome for outcome in outcomes if isinstance(outcome, ApplicationResponse)]
+    conflicts = [outcome for outcome in outcomes if isinstance(outcome, HTTPException)]
+    assert len(successes) == expected["success_count"]
+    assert len(conflicts) == expected["conflict_count"]
+    assert conflicts[0].status_code == expected["conflict_status"]
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["final_application_status"]
+    assert len(await repo.list_transactions(app.organization_id)) == expected[
+        "transaction_count"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rejection_wins_forced_evidence_race_without_retaining_submission() -> None:
+    expected = CONTRACT["lifecycle"]["concurrent_transition"][
+        "evidence_rejection_race"
+    ]
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-evidence-race",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+    )
+    await repo.save_application(app)
+    original_save = repo.save_application_if_status
+    evidence_reached_commit = asyncio.Event()
+    allow_evidence_commit = asyncio.Event()
+
+    async def controlled_save(candidate, *, expected_status):
+        if candidate.status == ApplicationStatus.PENDING and candidate.evidence_submissions:
+            evidence_reached_commit.set()
+            await allow_evidence_commit.wait()
+        return await original_save(candidate, expected_status=expected_status)
+
+    repo.save_application_if_status = controlled_save  # type: ignore[method-assign]
+    evidence_task = asyncio.create_task(
+        application_routes.submit_evidence(
+            application_id=app.id,
+            evidence=EvidenceSubmission(
+                evidence_type="DOCUMENT_SCAN",
+                evidence_data={"document": "passport"},
+            ),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    )
+    await evidence_reached_commit.wait()
+    rejection = await application_routes.reject_application(
+        application_id=app.id,
+        rejection=ApplicationRejection(review_notes="Reject"),
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    assert rejection.status == expected["final_application_status"]
+
+    allow_evidence_commit.set()
+    with pytest.raises(HTTPException) as raised:
+        await evidence_task
+    assert raised.value.status_code == expected["evidence_loser_status"]
+    assert raised.value.detail == expected["evidence_loser_detail"]
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["final_application_status"]
+    assert len(stored.evidence_submissions) == expected["evidence_submission_count"]
+
+
+@pytest.mark.asyncio
 async def test_offer_generation_replay_and_issued_transaction_read_match_contract(
     monkeypatch,
 ) -> None:

@@ -394,6 +394,34 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def save_application_if_status(
+        self,
+        app: Application,
+        *,
+        expected_status: ApplicationStatus,
+    ) -> bool:
+        """Persist an application only while its lifecycle status is unchanged."""
+        pass
+
+    @abstractmethod
+    async def reserve_application_issuance(
+        self,
+        prepared_transaction: IssuanceTransaction,
+        *,
+        expected_status: ApplicationStatus,
+        reviewer_id: str,
+        review_notes: str,
+        reviewed_at: datetime,
+    ) -> tuple[Application, IssuanceTransaction] | None:
+        """Atomically approve a non-Canvas application and bind one transaction.
+
+        Implementations must lock the application, reject a stale lifecycle
+        state without inserting or updating a transaction, and commit the
+        application and transaction together.
+        """
+        pass
+
+    @abstractmethod
     async def reserve_canvas_application_issuance(
         self,
         prepared_transaction: IssuanceTransaction,

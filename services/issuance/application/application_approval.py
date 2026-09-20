@@ -19,6 +19,10 @@ from issuance.domain.ports import IIssuanceRepository
 IssuerContextApplier = Callable[[IssuanceTransaction], Awaitable[None]]
 
 
+class ApplicationTransitionConflictError(ValueError):
+    """The application lifecycle changed while issuance was being prepared."""
+
+
 @dataclass(frozen=True)
 class CredentialContext:
     credential_type: str = "org.iso.18013.5.1.mDL"
@@ -141,6 +145,7 @@ async def approve_application_for_issuance(
         raise ValueError("Application template missing credential template ID")
     if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
         raise ValueError(f"Cannot approve application in {app.status} status")
+    expected_status = app.status
 
     canvas_application = _is_canvas_bound_application(app)
     existing_tx: IssuanceTransaction | None = None
@@ -167,8 +172,6 @@ async def approve_application_for_issuance(
                 tx.claims = {**tx.claims, "_vct": credential_context.credential_vct}
         if issuer_context_applier is not None:
             await issuer_context_applier(tx)
-        if not canvas_application:
-            await repo.save_transaction(tx)
     else:
         merged_claims = {**app.form_data}
         default_credential_type = str(
@@ -215,8 +218,6 @@ async def approve_application_for_issuance(
         )
         if issuer_context_applier is not None:
             await issuer_context_applier(tx)
-        if not canvas_application:
-            await repo.save_transaction(tx)
 
     now = datetime.now(UTC)
     if canvas_application:
@@ -243,11 +244,23 @@ async def approve_application_for_issuance(
             raise ValueError("Canvas credential claim is already in progress")
         return tx
 
-    app.status = ApplicationStatus.APPROVED
-    app.review_notes = review_notes
-    app.reviewer_id = reviewer_id
-    app.reviewed_at = now
-    app.issuance_transaction_id = tx.id
-    app.updated_at = now
-    await repo.save_application(app)
+    reserved = await repo.reserve_application_issuance(
+        tx,
+        expected_status=expected_status,
+        reviewer_id=reviewer_id,
+        review_notes=review_notes,
+        reviewed_at=now,
+    )
+    if reserved is None:
+        raise ApplicationTransitionConflictError(
+            "Application lifecycle changed during approval"
+        )
+    canonical_app, tx = reserved
+    app.status = canonical_app.status
+    app.review_notes = canonical_app.review_notes
+    app.reviewer_id = canonical_app.reviewer_id
+    app.reviewed_at = canonical_app.reviewed_at
+    app.issuance_transaction_id = canonical_app.issuance_transaction_id
+    app.credential_id = canonical_app.credential_id
+    app.updated_at = canonical_app.updated_at
     return tx

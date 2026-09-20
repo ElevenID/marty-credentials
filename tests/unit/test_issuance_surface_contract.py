@@ -22,7 +22,8 @@ def test_frozen_issuance_surface_matches_python_parity_oracle() -> None:
 
 
 def test_rust_owned_application_templates_preserve_the_remaining_semantic_surface() -> None:
-    # Baseline: reviewed Application Template Rust cutover. Only dynamic-lookup
+    # Baseline: reviewed Application Template Rust cutover plus the frozen,
+    # atomic internal-Application approval boundary. Only dynamic-lookup
     # source-line metadata is excluded; source paths, ordering and every retained
     # HTTP, RPC, configuration, runtime and migration field remain in the digest.
     # check_contract above still requires exact current source-line metadata.
@@ -31,7 +32,7 @@ def test_rust_owned_application_templates_preserve_the_remaining_semantic_surfac
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "242f5bec2997dbea511b345979eef3f55ae195e025fe8b0569dd0abafa4d92ff"
+        "7a5306e3e398dc161fe8b39a079293f4e62a585b05de4505ba6a62b39a204124"
     )
 
 

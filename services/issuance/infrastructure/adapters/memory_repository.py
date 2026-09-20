@@ -735,6 +735,71 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     async def save_application(self, app: Application) -> None:
         self._applications[app.id] = app
 
+    async def save_application_if_status(
+        self,
+        app: Application,
+        *,
+        expected_status: ApplicationStatus,
+    ) -> bool:
+        lock = self._application_issuance_locks.setdefault(app.id, asyncio.Lock())
+        async with lock:
+            stored = self._applications.get(app.id)
+            if (
+                stored is None
+                or stored.organization_id != app.organization_id
+                or stored.status != expected_status
+            ):
+                return False
+            self._applications[app.id] = copy.deepcopy(app)
+            return True
+
+    async def reserve_application_issuance(
+        self,
+        prepared_transaction: IssuanceTransaction,
+        *,
+        expected_status: ApplicationStatus,
+        reviewer_id: str,
+        review_notes: str,
+        reviewed_at: datetime,
+    ) -> tuple[Application, IssuanceTransaction] | None:
+        application_id = str(prepared_transaction.application_id or "").strip()
+        if not application_id:
+            raise ValueError("Issuance transaction requires an application")
+        lock = self._application_issuance_locks.setdefault(application_id, asyncio.Lock())
+        async with lock:
+            app = self._applications.get(application_id)
+            if (
+                app is None
+                or app.organization_id != prepared_transaction.organization_id
+                or self._canvas_context(app) is not None
+                or app.status != expected_status
+            ):
+                return None
+
+            stored_transaction = self._transactions.get(prepared_transaction.id)
+            if (
+                stored_transaction is not None
+                and stored_transaction.status
+                not in issuance_save_predecessors(prepared_transaction.status)
+            ):
+                raise ValueError(
+                    "Stale issuance transaction transition "
+                    f"{stored_transaction.status.value}->{prepared_transaction.status.value}"
+                )
+            self._transactions[prepared_transaction.id] = copy.deepcopy(
+                prepared_transaction
+            )
+
+            canonical = copy.deepcopy(app)
+            canonical.status = ApplicationStatus.APPROVED
+            canonical.review_notes = review_notes
+            canonical.reviewer_id = reviewer_id
+            canonical.reviewed_at = reviewed_at
+            canonical.issuance_transaction_id = prepared_transaction.id
+            canonical.updated_at = reviewed_at
+            self._applications[application_id] = canonical
+            return copy.deepcopy(canonical), copy.deepcopy(prepared_transaction)
+
     @staticmethod
     def _canvas_context(app: Application) -> dict[str, Any] | None:
         integration_context = (

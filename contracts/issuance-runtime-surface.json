@@ -396,7 +396,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 433,
+        "line": 447,
         "method": "GET",
         "operation": "list_applications",
         "path": "/internal/applications",
@@ -404,7 +404,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 380,
+        "line": 386,
         "method": "POST",
         "operation": "create_application",
         "path": "/internal/applications",
@@ -412,7 +412,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 650,
+        "line": 676,
         "method": "POST",
         "operation": "reconcile_application_evidence",
         "path": "/internal/applications/evidence/reconcile",
@@ -420,7 +420,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 680,
+        "line": 706,
         "method": "GET",
         "operation": "get_application_evidence_reconciliation_report",
         "path": "/internal/applications/evidence/reconciliation-report",
@@ -428,7 +428,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 474,
+        "line": 491,
         "method": "GET",
         "operation": "get_application",
         "path": "/internal/applications/{application_id}",
@@ -436,7 +436,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 744,
+        "line": 779,
         "method": "POST",
         "operation": "approve_application",
         "path": "/internal/applications/{application_id}/approve",
@@ -444,7 +444,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 505,
+        "line": 522,
         "method": "GET",
         "operation": "list_application_evidence_facts",
         "path": "/internal/applications/{application_id}/evidence-facts",
@@ -452,7 +452,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 522,
+        "line": 539,
         "method": "GET",
         "operation": "get_application_evidence_summary",
         "path": "/internal/applications/{application_id}/evidence-summary",
@@ -460,7 +460,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 552,
+        "line": 569,
         "method": "POST",
         "operation": "run_external_evidence_api_check",
         "path": "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
@@ -468,7 +468,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1364,
+        "line": 1484,
         "method": "GET",
         "operation": "list_issuance_events",
         "path": "/internal/applications/{application_id}/issuance-events",
@@ -476,7 +476,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1263,
+        "line": 1379,
         "method": "GET",
         "operation": "get_issuance_offer",
         "path": "/internal/applications/{application_id}/issuance-offer",
@@ -484,7 +484,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 1164,
+        "line": 1280,
         "method": "POST",
         "operation": "generate_issuance_offer",
         "path": "/internal/applications/{application_id}/issuance-offer",
@@ -492,7 +492,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 857,
+        "line": 909,
         "method": "POST",
         "operation": "reject_application",
         "path": "/internal/applications/{application_id}/reject",
@@ -500,7 +500,7 @@
         "source": "services/issuance/infrastructure/api/application_routes.py"
       },
       {
-        "line": 700,
+        "line": 726,
         "method": "POST",
         "operation": "submit_evidence",
         "path": "/internal/applications/{application_id}/submit-evidence",

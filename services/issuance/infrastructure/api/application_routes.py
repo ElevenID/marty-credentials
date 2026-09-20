@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -14,6 +15,7 @@ from pydantic import BaseModel, Field
 
 ISSUER_BASE_URL = os.environ.get("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 from issuance.application.application_approval import (
+    ApplicationTransitionConflictError,
     CredentialContext,
     approve_application_for_issuance,
 )
@@ -738,12 +740,21 @@ async def submit_evidence(
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot submit evidence for application in {app.status} status")
     
-    app.evidence_submissions.append({
+    updated_app = deepcopy(app)
+    updated_app.evidence_submissions.append({
         "evidence_type": evidence.evidence_type,
         "evidence_data": evidence.evidence_data,
         "submitted_at": datetime.now(timezone.utc).isoformat(),
     })
-    await repo.save_application(app)
+    if not await repo.save_application_if_status(
+        updated_app,
+        expected_status=ApplicationStatus.PENDING,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Application lifecycle changed during evidence submission",
+        )
+    app = updated_app
     
     logger.info(f"Added evidence to application {application_id}: {evidence.evidence_type}")
     
@@ -849,6 +860,11 @@ async def approve_application(
             credential_context=credential_context,
             issuer_context_applier=issuer_context_applier,
         )
+    except ApplicationTransitionConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Application lifecycle changed during approval",
+        ) from None
     except (RuntimeError, ValueError) as exc:
         if canvas_credential_context is None:
             logger.warning(
@@ -907,11 +923,20 @@ async def reject_application(
     if app.status != ApplicationStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"Cannot reject application in {app.status} status")
     
-    app.status = ApplicationStatus.REJECTED
-    app.review_notes = rejection.review_notes
-    app.reviewer_id = _INTERNAL_REVIEWER_ID
-    app.reviewed_at = datetime.now(timezone.utc)
-    await repo.save_application(app)
+    updated_app = deepcopy(app)
+    updated_app.status = ApplicationStatus.REJECTED
+    updated_app.review_notes = rejection.review_notes
+    updated_app.reviewer_id = _INTERNAL_REVIEWER_ID
+    updated_app.reviewed_at = datetime.now(timezone.utc)
+    if not await repo.save_application_if_status(
+        updated_app,
+        expected_status=ApplicationStatus.PENDING,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Application lifecycle changed during rejection",
+        )
+    app = updated_app
     
     logger.info(f"Rejected application {application_id}")
     

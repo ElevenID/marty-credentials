@@ -7,7 +7,12 @@
     "approved_repairs": [
       "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
       "843c0e5: restore name, email, then generated applicant identifier precedence",
-      "redact provider transport exception details from external evidence API responses"
+      "073b177: redact provider transport exception details from external evidence API responses",
+      "877253d: reserve replayed application offers idempotently",
+      "1dda8ac: map invalid status filters to a stable validation response",
+      "3bee6f7: fail closed on missing offer dependencies and issuer context",
+      "validate active tenant-owned revocation bindings before ordinary approval",
+      "commit manual lifecycle transitions and non-Canvas issuance reservations atomically"
     ]
   },
   "coverage": {
@@ -16,15 +21,19 @@
       "authentication",
       "tenant_boundary",
       "request_models",
-      "typed_response_projection"
-    ],
-    "required_before_rust_implementation": [
-      "complete_lifecycle_success_and_invalid_state_transitions",
+      "typed_response_projection",
+      "lifecycle_success_and_invalid_state_transitions",
       "dependency_failure_matrix",
-      "exact_write_sets_and_failure_atomicity",
+      "manual_transition_failure_atomicity",
       "offer_replay_and_concurrency",
       "external_api_failure_and_secret_redaction",
-      "canvas_and_non_canvas_repository_lifecycle"
+      "canvas_and_non_canvas_approval_lifecycle"
+    ],
+    "required_before_rust_implementation": [
+      "create_success_and_complete_http_lifecycle_replay",
+      "external_evidence_atomic_write_set_and_concurrent_lifecycle",
+      "reconciliation_atomic_write_set_and_concurrent_lifecycle",
+      "postgres_repository_replay_for_evidence_and_reconciliation"
     ],
     "rust_implementation_authorized": false
   },
@@ -213,6 +222,29 @@
       "wallet": {"id": "wallet-1", "name": "Example Wallet", "logo_url": "https://wallet.example/logo.svg", "platforms": ["ios", "android"]},
       "email_subject": "Your credential is ready",
       "event_types": ["offer_generated", "offer_generated", "offer_viewed"]
+    },
+    "concurrent_transition": {
+      "approval_rejection_race": {
+        "forced_winner": "rejection",
+        "final_application_status": "rejected",
+        "approval_loser_status": 409,
+        "approval_loser_detail": "Application lifecycle changed during approval",
+        "transaction_count": 0
+      },
+      "approval_approval_race": {
+        "success_count": 1,
+        "conflict_count": 1,
+        "conflict_status": 409,
+        "final_application_status": "approved",
+        "transaction_count": 1
+      },
+      "evidence_rejection_race": {
+        "forced_winner": "rejection",
+        "final_application_status": "rejected",
+        "evidence_loser_status": 409,
+        "evidence_loser_detail": "Application lifecycle changed during evidence submission",
+        "evidence_submission_count": 0
+      }
     },
     "external_api_failure_cases": [
       {"id": "api-check-missing-template", "arrange": "missing_template", "status": 404, "detail": "Application template not found"},

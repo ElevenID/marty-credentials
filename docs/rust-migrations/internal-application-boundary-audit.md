@@ -26,6 +26,13 @@ escaping as an enum conversion error and becoming an internal server failure.
 Fresh non-Canvas offers now require the local Application Template to retain a
 credential-template binding. Approval and offer KMS resolution failures return
 a stable redacted 503 and leave applications, transactions, and events intact.
+Ordinary approval now also verifies the configured Revocation Profile is
+present, tenant-owned, active, and reachable before any issuance write. Manual
+approval, rejection, and evidence submission now use repository-level
+compare-and-set transitions. Non-Canvas approval binds its transaction and
+application in one database transaction, so concurrent approval/rejection and
+approval/approval races cannot leave an orphan transaction or resurrect a
+losing lifecycle state.
 
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The
@@ -114,22 +121,23 @@ single language-neutral 14-route boundary.
 The canonical
 [`issuance-internal-applications.json`](../../contracts/issuance-internal-applications.json)
 contract and Python oracle now freeze the route surface, authentication,
-tenant boundary, request validation, and typed response projections. The
-contract deliberately leaves Rust implementation unauthorized until the
-remaining behavioral groups below are executable. Before implementation
-begins, extend that same contract and oracle suite to cover:
+tenant boundary, request validation, typed projections, lifecycle failures,
+ordinary and Canvas approval, dependency failures, offer replay, and manual
+lifecycle concurrency. The forced concurrency cases prove one non-Canvas
+approval transaction, no orphan transaction when rejection wins, and no stale
+evidence submission when rejection wins.
 
-1. every method/path and unsupported sibling routing;
-2. authentication and tenant failures on every route class;
-3. request-model unknown, missing, null, and malformed inputs;
-4. complete response projection for applications, evidence, events, and offers;
-5. every lifecycle success and invalid-state transition;
-6. dependency not-found, unavailable, wrong-tenant, inactive, and malformed
-   responses;
-7. exact write sets and no-mutation guarantees for every failure;
-8. idempotent/replayed offer behavior and concurrent transition conflicts;
-9. external API timeout/transport/mapping failures without secret leakage;
-10. Canvas and non-Canvas approval/offer paths with real repository state.
+Rust implementation remains deliberately unauthorized. The remaining
+behavior-freeze work is narrower but substantive:
+
+1. replay create success and the complete fourteen-route success lifecycle
+   through the actual HTTP boundary;
+2. make external-evidence fact, policy, application, event, and optional
+   issuance writes atomic, including a concurrent lifecycle-decision case;
+3. make reconciliation policy/application/event/issuance writes atomic and
+   freeze its concurrent lifecycle behavior;
+4. replay those evidence and reconciliation write sets against PostgreSQL,
+   not only the in-memory owner and statement-level approval tests.
 
 The Rust implementation may start only after that contract replays against the
 Python owner. Python deletion remains forbidden until the candidate passes the

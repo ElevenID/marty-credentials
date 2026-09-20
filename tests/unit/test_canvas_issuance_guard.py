@@ -643,11 +643,12 @@ async def test_manual_non_canvas_approval_uses_live_did_first_template(
             "organization_id": "org-1",
             "status": "ACTIVE",
             "credential_type": "EmployeeCredential",
-            "vct": "https://issuer.example/credentials/employee",
-            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
-            "issuer_did": "did:web:issuer.example:orgs:org-1",
-            "issuer_algorithm": "ES256",
-        }
+                "vct": "https://issuer.example/credentials/employee",
+                "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+                "revocation_profile_id": "revocation-profile-1",
+                "issuer_did": "did:web:issuer.example:orgs:org-1",
+                "issuer_algorithm": "ES256",
+            }
 
     ordinary_calls: list[str] = []
 
@@ -659,7 +660,18 @@ async def test_manual_non_canvas_approval_uses_live_did_first_template(
         tx.signing_service_id = "kms-service-1"
         return None
 
+    async def require_revocation_binding(**kwargs) -> None:
+        assert kwargs == {
+            "organization_id": "org-1",
+            "revocation_profile_id": "revocation-profile-1",
+        }
+
     monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
     monkeypatch.setattr(
         application_routes,
         "apply_required_remote_issuer_context",
