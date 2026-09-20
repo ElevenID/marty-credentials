@@ -2,6 +2,7 @@ import asyncio
 import json
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -12,6 +13,9 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    EventType,
+    EvidenceFact,
+    IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
 )
@@ -73,6 +77,29 @@ RESPONSE_MODELS = {
 
 def _response_model_name(value: object) -> str:
     return getattr(value, "__name__", str(value))
+
+
+def _evidence_fact_from_contract(value: dict) -> EvidenceFact:
+    return EvidenceFact(
+        id=value["id"],
+        organization_id=value["organization_id"],
+        application_id=value["application_id"],
+        subject_id=value["subject_id"],
+        provider=value["provider"],
+        fact_type=value["fact_type"],
+        scope=value["scope"],
+        assertion=value["assertion"],
+        verification=value["verification"],
+        source=value["source"],
+        requirement_id=value["requirement_id"],
+        logical_key=value["logical_key"],
+        source_revision=value["source_revision"],
+        payload_hash=value["payload_hash"],
+        observed_at=datetime.fromisoformat(value["observed_at"]),
+        effective_at=datetime.fromisoformat(value["effective_at"]),
+        superseded_fact_id=value["superseded_fact_id"],
+        created_at=datetime.fromisoformat(value["created_at"]),
+    )
 
 
 def test_internal_application_route_surface_matches_contract() -> None:
@@ -183,6 +210,93 @@ def test_application_status_domain_matches_contract() -> None:
     assert [status.value for status in ApplicationStatus] == CONTRACT["lifecycle"][
         "application_statuses"
     ]
+
+
+@pytest.mark.asyncio
+async def test_application_evidence_and_event_reads_match_contract() -> None:
+    expected = CONTRACT["lifecycle"]["read_projection"]
+    application_value = expected["application"]
+    previous_fact_value = expected["previous_evidence_fact"]
+    fact_value = expected["evidence_fact"]
+    event_value = expected["issuance_event"]
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id=application_value["id"],
+        organization_id=application_value["organization_id"],
+        application_template_id=application_value["application_template_id"],
+        applicant_identifier=application_value["applicant_identifier"],
+        form_data=application_value["form_data"],
+        evidence_submissions=application_value["evidence_submissions"],
+        integration_context=application_value["integration_context"],
+        status=ApplicationStatus(application_value["status"]),
+        review_notes=application_value["review_notes"],
+        reviewer_id=application_value["reviewer_id"],
+        submitted_at=datetime.fromisoformat(application_value["submitted_at"]),
+        reviewed_at=datetime.fromisoformat(application_value["reviewed_at"]),
+        expires_at=datetime.fromisoformat(application_value["expires_at"]),
+        issuance_transaction_id=application_value["issuance_transaction_id"],
+    )
+    previous_fact = _evidence_fact_from_contract(previous_fact_value)
+    fact = _evidence_fact_from_contract(fact_value)
+    event = IssuanceEvent(
+        id=event_value["id"],
+        transaction_id=event_value["transaction_id"],
+        application_id=event_value["application_id"],
+        event_type=EventType(event_value["event_type"]),
+        metadata=event_value["metadata"],
+        created_at=datetime.fromisoformat(event_value["created_at"]),
+    )
+    await repo.save_application(app)
+    await repo.save_evidence_fact(previous_fact)
+    await repo.save_evidence_fact(fact)
+    await repo.save_event(event)
+
+    listed = await application_routes.list_applications(
+        organization_id=app.organization_id,
+        status=app.status.value,
+        application_template_id=app.application_template_id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    fetched = await application_routes.get_application(
+        application_id=app.id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    facts = await application_routes.list_application_evidence_facts(
+        application_id=app.id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    events = await application_routes.list_issuance_events(
+        application_id=app.id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+
+    assert [value.model_dump(mode="json") for value in listed] == [application_value]
+    assert fetched.model_dump(mode="json") == application_value
+    assert [value.model_dump(mode="json") for value in facts] == [
+        previous_fact_value,
+        fact_value,
+    ]
+    assert [value.model_dump(mode="json") for value in events] == [event_value]
+
+
+@pytest.mark.asyncio
+async def test_invalid_list_status_is_a_stable_validation_failure() -> None:
+    case = CONTRACT["lifecycle"]["read_projection"]["invalid_status"]
+    repo = InMemoryIssuanceRepository()
+    with pytest.raises(HTTPException) as raised:
+        await application_routes.list_applications(
+            organization_id="org-123",
+            status=case["value"],
+            application_template_id=None,
+            trusted_organization_id="org-123",
+            repo=repo,
+        )
+    assert raised.value.status_code == case["status"]
+    assert raised.value.detail == case["detail"]
 
 
 @pytest.mark.asyncio

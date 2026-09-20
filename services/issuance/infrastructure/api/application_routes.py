@@ -455,7 +455,10 @@ async def list_applications(
         trusted_organization_id,
         organization_id,
     )
-    status_enum = ApplicationStatus(status) if status else None
+    try:
+        status_enum = ApplicationStatus(status) if status else None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid application status") from None
     apps = await repo.list_applications(
         org_id=organization_id,
         status=status_enum,

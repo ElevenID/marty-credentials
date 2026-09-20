@@ -21,6 +21,8 @@ The offer replay audit also replaced the non-atomic read-then-create path with
 the repository's existing tenant-scoped idempotent reservation primitive. Two
 concurrent initial or refresh requests now share one transaction and offer
 instead of leaving an unreachable duplicate transaction behind.
+Invalid list-status filters are now mapped to a stable 422 response instead of
+escaping as an enum conversion error and becoming an internal server failure.
 
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The

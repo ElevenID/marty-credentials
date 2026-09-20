@@ -249,6 +249,73 @@
         "transaction_created": false
       }
     },
+    "read_projection": {
+      "application": {
+        "id": "application-read",
+        "organization_id": "org-123",
+        "application_template_id": "application-template-1",
+        "applicant_identifier": "ada@example.test",
+        "form_data": {"given_name": "Ada", "family_name": "Lovelace"},
+        "evidence_submissions": [{"evidence_type": "DOCUMENT_SCAN", "evidence_data": {"digest": "sha256:1"}}],
+        "integration_context": {"source": "contract"},
+        "status": "under_review",
+        "review_notes": "Reviewing",
+        "reviewer_id": "reviewer-1",
+        "submitted_at": "2026-09-19T12:34:56+00:00",
+        "reviewed_at": "2026-09-19T12:35:56+00:00",
+        "expires_at": "2026-10-19T12:34:56+00:00",
+        "issuance_transaction_id": "transaction-1"
+      },
+      "previous_evidence_fact": {
+        "id": "fact-0",
+        "organization_id": "org-123",
+        "application_id": "application-read",
+        "subject_id": "ada@example.test",
+        "provider": "contract-provider",
+        "fact_type": "identity.document",
+        "scope": {"document_type": "passport"},
+        "assertion": {"verified": false},
+        "verification": {"method": "CONTRACT", "status": "UNVERIFIED"},
+        "source": {"event_id": "event-0"},
+        "requirement_id": "requirement-1",
+        "logical_key": "logical-key-1",
+        "source_revision": "revision-0",
+        "payload_hash": "payload-hash-0",
+        "observed_at": "2026-09-19T12:30:56+00:00",
+        "effective_at": "2026-09-19T12:31:56+00:00",
+        "superseded_fact_id": null,
+        "created_at": "2026-09-19T12:32:56+00:00"
+      },
+      "evidence_fact": {
+        "id": "fact-1",
+        "organization_id": "org-123",
+        "application_id": "application-read",
+        "subject_id": "ada@example.test",
+        "provider": "contract-provider",
+        "fact_type": "identity.document",
+        "scope": {"document_type": "passport"},
+        "assertion": {"verified": true},
+        "verification": {"method": "CONTRACT", "status": "VERIFIED"},
+        "source": {"event_id": "event-1"},
+        "requirement_id": "requirement-1",
+        "logical_key": "logical-key-1",
+        "source_revision": "revision-1",
+        "payload_hash": "payload-hash-1",
+        "observed_at": "2026-09-19T12:36:56+00:00",
+        "effective_at": "2026-09-19T12:37:56+00:00",
+        "superseded_fact_id": "fact-0",
+        "created_at": "2026-09-19T12:38:56+00:00"
+      },
+      "issuance_event": {
+        "id": "issuance-event-1",
+        "transaction_id": "transaction-1",
+        "application_id": "application-read",
+        "event_type": "offer_viewed",
+        "metadata": {"channel": "contract"},
+        "created_at": "2026-09-19T12:39:56+00:00"
+      },
+      "invalid_status": {"value": "not-a-status", "status": 422, "detail": "Invalid application status"}
+    },
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},
