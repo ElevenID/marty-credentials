@@ -9,6 +9,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
 _PYTHON = os.path.join(_REPO_ROOT, "python")
@@ -35,10 +37,24 @@ from issuance.domain.entities import (
     CanvasPlatform,
     CanvasProgramBinding,
     EvidenceFact,
+    IssuanceEvent,
 )
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api.application_routes import reject_application
 from issuance.infrastructure.api.routes import ApplicationRejection
+
+
+class _FailingAuditRepository(InMemoryIssuanceRepository):
+    def __init__(self, fail_at: int) -> None:
+        super().__init__()
+        self._fail_at = fail_at
+        self._audit_writes = 0
+
+    async def save_event(self, event: IssuanceEvent) -> None:
+        self._audit_writes += 1
+        if self._audit_writes == self._fail_at:
+            raise RuntimeError(f"audit-write-{self._fail_at}-failed")
+        await super().save_event(event)
 
 
 def _verified_canvas_fact(
@@ -282,6 +298,38 @@ async def test_reconciliation_loses_rejection_race_without_resurrecting_applicat
     stored = await repo.get_application(app.id)
     assert stored is not None
     assert stored.status.value == expected["final_application_status"]
+    assert len(await repo.list_transactions(app.organization_id)) == expected[
+        "transaction_count"
+    ]
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type.value for event in events] == expected["event_types"]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+async def test_reconciliation_atomic_write_set_rolls_back_every_audit_failure(
+    fail_at: int,
+) -> None:
+    expected = CONTRACT["lifecycle"]["reconciliation_outcomes"][
+        "atomic_persistence_failure"
+    ]
+    repo = _FailingAuditRepository(fail_at)
+    app = await _seed_canvas_application(repo, app_id=f"app-reconciliation-failure-{fail_at}")
+
+    with pytest.raises(RuntimeError, match=f"audit-write-{fail_at}-failed"):
+        await reconcile_canvas_evidence_transitions(
+            repo=repo,
+            organization_id=app.organization_id,
+            application_id=app.id,
+        )
+
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["application_status"]
+    assert stored.issuance_transaction_id is None
+    assert ("policy" in stored.integration_context) is expected["policy_persisted"]
+    assert len(await repo.list_evidence_facts_for_application(app.id)) == expected[
+        "existing_fact_count"
+    ]
     assert len(await repo.list_transactions(app.organization_id)) == expected[
         "transaction_count"
     ]

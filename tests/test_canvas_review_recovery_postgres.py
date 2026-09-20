@@ -20,10 +20,15 @@ from issuance.application.canvas_sync_service import (
     resolve_evidence_policy_review,
 )
 from issuance.domain.entities import (
+    Application,
+    ApplicationStatus,
     EventType,
+    EvidenceFact,
     EvidencePolicyReview,
     EvidencePolicyReviewStatus,
     IssuanceEvent,
+    IssuanceStatus,
+    IssuanceTransaction,
 )
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 from sqlalchemy import create_engine, text
@@ -285,5 +290,214 @@ async def _exercise(url, config) -> None:
         assert await review() == recovered
         assert len(await events()) == 1
         assert await credential_rows() == preserved_credentials
+        await _exercise_atomic_application_evidence_write_sets(engine=engine, repo=repo)
     finally:
         await engine.dispose()
+
+
+async def _exercise_atomic_application_evidence_write_sets(*, engine, repo) -> None:
+    async def seed_application(application_id: str, *, canvas: bool = False) -> Application:
+        context = '{"canvas":{"canvas_platform_id":"platform-review"}}' if canvas else "{}"
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO issuance_service.applications "
+                    "(id,organization_id,application_template_id,applicant_identifier,form_data,"
+                    "submitted_evidence,status,derived_claims,integration_context,created_at,updated_at) "
+                    "VALUES (:id,'org-review','template-review','synthetic-subject','{}','[]','pending',"
+                    "'{}',CAST(:context AS jsonb),now(),now())"
+                ),
+                {"id": application_id, "context": context},
+            )
+        application = await repo.get_application(application_id)
+        assert application is not None
+        return application
+
+    async def persisted_counts(application_id: str, transaction_id: str) -> tuple[int, int, int, str]:
+        async with engine.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        "SELECT "
+                        "(SELECT count(*) FROM issuance_service.evidence_facts WHERE application_id=:app),"
+                        "(SELECT count(*) FROM issuance_service.issuance_events WHERE application_id=:app),"
+                        "(SELECT count(*) FROM issuance_service.issuance_transactions WHERE id=:tx),"
+                        "(SELECT status FROM issuance_service.applications WHERE id=:app)"
+                    ),
+                    {"app": application_id, "tx": transaction_id},
+                )
+            ).one()
+        return int(row[0]), int(row[1]), int(row[2]), str(row[3])
+
+    external = await seed_application("application-external-atomic")
+    external.evidence_submissions = [{"evidence_type": "EXTERNAL_API"}]
+    external.integration_context = {"policy": {"allowed": True}}
+    external_fact = EvidenceFact(
+        id="fact-external-atomic",
+        organization_id=external.organization_id,
+        application_id=external.id,
+        subject_id=external.applicant_identifier,
+        provider="synthetic",
+        fact_type="identity.document",
+        verification={"status": "VERIFIED"},
+    )
+    external_tx = IssuanceTransaction(
+        id="transaction-external-atomic",
+        organization_id=external.organization_id,
+        credential_template_id="credential-template",
+        applicant_id=external.applicant_identifier,
+        application_id=external.id,
+        claims={},
+        status=IssuanceStatus.PENDING,
+    )
+    external_events = tuple(
+        IssuanceEvent(
+            id=f"event-external-atomic-{index}",
+            application_id=external.id,
+            transaction_id=external_tx.id if event_type == EventType.APPROVAL_ISSUANCE_SUCCEEDED else None,
+            event_type=event_type,
+            metadata={"organization_id": external.organization_id},
+        )
+        for index, event_type in enumerate(
+            (
+                EventType.EVIDENCE_FACT_CREATED,
+                EventType.EVIDENCE_POLICY_PERMITTED,
+                EventType.APPROVAL_ISSUANCE_SUCCEEDED,
+            )
+        )
+    )
+    assert await repo.reserve_application_issuance(
+        external,
+        external_tx,
+        expected_status=ApplicationStatus.PENDING,
+        reviewer_id="synthetic-reviewer",
+        review_notes="Synthetic external evidence",
+        reviewed_at=datetime.now(UTC),
+        evidence_fact=external_fact,
+        audit_events=external_events,
+    ) is not None
+    assert await persisted_counts(external.id, external_tx.id) == (1, 3, 1, "approved")
+
+    canvas = await seed_application("application-reconciliation-atomic", canvas=True)
+    canvas.integration_context["policy"] = {"allowed": True}
+    canvas_tx = IssuanceTransaction(
+        id="transaction-reconciliation-atomic",
+        organization_id=canvas.organization_id,
+        credential_template_id="credential-template",
+        applicant_id=canvas.applicant_identifier,
+        application_id=canvas.id,
+        claims={},
+        status=IssuanceStatus.PENDING,
+    )
+    canvas_events = tuple(
+        IssuanceEvent(
+            id=f"event-reconciliation-atomic-{index}",
+            application_id=canvas.id,
+            transaction_id=canvas_tx.id if event_type == EventType.APPROVAL_ISSUANCE_SUCCEEDED else None,
+            event_type=event_type,
+            metadata={"organization_id": canvas.organization_id},
+        )
+        for index, event_type in enumerate(
+            (EventType.EVIDENCE_POLICY_PERMITTED, EventType.APPROVAL_ISSUANCE_SUCCEEDED)
+        )
+    )
+    assert await repo.reserve_canvas_application_issuance(
+        canvas_tx,
+        application=canvas,
+        expected_updated_at=canvas.updated_at,
+        reviewer_id="canvas:evidence-reconciliation",
+        review_notes="Synthetic reconciliation",
+        reviewed_at=datetime.now(UTC),
+        audit_events=canvas_events,
+    ) is not None
+    assert await persisted_counts(canvas.id, canvas_tx.id) == (0, 2, 1, "approved")
+
+    async with engine.begin() as connection:
+        await connection.exec_driver_sql(
+            "ALTER TABLE issuance_service.issuance_events ADD CONSTRAINT "
+            "synthetic_evidence_audit_failure CHECK (id <> 'synthetic-evidence-fail')"
+        )
+    try:
+        failed = await seed_application("application-external-rollback")
+        failed.evidence_submissions = [{"evidence_type": "EXTERNAL_API"}]
+        failed_fact = EvidenceFact(
+            id="fact-external-rollback",
+            organization_id=failed.organization_id,
+            application_id=failed.id,
+            subject_id=failed.applicant_identifier,
+            provider="synthetic",
+            fact_type="identity.document",
+            verification={"status": "VERIFIED"},
+        )
+        failed_tx = IssuanceTransaction(
+            id="transaction-external-rollback",
+            organization_id=failed.organization_id,
+            credential_template_id="credential-template",
+            applicant_id=failed.applicant_identifier,
+            application_id=failed.id,
+            claims={},
+            status=IssuanceStatus.PENDING,
+        )
+        with pytest.raises(IntegrityError, match="synthetic_evidence_audit_failure"):
+            await repo.reserve_application_issuance(
+                failed,
+                failed_tx,
+                expected_status=ApplicationStatus.PENDING,
+                reviewer_id="synthetic-reviewer",
+                review_notes="Must roll back",
+                reviewed_at=datetime.now(UTC),
+                evidence_fact=failed_fact,
+                audit_events=(
+                    IssuanceEvent(
+                        id="synthetic-evidence-fail",
+                        application_id=failed.id,
+                        event_type=EventType.APPROVAL_ISSUANCE_SUCCEEDED,
+                        metadata={"organization_id": failed.organization_id},
+                    ),
+                ),
+            )
+        assert await persisted_counts(failed.id, failed_tx.id) == (0, 0, 0, "pending")
+
+        failed_canvas = await seed_application(
+            "application-reconciliation-rollback",
+            canvas=True,
+        )
+        failed_canvas.integration_context["policy"] = {"allowed": True}
+        failed_canvas_tx = IssuanceTransaction(
+            id="transaction-reconciliation-rollback",
+            organization_id=failed_canvas.organization_id,
+            credential_template_id="credential-template",
+            applicant_id=failed_canvas.applicant_identifier,
+            application_id=failed_canvas.id,
+            claims={},
+            status=IssuanceStatus.PENDING,
+        )
+        with pytest.raises(IntegrityError, match="synthetic_evidence_audit_failure"):
+            await repo.reserve_canvas_application_issuance(
+                failed_canvas_tx,
+                application=failed_canvas,
+                expected_updated_at=failed_canvas.updated_at,
+                reviewer_id="canvas:evidence-reconciliation",
+                review_notes="Must roll back",
+                reviewed_at=datetime.now(UTC),
+                audit_events=(
+                    IssuanceEvent(
+                        id="synthetic-evidence-fail",
+                        application_id=failed_canvas.id,
+                        event_type=EventType.APPROVAL_ISSUANCE_SUCCEEDED,
+                        metadata={"organization_id": failed_canvas.organization_id},
+                    ),
+                ),
+            )
+        assert await persisted_counts(failed_canvas.id, failed_canvas_tx.id) == (
+            0,
+            0,
+            0,
+            "pending",
+        )
+    finally:
+        async with engine.begin() as connection:
+            await connection.exec_driver_sql(
+                "ALTER TABLE issuance_service.issuance_events DROP CONSTRAINT "
+                "synthetic_evidence_audit_failure"
+            )

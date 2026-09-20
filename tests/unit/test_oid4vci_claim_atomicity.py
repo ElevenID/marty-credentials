@@ -15,6 +15,9 @@ from issuance.domain.entities import (
     ApplicationStatus,
     AuthorizationSession,
     CredentialStatus,
+    EventType,
+    EvidenceFact,
+    IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
@@ -61,7 +64,7 @@ class _Transaction:
 
 
 class _Session:
-    def __init__(self, results: list[_Result]) -> None:
+    def __init__(self, results: list[_Result | Exception]) -> None:
         self.results = list(results)
         self.statements = []
         self.transaction_states: list[bool] = []
@@ -81,7 +84,10 @@ class _Session:
     async def execute(self, statement):
         self.statements.append(statement)
         self.transaction_states.append(self.transaction_active)
-        return self.results.pop(0)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
     async def commit(self):
         self.committed = True
@@ -110,6 +116,10 @@ def _application_row(application: Application) -> SimpleNamespace:
     values["status"] = application.status.value
     values["submitted_evidence"] = values.pop("evidence_submissions")
     return SimpleNamespace(**values)
+
+
+def _evidence_fact_row(fact: EvidenceFact) -> SimpleNamespace:
+    return SimpleNamespace(**vars(fact))
 
 
 def _transaction(**overrides) -> IssuanceTransaction:
@@ -928,6 +938,217 @@ async def test_postgres_application_status_cas_locks_then_updates() -> None:
     statements = [str(statement).upper() for statement in session.statements]
     assert "FOR UPDATE" in statements[0]
     assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[1]
+
+
+def _evidence_audit_events(
+    application: Application,
+    *,
+    transaction_id: str | None = None,
+) -> tuple[IssuanceEvent, ...]:
+    events = [
+        IssuanceEvent(
+            application_id=application.id,
+            event_type=EventType.EVIDENCE_FACT_CREATED,
+            metadata={"organization_id": application.organization_id},
+        ),
+        IssuanceEvent(
+            application_id=application.id,
+            event_type=EventType.EVIDENCE_POLICY_PERMITTED,
+            metadata={"organization_id": application.organization_id},
+        ),
+    ]
+    if transaction_id is not None:
+        events.append(
+            IssuanceEvent(
+                application_id=application.id,
+                transaction_id=transaction_id,
+                event_type=EventType.APPROVAL_ISSUANCE_SUCCEEDED,
+                metadata={"organization_id": application.organization_id},
+            )
+        )
+    return tuple(events)
+
+
+@pytest.mark.asyncio
+async def test_postgres_external_evidence_permit_commits_exact_write_set_atomically() -> None:
+    application = Application(
+        id="external-evidence-application",
+        organization_id="org-1",
+        application_template_id="ordinary-application-template",
+        applicant_identifier="holder-1",
+    )
+    candidate = Application(**vars(application))
+    candidate.evidence_submissions = [{"evidence_type": "EXTERNAL_API"}]
+    candidate.integration_context = {"policy": {"allowed": True}}
+    fact = EvidenceFact(
+        id="external-evidence-fact",
+        organization_id=application.organization_id,
+        application_id=application.id,
+        subject_id=application.applicant_identifier,
+        provider="contract",
+        fact_type="identity.document",
+        verification={"status": "VERIFIED"},
+    )
+    prepared = _transaction(
+        id="external-evidence-transaction",
+        application_id=application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce=None,
+    )
+    reviewed_at = datetime.now(UTC)
+    approved = Application(**vars(candidate))
+    approved.status = ApplicationStatus.APPROVED
+    approved.review_notes = "Evidence permitted"
+    approved.reviewer_id = "evidence-reconciler"
+    approved.reviewed_at = reviewed_at
+    approved.updated_at = reviewed_at
+    approved.issuance_transaction_id = prepared.id
+    events = _evidence_audit_events(application, transaction_id=prepared.id)
+
+    def results(*, fail_at: int | None = None) -> list[_Result | Exception]:
+        values: list[_Result | Exception] = [
+            _Result(_application_row(application)),
+            _Result(None),
+            _Result(_evidence_fact_row(fact)),
+            _Result(),
+            _Result(_transaction_row(prepared)),
+            _Result(_application_row(approved)),
+            *[_Result() for _event in events],
+        ]
+        if fail_at is not None:
+            values[fail_at] = RuntimeError(f"write-{fail_at}-failed")
+        return values
+
+    session = _Session(results())
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+    reserved = await repo.reserve_application_issuance(
+        candidate,
+        prepared,
+        expected_status=ApplicationStatus.PENDING,
+        reviewer_id="evidence-reconciler",
+        review_notes="Evidence permitted",
+        reviewed_at=reviewed_at,
+        evidence_fact=fact,
+        audit_events=events,
+    )
+
+    assert reserved is not None
+    assert session.committed is True
+    assert session.rolled_back is False
+    assert all(session.transaction_states)
+    statements = [str(statement).upper() for statement in session.statements]
+    assert "FOR UPDATE" in statements[0]
+    assert "FOR UPDATE" in statements[1]
+    assert "INSERT INTO ISSUANCE_SERVICE.EVIDENCE_FACTS" in statements[2]
+    assert "INSERT INTO ISSUANCE_SERVICE.EVIDENCE_FACT_HEADS" in statements[3]
+    assert "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in statements[4]
+    assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[5]
+    assert all(
+        "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_EVENTS" in statement
+        for statement in statements[6:]
+    )
+
+    for fail_at in range(len(results())):
+        failing_session = _Session(results(fail_at=fail_at))
+        failing_repo = PostgresIssuanceRepository(_SessionFactory(failing_session))
+        with pytest.raises(RuntimeError, match=f"write-{fail_at}-failed"):
+            await failing_repo.reserve_application_issuance(
+                candidate,
+                prepared,
+                expected_status=ApplicationStatus.PENDING,
+                reviewer_id="evidence-reconciler",
+                review_notes="Evidence permitted",
+                reviewed_at=reviewed_at,
+                evidence_fact=fact,
+                audit_events=events,
+            )
+        assert failing_session.committed is False
+        assert failing_session.rolled_back is True
+        assert all(failing_session.transaction_states)
+
+
+@pytest.mark.asyncio
+async def test_postgres_reconciliation_approval_commits_exact_write_set_atomically() -> None:
+    application = Application(
+        id="reconciliation-application",
+        organization_id="org-1",
+        application_template_id="canvas-application-template",
+        applicant_identifier="learner-1",
+        integration_context={
+            "canvas": {"canvas_platform_id": "platform-1"},
+            "policy": {"allowed": True},
+        },
+    )
+    prepared = _transaction(
+        id="reconciliation-transaction",
+        application_id=application.id,
+        status=IssuanceStatus.PENDING,
+        access_token=None,
+        nonce=None,
+    )
+    reviewed_at = datetime.now(UTC)
+    approved = Application(**vars(application))
+    approved.status = ApplicationStatus.APPROVED
+    approved.review_notes = "Recovered by reconciliation"
+    approved.reviewer_id = "canvas:evidence-reconciliation"
+    approved.reviewed_at = reviewed_at
+    approved.updated_at = reviewed_at
+    approved.issuance_transaction_id = prepared.id
+    events = _evidence_audit_events(application, transaction_id=prepared.id)[1:]
+
+    def results(*, fail_at: int | None = None) -> list[_Result | Exception]:
+        values: list[_Result | Exception] = [
+            _Result(_application_row(application)),
+            _Result(_transaction_row(prepared)),
+            _Result(_application_row(approved)),
+            *[_Result() for _event in events],
+        ]
+        if fail_at is not None:
+            values[fail_at] = RuntimeError(f"write-{fail_at}-failed")
+        return values
+
+    session = _Session(results())
+    repo = PostgresIssuanceRepository(_SessionFactory(session))
+    reserved = await repo.reserve_canvas_application_issuance(
+        prepared,
+        application=application,
+        expected_updated_at=application.updated_at,
+        reviewer_id="canvas:evidence-reconciliation",
+        review_notes="Recovered by reconciliation",
+        reviewed_at=reviewed_at,
+        audit_events=events,
+    )
+
+    assert reserved is not None
+    assert session.committed is True
+    assert session.rolled_back is False
+    assert all(session.transaction_states)
+    statements = [str(statement).upper() for statement in session.statements]
+    assert "FOR UPDATE" in statements[0]
+    assert "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_TRANSACTIONS" in statements[1]
+    assert "UPDATE ISSUANCE_SERVICE.APPLICATIONS" in statements[2]
+    assert all(
+        "INSERT INTO ISSUANCE_SERVICE.ISSUANCE_EVENTS" in statement
+        for statement in statements[3:]
+    )
+
+    for fail_at in range(len(results())):
+        failing_session = _Session(results(fail_at=fail_at))
+        failing_repo = PostgresIssuanceRepository(_SessionFactory(failing_session))
+        with pytest.raises(RuntimeError, match=f"write-{fail_at}-failed"):
+            await failing_repo.reserve_canvas_application_issuance(
+                prepared,
+                application=application,
+                expected_updated_at=application.updated_at,
+                reviewer_id="canvas:evidence-reconciliation",
+                review_notes="Recovered by reconciliation",
+                reviewed_at=reviewed_at,
+                audit_events=events,
+            )
+        assert failing_session.committed is False
+        assert failing_session.rolled_back is True
+        assert all(failing_session.transaction_states)
 
 
 @pytest.mark.asyncio

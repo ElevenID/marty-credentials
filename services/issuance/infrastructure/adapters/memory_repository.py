@@ -543,6 +543,39 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             fact.id = stored.id
             fact.superseded_fact_id = stored.superseded_fact_id
 
+    async def _save_application_events(
+        self,
+        application_id: str,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        for event in audit_events:
+            if event.application_id != application_id:
+                raise ValueError("Application audit event does not belong to the application")
+            await self.save_event(copy.deepcopy(event))
+
+    async def save_evidence_fact_with_events(
+        self,
+        fact: EvidenceFact,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        lock = self._application_evidence_locks.setdefault(fact.application_id, asyncio.Lock())
+        async with lock:
+            facts_snapshot = copy.deepcopy(self._evidence_facts)
+            heads_snapshot = copy.deepcopy(self._evidence_fact_heads)
+            events_snapshot = list(self._events)
+            try:
+                stored, _changed = await self.record_evidence_revision(copy.deepcopy(fact))
+                if stored.id != fact.id:
+                    fact.id = stored.id
+                    fact.superseded_fact_id = stored.superseded_fact_id
+                await self._save_application_events(fact.application_id, audit_events)
+            except Exception:
+                self._evidence_facts = facts_snapshot
+                self._evidence_fact_heads = heads_snapshot
+                self._events = events_snapshot
+                raise
+
     async def record_evidence_revision(self, fact: EvidenceFact) -> tuple[EvidenceFact, bool]:
         app = self._applications.get(fact.application_id)
         if app is None or app.organization_id != fact.organization_id:
@@ -741,6 +774,8 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         *,
         expected_status: ApplicationStatus,
         expected_updated_at: datetime | None = None,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
     ) -> bool:
         lock = self._application_issuance_locks.setdefault(app.id, asyncio.Lock())
         async with lock:
@@ -755,8 +790,27 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 )
             ):
                 return False
-            self._applications[app.id] = copy.deepcopy(app)
-            return True
+            applications_snapshot = copy.deepcopy(self._applications)
+            facts_snapshot = copy.deepcopy(self._evidence_facts)
+            heads_snapshot = copy.deepcopy(self._evidence_fact_heads)
+            events_snapshot = list(self._events)
+            try:
+                if evidence_fact is not None:
+                    if (
+                        evidence_fact.application_id != app.id
+                        or evidence_fact.organization_id != app.organization_id
+                    ):
+                        raise ValueError("Evidence fact does not belong to the application")
+                    await self.record_evidence_revision(copy.deepcopy(evidence_fact))
+                self._applications[app.id] = copy.deepcopy(app)
+                await self._save_application_events(app.id, audit_events)
+                return True
+            except Exception:
+                self._applications = applications_snapshot
+                self._evidence_facts = facts_snapshot
+                self._evidence_fact_heads = heads_snapshot
+                self._events = events_snapshot
+                raise
 
     async def reserve_application_issuance(
         self,
@@ -767,6 +821,8 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
     ) -> tuple[Application, IssuanceTransaction] | None:
         application_id = str(prepared_transaction.application_id or "").strip()
         if not application_id:
@@ -795,19 +851,40 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                     "Stale issuance transaction transition "
                     f"{stored_transaction.status.value}->{prepared_transaction.status.value}"
                 )
-            self._transactions[prepared_transaction.id] = copy.deepcopy(
-                prepared_transaction
-            )
+            applications_snapshot = copy.deepcopy(self._applications)
+            transactions_snapshot = copy.deepcopy(self._transactions)
+            facts_snapshot = copy.deepcopy(self._evidence_facts)
+            heads_snapshot = copy.deepcopy(self._evidence_fact_heads)
+            events_snapshot = list(self._events)
+            try:
+                if evidence_fact is not None:
+                    if (
+                        evidence_fact.application_id != application_id
+                        or evidence_fact.organization_id != application.organization_id
+                    ):
+                        raise ValueError("Evidence fact does not belong to the application")
+                    await self.record_evidence_revision(copy.deepcopy(evidence_fact))
+                self._transactions[prepared_transaction.id] = copy.deepcopy(
+                    prepared_transaction
+                )
 
-            canonical = copy.deepcopy(application)
-            canonical.status = ApplicationStatus.APPROVED
-            canonical.review_notes = review_notes
-            canonical.reviewer_id = reviewer_id
-            canonical.reviewed_at = reviewed_at
-            canonical.issuance_transaction_id = prepared_transaction.id
-            canonical.updated_at = reviewed_at
-            self._applications[application_id] = canonical
-            return copy.deepcopy(canonical), copy.deepcopy(prepared_transaction)
+                canonical = copy.deepcopy(application)
+                canonical.status = ApplicationStatus.APPROVED
+                canonical.review_notes = review_notes
+                canonical.reviewer_id = reviewer_id
+                canonical.reviewed_at = reviewed_at
+                canonical.issuance_transaction_id = prepared_transaction.id
+                canonical.updated_at = reviewed_at
+                self._applications[application_id] = canonical
+                await self._save_application_events(application_id, audit_events)
+                return copy.deepcopy(canonical), copy.deepcopy(prepared_transaction)
+            except Exception:
+                self._applications = applications_snapshot
+                self._transactions = transactions_snapshot
+                self._evidence_facts = facts_snapshot
+                self._evidence_fact_heads = heads_snapshot
+                self._events = events_snapshot
+                raise
 
     @staticmethod
     def _canvas_context(app: Application) -> dict[str, Any] | None:
@@ -831,10 +908,14 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         self,
         prepared_transaction: IssuanceTransaction,
         *,
+        application: Application | None = None,
+        expected_updated_at: datetime | None = None,
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
-    ) -> tuple[Application, IssuanceTransaction, bool]:
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
+    ) -> tuple[Application, IssuanceTransaction, bool] | None:
         application_id = str(prepared_transaction.application_id or "").strip()
         if not application_id:
             raise ValueError("Canvas issuance transaction requires an application")
@@ -847,73 +928,113 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
                 or self._canvas_context(app) is None
             ):
                 raise ValueError("Canvas application was not found for issuance")
+            if application is not None and (
+                application.id != app.id
+                or application.organization_id != app.organization_id
+                or (
+                    expected_updated_at is not None
+                    and app.updated_at != expected_updated_at
+                )
+            ):
+                return None
             if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
+                if application is not None:
+                    return None
                 raise ValueError(f"Cannot approve application in {app.status} status")
 
-            current_tx = (
-                self._transactions.get(app.issuance_transaction_id)
-                if app.issuance_transaction_id
-                else None
-            )
-            if app.credential_id:
-                if current_tx is None or current_tx.status != IssuanceStatus.ISSUED:
-                    raise ValueError("Canvas application already has a claimed credential")
-                return copy.deepcopy(app), copy.deepcopy(current_tx), True
+            applications_snapshot = copy.deepcopy(self._applications)
+            transactions_snapshot = copy.deepcopy(self._transactions)
+            facts_snapshot = copy.deepcopy(self._evidence_facts)
+            heads_snapshot = copy.deepcopy(self._evidence_fact_heads)
+            events_snapshot = list(self._events)
+            candidates_snapshot = copy.deepcopy(self._canvas_award_candidates)
+            try:
+                current_tx = (
+                    self._transactions.get(app.issuance_transaction_id)
+                    if app.issuance_transaction_id
+                    else None
+                )
+                if app.credential_id:
+                    if current_tx is None or current_tx.status != IssuanceStatus.ISSUED:
+                        raise ValueError("Canvas application already has a claimed credential")
+                    return copy.deepcopy(app), copy.deepcopy(current_tx), True
 
-            if current_tx is not None and current_tx.status == IssuanceStatus.ISSUED:
-                issued = next(
-                    (
-                        item
-                        for item in self._credentials.values()
-                        if item.transaction_id == current_tx.id
-                    ),
-                    None,
-                )
-                if issued is None:
-                    raise ValueError("Issued Canvas transaction has no credential")
-                app.credential_id = issued.id
-                app.updated_at = reviewed_at
-                canvas = self._canvas_context(app) or {}
-                candidate_id = str(canvas.get("canvas_award_candidate_id") or "").strip()
-                candidate = (
-                    self._canvas_award_candidates.get(candidate_id) if candidate_id else None
-                )
-                if candidate is not None and candidate.application_id == app.id:
-                    if candidate.claimed_credential_id not in (None, issued.id):
-                        raise ValueError(
-                            "Canvas award candidate already has a different credential"
+                if current_tx is not None and current_tx.status == IssuanceStatus.ISSUED:
+                    issued = next(
+                        (
+                            item
+                            for item in self._credentials.values()
+                            if item.transaction_id == current_tx.id
+                        ),
+                        None,
+                    )
+                    if issued is None:
+                        raise ValueError("Issued Canvas transaction has no credential")
+                    app.credential_id = issued.id
+                    app.updated_at = reviewed_at
+                    canvas = self._canvas_context(app) or {}
+                    candidate_id = str(canvas.get("canvas_award_candidate_id") or "").strip()
+                    candidate = (
+                        self._canvas_award_candidates.get(candidate_id) if candidate_id else None
+                    )
+                    if candidate is not None and candidate.application_id == app.id:
+                        if candidate.claimed_credential_id not in (None, issued.id):
+                            raise ValueError(
+                                "Canvas award candidate already has a different credential"
+                            )
+                        candidate.state = CanvasAwardCandidateState.CLAIMED
+                        candidate.claimed_credential_id = issued.id
+                        candidate.updated_at = reviewed_at
+                    return copy.deepcopy(app), copy.deepcopy(current_tx), True
+
+                current_is_active = bool(
+                    current_tx is not None
+                    and (
+                        current_tx.status
+                        in {
+                            IssuanceStatus.AUTHORIZED,
+                            IssuanceStatus.SIGNING,
+                        }
+                        or (
+                            current_tx.status == IssuanceStatus.PENDING
+                            and not current_tx.is_expired
                         )
-                    candidate.state = CanvasAwardCandidateState.CLAIMED
-                    candidate.claimed_credential_id = issued.id
-                    candidate.updated_at = reviewed_at
-                return copy.deepcopy(app), copy.deepcopy(current_tx), True
-
-            current_is_active = bool(
-                current_tx is not None
-                and (
-                    current_tx.status
-                    in {
-                        IssuanceStatus.AUTHORIZED,
-                        IssuanceStatus.SIGNING,
-                    }
-                    or (current_tx.status == IssuanceStatus.PENDING and not current_tx.is_expired)
+                    )
                 )
-            )
-            if current_is_active:
-                reserved = current_tx
-            else:
-                if prepared_transaction.id in self._transactions:
-                    raise ValueError("Canvas issuance transaction identifier is already in use")
-                self._transactions[prepared_transaction.id] = copy.deepcopy(prepared_transaction)
-                reserved = prepared_transaction
+                if current_is_active:
+                    reserved = current_tx
+                else:
+                    if prepared_transaction.id in self._transactions:
+                        raise ValueError("Canvas issuance transaction identifier is already in use")
+                    self._transactions[prepared_transaction.id] = copy.deepcopy(prepared_transaction)
+                    reserved = prepared_transaction
 
-            app.status = ApplicationStatus.APPROVED
-            app.review_notes = review_notes
-            app.reviewer_id = reviewer_id
-            app.reviewed_at = reviewed_at
-            app.issuance_transaction_id = reserved.id
-            app.updated_at = reviewed_at
-            return copy.deepcopy(app), copy.deepcopy(reserved), False
+                if evidence_fact is not None:
+                    if (
+                        evidence_fact.application_id != application_id
+                        or evidence_fact.organization_id != app.organization_id
+                    ):
+                        raise ValueError("Evidence fact does not belong to the application")
+                    await self.record_evidence_revision(copy.deepcopy(evidence_fact))
+
+                canonical = copy.deepcopy(application) if application is not None else app
+                canonical.status = ApplicationStatus.APPROVED
+                canonical.review_notes = review_notes
+                canonical.reviewer_id = reviewer_id
+                canonical.reviewed_at = reviewed_at
+                canonical.issuance_transaction_id = reserved.id
+                canonical.updated_at = reviewed_at
+                self._applications[application_id] = canonical
+                await self._save_application_events(application_id, audit_events)
+                return copy.deepcopy(canonical), copy.deepcopy(reserved), False
+            except Exception:
+                self._applications = applications_snapshot
+                self._transactions = transactions_snapshot
+                self._evidence_facts = facts_snapshot
+                self._evidence_fact_heads = heads_snapshot
+                self._events = events_snapshot
+                self._canvas_award_candidates = candidates_snapshot
+                raise
 
     async def patch_application_integration_context(
         self,
@@ -963,6 +1084,25 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
     # Lifecycle event methods
     async def save_event(self, event: IssuanceEvent) -> None:
         self._events.append(event)
+
+    async def save_events_atomically(
+        self,
+        application_id: str,
+        organization_id: str,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        lock = self._application_issuance_locks.setdefault(application_id, asyncio.Lock())
+        async with lock:
+            app = self._applications.get(application_id)
+            if app is None or app.organization_id != organization_id:
+                raise ValueError("Audit application was not found for this organization")
+            events_snapshot = list(self._events)
+            try:
+                await self._save_application_events(application_id, audit_events)
+            except Exception:
+                self._events = events_snapshot
+                raise
 
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         return sorted(

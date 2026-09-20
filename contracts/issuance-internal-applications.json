@@ -12,7 +12,8 @@
       "1dda8ac: map invalid status filters to a stable validation response",
       "3bee6f7: fail closed on missing offer dependencies and issuer context",
       "validate active tenant-owned revocation bindings before ordinary approval",
-      "commit manual lifecycle transitions and non-Canvas issuance reservations atomically"
+      "commit manual lifecycle transitions and non-Canvas issuance reservations atomically",
+      "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically"
     ]
   },
   "coverage": {
@@ -30,13 +31,12 @@
       "canvas_and_non_canvas_approval_lifecycle",
       "complete_http_success_lifecycle_replay",
       "external_evidence_concurrent_lifecycle_write_set",
-      "reconciliation_concurrent_lifecycle_write_set"
-    ],
-    "required_before_rust_implementation": [
+      "reconciliation_concurrent_lifecycle_write_set",
       "external_evidence_failure_injection_and_postgres_write_set_replay",
       "reconciliation_failure_injection_and_postgres_write_set_replay"
     ],
-    "rust_implementation_authorized": false
+    "required_before_rust_implementation": [],
+    "rust_implementation_authorized": true
   },
   "surface": {
     "base_path": "/internal/applications",
@@ -289,13 +289,21 @@
         "request_passport_number": "X1234567",
         "request_authorization": "Bearer secret-token",
         "summary_check_id": "passport-document-check",
-        "summary_forbidden_fields": ["secret_headers"]
+        "summary_forbidden_fields": ["secret_headers"],
+        "fact_count": 1,
+        "event_types": [
+          "evidence_fact_created",
+          "evidence_policy_permitted",
+          "approval_issuance_succeeded"
+        ]
       },
       "deny": {
         "application_status": "pending",
         "transaction_created": false,
         "policy_allowed": false,
-        "verification_status": "UNVERIFIED"
+        "verification_status": "UNVERIFIED",
+        "fact_count": 1,
+        "event_types": ["evidence_fact_created", "evidence_policy_denied"]
       },
       "lifecycle_conflict": {
         "forced_winner": "rejection",
@@ -310,6 +318,13 @@
           "evidence_policy_permitted",
           "approval_issuance_failed"
         ]
+      },
+      "atomic_persistence_failure": {
+        "application_status": "pending",
+        "application_evidence_submission_count": 0,
+        "fact_count": 0,
+        "transaction_count": 0,
+        "event_types": []
       }
     },
     "reconciliation_outcomes": {
@@ -345,6 +360,13 @@
           "evidence_policy_permitted",
           "approval_issuance_failed"
         ]
+      },
+      "atomic_persistence_failure": {
+        "application_status": "pending",
+        "policy_persisted": false,
+        "existing_fact_count": 1,
+        "transaction_count": 0,
+        "event_types": []
       }
     },
     "canvas_approval_outcomes": {

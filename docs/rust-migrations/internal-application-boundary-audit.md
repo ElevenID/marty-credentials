@@ -1,7 +1,7 @@
 # Internal Application Rust migration boundary audit
 
-**Status:** behavior-freeze audit in progress; no route is cut over and no
-Python implementation is deleted.
+**Status:** behavior freeze complete and Rust implementation authorized; no
+route is cut over and no Python implementation is deleted yet.
 
 The audit found and repaired one retained-owner defect before freezing the
 boundary: the wallet-invite GET handler referenced a nonexistent
@@ -132,18 +132,19 @@ revision compare-and-set semantics: a concurrent rejection remains terminal,
 no issuance transaction is created, and the exact retained audit/fact write
 set is frozen rather than silently overwriting the lifecycle decision.
 
-Rust implementation remains deliberately unauthorized. The remaining
-behavior-freeze work is narrower but substantive:
+The final authorization gates are now complete. External evidence commits its
+fact/head, application projection, optional issuance transaction, and audit
+events in one repository transaction. Reconciliation does the same for its
+policy context, application/transaction reservation, and audit events. Forced
+late-write failures roll back the complete in-memory write set, synthetic
+PostgreSQL sessions inject failure at every SQL boundary, and the same success
+and rollback paths pass against a freshly created real PostgreSQL database.
+Concurrent lifecycle losers still retain only the deliberately frozen immutable
+fact/audit record and cannot overwrite the winning rejection.
 
-1. inject failures at every external-evidence persistence boundary and replay
-   its exact success, denial, conflict, and failure write sets against
-   PostgreSQL;
-2. do the same for reconciliation policy/application/event/issuance writes,
-   not only the in-memory owner and statement-level approval tests.
-
-The Rust implementation may start only after that contract replays against the
-Python owner. Python deletion remains forbidden until the candidate passes the
-same contract, isolated PostgreSQL tests, complete HTTP lifecycle coverage,
+Rust implementation is therefore authorized by the canonical contract. Python
+deletion remains forbidden until the candidate passes that same contract,
+isolated PostgreSQL tests, complete HTTP lifecycle coverage,
 packaged-main/gateway routing, all retained-consumer tests, and protected CI.
 
 ## Explicit non-goals

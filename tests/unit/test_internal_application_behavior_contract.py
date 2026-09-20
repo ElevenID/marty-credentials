@@ -1565,7 +1565,11 @@ async def test_external_api_failures_are_atomic_and_do_not_leak_secrets(
     assert await repo.list_transactions(app.organization_id) == []
 
 
-def test_contract_does_not_authorize_rust_before_behavior_freeze_is_complete() -> None:
+def test_contract_authorizes_rust_only_after_behavior_freeze_is_complete() -> None:
     coverage = CONTRACT["coverage"]
-    assert coverage["rust_implementation_authorized"] is False
-    assert coverage["required_before_rust_implementation"]
+    assert coverage["rust_implementation_authorized"] is True
+    assert coverage["required_before_rust_implementation"] == []
+    assert {
+        "external_evidence_failure_injection_and_postgres_write_set_replay",
+        "reconciliation_failure_injection_and_postgres_write_set_replay",
+    }.issubset(coverage["implemented_case_groups"])

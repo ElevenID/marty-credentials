@@ -26,7 +26,7 @@ CONTRACT = json.loads(
     )
 )
 
-from issuance.domain.entities import Application, ApplicationTemplate
+from issuance.domain.entities import Application, ApplicationTemplate, IssuanceEvent
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api.application_routes import (
     ExternalEvidenceApiCheckRequest,
@@ -64,6 +64,19 @@ class _FakeAsyncClient:
     async def request(self, method: str, url: str, **kwargs: Any) -> _FakeResponse:
         self.requests.append({"method": method, "url": url, **kwargs})
         return _FakeResponse(self.response_payload, self.status_code)
+
+
+class _FailingAuditRepository(InMemoryIssuanceRepository):
+    def __init__(self, fail_at: int) -> None:
+        super().__init__()
+        self._fail_at = fail_at
+        self._audit_writes = 0
+
+    async def save_event(self, event: IssuanceEvent) -> None:
+        self._audit_writes += 1
+        if self._audit_writes == self._fail_at:
+            raise RuntimeError(f"audit-write-{self._fail_at}-failed")
+        await super().save_event(event)
 
 
 def _passport_requirement(*, auto_issue: bool = True) -> dict[str, Any]:
@@ -179,7 +192,7 @@ async def test_external_api_check_creates_fact_and_auto_issues(monkeypatch) -> N
     assert stored_app is not None
     assert stored_app.status.value == expected["application_status"]
     assert stored_app.issuance_transaction_id == response.issuance_transaction_id
-    assert len(facts) == 1
+    assert len(facts) == expected["fact_count"]
     assert facts[0].provider == expected["provider"]
     assert facts[0].fact_type == expected["fact_type"]
     assert facts[0].scope == expected["scope"]
@@ -193,6 +206,9 @@ async def test_external_api_check_creates_fact_and_auto_issues(monkeypatch) -> N
         _FakeAsyncClient.requests[0]["headers"]["authorization"]
         == expected["request_authorization"]
     )
+
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type.value for event in events] == expected["event_types"]
 
     summary = await get_application_evidence_summary(app.id, repo=repo)
     assert summary.available_api_checks[0]["check_id"] == expected["summary_check_id"]
@@ -235,8 +251,10 @@ async def test_external_api_check_denies_when_expected_response_fails(monkeypatc
     assert stored_app is not None
     assert stored_app.status.value == expected["application_status"]
     assert stored_app.issuance_transaction_id is None
-    assert len(facts) == 1
+    assert len(facts) == expected["fact_count"]
     assert facts[0].verification["status"] == expected["verification_status"]
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type.value for event in events] == expected["event_types"]
 
 
 async def test_external_api_check_loses_rejection_race_without_resurrecting_application(
@@ -308,6 +326,53 @@ async def test_external_api_check_loses_rejection_race_without_resurrecting_appl
     ]
     assert len(await repo.list_evidence_facts_for_application(app.id)) == expected[
         "retained_fact_count"
+    ]
+    events = await repo.list_events_for_application(app.id)
+    assert [event.event_type.value for event in events] == expected["event_types"]
+
+
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+async def test_external_api_atomic_write_set_rolls_back_every_audit_failure(
+    monkeypatch,
+    fail_at: int,
+) -> None:
+    expected = CONTRACT["lifecycle"]["external_api_outcomes"][
+        "atomic_persistence_failure"
+    ]
+    monkeypatch.setenv("PASSPORT_VERIFY_API_TOKEN", "Bearer secret-token")
+    monkeypatch.setattr(
+        "issuance.application.external_evidence_api.httpx.AsyncClient",
+        _FakeAsyncClient,
+    )
+    _FakeAsyncClient.requests = []
+    _FakeAsyncClient.response_payload = {
+        "id": f"passport-event-failure-{fail_at}",
+        "status": "verified",
+        "checks": {"passive_auth_valid": True},
+        "biometric": {"face_match_score": 0.91},
+        "document": {"issuing_country": "US", "not_expired": True},
+    }
+    repo = _FailingAuditRepository(fail_at)
+    app = await _seed_application(repo, _passport_requirement())
+
+    with pytest.raises(RuntimeError, match=f"audit-write-{fail_at}-failed"):
+        await run_external_evidence_api_check(
+            application_id=app.id,
+            check_id="passport-document-check",
+            request=ExternalEvidenceApiCheckRequest(),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert stored.status.value == expected["application_status"]
+    assert len(stored.evidence_submissions) == expected[
+        "application_evidence_submission_count"
+    ]
+    assert len(await repo.list_evidence_facts_for_application(app.id)) == expected["fact_count"]
+    assert len(await repo.list_transactions(app.organization_id)) == expected[
+        "transaction_count"
     ]
     events = await repo.list_events_for_application(app.id)
     assert [event.event_type.value for event in events] == expected["event_types"]

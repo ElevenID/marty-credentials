@@ -1486,6 +1486,27 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             fact.id = stored_fact.id
             fact.superseded_fact_id = stored_fact.superseded_fact_id
 
+    async def save_evidence_fact_with_events(
+        self,
+        fact: EvidenceFact,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        async with self._session_factory() as session, session.begin():
+            await self._lock_evidence_application(session, fact)
+            stored_fact, _inserted, _changed = await self._record_evidence_revision_in_session(
+                session,
+                fact,
+            )
+            if stored_fact.id != fact.id:
+                fact.id = stored_fact.id
+                fact.superseded_fact_id = stored_fact.superseded_fact_id
+            await self._save_application_events_in_session(
+                session,
+                fact.application_id,
+                audit_events,
+            )
+
     async def record_evidence_revision(self, fact: EvidenceFact) -> tuple[EvidenceFact, bool]:
         """Atomically append a revision and move its head only when newer.
 
@@ -1778,6 +1799,18 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
         )
 
+    @classmethod
+    async def _save_application_events_in_session(
+        cls,
+        session: AsyncSession,
+        application_id: str,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        for event in audit_events:
+            if event.application_id != application_id:
+                raise ValueError("Application audit event does not belong to the application")
+            await cls._save_event_in_session(session, event)
+
     async def list_evidence_fact_heads_for_application(
         self,
         application_id: str,
@@ -2054,6 +2087,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         *,
         expected_status: ApplicationStatus,
         expected_updated_at: datetime | None = None,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
     ) -> bool:
         async with self._session_factory() as session, session.begin():
             current = await session.execute(
@@ -2074,6 +2109,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 )
             ):
                 return False
+            if evidence_fact is not None:
+                if (
+                    evidence_fact.application_id != app.id
+                    or evidence_fact.organization_id != app.organization_id
+                ):
+                    raise ValueError("Evidence fact does not belong to the application")
+                await self._record_evidence_revision_in_session(session, evidence_fact)
             app_data = self._application_values(app)
             update_data = {
                 key: value
@@ -2090,7 +2132,10 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             updated = await session.execute(
                 update(applications_table).where(*predicates).values(**update_data)
             )
-            return updated.rowcount == 1
+            if updated.rowcount != 1:
+                raise RuntimeError("Application revision update was lost after row lock")
+            await self._save_application_events_in_session(session, app.id, audit_events)
+            return True
 
     async def reserve_application_issuance(
         self,
@@ -2101,6 +2146,8 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
     ) -> tuple[Application, IssuanceTransaction] | None:
         application_id = str(prepared_transaction.application_id or "").strip()
         if not application_id:
@@ -2126,6 +2173,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 or app_row.updated_at != application.updated_at
             ):
                 return None
+
+            if evidence_fact is not None:
+                if (
+                    evidence_fact.application_id != application_id
+                    or evidence_fact.organization_id != application.organization_id
+                ):
+                    raise ValueError("Evidence fact does not belong to the application")
+                await self._record_evidence_revision_in_session(session, evidence_fact)
 
             tx_data = self._transaction_values(prepared_transaction)
             immutable = {
@@ -2183,6 +2238,11 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             updated_row = updated.first()
             if updated_row is None:
                 raise ValueError("Application lost its issuance reservation")
+            await self._save_application_events_in_session(
+                session,
+                application_id,
+                audit_events,
+            )
             return self._row_to_application(updated_row), self._row_to_transaction(reserved_row)
 
     async def _project_canvas_claim_in_session(
@@ -2267,10 +2327,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         self,
         prepared_transaction: IssuanceTransaction,
         *,
+        application: Application | None = None,
+        expected_updated_at: datetime | None = None,
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
-    ) -> tuple[Application, IssuanceTransaction, bool]:
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
+    ) -> tuple[Application, IssuanceTransaction, bool] | None:
         application_id = str(prepared_transaction.application_id or "").strip()
         if not application_id:
             raise ValueError("Canvas issuance transaction requires an application")
@@ -2287,10 +2351,21 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             app_row = application_result.first()
             if app_row is None or _canvas_application_context(app_row.integration_context) is None:
                 raise ValueError("Canvas application was not found for issuance")
+            if application is not None and (
+                application.id != app_row.id
+                or application.organization_id != app_row.organization_id
+                or (
+                    expected_updated_at is not None
+                    and app_row.updated_at != expected_updated_at
+                )
+            ):
+                return None
             if app_row.status not in {
                 ApplicationStatus.PENDING.value,
                 ApplicationStatus.APPROVED.value,
             }:
+                if application is not None:
+                    return None
                 raise ValueError(f"Cannot approve application in {app_row.status} status")
 
             current_row = None
@@ -2333,6 +2408,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     self._row_to_transaction(current_row),
                     True,
                 )
+
+            if evidence_fact is not None:
+                if (
+                    evidence_fact.application_id != app_row.id
+                    or evidence_fact.organization_id != app_row.organization_id
+                ):
+                    raise ValueError("Evidence fact does not belong to the application")
+                await self._record_evidence_revision_in_session(session, evidence_fact)
 
             current_is_active = bool(
                 current_row is not None
@@ -2403,25 +2486,49 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 if reserved_row is None:
                     raise ValueError("Canvas issuance transaction could not be reserved")
 
+            application_values = (
+                self._application_values(application)
+                if application is not None
+                else {}
+            )
+            application_values.update(
+                status=ApplicationStatus.APPROVED.value,
+                review_notes=review_notes,
+                reviewer_id=reviewer_id,
+                reviewed_at=reviewed_at,
+                issuance_transaction_id=reserved_row.id,
+                updated_at=reviewed_at,
+            )
+            update_values = {
+                key: value
+                for key, value in application_values.items()
+                if key not in {"id", "organization_id"}
+            }
+            predicates = [
+                applications_table.c.id == app_row.id,
+                applications_table.c.organization_id == app_row.organization_id,
+            ]
+            if application is not None:
+                predicates.extend(
+                    [
+                        applications_table.c.status == application.status.value,
+                        applications_table.c.updated_at == application.updated_at,
+                    ]
+                )
             updated = await session.execute(
                 update(applications_table)
-                .where(
-                    applications_table.c.id == app_row.id,
-                    applications_table.c.organization_id == app_row.organization_id,
-                )
-                .values(
-                    status=ApplicationStatus.APPROVED.value,
-                    review_notes=review_notes,
-                    reviewer_id=reviewer_id,
-                    reviewed_at=reviewed_at,
-                    issuance_transaction_id=reserved_row.id,
-                    updated_at=reviewed_at,
-                )
+                .where(*predicates)
+                .values(**update_values)
                 .returning(applications_table)
             )
             updated_row = updated.first()
             if updated_row is None:
                 raise ValueError("Canvas application lost its issuance reservation")
+            await self._save_application_events_in_session(
+                session,
+                app_row.id,
+                audit_events,
+            )
             return (
                 self._row_to_application(updated_row),
                 self._row_to_transaction(reserved_row),
@@ -2528,6 +2635,30 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             await session.execute(stmt)
             await session.commit()
+
+    async def save_events_atomically(
+        self,
+        application_id: str,
+        organization_id: str,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        async with self._session_factory() as session, session.begin():
+            current = await session.execute(
+                select(applications_table.c.id)
+                .where(
+                    applications_table.c.id == application_id,
+                    applications_table.c.organization_id == organization_id,
+                )
+                .with_for_update()
+            )
+            if current.first() is None:
+                raise ValueError("Audit application was not found for this organization")
+            await self._save_application_events_in_session(
+                session,
+                application_id,
+                audit_events,
+            )
 
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
         async with self._session_factory() as session:

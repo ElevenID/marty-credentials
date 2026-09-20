@@ -313,6 +313,16 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def save_evidence_fact_with_events(
+        self,
+        fact: EvidenceFact,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        """Atomically persist an immutable fact and its audit write set."""
+        pass
+
+    @abstractmethod
     async def list_evidence_facts_for_application(
         self,
         application_id: str,
@@ -400,8 +410,10 @@ class IIssuanceRepository(ABC):
         *,
         expected_status: ApplicationStatus,
         expected_updated_at: datetime | None = None,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
     ) -> bool:
-        """Persist only while lifecycle status and optional revision are unchanged."""
+        """Atomically persist an application revision and evidence-side writes."""
         pass
 
     @abstractmethod
@@ -414,6 +426,8 @@ class IIssuanceRepository(ABC):
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
     ) -> tuple[Application, IssuanceTransaction] | None:
         """Atomically approve a non-Canvas application and bind one transaction.
 
@@ -429,10 +443,14 @@ class IIssuanceRepository(ABC):
         self,
         prepared_transaction: IssuanceTransaction,
         *,
+        application: Application | None = None,
+        expected_updated_at: datetime | None = None,
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
-    ) -> tuple[Application, IssuanceTransaction, bool]:
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
+    ) -> tuple[Application, IssuanceTransaction, bool] | None:
         """Atomically approve a Canvas application and reserve one transaction.
 
         Implementations must lock the application, reuse any transaction that
@@ -475,6 +493,17 @@ class IIssuanceRepository(ABC):
     @abstractmethod
     async def save_event(self, event: IssuanceEvent) -> None:
         """Append an immutable lifecycle event to the audit log."""
+        pass
+
+    @abstractmethod
+    async def save_events_atomically(
+        self,
+        application_id: str,
+        organization_id: str,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        """Append a tenant-bound application audit write set atomically."""
         pass
 
     @abstractmethod
