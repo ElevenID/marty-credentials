@@ -27,10 +27,10 @@
       "manual_transition_failure_atomicity",
       "offer_replay_and_concurrency",
       "external_api_failure_and_secret_redaction",
-      "canvas_and_non_canvas_approval_lifecycle"
+      "canvas_and_non_canvas_approval_lifecycle",
+      "complete_http_success_lifecycle_replay"
     ],
     "required_before_rust_implementation": [
-      "create_success_and_complete_http_lifecycle_replay",
       "external_evidence_atomic_write_set_and_concurrent_lifecycle",
       "reconciliation_atomic_write_set_and_concurrent_lifecycle",
       "postgres_repository_replay_for_evidence_and_reconciliation"
@@ -157,6 +157,30 @@
     "reviewer_identity": "server-owned",
     "reviewer_id": "issuance-management-api",
     "applicant_identifier_precedence": ["trimmed_given_and_family_name", "trimmed_email", "generated_applicant_prefix_plus_8_hex"],
+    "http_success_replay": {
+      "operation_order": [
+        "create_application",
+        "list_applications",
+        "get_application",
+        "run_external_evidence_api_check",
+        "list_application_evidence_facts",
+        "get_application_evidence_summary",
+        "reconcile_application_evidence",
+        "get_application_evidence_reconciliation_report",
+        "submit_evidence",
+        "approve_application",
+        "generate_issuance_offer",
+        "get_issuance_offer",
+        "list_issuance_events",
+        "reject_application"
+      ],
+      "created_status": "pending",
+      "created_applicant_identifier": "Ada_Lovelace",
+      "submitted_evidence_count": 1,
+      "approved_status": "approved",
+      "rejected_status": "rejected",
+      "minimum_offer_event_count": 2
+    },
     "template_failure_cases": [
       {"id": "create-missing-template", "template": "missing", "trusted_organization_id": "org-123", "status": 404, "detail": "Application template not found"},
       {"id": "create-inactive-template", "template": "DRAFT", "trusted_organization_id": "org-123", "status": 422, "detail": "Application template must be active"},

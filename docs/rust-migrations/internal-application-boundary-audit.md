@@ -123,20 +123,20 @@ The canonical
 contract and Python oracle now freeze the route surface, authentication,
 tenant boundary, request validation, typed projections, lifecycle failures,
 ordinary and Canvas approval, dependency failures, offer replay, and manual
-lifecycle concurrency. The forced concurrency cases prove one non-Canvas
-approval transaction, no orphan transaction when rejection wins, and no stale
-evidence submission when rejection wins.
+lifecycle concurrency. A single authenticated HTTP replay now exercises every
+one of the fourteen successful route operations against the Python owner. The
+forced concurrency cases prove one non-Canvas approval transaction, no orphan
+transaction when rejection wins, and no stale evidence submission when
+rejection wins.
 
 Rust implementation remains deliberately unauthorized. The remaining
 behavior-freeze work is narrower but substantive:
 
-1. replay create success and the complete fourteen-route success lifecycle
-   through the actual HTTP boundary;
-2. make external-evidence fact, policy, application, event, and optional
+1. make external-evidence fact, policy, application, event, and optional
    issuance writes atomic, including a concurrent lifecycle-decision case;
-3. make reconciliation policy/application/event/issuance writes atomic and
+2. make reconciliation policy/application/event/issuance writes atomic and
    freeze its concurrent lifecycle behavior;
-4. replay those evidence and reconciliation write sets against PostgreSQL,
+3. replay those evidence and reconciliation write sets against PostgreSQL,
    not only the in-memory owner and statement-level approval tests.
 
 The Rust implementation may start only after that contract replays against the

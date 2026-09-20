@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -19,6 +20,7 @@ from issuance.domain.entities import (
     IssuanceStatus,
     IssuanceTransaction,
 )
+from issuance.domain.ports import IIssuanceRepository
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api import application_routes
 from issuance.infrastructure.api.application_routes import (
@@ -180,6 +182,254 @@ def test_unsupported_sibling_routes_remain_unowned() -> None:
     for case in CONTRACT["surface"]["unsupported_siblings"]:
         response = client.request(case["method"], case["path"])
         assert response.status_code == case["status"], case["path"]
+
+
+@pytest.mark.asyncio
+async def test_complete_http_success_lifecycle_replays_against_python_owner(
+    monkeypatch,
+) -> None:
+    from issuance.infrastructure.api import routes
+
+    expected = CONTRACT["lifecycle"]["http_success_replay"]
+    repo = InMemoryIssuanceRepository()
+    template = ApplicationTemplate(
+        id="application-template-http",
+        organization_id="org-123",
+        name="HTTP lifecycle",
+        credential_template_id="credential-template-1",
+        status="ACTIVE",
+        evidence_requirements=[
+            {
+                "evidence_id": "check-1",
+                "evidence_type": "EXTERNAL_API",
+                "description": "Contract API check",
+                "provider": "contract-provider",
+                "fact_type": "identity.document",
+                "required": True,
+                "api": {
+                    "method": "POST",
+                    "url": "https://provider.example.test/check",
+                },
+            }
+        ],
+    )
+    await repo.save_application_template(template)
+
+    async def fetch_template(_template_id: str):
+        return _valid_live_credential_template()
+
+    async def require_revocation_binding(**_kwargs) -> None:
+        return None
+
+    async def apply_issuer_context(transaction) -> None:
+        transaction.issuer_profile_id = "issuer-profile-1"
+        transaction.signing_service_id = "kms-service-1"
+
+    async def fetch_wallets(_template_id: str | None):
+        return []
+
+    async def execute_check(*, app, requirement, inputs):
+        assert requirement["evidence_id"] == "check-1"
+        assert inputs == {"document": "passport"}
+        fact = EvidenceFact(
+            id="fact-http-1",
+            organization_id=app.organization_id,
+            application_id=app.id,
+            subject_id=app.applicant_identifier,
+            provider="contract-provider",
+            fact_type="identity.document",
+            scope={"document_type": "passport"},
+            assertion={"verified": True},
+            verification={"method": "CONTRACT", "status": "VERIFIED"},
+            source={"event_id": "provider-event-1"},
+            requirement_id="check-1",
+            logical_key="logical-http-1",
+            source_revision="revision-http-1",
+            payload_hash="payload-http-1",
+        )
+        return SimpleNamespace(
+            evidence_fact=fact,
+            response_metadata={"provider_status": 200},
+        )
+
+    async def persist_transition(**kwargs):
+        await kwargs["repo"].save_evidence_fact(kwargs["evidence_fact"])
+        return SimpleNamespace(policy_decision=None, issuance_transaction=None)
+
+    async def reconcile(**_kwargs):
+        return SimpleNamespace(to_dict=lambda: {"processed": 1, "dry_run": False})
+
+    async def reconciliation_report(**_kwargs):
+        return SimpleNamespace(to_dict=lambda: {"processed": 1, "dry_run": True})
+
+    monkeypatch.setattr(routes, "_ISSUANCE_API_KEY", "secret")
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
+    monkeypatch.setattr(application_routes, "_fetch_wallets_for_template", fetch_wallets)
+    monkeypatch.setattr(application_routes, "execute_external_evidence_api_check", execute_check)
+    monkeypatch.setattr(
+        application_routes,
+        "persist_evidence_fact_and_apply_policy",
+        persist_transition,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "reconcile_canvas_evidence_transitions",
+        reconcile,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "build_canvas_evidence_reconciliation_report",
+        reconciliation_report,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "_build_offer_uri",
+        lambda **_kwargs: "openid-credential-offer://?credential_offer=contract",
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "_build_wallet_offer_uris",
+        lambda **_kwargs: {},
+    )
+
+    api = FastAPI()
+    api.include_router(internal_application_router)
+    api.dependency_overrides[IIssuanceRepository] = lambda: repo
+    headers = {"X-API-Key": "secret", "X-Organization-ID": "org-123"}
+    transport = httpx.ASGITransport(app=api)
+    visited: list[str] = []
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://contract") as client:
+        created = await client.post(
+            "/internal/applications",
+            headers=headers,
+            json={
+                "application_template_id": template.id,
+                "applicant_data": {
+                    "given_name": "Ada",
+                    "family_name": "Lovelace",
+                },
+            },
+        )
+        assert created.status_code == 200
+        application_id = created.json()["id"]
+        assert created.json()["status"] == expected["created_status"]
+        assert (
+            created.json()["applicant_identifier"]
+            == expected["created_applicant_identifier"]
+        )
+        visited.append("create_application")
+
+        requests = [
+            ("list_applications", "GET", "/internal/applications?organization_id=org-123", None),
+            ("get_application", "GET", f"/internal/applications/{application_id}", None),
+            (
+                "run_external_evidence_api_check",
+                "POST",
+                f"/internal/applications/{application_id}/evidence/api-checks/check-1/run",
+                {"inputs": {"document": "passport"}, "issue_on_permit": False},
+            ),
+            (
+                "list_application_evidence_facts",
+                "GET",
+                f"/internal/applications/{application_id}/evidence-facts",
+                None,
+            ),
+            (
+                "get_application_evidence_summary",
+                "GET",
+                f"/internal/applications/{application_id}/evidence-summary",
+                None,
+            ),
+            (
+                "reconcile_application_evidence",
+                "POST",
+                "/internal/applications/evidence/reconcile",
+                {"organization_id": "org-123", "issue_on_permit": False},
+            ),
+            (
+                "get_application_evidence_reconciliation_report",
+                "GET",
+                "/internal/applications/evidence/reconciliation-report?organization_id=org-123",
+                None,
+            ),
+            (
+                "submit_evidence",
+                "POST",
+                f"/internal/applications/{application_id}/submit-evidence",
+                {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {"verified": True}},
+            ),
+            (
+                "approve_application",
+                "POST",
+                f"/internal/applications/{application_id}/approve",
+                {"review_notes": "Reviewed"},
+            ),
+            (
+                "generate_issuance_offer",
+                "POST",
+                f"/internal/applications/{application_id}/issuance-offer",
+                None,
+            ),
+            (
+                "get_issuance_offer",
+                "GET",
+                f"/internal/applications/{application_id}/issuance-offer",
+                None,
+            ),
+            (
+                "list_issuance_events",
+                "GET",
+                f"/internal/applications/{application_id}/issuance-events",
+                None,
+            ),
+        ]
+        responses: dict[str, httpx.Response] = {}
+        for operation, method, path, body in requests:
+            response = await client.request(method, path, headers=headers, json=body)
+            assert response.status_code == 200, (operation, response.text)
+            responses[operation] = response
+            visited.append(operation)
+
+        assert len(responses["submit_evidence"].json()["evidence_submissions"]) == expected[
+            "submitted_evidence_count"
+        ]
+        assert responses["approve_application"].json()["status"] == expected[
+            "approved_status"
+        ]
+        assert len(responses["list_issuance_events"].json()) >= expected[
+            "minimum_offer_event_count"
+        ]
+
+        rejection_candidate = await client.post(
+            "/internal/applications",
+            headers=headers,
+            json={
+                "application_template_id": template.id,
+                "applicant_data": {"email": "reject@example.test"},
+            },
+        )
+        assert rejection_candidate.status_code == 200
+        rejected = await client.post(
+            f"/internal/applications/{rejection_candidate.json()['id']}/reject",
+            headers=headers,
+            json={"review_notes": "Rejected by contract"},
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["status"] == expected["rejected_status"]
+        visited.append("reject_application")
+
+    assert visited == expected["operation_order"]
 
 
 @pytest.mark.asyncio
