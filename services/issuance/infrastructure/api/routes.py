@@ -734,9 +734,6 @@ def _did_resolution_failure_detail(tx: IssuanceTransaction, exc: Exception) -> s
 
 # Routers
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
-application_template_router = APIRouter(
-    prefix="/v1/application-templates", tags=["application-templates"]
-)
 internal_application_router = APIRouter(
     prefix="/internal/applications", tags=["internal-applications"]
 )
@@ -1136,124 +1133,6 @@ class CredentialResponse(BaseModel):
     notification_id: str | None = None
 
 
-class ApplicationFieldOption(BaseModel):
-    """A stable value with a human-readable label for select fields."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    label: str = Field(min_length=1, max_length=256)
-    value: str = Field(min_length=1, max_length=256)
-
-
-class ApplicationFormField(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    field_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
-    label: str = Field(min_length=1, max_length=256)
-    field_type: Literal[
-        "TEXT",
-        "DATE",
-        "DATETIME",
-        "SELECT",
-        "FILE_UPLOAD",
-        "INTEGER",
-        "NUMBER",
-        "BOOLEAN",
-        "EMAIL",
-        "URL",
-    ]
-    required: bool
-    claim_mapping: str | None = None
-    validation_pattern: str | None = None
-    options: list[str | ApplicationFieldOption] | None = None
-    minimum: float | None = None
-    maximum: float | None = None
-    placeholder: str | None = None
-    hint: str | None = None
-
-
-class RequiredApplicationCheck(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    check_type: str = Field(min_length=1)
-    is_required: bool = True
-    order: int = Field(ge=1)
-    config: dict[str, Any] = Field(default_factory=dict)
-    external_provider: str | None = None
-
-
-class ApplicationEvidenceRequirement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    evidence_id: str = Field(min_length=1)
-    evidence_type: Literal[
-        "DOCUMENT_SCAN",
-        "BIOMETRIC",
-        "SELFIE",
-        "THIRD_PARTY_VERIFICATION",
-        "EXTERNAL_FACT",
-        "EXTERNAL_API",
-    ]
-    description: str
-    required: bool
-    accepted_formats: list[str] | None = None
-    max_file_size_bytes: int | None = Field(default=None, ge=1)
-    provider: str | None = None
-    fact_type: str | None = None
-    scope: dict[str, Any] | None = None
-    pass_rule: dict[str, Any] | None = None
-    verification_method: str | None = None
-    freshness: dict[str, Any] | None = None
-    manual_fallback: bool | None = None
-    api: dict[str, Any] | None = None
-    expected_response: dict[str, Any] | None = None
-    response_mapping: dict[str, Any] | None = None
-    auto_issue_on_permit: bool | None = None
-
-
-class ClaimCollectionRule(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    claim_name: str = Field(min_length=1)
-    source: Literal["FORM_FIELD", "EVIDENCE_EXTRACTION", "EXTERNAL_API", "SYSTEM"]
-    source_config: dict[str, Any] = Field(default_factory=dict)
-
-
-class ApplicationTemplateCreate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    organization_id: str
-    name: str = Field(min_length=1, max_length=128)
-    description: str | None = None
-    credential_template_id: str | None = None
-    form_fields: list[ApplicationFormField] = Field(default_factory=list)
-    evidence_requirements: list[ApplicationEvidenceRequirement] = Field(default_factory=list)
-    claim_collection_rules: list[ClaimCollectionRule] = Field(default_factory=list)
-    required_checks: list[RequiredApplicationCheck] = Field(default_factory=list)
-    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "MANUAL"
-    approval_policy_set_id: str | None = None
-    application_validity_days: int = Field(default=30, ge=1, le=3650)
-    ui_config: dict[str, Any] = Field(default_factory=dict)
-    notification_config: dict[str, Any] = Field(default_factory=dict)
-
-
-class ApplicationTemplatePatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = Field(default=None, min_length=1, max_length=128)
-    description: str | None = None
-    credential_template_id: str | None = None
-    form_fields: list[ApplicationFormField] | None = None
-    evidence_requirements: list[ApplicationEvidenceRequirement] | None = None
-    claim_collection_rules: list[ClaimCollectionRule] | None = None
-    required_checks: list[RequiredApplicationCheck] | None = None
-    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = None
-    approval_policy_set_id: str | None = None
-    application_validity_days: int | None = Field(default=None, ge=1, le=3650)
-    ui_config: dict[str, Any] | None = None
-    notification_config: dict[str, Any] | None = None
-
-
 # ── DIDComm v2 models ─────────────────────────────────────────────────────
 
 
@@ -1376,26 +1255,6 @@ async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
                 )
 
     return endpoint
-
-
-class ApplicationTemplateResponse(BaseModel):
-    id: str
-    organization_id: str
-    name: str
-    description: str | None
-    credential_template_id: str | None
-    form_fields: list[dict[str, Any]]
-    evidence_requirements: list[Any]
-    claim_collection_rules: list[dict[str, Any]]
-    required_checks: list[dict[str, Any]]
-    approval_strategy: str
-    approval_policy_set_id: str | None = None
-    application_validity_days: int
-    ui_config: dict[str, Any]
-    notification_config: dict[str, Any]
-    status: str
-    created_at: str
-    updated_at: str
 
 
 class ApplicationCreate(BaseModel):
