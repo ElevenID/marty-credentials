@@ -136,6 +136,35 @@
       {"id": "create-inactive-template", "template": "DRAFT", "trusted_organization_id": "org-123", "status": 422, "detail": "Application template must be active"},
       {"id": "create-foreign-template", "template": "ACTIVE", "trusted_organization_id": "org-other", "status": 404, "detail": "Application resource not found"}
     ],
+    "approval_dependency_cases": [
+      {"id": "approval-missing-application-template", "arrange": "missing_application_template", "status": 400, "detail": "Application template missing credential template ID"},
+      {"id": "approval-missing-credential-template-id", "arrange": "missing_credential_template_id", "status": 400, "detail": "Application template missing credential template ID"},
+      {"id": "approval-credential-template-unavailable", "arrange": "remote_unavailable", "status": 503, "detail": "Credential Template validation is unavailable."},
+      {"id": "approval-credential-template-not-found", "arrange": "remote_not_found", "status": 422, "detail": "Credential Template not found."},
+      {"id": "approval-foreign-credential-template", "arrange": "remote_override", "override": {"organization_id": "org-other"}, "status": 422, "detail": "Credential Template is not owned by this organization"},
+      {"id": "approval-inactive-credential-template", "arrange": "remote_override", "override": {"status": "DRAFT"}, "status": 422, "detail": "Credential Template must be active"},
+      {"id": "approval-missing-credential-type", "arrange": "remote_override", "override": {"credential_type": ""}, "status": 422, "detail": "Credential Template must define a credential type"},
+      {"id": "approval-missing-payload-format", "arrange": "remote_override", "override": {"credential_payload_format": ""}, "status": 422, "detail": "Credential Template must define a credential payload format"},
+      {"id": "approval-missing-issuer-did", "arrange": "remote_override", "override": {"issuer_did": ""}, "status": 422, "detail": "Credential Template must define an issuer DID"},
+      {"id": "approval-unsupported-issuer-algorithm", "arrange": "remote_override", "override": {"issuer_algorithm": "HS256"}, "status": 422, "detail": "Credential Template must define a supported issuer algorithm"}
+    ],
+    "ordinary_approval_success": {
+      "application_status": "approved",
+      "reviewer_id": "issuance-management-api",
+      "review_notes": "Reviewed",
+      "transaction": {
+        "credential_template_id": "credential-template-1",
+        "credential_type": "EmployeeCredential",
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "revocation_profile_id": "revocation-profile-1",
+        "issuer_did_override": "did:web:issuer.example:orgs:org-123",
+        "issuer_algorithm": "ES256",
+        "issuer_profile_id": "issuer-profile-1",
+        "signing_service_id": "kms-service-1",
+        "delivery_mode": "wallet_only",
+        "claims": {"employee_id": "E-1", "_vct": "https://issuer.example/credentials/employee"}
+      }
+    },
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},

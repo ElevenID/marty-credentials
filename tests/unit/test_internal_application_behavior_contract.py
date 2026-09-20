@@ -210,6 +210,135 @@ async def test_create_template_failures_do_not_write(case) -> None:
     assert await repo.list_applications(org_id="org-123") == []
 
 
+def _valid_live_credential_template() -> dict[str, object]:
+    return {
+        "organization_id": "org-123",
+        "status": "ACTIVE",
+        "credential_type": "EmployeeCredential",
+        "vct": "https://issuer.example/credentials/employee",
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "revocation_profile_id": "revocation-profile-1",
+        "issuer_did": "did:web:issuer.example:orgs:org-123",
+        "issuer_algorithm": "ES256",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    CONTRACT["lifecycle"]["approval_dependency_cases"],
+    ids=lambda case: case["id"],
+)
+async def test_ordinary_approval_dependency_failures_are_atomic(
+    monkeypatch, case
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-1",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+        form_data={"employee_id": "E-1"},
+    )
+    await repo.save_application(app)
+
+    if case["arrange"] != "missing_application_template":
+        await repo.save_application_template(
+            ApplicationTemplate(
+                id=app.application_template_id,
+                organization_id=app.organization_id,
+                name="Membership",
+                credential_template_id=(
+                    None
+                    if case["arrange"] == "missing_credential_template_id"
+                    else "credential-template-1"
+                ),
+                status="ACTIVE",
+            )
+        )
+
+    async def fetch_template(_template_id: str):
+        if case["arrange"] == "remote_unavailable":
+            raise application_routes._CredentialTemplateLookupUnavailable
+        if case["arrange"] == "remote_not_found":
+            return None
+        template = _valid_live_credential_template()
+        template.update(case.get("override", {}))
+        return template
+
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    before = asdict(deepcopy(app))
+
+    with pytest.raises(HTTPException) as raised:
+        await application_routes.approve_application(
+            application_id=app.id,
+            approval=ApplicationApproval(review_notes="Reviewed"),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+
+    assert raised.value.status_code == case["status"]
+    assert raised.value.detail == case["detail"]
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert asdict(stored) == before
+    assert await repo.list_transactions(app.organization_id) == []
+
+
+@pytest.mark.asyncio
+async def test_ordinary_approval_success_matches_contract(monkeypatch) -> None:
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-1",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+        form_data={"employee_id": "E-1"},
+    )
+    await repo.save_application_template(
+        ApplicationTemplate(
+            id=app.application_template_id,
+            organization_id=app.organization_id,
+            name="Membership",
+            credential_template_id="credential-template-1",
+            status="ACTIVE",
+        )
+    )
+    await repo.save_application(app)
+
+    async def fetch_template(_template_id: str):
+        return _valid_live_credential_template()
+
+    async def apply_issuer_context(transaction) -> None:
+        transaction.issuer_profile_id = "issuer-profile-1"
+        transaction.signing_service_id = "kms-service-1"
+
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
+
+    response = await application_routes.approve_application(
+        application_id=app.id,
+        approval=ApplicationApproval(review_notes="Reviewed"),
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+
+    expected = CONTRACT["lifecycle"]["ordinary_approval_success"]
+    assert response.status == expected["application_status"]
+    assert response.reviewer_id == expected["reviewer_id"]
+    assert response.review_notes == expected["review_notes"]
+    assert response.reviewed_at is not None
+    assert response.issuance_transaction_id is not None
+    transaction = await repo.get_transaction(response.issuance_transaction_id)
+    assert transaction is not None
+    for field, value in expected["transaction"].items():
+        assert getattr(transaction, field) == value
+
+
 async def _invoke_invalid_transition(
     operation: str, app: Application, repo: InMemoryIssuanceRepository
 ) -> None:
