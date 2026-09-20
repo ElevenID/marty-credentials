@@ -1,0 +1,134 @@
+{
+  "schema": "marty.issuance-internal-applications/v1",
+  "purpose": "Language-neutral behavior and security floor for replacing the Python internal Application lifecycle with the shared Rust issuance service",
+  "source_revision": {
+    "repository": "ElevenID/marty-credentials",
+    "baseline": "f127f55b",
+    "approved_repairs": [
+      "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
+      "843c0e5: restore name, email, then generated applicant identifier precedence"
+    ]
+  },
+  "coverage": {
+    "implemented_case_groups": [
+      "surface",
+      "authentication",
+      "tenant_boundary",
+      "request_models",
+      "typed_response_projection"
+    ],
+    "required_before_rust_implementation": [
+      "complete_lifecycle_success_and_invalid_state_transitions",
+      "dependency_failure_matrix",
+      "exact_write_sets_and_failure_atomicity",
+      "offer_replay_and_concurrency",
+      "external_api_failure_and_secret_redaction",
+      "canvas_and_non_canvas_repository_lifecycle"
+    ],
+    "rust_implementation_authorized": false
+  },
+  "surface": {
+    "base_path": "/internal/applications",
+    "routes": [
+      {"method": "POST", "path": "/internal/applications", "operation": "create_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications", "operation": "list_applications", "response_model": "list", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}", "operation": "get_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/evidence-facts", "operation": "list_application_evidence_facts", "response_model": "list", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/evidence-summary", "operation": "get_application_evidence_summary", "response_model": "ApplicationEvidenceSummaryResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run", "operation": "run_external_evidence_api_check", "response_model": "ExternalEvidenceApiCheckResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/evidence/reconcile", "operation": "reconcile_application_evidence", "response_model": "dict", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/evidence/reconciliation-report", "operation": "get_application_evidence_reconciliation_report", "response_model": "dict", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/submit-evidence", "operation": "submit_evidence", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/approve", "operation": "approve_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/reject", "operation": "reject_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/issuance-offer", "operation": "generate_issuance_offer", "response_model": "IssuanceOfferResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/issuance-offer", "operation": "get_issuance_offer", "response_model": "IssuanceOfferResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/issuance-events", "operation": "list_issuance_events", "response_model": "list", "success_status": 200}
+    ],
+    "unsupported_siblings": [
+      {"method": "GET", "path": "/v1/applications", "status": 404},
+      {"method": "DELETE", "path": "/internal/applications/application-1", "status": 405},
+      {"method": "PUT", "path": "/internal/applications/application-1/approve", "status": 405}
+    ]
+  },
+  "security": {
+    "route_dependencies": ["_verify_management_api_key", "_trusted_application_organization_id"],
+    "authentication_cases": [
+      {"id": "server-key-unconfigured", "configured_key": "", "supplied_key": null, "status": 503, "detail": "ISSUANCE_API_KEY not configured on server"},
+      {"id": "header-missing", "configured_key": "secret", "supplied_key": null, "status": 401, "detail": "X-API-Key header is missing"},
+      {"id": "header-invalid", "configured_key": "secret", "supplied_key": "wrong", "status": 401, "detail": "Invalid API Key"},
+      {"id": "header-valid", "configured_key": "secret", "supplied_key": "secret", "result": "secret"}
+    ],
+    "tenant_cases": {
+      "missing_header": {"status": 400, "detail": "X-Organization-ID is required for application management"},
+      "claimed_mismatch": {"status": 404, "detail": "Application resource not found"},
+      "foreign_item": {"status": 404, "detail": "Application not found"}
+    }
+  },
+  "request_models": {
+    "ApplicationCreate": {"unknown_fields": "ignore", "fields": ["application_template_id", "applicant_data", "integration_context"]},
+    "EvidenceSubmission": {"unknown_fields": "ignore", "fields": ["evidence_type", "evidence_data"]},
+    "ApplicationApproval": {"unknown_fields": "forbid", "fields": ["review_notes"]},
+    "ApplicationRejection": {"unknown_fields": "forbid", "fields": ["review_notes"]},
+    "EvidenceReconciliationRequest": {"unknown_fields": "ignore", "fields": ["organization_id", "application_id", "limit", "dry_run", "issue_on_permit"]},
+    "ExternalEvidenceApiCheckRequest": {"unknown_fields": "ignore", "fields": ["inputs", "issue_on_permit"]}
+  },
+  "request_cases": [
+    {"id": "create-minimum", "model": "ApplicationCreate", "input": {"application_template_id": "template-1", "applicant_data": {}}, "outcome": "accept", "normalized": {"application_template_id": "template-1", "applicant_data": {}, "integration_context": {}}},
+    {"id": "create-missing", "model": "ApplicationCreate", "input": {"applicant_data": {}}, "outcome": "reject"},
+    {"id": "create-null", "model": "ApplicationCreate", "input": {"application_template_id": "template-1", "applicant_data": null}, "outcome": "reject"},
+    {"id": "create-malformed", "model": "ApplicationCreate", "input": {"application_template_id": {}, "applicant_data": {}}, "outcome": "reject"},
+    {"id": "create-unknown-ignored", "model": "ApplicationCreate", "input": {"application_template_id": "template-1", "applicant_data": {}, "unknown": true}, "outcome": "accept", "normalized": {"application_template_id": "template-1", "applicant_data": {}, "integration_context": {}}},
+
+    {"id": "evidence-minimum", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}, "outcome": "accept", "normalized": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}},
+    {"id": "evidence-missing", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN"}, "outcome": "reject"},
+    {"id": "evidence-null", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": null}, "outcome": "reject"},
+    {"id": "evidence-malformed", "model": "EvidenceSubmission", "input": {"evidence_type": [], "evidence_data": {}}, "outcome": "reject"},
+    {"id": "evidence-unknown-ignored", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}, "unknown": true}, "outcome": "accept", "normalized": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}},
+
+    {"id": "approval-minimum", "model": "ApplicationApproval", "input": {}, "outcome": "accept", "normalized": {"review_notes": null}},
+    {"id": "approval-null", "model": "ApplicationApproval", "input": {"review_notes": null}, "outcome": "accept", "normalized": {"review_notes": null}},
+    {"id": "approval-malformed", "model": "ApplicationApproval", "input": {"review_notes": []}, "outcome": "reject"},
+    {"id": "approval-unknown-forbidden", "model": "ApplicationApproval", "input": {"reviewer_id": "caller"}, "outcome": "reject"},
+
+    {"id": "rejection-minimum", "model": "ApplicationRejection", "input": {"review_notes": "insufficient evidence"}, "outcome": "accept", "normalized": {"review_notes": "insufficient evidence"}},
+    {"id": "rejection-missing", "model": "ApplicationRejection", "input": {}, "outcome": "reject"},
+    {"id": "rejection-null", "model": "ApplicationRejection", "input": {"review_notes": null}, "outcome": "reject"},
+    {"id": "rejection-malformed", "model": "ApplicationRejection", "input": {"review_notes": []}, "outcome": "reject"},
+    {"id": "rejection-unknown-forbidden", "model": "ApplicationRejection", "input": {"review_notes": "no", "reviewer_id": "caller"}, "outcome": "reject"},
+
+    {"id": "reconcile-minimum", "model": "EvidenceReconciliationRequest", "input": {"organization_id": "org-123"}, "outcome": "accept", "normalized": {"organization_id": "org-123", "application_id": null, "limit": 100, "dry_run": false, "issue_on_permit": true}},
+    {"id": "reconcile-missing", "model": "EvidenceReconciliationRequest", "input": {}, "outcome": "reject"},
+    {"id": "reconcile-null", "model": "EvidenceReconciliationRequest", "input": {"organization_id": null}, "outcome": "reject"},
+    {"id": "reconcile-malformed", "model": "EvidenceReconciliationRequest", "input": {"organization_id": "org-123", "limit": {}}, "outcome": "reject"},
+    {"id": "reconcile-unknown-ignored", "model": "EvidenceReconciliationRequest", "input": {"organization_id": "org-123", "unknown": true}, "outcome": "accept", "normalized": {"organization_id": "org-123", "application_id": null, "limit": 100, "dry_run": false, "issue_on_permit": true}},
+
+    {"id": "api-check-minimum", "model": "ExternalEvidenceApiCheckRequest", "input": {}, "outcome": "accept", "normalized": {"inputs": {}, "issue_on_permit": true}},
+    {"id": "api-check-null", "model": "ExternalEvidenceApiCheckRequest", "input": {"inputs": null}, "outcome": "reject"},
+    {"id": "api-check-malformed", "model": "ExternalEvidenceApiCheckRequest", "input": {"inputs": []}, "outcome": "reject"},
+    {"id": "api-check-unknown-ignored", "model": "ExternalEvidenceApiCheckRequest", "input": {"unknown": true}, "outcome": "accept", "normalized": {"inputs": {}, "issue_on_permit": true}}
+  ],
+  "response_models": {
+    "ApplicationResponse": ["id", "organization_id", "application_template_id", "applicant_identifier", "form_data", "evidence_submissions", "integration_context", "status", "review_notes", "reviewer_id", "submitted_at", "reviewed_at", "expires_at", "issuance_transaction_id"],
+    "EvidenceFactResponse": ["id", "organization_id", "application_id", "subject_id", "provider", "fact_type", "scope", "assertion", "verification", "source", "requirement_id", "logical_key", "source_revision", "payload_hash", "observed_at", "effective_at", "superseded_fact_id", "created_at"],
+    "ApplicationEvidenceSummaryResponse": ["application_id", "organization_id", "status", "evidence_facts", "policy_decision", "policy_source", "policy_set_id", "issuance_transaction_id", "canvas", "available_api_checks"],
+    "ExternalEvidenceApiCheckResponse": ["application_id", "organization_id", "check_id", "status", "application_status", "evidence_fact", "policy_decision", "issuance_transaction_id", "response_metadata"],
+    "IssuanceOfferWallet": ["id", "name", "logo_url", "deep_link_url", "platforms"],
+    "IssuanceOfferResponse": ["offer_url", "qr_payload", "wallets", "email_payload", "expires_at", "transaction_id", "status", "credential_offer_uris"],
+    "IssuanceEventResponse": ["id", "transaction_id", "application_id", "event_type", "metadata", "created_at"]
+  },
+  "lifecycle": {
+    "application_statuses": ["pending", "under_review", "approved", "rejected", "withdrawn"],
+    "transitions": [
+      {"operation": "create", "precondition": "active same-tenant application template", "to": "pending"},
+      {"operation": "submit_evidence", "from": ["pending"], "to": "pending"},
+      {"operation": "approve", "from": ["pending"], "to": "approved"},
+      {"operation": "reject", "from": ["pending"], "to": "rejected"},
+      {"operation": "run_external_evidence_api_check", "from": ["pending", "approved"], "to": "policy-dependent"},
+      {"operation": "generate_issuance_offer", "from": ["approved"], "to": "approved"},
+      {"operation": "get_issuance_offer", "from": ["approved"], "transaction_state": "authoritative"}
+    ],
+    "reviewer_identity": "server-owned",
+    "applicant_identifier_precedence": ["trimmed_given_and_family_name", "trimmed_email", "generated_applicant_prefix_plus_8_hex"]
+  }
+}

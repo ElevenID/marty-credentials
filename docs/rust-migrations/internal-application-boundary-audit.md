@@ -79,8 +79,9 @@ current owner until separately frozen.
 - Approval retains the Canvas issuance guard, live authenticated credential
   template resolution, active revocation-profile binding, issuer/signing
   context resolution, transaction association, and failure atomicity.
-- Issuance offers remain approved-only for generation and approved-or-issued
-  for reads. They preserve fresh/reusable transaction rules, pre-authorized
+- Issuance offers remain application-approved for generation and reads, while
+  the associated transaction is authoritative for issuance progress. They
+  preserve fresh/reusable transaction rules, pre-authorized
   offer construction, per-wallet deep links, expiry status, event creation,
   authenticated wallet discovery, and Canvas readiness enforcement.
 - Existing Application, Application Template, IssuanceTransaction, evidence,
@@ -97,8 +98,13 @@ Canvas approval guards, offer idempotency, and offer transaction-read
 behavior. Those tests are valuable but are distributed and do not yet prove a
 single language-neutral 14-route boundary.
 
-Before implementation begins, add one canonical JSON contract and a Python
-oracle suite that together cover:
+The canonical
+[`issuance-internal-applications.json`](../../contracts/issuance-internal-applications.json)
+contract and Python oracle now freeze the route surface, authentication,
+tenant boundary, request validation, and typed response projections. The
+contract deliberately leaves Rust implementation unauthorized until the
+remaining behavioral groups below are executable. Before implementation
+begins, extend that same contract and oracle suite to cover:
 
 1. every method/path and unsupported sibling routing;
 2. authentication and tenant failures on every route class;
