@@ -1282,7 +1282,11 @@ async def get_issuance_offer(
         trusted_organization_id=trusted_organization_id,
     )
 
-    if app.status not in (ApplicationStatus.APPROVED, ApplicationStatus.ISSUED):
+    # Applications remain APPROVED after their issuance transaction completes;
+    # credential issuance state belongs to IssuanceTransaction.  Do not test a
+    # nonexistent ApplicationStatus.ISSUED member here: doing so crashed every
+    # wallet-invite read before the approved-state check could run.
+    if app.status != ApplicationStatus.APPROVED:
         raise HTTPException(
             status_code=404,
             detail="No issuance offer available for this application",

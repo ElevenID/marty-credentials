@@ -3,6 +3,13 @@
 **Status:** behavior-freeze audit in progress; no route is cut over and no
 Python implementation is deleted.
 
+The audit found and repaired one retained-owner defect before freezing the
+boundary: the wallet-invite GET handler referenced a nonexistent
+`ApplicationStatus.ISSUED` member and therefore crashed for every request that
+reached its status check. Applications remain `approved`; issuance completion
+belongs to `IssuanceTransaction`. A focused regression now exercises an
+approved application and its transaction through the actual offer-read handler.
+
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The
 `ApplicationTemplate` entity, persistence, migrations, and application-facing
