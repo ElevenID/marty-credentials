@@ -203,6 +203,30 @@
         "verification_status": "UNVERIFIED"
       }
     },
+    "reconciliation_outcomes": {
+      "evaluate_missing_policy": {
+        "metrics": {"scanned_applications": 1, "evaluated_policies": 1, "policy_permits": 1, "approval_issuance_successes": 1},
+        "application_status": "approved",
+        "reviewer_id": "canvas:evidence-reconciliation",
+        "transaction_created": true,
+        "policy_allowed": true,
+        "event_types": ["evidence_policy_permitted", "approval_issuance_succeeded"]
+      },
+      "recover_existing_permit": {
+        "action": "approval_issuance_recovered_from_policy_permit",
+        "evaluated_policies": 0,
+        "approval_issuance_successes": 1,
+        "application_status": "approved",
+        "transaction_created": true
+      },
+      "dry_run_stale_receipt": {
+        "dry_run": true,
+        "action": "would_create_or_refresh_issuance_transaction",
+        "stale_receipts": 1,
+        "reasons": ["receipt_without_evidence_fact_metadata", "receipt_without_policy_decision"],
+        "application_mutated": false
+      }
+    },
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},

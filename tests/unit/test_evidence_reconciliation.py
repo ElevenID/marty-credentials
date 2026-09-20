@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 _SERVICES = os.path.join(_REPO_ROOT, "services")
@@ -13,6 +15,12 @@ _PYTHON = os.path.join(_REPO_ROOT, "python")
 for _path in (_SERVICES, _PYTHON):
     if _path not in sys.path:
         sys.path.insert(0, _path)
+
+CONTRACT = json.loads(
+    (Path(_REPO_ROOT) / "contracts" / "issuance-internal-applications.json").read_text(
+        encoding="utf-8"
+    )
+)
 
 from issuance.application.evidence_reconciliation import (
     build_canvas_evidence_reconciliation_report,
@@ -25,7 +33,6 @@ from issuance.domain.entities import (
     CanvasEventReceipt,
     CanvasPlatform,
     CanvasProgramBinding,
-    EventType,
     EvidenceFact,
 )
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
@@ -121,6 +128,9 @@ async def _seed_canvas_application(
 
 
 async def test_reconcile_evaluates_missing_policy_and_creates_issuance_transaction() -> None:
+    expected = CONTRACT["lifecycle"]["reconciliation_outcomes"][
+        "evaluate_missing_policy"
+    ]
     repo = InMemoryIssuanceRepository()
     app = await _seed_canvas_application(repo)
 
@@ -130,26 +140,31 @@ async def test_reconcile_evaluates_missing_policy_and_creates_issuance_transacti
     )
 
     stored_app = await repo.get_application(app.id)
-    assert result.metrics["scanned_applications"] == 1
-    assert result.metrics["evaluated_policies"] == 1
-    assert result.metrics["policy_permits"] == 1
-    assert result.metrics["approval_issuance_successes"] == 1
+    for metric, value in expected["metrics"].items():
+        assert result.metrics[metric] == value
     assert stored_app is not None
-    assert stored_app.status == ApplicationStatus.APPROVED
-    assert stored_app.reviewer_id == "canvas:evidence-reconciliation"
-    assert stored_app.issuance_transaction_id is not None
-    assert stored_app.integration_context["policy"]["allowed"] is True
+    assert stored_app.status.value == expected["application_status"]
+    assert stored_app.reviewer_id == expected["reviewer_id"]
+    assert (stored_app.issuance_transaction_id is not None) is expected[
+        "transaction_created"
+    ]
+    assert stored_app.integration_context["policy"]["allowed"] is expected[
+        "policy_allowed"
+    ]
 
     tx = await repo.get_transaction(stored_app.issuance_transaction_id)
     assert tx is not None
     assert tx.application_id == app.id
     events = await repo.list_events_for_application(app.id)
-    event_types = [event.event_type for event in events]
-    assert EventType.EVIDENCE_POLICY_PERMITTED in event_types
-    assert EventType.APPROVAL_ISSUANCE_SUCCEEDED in event_types
+    event_types = [event.event_type.value for event in events]
+    for event_type in expected["event_types"]:
+        assert event_type in event_types
 
 
 async def test_reconcile_recovers_existing_policy_permit_without_transaction() -> None:
+    expected = CONTRACT["lifecycle"]["reconciliation_outcomes"][
+        "recover_existing_permit"
+    ]
     repo = InMemoryIssuanceRepository()
     app = await _seed_canvas_application(
         repo,
@@ -173,15 +188,22 @@ async def test_reconcile_recovers_existing_policy_permit_without_transaction() -
     )
 
     stored_app = await repo.get_application(app.id)
-    assert result.records[0].action == "approval_issuance_recovered_from_policy_permit"
-    assert result.metrics["evaluated_policies"] == 0
-    assert result.metrics["approval_issuance_successes"] == 1
+    assert result.records[0].action == expected["action"]
+    assert result.metrics["evaluated_policies"] == expected["evaluated_policies"]
+    assert result.metrics["approval_issuance_successes"] == expected[
+        "approval_issuance_successes"
+    ]
     assert stored_app is not None
-    assert stored_app.status == ApplicationStatus.APPROVED
-    assert stored_app.issuance_transaction_id is not None
+    assert stored_app.status.value == expected["application_status"]
+    assert (stored_app.issuance_transaction_id is not None) is expected[
+        "transaction_created"
+    ]
 
 
 async def test_reconciliation_report_flags_stale_receipt_without_mutating_application() -> None:
+    expected = CONTRACT["lifecycle"]["reconciliation_outcomes"][
+        "dry_run_stale_receipt"
+    ]
     repo = InMemoryIssuanceRepository()
     app = await _seed_canvas_application(repo, app_id="app-stale-receipt")
     await repo.save_canvas_event_receipt(
@@ -206,13 +228,14 @@ async def test_reconciliation_report_flags_stale_receipt_without_mutating_applic
     )
 
     stored_app = await repo.get_application(app.id)
-    assert result.dry_run is True
-    assert result.records[0].action == "would_create_or_refresh_issuance_transaction"
-    assert result.metrics["stale_receipts"] == 1
-    assert result.stale_receipts[0].reasons == [
-        "receipt_without_evidence_fact_metadata",
-        "receipt_without_policy_decision",
-    ]
+    assert result.dry_run is expected["dry_run"]
+    assert result.records[0].action == expected["action"]
+    assert result.metrics["stale_receipts"] == expected["stale_receipts"]
+    assert result.stale_receipts[0].reasons == expected["reasons"]
     assert stored_app is not None
-    assert "policy" not in stored_app.integration_context
-    assert stored_app.issuance_transaction_id is None
+    assert ("policy" in stored_app.integration_context) is expected[
+        "application_mutated"
+    ]
+    assert (stored_app.issuance_transaction_id is not None) is expected[
+        "application_mutated"
+    ]
