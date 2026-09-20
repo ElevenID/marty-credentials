@@ -847,7 +847,15 @@ async def approve_application(
         )
     except (RuntimeError, ValueError) as exc:
         if canvas_credential_context is None:
-            raise
+            logger.warning(
+                "[approve] issuer context unavailable app=%s error_type=%s",
+                application_id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Issuer signing context is unavailable.",
+            ) from None
         logger.warning(
             "[approve] Canvas issuer context denied app=%s error_type=%s",
             application_id,
@@ -1077,6 +1085,24 @@ async def _fetch_wallets_for_template(credential_template_id: str | None) -> lis
     return await _fetch_via_grpc()
 
 
+async def _apply_required_offer_issuer_context(
+    app: Application,
+    tx: IssuanceTransaction,
+) -> None:
+    try:
+        await apply_required_remote_issuer_context(tx)
+    except (RuntimeError, ValueError) as exc:
+        logger.warning(
+            "[issuance-offer] issuer context unavailable app=%s error_type=%s",
+            app.id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer signing context is unavailable.",
+        ) from None
+
+
 async def _get_or_refresh_transaction(
     app: "Application",
     repo: IIssuanceRepository,
@@ -1121,6 +1147,9 @@ async def _get_or_refresh_transaction(
                 detail="Canvas application is not ready for issuance",
             ) from None
 
+    if template is None or not str(template.credential_template_id or "").strip():
+        raise HTTPException(status_code=422, detail="Credential Template is required.")
+
     credential_template_id = template.credential_template_id if template else None
     revocation_profile_id: str | None = None
     credential_context: CredentialContext | None = None
@@ -1160,7 +1189,7 @@ async def _get_or_refresh_transaction(
         tx.issuer_algorithm = credential_context.issuer_algorithm
         tx.issuer_profile_id = None
         tx.signing_service_id = None
-        await apply_required_remote_issuer_context(tx)
+        await _apply_required_offer_issuer_context(app, tx)
         await repo.save_transaction(tx)
         return tx
 
@@ -1178,7 +1207,7 @@ async def _get_or_refresh_transaction(
         issuer_did_override=(credential_context.issuer_did if credential_context else None),
         issuer_algorithm=(credential_context.issuer_algorithm if credential_context else None),
     )
-    await apply_required_remote_issuer_context(tx)
+    await _apply_required_offer_issuer_context(app, tx)
     tx.idempotency_key_hash = hash_idempotency_key(
         f"internal-application-offer:{app.id}:{generation_anchor}"
     )

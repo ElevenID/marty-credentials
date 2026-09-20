@@ -163,7 +163,16 @@
       {"id": "approval-missing-credential-type", "arrange": "remote_override", "override": {"credential_type": ""}, "status": 422, "detail": "Credential Template must define a credential type"},
       {"id": "approval-missing-payload-format", "arrange": "remote_override", "override": {"credential_payload_format": ""}, "status": 422, "detail": "Credential Template must define a credential payload format"},
       {"id": "approval-missing-issuer-did", "arrange": "remote_override", "override": {"issuer_did": ""}, "status": 422, "detail": "Credential Template must define an issuer DID"},
-      {"id": "approval-unsupported-issuer-algorithm", "arrange": "remote_override", "override": {"issuer_algorithm": "HS256"}, "status": 422, "detail": "Credential Template must define a supported issuer algorithm"}
+      {"id": "approval-unsupported-issuer-algorithm", "arrange": "remote_override", "override": {"issuer_algorithm": "HS256"}, "status": 422, "detail": "Credential Template must define a supported issuer algorithm"},
+      {"id": "approval-issuer-context-unavailable", "arrange": "issuer_context_unavailable", "status": 503, "detail": "Issuer signing context is unavailable.", "forbidden_detail": "Bearer secret-token"}
+    ],
+    "offer_dependency_cases": [
+      {"id": "offer-missing-application-template", "arrange": "missing_application_template", "status": 422, "detail": "Credential Template is required."},
+      {"id": "offer-missing-credential-template-id", "arrange": "missing_credential_template_id", "status": 422, "detail": "Credential Template is required."},
+      {"id": "offer-credential-template-unavailable", "arrange": "remote_unavailable", "status": 503, "detail": "Credential Template validation is unavailable."},
+      {"id": "offer-credential-template-not-found", "arrange": "remote_not_found", "status": 422, "detail": "Credential Template not found."},
+      {"id": "offer-revocation-profile-unavailable", "arrange": "revocation_unavailable", "status": 503, "detail": "Revocation Profile validation is unavailable."},
+      {"id": "offer-issuer-context-unavailable", "arrange": "issuer_context_unavailable", "status": 503, "detail": "Issuer signing context is unavailable.", "forbidden_detail": "Bearer secret-token"}
     ],
     "ordinary_approval_success": {
       "application_status": "approved",

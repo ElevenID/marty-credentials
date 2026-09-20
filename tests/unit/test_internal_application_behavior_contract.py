@@ -463,6 +463,16 @@ async def test_ordinary_approval_dependency_failures_are_atomic(
         return template
 
     monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    if case["arrange"] == "issuer_context_unavailable":
+
+        async def apply_issuer_context(_transaction) -> None:
+            raise RuntimeError("Bearer secret-token")
+
+        monkeypatch.setattr(
+            application_routes,
+            "apply_required_remote_issuer_context",
+            apply_issuer_context,
+        )
     before = asdict(deepcopy(app))
 
     with pytest.raises(HTTPException) as raised:
@@ -475,10 +485,95 @@ async def test_ordinary_approval_dependency_failures_are_atomic(
 
     assert raised.value.status_code == case["status"]
     assert raised.value.detail == case["detail"]
+    if forbidden := case.get("forbidden_detail"):
+        assert forbidden not in str(raised.value.detail)
     stored = await repo.get_application(app.id)
     assert stored is not None
     assert asdict(stored) == before
     assert await repo.list_transactions(app.organization_id) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    CONTRACT["lifecycle"]["offer_dependency_cases"],
+    ids=lambda case: case["id"],
+)
+async def test_offer_dependency_failures_are_atomic_and_redacted(
+    monkeypatch, case
+) -> None:
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-1",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+        form_data={"employee_id": "E-1"},
+        status=ApplicationStatus.APPROVED,
+    )
+    await repo.save_application(app)
+    if case["arrange"] != "missing_application_template":
+        await repo.save_application_template(
+            ApplicationTemplate(
+                id=app.application_template_id,
+                organization_id=app.organization_id,
+                name="Membership",
+                credential_template_id=(
+                    None
+                    if case["arrange"] == "missing_credential_template_id"
+                    else "credential-template-1"
+                ),
+                status="ACTIVE",
+            )
+        )
+
+    async def fetch_template(_template_id: str):
+        if case["arrange"] == "remote_unavailable":
+            raise application_routes._CredentialTemplateLookupUnavailable
+        if case["arrange"] == "remote_not_found":
+            return None
+        return _valid_live_credential_template()
+
+    async def require_revocation_binding(**_kwargs) -> None:
+        if case["arrange"] == "revocation_unavailable":
+            raise HTTPException(
+                status_code=503,
+                detail="Revocation Profile validation is unavailable.",
+            )
+
+    async def apply_issuer_context(_transaction) -> None:
+        if case["arrange"] == "issuer_context_unavailable":
+            raise RuntimeError("Bearer secret-token")
+
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
+    before = asdict(deepcopy(app))
+
+    with pytest.raises(HTTPException) as raised:
+        await application_routes.generate_issuance_offer(
+            application_id=app.id,
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+
+    assert raised.value.status_code == case["status"]
+    assert raised.value.detail == case["detail"]
+    if forbidden := case.get("forbidden_detail"):
+        assert forbidden not in str(raised.value.detail)
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert asdict(stored) == before
+    assert await repo.list_transactions(app.organization_id) == []
+    assert await repo.list_events_for_application(app.id) == []
 
 
 @pytest.mark.asyncio

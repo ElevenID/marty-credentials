@@ -23,6 +23,9 @@ concurrent initial or refresh requests now share one transaction and offer
 instead of leaving an unreachable duplicate transaction behind.
 Invalid list-status filters are now mapped to a stable 422 response instead of
 escaping as an enum conversion error and becoming an internal server failure.
+Fresh non-Canvas offers now require the local Application Template to retain a
+credential-template binding. Approval and offer KMS resolution failures return
+a stable redacted 503 and leave applications, transactions, and events intact.
 
 **Ordering:** this work follows the eight-route Application Template Rust
 landing and its separately gated Python management retirement. The
