@@ -165,6 +165,16 @@
         "claims": {"employee_id": "E-1", "_vct": "https://issuer.example/credentials/employee"}
       }
     },
+    "offer_replay_success": {
+      "application_status": "approved",
+      "transaction_count_after_two_generations": 1,
+      "transaction_status_still_readable": "issued",
+      "offer_status": "active",
+      "offer_scheme": "openid-credential-offer://?credential_offer=",
+      "wallet": {"id": "wallet-1", "name": "Example Wallet", "logo_url": "https://wallet.example/logo.svg", "platforms": ["ios", "android"]},
+      "email_subject": "Your credential is ready",
+      "event_types": ["offer_generated", "offer_generated", "offer_viewed"]
+    },
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},

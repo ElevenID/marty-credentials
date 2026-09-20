@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from issuance.domain.entities import Application, ApplicationStatus, ApplicationTemplate
+from issuance.domain.entities import (
+    Application,
+    ApplicationStatus,
+    ApplicationTemplate,
+    IssuanceStatus,
+    IssuanceTransaction,
+)
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api import application_routes
 from issuance.infrastructure.api.application_routes import (
@@ -337,6 +343,121 @@ async def test_ordinary_approval_success_matches_contract(monkeypatch) -> None:
     assert transaction is not None
     for field, value in expected["transaction"].items():
         assert getattr(transaction, field) == value
+
+
+@pytest.mark.asyncio
+async def test_offer_generation_replay_and_issued_transaction_read_match_contract(
+    monkeypatch,
+) -> None:
+    expected = CONTRACT["lifecycle"]["offer_replay_success"]
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-1",
+        organization_id="org-123",
+        application_template_id="application-template-1",
+        applicant_identifier="applicant-1",
+        form_data={"employee_id": "E-1"},
+        status=ApplicationStatus(expected["application_status"]),
+    )
+    template = ApplicationTemplate(
+        id=app.application_template_id,
+        organization_id=app.organization_id,
+        name="Membership",
+        credential_template_id="credential-template-1",
+        status="ACTIVE",
+    )
+    await repo.save_application_template(template)
+    await repo.save_application(app)
+
+    async def fetch_template(_template_id: str):
+        return _valid_live_credential_template()
+
+    async def apply_issuer_context(transaction) -> None:
+        transaction.issuer_profile_id = "issuer-profile-1"
+        transaction.signing_service_id = "kms-service-1"
+
+    async def require_revocation_binding(**_kwargs) -> None:
+        return None
+
+    async def fetch_wallets(_template_id: str):
+        wallet = expected["wallet"]
+        return [
+            IssuanceOfferWallet(
+                id=wallet["id"],
+                name=wallet["name"],
+                logo_url=wallet["logo_url"],
+                deep_link_url="",
+                platforms=wallet["platforms"],
+            )
+        ]
+
+    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "apply_required_remote_issuer_context",
+        apply_issuer_context,
+    )
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
+    monkeypatch.setattr(application_routes, "_fetch_wallets_for_template", fetch_wallets)
+
+    first = await application_routes.generate_issuance_offer(
+        application_id=app.id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+    second = await application_routes.generate_issuance_offer(
+        application_id=app.id,
+        trusted_organization_id=app.organization_id,
+        repo=repo,
+    )
+
+    assert second.transaction_id == first.transaction_id
+    assert second.offer_url == first.offer_url
+    assert second.qr_payload == first.offer_url
+    assert second.offer_url.startswith(expected["offer_scheme"])
+    assert second.status == expected["offer_status"]
+    assert second.email_payload["subject"] == expected["email_subject"]
+    assert second.email_payload["offer_url"] == second.offer_url
+    assert second.wallets[0].model_dump(exclude={"deep_link_url"}) == expected["wallet"]
+    assert second.wallets[0].deep_link_url == second.offer_url
+    assert second.credential_offer_uris == {}
+    transactions = await repo.list_transactions(app.organization_id)
+    assert len(transactions) == expected["transaction_count_after_two_generations"]
+
+    generation_events = await repo.list_events_for_application(app.id)
+
+    issued_repo = InMemoryIssuanceRepository()
+    issued_transaction = IssuanceTransaction(
+        id="issued-transaction",
+        organization_id=app.organization_id,
+        credential_template_id=template.credential_template_id,
+        application_id=app.id,
+        applicant_id=app.applicant_identifier,
+        credential_type="EmployeeCredential",
+        status=IssuanceStatus(expected["transaction_status_still_readable"]),
+    )
+    issued_app = deepcopy(app)
+    issued_app.issuance_transaction_id = issued_transaction.id
+    await issued_repo.save_application_template(template)
+    await issued_repo.save_transaction(issued_transaction)
+    await issued_repo.save_application(issued_app)
+    read = await application_routes.get_issuance_offer(
+        application_id=issued_app.id,
+        trusted_organization_id=issued_app.organization_id,
+        repo=issued_repo,
+    )
+    assert read.transaction_id == issued_transaction.id
+    assert read.offer_url.startswith(expected["offer_scheme"])
+    assert read.status == expected["offer_status"]
+
+    read_events = await issued_repo.list_events_for_application(issued_app.id)
+    assert [
+        event.event_type.value for event in [*generation_events, *read_events]
+    ] == expected["event_types"]
 
 
 async def _invoke_invalid_transition(
