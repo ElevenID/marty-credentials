@@ -227,6 +227,24 @@
         "application_mutated": false
       }
     },
+    "canvas_approval_outcomes": {
+      "ready": {
+        "credential_template_id": "credential-template-1",
+        "credential_type": "OpenBadgeCredential",
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "revocation_profile_id": "status-profile-1",
+        "issuer_profile_id": "resolved-profile-1",
+        "issuer_did_override": "did:web:issuer.example:orgs:org-1",
+        "signing_service_id": "kms-service-1",
+        "kms_calls_per_approval_or_refresh": 1
+      },
+      "stale_readiness": {
+        "status": 409,
+        "detail": "Canvas application is not ready for approval",
+        "application_status": "pending",
+        "transaction_created": false
+      }
+    },
     "invalid_state_cases": [
       {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
       {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},
