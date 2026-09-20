@@ -164,6 +164,11 @@
       {"id": "approval-missing-payload-format", "arrange": "remote_override", "override": {"credential_payload_format": ""}, "status": 422, "detail": "Credential Template must define a credential payload format"},
       {"id": "approval-missing-issuer-did", "arrange": "remote_override", "override": {"issuer_did": ""}, "status": 422, "detail": "Credential Template must define an issuer DID"},
       {"id": "approval-unsupported-issuer-algorithm", "arrange": "remote_override", "override": {"issuer_algorithm": "HS256"}, "status": 422, "detail": "Credential Template must define a supported issuer algorithm"},
+      {"id": "approval-missing-revocation-profile", "arrange": "revocation_missing_binding", "override": {"revocation_profile_id": ""}, "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "approval-revocation-profile-not-found", "arrange": "revocation_not_found", "status": 422, "detail": "Revocation Profile not found."},
+      {"id": "approval-foreign-revocation-profile", "arrange": "revocation_foreign", "status": 422, "detail": "The Revocation Profile belongs to another organization."},
+      {"id": "approval-inactive-revocation-profile", "arrange": "revocation_inactive", "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "approval-revocation-profile-unavailable", "arrange": "revocation_unavailable", "status": 503, "detail": "Revocation Profile validation is unavailable."},
       {"id": "approval-issuer-context-unavailable", "arrange": "issuer_context_unavailable", "status": 503, "detail": "Issuer signing context is unavailable.", "forbidden_detail": "Bearer secret-token"}
     ],
     "offer_dependency_cases": [
@@ -171,6 +176,10 @@
       {"id": "offer-missing-credential-template-id", "arrange": "missing_credential_template_id", "status": 422, "detail": "Credential Template is required."},
       {"id": "offer-credential-template-unavailable", "arrange": "remote_unavailable", "status": 503, "detail": "Credential Template validation is unavailable."},
       {"id": "offer-credential-template-not-found", "arrange": "remote_not_found", "status": 422, "detail": "Credential Template not found."},
+      {"id": "offer-missing-revocation-profile", "arrange": "revocation_missing_binding", "override": {"revocation_profile_id": ""}, "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "offer-revocation-profile-not-found", "arrange": "revocation_not_found", "status": 422, "detail": "Revocation Profile not found."},
+      {"id": "offer-foreign-revocation-profile", "arrange": "revocation_foreign", "status": 422, "detail": "The Revocation Profile belongs to another organization."},
+      {"id": "offer-inactive-revocation-profile", "arrange": "revocation_inactive", "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
       {"id": "offer-revocation-profile-unavailable", "arrange": "revocation_unavailable", "status": 503, "detail": "Revocation Profile validation is unavailable."},
       {"id": "offer-issuer-context-unavailable", "arrange": "issuer_context_unavailable", "status": 503, "detail": "Issuer signing context is unavailable.", "forbidden_detail": "Bearer secret-token"}
     ],

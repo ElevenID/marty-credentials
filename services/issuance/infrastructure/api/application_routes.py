@@ -824,6 +824,10 @@ async def approve_application(
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await _require_active_revocation_profile_binding(
+            organization_id=app.organization_id,
+            revocation_profile_id=credential_context.revocation_profile_id,
+        )
         credential_type = credential_context.credential_type
         issuer_context_applier = apply_required_remote_issuer_context
 

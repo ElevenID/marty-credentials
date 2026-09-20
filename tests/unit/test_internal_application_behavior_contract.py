@@ -419,6 +419,41 @@ def _valid_live_credential_template() -> dict[str, object]:
     }
 
 
+async def _apply_revocation_dependency_case(
+    case: dict[str, object],
+    *,
+    organization_id: str,
+    revocation_profile_id: str | None,
+) -> None:
+    assert organization_id == "org-123"
+    arrange = case["arrange"]
+    if arrange == "revocation_missing_binding":
+        assert revocation_profile_id is None
+    else:
+        assert revocation_profile_id == "revocation-profile-1"
+    failures = {
+        "revocation_missing_binding": (
+            422,
+            "Credential Templates must reference an active Revocation Profile before issuance.",
+        ),
+        "revocation_not_found": (422, "Revocation Profile not found."),
+        "revocation_foreign": (
+            422,
+            "The Revocation Profile belongs to another organization.",
+        ),
+        "revocation_inactive": (
+            422,
+            "Credential Templates must reference an active Revocation Profile before issuance.",
+        ),
+        "revocation_unavailable": (
+            503,
+            "Revocation Profile validation is unavailable.",
+        ),
+    }
+    if failure := failures.get(str(arrange)):
+        raise HTTPException(status_code=failure[0], detail=failure[1])
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case",
@@ -462,7 +497,15 @@ async def test_ordinary_approval_dependency_failures_are_atomic(
         template.update(case.get("override", {}))
         return template
 
+    async def require_revocation_binding(**kwargs) -> None:
+        await _apply_revocation_dependency_case(case, **kwargs)
+
     monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
     if case["arrange"] == "issuer_context_unavailable":
 
         async def apply_issuer_context(_transaction) -> None:
@@ -532,14 +575,12 @@ async def test_offer_dependency_failures_are_atomic_and_redacted(
             raise application_routes._CredentialTemplateLookupUnavailable
         if case["arrange"] == "remote_not_found":
             return None
-        return _valid_live_credential_template()
+        template = _valid_live_credential_template()
+        template.update(case.get("override", {}))
+        return template
 
-    async def require_revocation_binding(**_kwargs) -> None:
-        if case["arrange"] == "revocation_unavailable":
-            raise HTTPException(
-                status_code=503,
-                detail="Revocation Profile validation is unavailable.",
-            )
+    async def require_revocation_binding(**kwargs) -> None:
+        await _apply_revocation_dependency_case(case, **kwargs)
 
     async def apply_issuer_context(_transaction) -> None:
         if case["arrange"] == "issuer_context_unavailable":
@@ -604,7 +645,18 @@ async def test_ordinary_approval_success_matches_contract(monkeypatch) -> None:
         transaction.issuer_profile_id = "issuer-profile-1"
         transaction.signing_service_id = "kms-service-1"
 
+    async def require_revocation_binding(**kwargs) -> None:
+        assert kwargs == {
+            "organization_id": "org-123",
+            "revocation_profile_id": "revocation-profile-1",
+        }
+
     monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
+    monkeypatch.setattr(
+        application_routes,
+        "_require_active_revocation_profile_binding",
+        require_revocation_binding,
+    )
     monkeypatch.setattr(
         application_routes,
         "apply_required_remote_issuer_context",
