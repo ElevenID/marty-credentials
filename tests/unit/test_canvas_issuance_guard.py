@@ -29,9 +29,7 @@ from issuance.infrastructure.adapters.memory_repository import (
 NOW = datetime(2026, 7, 15, 12, 0, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = json.loads(
-    (ROOT / "contracts" / "issuance-internal-applications.json").read_text(
-        encoding="utf-8"
-    )
+    (ROOT / "contracts" / "issuance-internal-applications.json").read_text(encoding="utf-8")
 )
 
 
@@ -400,12 +398,15 @@ async def test_canvas_guard_uses_configured_evidence_freshness(
     )
     monkeypatch.setenv("CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS", "1800")
 
-    assert await require_canvas_issuance_ready(
-        repo=repo,
-        tx=tx,
-        now=NOW,
-        resolved_issuer_context=_resolved_context(),
-    ) is True
+    assert (
+        await require_canvas_issuance_ready(
+            repo=repo,
+            tx=tx,
+            now=NOW,
+            resolved_issuer_context=_resolved_context(),
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -436,14 +437,15 @@ async def test_canvas_guard_allows_private_kms_key_rotation_behind_same_did(
 ) -> None:
     repo, tx, _platform, _binding, _fact = await _ready_case(monkeypatch)
 
-    assert await require_canvas_issuance_ready(
-        repo=repo,
-        tx=tx,
-        now=NOW,
-        resolved_issuer_context=_resolved_context(
-            key_reference="rotated-behind-the-same-did"
-        ),
-    ) is True
+    assert (
+        await require_canvas_issuance_ready(
+            repo=repo,
+            tx=tx,
+            now=NOW,
+            resolved_issuer_context=_resolved_context(key_reference="rotated-behind-the-same-did"),
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -507,191 +509,3 @@ async def test_credential_route_sanitizes_unexpected_guard_failures(
     assert response.status_code == 400
     assert b"secret" not in response.body
     assert json.loads(response.body)["error"] == "invalid_credential_request"
-
-
-@pytest.mark.asyncio
-async def test_manual_canvas_approval_uses_persisted_snapshot_and_required_kms(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected = CONTRACT["lifecycle"]["canvas_approval_outcomes"]["ready"]
-    from issuance.infrastructure.api import application_routes, routes
-
-    repo, _old_tx, _platform, binding, _fact = await _ready_case(monkeypatch)
-    app = await repo.get_application("application-1")
-    assert app is not None
-    app.status = ApplicationStatus.PENDING
-    app.issuance_transaction_id = None
-    await repo.save_application(app)
-
-    required_calls: list[str] = []
-
-    async def apply_required(tx):
-        required_calls.append(tx.id)
-        assert tx.issuer_did_override == "did:web:issuer.example:orgs:org-1"
-        assert tx.issuer_algorithm == "ES256"
-        tx.issuer_profile_id = "resolved-profile-1"
-        tx.signing_service_id = "kms-service-1"
-        return {"signing_key_reference": "badge-key-1"}
-
-    monkeypatch.setattr(
-        application_routes,
-        "apply_required_remote_issuer_context",
-        apply_required,
-    )
-    monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: pytest.fail(
-            "Canvas approval must not fetch a live credential template"
-        ),
-    )
-
-    response = await application_routes.approve_application(
-        app.id,
-        routes.ApplicationApproval(review_notes="Pilot administrator approval"),
-        trusted_organization_id="org-1",
-        repo=repo,
-    )
-
-    tx = await repo.get_transaction(response.issuance_transaction_id)
-    assert tx is not None
-    assert len(required_calls) == expected["kms_calls_per_approval_or_refresh"]
-    assert required_calls == [tx.id]
-    assert tx.credential_template_id == expected["credential_template_id"]
-    assert tx.credential_template_id == binding.credential_template_id
-    assert tx.credential_type == expected["credential_type"]
-    assert tx.credential_payload_format == expected["credential_payload_format"]
-    assert tx.revocation_profile_id == expected["revocation_profile_id"]
-    assert tx.issuer_profile_id == expected["issuer_profile_id"]
-    assert tx.issuer_did_override == expected["issuer_did_override"]
-    assert tx.signing_service_id == expected["signing_service_id"]
-
-    approved_app = await repo.get_application(app.id)
-    assert approved_app is not None
-    template = await repo.get_application_template(approved_app.application_template_id)
-    refreshed = await application_routes._get_or_refresh_transaction(
-        approved_app,
-        repo,
-        template,
-    )
-    assert refreshed.id == tx.id
-    assert len(required_calls) == expected["kms_calls_per_approval_or_refresh"] * 2
-    assert required_calls == [tx.id, tx.id]
-    assert refreshed.revocation_profile_id == expected["revocation_profile_id"]
-
-
-@pytest.mark.asyncio
-async def test_manual_canvas_approval_fails_closed_on_stale_readiness(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    expected = CONTRACT["lifecycle"]["canvas_approval_outcomes"]["stale_readiness"]
-    from fastapi import HTTPException
-    from issuance.infrastructure.api import application_routes, routes
-
-    repo, _old_tx, _platform, binding, _fact = await _ready_case(monkeypatch)
-    app = await repo.get_application("application-1")
-    assert app is not None
-    app.status = ApplicationStatus.PENDING
-    app.issuance_transaction_id = None
-    binding.config_version += 1
-    await repo.save_application(app)
-    await repo.save_canvas_program_binding(binding)
-
-    monkeypatch.setattr(
-        application_routes.httpx,
-        "AsyncClient",
-        lambda **_kwargs: pytest.fail("stale Canvas approval must not call services"),
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        await application_routes.approve_application(
-            app.id,
-            routes.ApplicationApproval(review_notes="Should fail"),
-            trusted_organization_id="org-1",
-            repo=repo,
-        )
-
-    assert exc_info.value.status_code == expected["status"]
-    assert exc_info.value.detail == expected["detail"]
-    assert app.status.value == expected["application_status"]
-    assert (app.issuance_transaction_id is not None) is expected[
-        "transaction_created"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_manual_non_canvas_approval_uses_live_did_first_template(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from issuance.infrastructure.api import application_routes, routes
-
-    repo = InMemoryIssuanceRepository()
-    template = ApplicationTemplate(
-        id="ordinary-template",
-        organization_id="org-1",
-        credential_template_id="ordinary-credential-template",
-        status="ACTIVE",
-    )
-    app = Application(
-        id="ordinary-application",
-        organization_id="org-1",
-        application_template_id=template.id,
-        applicant_identifier="ordinary-holder",
-        status=ApplicationStatus.PENDING,
-        integration_context={},
-    )
-    await repo.save_application_template(template)
-    await repo.save_application(app)
-
-    async def fetch_template(_template_id: str):
-        return {
-            "organization_id": "org-1",
-            "status": "ACTIVE",
-            "credential_type": "EmployeeCredential",
-                "vct": "https://issuer.example/credentials/employee",
-                "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
-                "revocation_profile_id": "revocation-profile-1",
-                "issuer_did": "did:web:issuer.example:orgs:org-1",
-                "issuer_algorithm": "ES256",
-            }
-
-    ordinary_calls: list[str] = []
-
-    async def apply_ordinary(tx):
-        ordinary_calls.append(tx.id)
-        assert tx.issuer_did_override == "did:web:issuer.example:orgs:org-1"
-        assert tx.issuer_algorithm == "ES256"
-        tx.issuer_profile_id = "resolved-profile-1"
-        tx.signing_service_id = "kms-service-1"
-        return None
-
-    async def require_revocation_binding(**kwargs) -> None:
-        assert kwargs == {
-            "organization_id": "org-1",
-            "revocation_profile_id": "revocation-profile-1",
-        }
-
-    monkeypatch.setattr(application_routes, "_fetch_credential_template", fetch_template)
-    monkeypatch.setattr(
-        application_routes,
-        "_require_active_revocation_profile_binding",
-        require_revocation_binding,
-    )
-    monkeypatch.setattr(
-        application_routes,
-        "apply_required_remote_issuer_context",
-        apply_ordinary,
-    )
-
-    response = await application_routes.approve_application(
-        app.id,
-        routes.ApplicationApproval(review_notes="Ordinary approval"),
-        trusted_organization_id="org-1",
-        repo=repo,
-    )
-
-    tx = await repo.get_transaction(response.issuance_transaction_id)
-    assert tx is not None
-    assert ordinary_calls == [tx.id]
-    assert tx.credential_type == "EmployeeCredential"
-    assert tx.issuer_profile_id == "resolved-profile-1"
-    assert tx.claims["_vct"] == "https://issuer.example/credentials/employee"

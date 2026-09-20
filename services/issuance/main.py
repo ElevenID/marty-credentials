@@ -276,7 +276,6 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
-from issuance.infrastructure.api.application_routes import internal_application_router
 from issuance.infrastructure.api.canvas_operations_routes import canvas_operations_router
 from issuance.infrastructure.api.canvas_routes import canvas_integration_router
 from issuance.infrastructure.api.physical_document_routes import (
@@ -421,7 +420,6 @@ def create_app() -> FastAPI:
     app.include_router(canvas_operations_router)
     app.include_router(issued_credential_router)
     app.include_router(resource_owner_router)
-    app.include_router(internal_application_router)
     app.include_router(physical_document_router)
 
     # Override FastAPI dependency injection

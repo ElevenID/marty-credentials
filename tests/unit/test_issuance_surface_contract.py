@@ -21,9 +21,9 @@ def test_frozen_issuance_surface_matches_python_parity_oracle() -> None:
     surface.check_contract()
 
 
-def test_rust_owned_application_templates_preserve_the_remaining_semantic_surface() -> None:
-    # Baseline: reviewed Application Template Rust cutover plus the frozen,
-    # atomic internal-Application approval boundary. Only dynamic-lookup
+def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface() -> None:
+    # Baseline: reviewed Application Template and internal-Application Rust
+    # cutovers. Only dynamic-lookup
     # source-line metadata is excluded; source paths, ordering and every retained
     # HTTP, RPC, configuration, runtime and migration field remain in the digest.
     # check_contract above still requires exact current source-line metadata.
@@ -32,7 +32,7 @@ def test_rust_owned_application_templates_preserve_the_remaining_semantic_surfac
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "47af83c925b34f26a2b6ef001738d9008c5abe6d3dc075e38a89ab69d9726e47"
+        "7d2acea6da0cb5b0e68f045d16e7d0390eb834108840d4e835094dd9ac5ad260"
     )
 
 
@@ -40,7 +40,7 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
     contract = surface.build_contract()
 
     assert contract["schema"] == "marty.issuance-runtime-surface/v1"
-    assert contract["http"]["route_count"] == 123
+    assert contract["http"]["route_count"] == 109
     assert contract["grpc"]["method_count"] == 12
     assert {mode["name"] for mode in contract["runtime"]["modes"]} == {
         "api",

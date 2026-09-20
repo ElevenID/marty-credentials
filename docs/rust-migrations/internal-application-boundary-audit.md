@@ -1,7 +1,9 @@
 # Internal Application Rust migration boundary audit
 
-**Status:** behavior freeze complete and Rust implementation authorized; no
-route is cut over and no Python implementation is deleted yet.
+**Status:** behavior freeze complete; the Rust implementation, PostgreSQL
+contracts, packaged executable, and fail-closed gateway selection are complete
+on the staged `marty-ui` migration. This consumer checkpoint retires the
+superseded Python HTTP owner and remains ordered after that Rust landing.
 
 The audit found and repaired one retained-owner defect before freezing the
 boundary: the wallet-invite GET handler referenced a nonexistent
@@ -142,10 +144,14 @@ and rollback paths pass against a freshly created real PostgreSQL database.
 Concurrent lifecycle losers still retain only the deliberately frozen immutable
 fact/audit record and cannot overwrite the winning rejection.
 
-Rust implementation is therefore authorized by the canonical contract. Python
-deletion remains forbidden until the candidate passes that same contract,
-isolated PostgreSQL tests, complete HTTP lifecycle coverage,
-packaged-main/gateway routing, all retained-consumer tests, and protected CI.
+The Rust candidate has passed the canonical contract, isolated PostgreSQL
+tests, complete HTTP lifecycle coverage, packaged-main routing, gateway
+selection, and retained-consumer collection. The Python router plus its two
+unreferenced route-only orchestration modules are therefore retired here.
+Shared Application storage, Canvas approval, Canvas evidence transition, and
+other retained Python consumers remain until their own independently frozen
+Rust migrations land. Protected CI and merge ordering remain mandatory before
+this deletion reaches `main`.
 
 ## Explicit non-goals
 

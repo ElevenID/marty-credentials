@@ -34,7 +34,7 @@ marty-credentials/services/issuance/
 │   │   └── __init__.py
 │   ├── api/
 │   │   ├── routes.py                # OID4VCI endpoints (/initiate, /token, /credential)
-│   │   ├── application_routes.py    # Application workflow endpoints
+│   │   ├── canvas_routes.py         # Retained Canvas integration endpoints
 │   │   └── __init__.py
 │   ├── migrations/                  # Alembic database migrations (copied from old location)
 │   │   ├── alembic.ini
@@ -51,7 +51,8 @@ marty-credentials/services/issuance/
 - **Repository Pattern**: Clean separation with `IIssuanceRepository` port and PostgreSQL/in-memory adapters
 - **Complete OID4VCI Protocol**: All endpoints implemented (/initiate, /token, /credential, /offers, /transactions)
 - **Credential Lifecycle**: Revoke, suspend, reinstate endpoints with RevocationProfile integration
-- **Application Workflow**: Template and application management with approval/rejection flows
+- **Application Workflow**: Rust owns template and internal-Application HTTP workflows;
+  Python retains shared Canvas consumers until their separate migration
 - **Dependency Injection**: FastAPI DI with repository override pattern
 
 ### 3. **Updated Docker Configuration** ✅

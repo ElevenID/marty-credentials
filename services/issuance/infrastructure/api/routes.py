@@ -734,9 +734,6 @@ def _did_resolution_failure_detail(tx: IssuanceTransaction, exc: Exception) -> s
 
 # Routers
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["issuance"])
-internal_application_router = APIRouter(
-    prefix="/internal/applications", tags=["internal-applications"]
-)
 issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["issued-credentials"])
 resource_owner_router = APIRouter(
     prefix="/internal/v1/resource-owners",
@@ -1255,46 +1252,6 @@ async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
                 )
 
     return endpoint
-
-
-class ApplicationCreate(BaseModel):
-    application_template_id: str
-    applicant_data: dict[str, Any]
-    integration_context: dict[str, Any] = {}
-
-
-class ApplicationResponse(BaseModel):
-    id: str
-    organization_id: str
-    application_template_id: str
-    applicant_identifier: str
-    form_data: dict[str, Any]
-    evidence_submissions: list[dict[str, Any]]
-    integration_context: dict[str, Any] = {}
-    status: str
-    review_notes: str | None
-    reviewer_id: str | None
-    submitted_at: str
-    reviewed_at: str | None
-    expires_at: str
-    issuance_transaction_id: str | None
-
-
-class EvidenceSubmission(BaseModel):
-    evidence_type: str
-    evidence_data: dict[str, Any]
-
-
-class ApplicationApproval(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    review_notes: str | None = None
-
-
-class ApplicationRejection(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    review_notes: str
 
 
 class CredentialStatusRequest(BaseModel):
