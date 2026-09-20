@@ -1,10 +1,13 @@
 import json
+from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from issuance.domain.entities import ApplicationStatus
+from issuance.domain.entities import Application, ApplicationStatus, ApplicationTemplate
+from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api import application_routes
 from issuance.infrastructure.api.application_routes import (
     ApplicationEvidenceSummaryResponse,
@@ -172,6 +175,154 @@ def test_application_status_domain_matches_contract() -> None:
     assert [status.value for status in ApplicationStatus] == CONTRACT["lifecycle"][
         "application_statuses"
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    CONTRACT["lifecycle"]["template_failure_cases"],
+    ids=lambda case: case["id"],
+)
+async def test_create_template_failures_do_not_write(case) -> None:
+    repo = InMemoryIssuanceRepository()
+    if case["template"] != "missing":
+        await repo.save_application_template(
+            ApplicationTemplate(
+                id="template-1",
+                organization_id="org-123",
+                name="Membership",
+                status=case["template"],
+            )
+        )
+
+    with pytest.raises(HTTPException) as raised:
+        await application_routes.create_application(
+            request=ApplicationCreate(
+                application_template_id="template-1",
+                applicant_data={"email": "applicant@example.test"},
+            ),
+            trusted_organization_id=case["trusted_organization_id"],
+            repo=repo,
+        )
+
+    assert raised.value.status_code == case["status"]
+    assert raised.value.detail == case["detail"]
+    assert await repo.list_applications(org_id="org-123") == []
+
+
+async def _invoke_invalid_transition(
+    operation: str, app: Application, repo: InMemoryIssuanceRepository
+) -> None:
+    if operation == "submit_evidence":
+        await application_routes.submit_evidence(
+            application_id=app.id,
+            evidence=EvidenceSubmission(
+                evidence_type="DOCUMENT_SCAN", evidence_data={"digest": "sha256:1"}
+            ),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    elif operation == "approve":
+        await application_routes.approve_application(
+            application_id=app.id,
+            approval=ApplicationApproval(review_notes="approved"),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    elif operation == "reject":
+        await application_routes.reject_application(
+            application_id=app.id,
+            rejection=ApplicationRejection(review_notes="rejected"),
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    elif operation == "generate_issuance_offer":
+        await application_routes.generate_issuance_offer(
+            application_id=app.id,
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    elif operation == "get_issuance_offer":
+        await application_routes.get_issuance_offer(
+            application_id=app.id,
+            trusted_organization_id=app.organization_id,
+            repo=repo,
+        )
+    else:  # pragma: no cover - the contract inventory owns this branch
+        raise AssertionError(f"Unsupported contract operation: {operation}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    CONTRACT["lifecycle"]["invalid_state_cases"],
+    ids=lambda case: case["id"],
+)
+async def test_invalid_lifecycle_transitions_preserve_exact_application(case) -> None:
+    repo = InMemoryIssuanceRepository()
+    app = Application(
+        id="application-1",
+        organization_id="org-123",
+        application_template_id="template-1",
+        applicant_identifier="applicant-1",
+        status=ApplicationStatus(case["application_status"]),
+    )
+    await repo.save_application(app)
+    before = asdict(deepcopy(app))
+
+    with pytest.raises(HTTPException) as raised:
+        await _invoke_invalid_transition(case["operation"], app, repo)
+
+    assert raised.value.status_code == case["status"]
+    assert raised.value.detail == case["detail"]
+    stored = await repo.get_application(app.id)
+    assert stored is not None
+    assert asdict(stored) == before
+
+
+@pytest.mark.asyncio
+async def test_pending_evidence_and_rejection_successes_match_contract() -> None:
+    repo = InMemoryIssuanceRepository()
+    evidence_app = Application(
+        id="application-evidence",
+        organization_id="org-123",
+        application_template_id="template-1",
+        applicant_identifier="applicant-1",
+    )
+    rejection_app = Application(
+        id="application-rejection",
+        organization_id="org-123",
+        application_template_id="template-1",
+        applicant_identifier="applicant-2",
+    )
+    await repo.save_application(evidence_app)
+    await repo.save_application(rejection_app)
+
+    evidence_response = await application_routes.submit_evidence(
+        application_id=evidence_app.id,
+        evidence=EvidenceSubmission(
+            evidence_type="DOCUMENT_SCAN", evidence_data={"digest": "sha256:1"}
+        ),
+        trusted_organization_id="org-123",
+        repo=repo,
+    )
+    assert evidence_response.status == ApplicationStatus.PENDING.value
+    assert evidence_response.evidence_submissions[0]["evidence_type"] == "DOCUMENT_SCAN"
+    assert evidence_response.evidence_submissions[0]["evidence_data"] == {
+        "digest": "sha256:1"
+    }
+    assert evidence_response.evidence_submissions[0]["submitted_at"].endswith("+00:00")
+
+    rejection_response = await application_routes.reject_application(
+        application_id=rejection_app.id,
+        rejection=ApplicationRejection(review_notes="insufficient evidence"),
+        trusted_organization_id="org-123",
+        repo=repo,
+    )
+    assert rejection_response.status == ApplicationStatus.REJECTED.value
+    assert rejection_response.review_notes == "insufficient evidence"
+    assert rejection_response.reviewer_id == CONTRACT["lifecycle"]["reviewer_id"]
+    assert rejection_response.reviewed_at is not None
 
 
 def test_contract_does_not_authorize_rust_before_behavior_freeze_is_complete() -> None:

@@ -129,6 +129,38 @@
       {"operation": "get_issuance_offer", "from": ["approved"], "transaction_state": "authoritative"}
     ],
     "reviewer_identity": "server-owned",
-    "applicant_identifier_precedence": ["trimmed_given_and_family_name", "trimmed_email", "generated_applicant_prefix_plus_8_hex"]
+    "reviewer_id": "issuance-management-api",
+    "applicant_identifier_precedence": ["trimmed_given_and_family_name", "trimmed_email", "generated_applicant_prefix_plus_8_hex"],
+    "template_failure_cases": [
+      {"id": "create-missing-template", "template": "missing", "trusted_organization_id": "org-123", "status": 404, "detail": "Application template not found"},
+      {"id": "create-inactive-template", "template": "DRAFT", "trusted_organization_id": "org-123", "status": 422, "detail": "Application template must be active"},
+      {"id": "create-foreign-template", "template": "ACTIVE", "trusted_organization_id": "org-other", "status": 404, "detail": "Application resource not found"}
+    ],
+    "invalid_state_cases": [
+      {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},
+      {"id": "submit-rejected", "operation": "submit_evidence", "application_status": "rejected", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.REJECTED status"},
+      {"id": "submit-withdrawn", "operation": "submit_evidence", "application_status": "withdrawn", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "approve-under-review", "operation": "approve", "application_status": "under_review", "status": 400, "detail": "Cannot approve application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "approve-approved", "operation": "approve", "application_status": "approved", "status": 400, "detail": "Cannot approve application in ApplicationStatus.APPROVED status"},
+      {"id": "approve-rejected", "operation": "approve", "application_status": "rejected", "status": 400, "detail": "Cannot approve application in ApplicationStatus.REJECTED status"},
+      {"id": "approve-withdrawn", "operation": "approve", "application_status": "withdrawn", "status": 400, "detail": "Cannot approve application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "reject-under-review", "operation": "reject", "application_status": "under_review", "status": 400, "detail": "Cannot reject application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "reject-approved", "operation": "reject", "application_status": "approved", "status": 400, "detail": "Cannot reject application in ApplicationStatus.APPROVED status"},
+      {"id": "reject-rejected", "operation": "reject", "application_status": "rejected", "status": 400, "detail": "Cannot reject application in ApplicationStatus.REJECTED status"},
+      {"id": "reject-withdrawn", "operation": "reject", "application_status": "withdrawn", "status": 400, "detail": "Cannot reject application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "generate-offer-pending", "operation": "generate_issuance_offer", "application_status": "pending", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is pending"},
+      {"id": "generate-offer-under-review", "operation": "generate_issuance_offer", "application_status": "under_review", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is under_review"},
+      {"id": "generate-offer-rejected", "operation": "generate_issuance_offer", "application_status": "rejected", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is rejected"},
+      {"id": "generate-offer-withdrawn", "operation": "generate_issuance_offer", "application_status": "withdrawn", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is withdrawn"},
+
+      {"id": "get-offer-pending", "operation": "get_issuance_offer", "application_status": "pending", "status": 404, "detail": "No issuance offer available for this application"},
+      {"id": "get-offer-under-review", "operation": "get_issuance_offer", "application_status": "under_review", "status": 404, "detail": "No issuance offer available for this application"},
+      {"id": "get-offer-rejected", "operation": "get_issuance_offer", "application_status": "rejected", "status": 404, "detail": "No issuance offer available for this application"},
+      {"id": "get-offer-withdrawn", "operation": "get_issuance_offer", "application_status": "withdrawn", "status": 404, "detail": "No issuance offer available for this application"}
+    ]
   }
 }
