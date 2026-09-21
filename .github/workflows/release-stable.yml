@@ -286,6 +286,8 @@ jobs:
           python scripts/install_pinned_core.py --repository . --destination release-deps
           python -m pip install pytest==9.1.1
           pip install -e .[dev]
+          DIDCOMM_DELIVERY_OWNER=native \
+          ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005 \
           PYTHONPATH="$GITHUB_WORKSPACE/services" python -c \
             "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; issuance()"
           pytest tests/ packages/tests/

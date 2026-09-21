@@ -107,6 +107,13 @@ mod python_bindings {
         Ok((material.kid, material.private_jwk))
     }
 
+    /// Generates a P-256 private JWK and its public-only JWK.
+    #[pyfunction]
+    pub fn generate_p256_jwk() -> PyResult<(String, String)> {
+        marty_oid4vci::issuer::generate_p256_jwk_pair()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
     /// Generates a new P-384 key and returns (did, jwk_json) - for ES384
     #[pyfunction]
     pub fn generate_p384_key() -> PyResult<(String, String)> {
@@ -409,6 +416,30 @@ mod python_bindings {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Select issuer-bound disclosures for an unbound SD-JWT presentation.
+    ///
+    /// Nonce or audience binding requires a holder-key-aware OID4VP flow and
+    /// therefore fails closed at this retained compatibility boundary.
+    #[pyfunction]
+    #[pyo3(signature = (sd_jwt_compact, disclosed_fields, nonce=None, audience=None))]
+    pub fn sd_jwt_create_presentation(
+        sd_jwt_compact: &str,
+        disclosed_fields: Vec<String>,
+        nonce: Option<&str>,
+        audience: Option<&str>,
+    ) -> PyResult<String> {
+        if nonce.is_some() || audience.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "SD-JWT nonce or audience binding requires a holder-key-aware OID4VP flow",
+            ));
+        }
+        marty_oid4vci::formats::sd_jwt::create_sd_jwt_presentation(
+            sd_jwt_compact,
+            &disclosed_fields,
+        )
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
+    }
+
     #[pymodule]
     pub fn _marty_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
         // Initialize tracing for structured logging
@@ -419,6 +450,7 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(check_isomdl, m)?)?;
         m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
         m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
+        m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
         m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
         m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
         m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
@@ -428,6 +460,7 @@ mod python_bindings {
             complete_vcdm_data_integrity_credential,
             m
         )?)?;
+        m.add_function(wrap_pyfunction!(sd_jwt_create_presentation, m)?)?;
         crate::canonical_verification::register(m)?;
 
         // Status list classes and functions for credential revocation

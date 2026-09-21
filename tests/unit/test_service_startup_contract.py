@@ -368,6 +368,8 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
     assert "validate_marty_rs_capabilities()" in dockerfile
+    assert "DIDCOMM_DELIVERY_OWNER=native" in dockerfile
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in dockerfile
     assert "COPY python/marty_credentials /app/marty_credentials" in dockerfile
     assert "COPY marty-core/" not in dockerfile
     assert dependencies["marty-rs"]["repository"] == "ElevenID/marty-core"
@@ -435,6 +437,8 @@ def test_local_compatibility_binding_cannot_replace_the_production_core_wheel() 
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
     assert "pathlib.Path('release-deps').glob('*.whl')" in python_ci
+    assert "DIDCOMM_DELIVERY_OWNER=native" in python_ci
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in python_ci
     assert "local-wheels" not in dockerfile
     assert "local-wheels" not in python_ci
 
@@ -454,6 +458,12 @@ def test_release_image_uses_the_pinned_canonical_core_wheels() -> None:
     assert "ARG MARTY_VERIFICATION_WHEEL" in issuance_image
     assert "ARG MARTY_VERIFICATION_SHA256" in issuance_image
     assert "validate_marty_rs_capabilities()" in issuance_image
+
+    stable_release = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "DIDCOMM_DELIVERY_OWNER=native" in stable_release
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in stable_release
 
 
 def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:

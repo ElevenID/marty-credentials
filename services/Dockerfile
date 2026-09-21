@@ -46,7 +46,9 @@ RUN echo "${MARTY_RS_SHA256}  /release-deps/${MARTY_RS_WHEEL}" | sha256sum -c - 
 COPY services/issuance /app/services/issuance
 COPY packages /app/packages
 COPY python/marty_credentials /app/marty_credentials
-RUN python -c "from issuance.application.rust_integration import validate_marty_rs_capabilities; validate_marty_rs_capabilities()"
+RUN DIDCOMM_DELIVERY_OWNER=native \
+    ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005 \
+    python -c "from issuance.application.rust_integration import validate_marty_rs_capabilities; validate_marty_rs_capabilities()"
 
 WORKDIR /app/services/issuance
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

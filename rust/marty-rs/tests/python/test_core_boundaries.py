@@ -7,7 +7,9 @@ from _marty_rs import (
     create_verifiable_credential,
     create_zk_age_verification,
     generate_issuer_metadata,
+    generate_p256_jwk,
     generate_p256_key,
+    sd_jwt_create_presentation,
 )
 
 
@@ -63,3 +65,19 @@ def test_local_issuance_rejects_contradictory_jwk_algorithm_metadata() -> None:
         )
 
     assert private_scalar not in str(raised.value)
+
+
+def test_retained_local_key_adapter_exports_private_and_public_jwks() -> None:
+    private_json, public_json = generate_p256_jwk()
+    private = json.loads(private_json)
+    public = json.loads(public_json)
+
+    assert private["d"]
+    assert "d" not in public
+    assert public["x"] == private["x"]
+    assert public["y"] == private["y"]
+
+
+def test_retained_sd_jwt_adapter_rejects_unimplemented_holder_binding() -> None:
+    with pytest.raises(ValueError, match="holder-key-aware OID4VP flow"):
+        sd_jwt_create_presentation("not-an-sd-jwt", [], "nonce", "audience")
