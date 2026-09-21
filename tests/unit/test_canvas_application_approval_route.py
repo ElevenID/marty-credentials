@@ -125,9 +125,10 @@ async def test_canvas_application_approval_is_owned_and_uses_canonical_guard(
         "status": "approved",
         "issuance_transaction_id": "transaction-1",
     }
-    assert captured["guard"]["app"] is application
+    guarded_application = captured["guard"]["app"]
+    assert guarded_application.id == application.id
     approval = captured["approval"]
-    assert approval["app"] is application
+    assert approval["app"] is guarded_application
     assert approval["credential_context"] is credential_context
     assert approval["reviewer_id"] == "canvas-integration-management-api"
     assert approval["review_notes"] == "Evidence verified by the pilot administrator"

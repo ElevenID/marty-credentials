@@ -11,12 +11,18 @@ from issuance.domain.entities import (
     Application,
     ApplicationStatus,
     ApplicationTemplate,
+    EvidenceFact,
+    IssuanceEvent,
     IssuanceStatus,
     IssuanceTransaction,
 )
 from issuance.domain.ports import IIssuanceRepository
 
 IssuerContextApplier = Callable[[IssuanceTransaction], Awaitable[None]]
+
+
+class ApplicationTransitionConflictError(ValueError):
+    """The application lifecycle changed while issuance was being prepared."""
 
 
 @dataclass(frozen=True)
@@ -125,24 +131,20 @@ def _is_canvas_bound_application(app: Application) -> bool:
     )
 
 
-async def approve_application_for_issuance(
+async def prepare_application_issuance(
     *,
     repo: IIssuanceRepository,
     app: Application,
     template: ApplicationTemplate,
-    reviewer_id: str,
-    review_notes: str,
     credential_context: CredentialContext | None = None,
     issuer_context_applier: IssuerContextApplier | None = None,
 ) -> IssuanceTransaction:
-    """Approve an application and create or refresh its issuance transaction."""
+    """Prepare an issuance transaction without committing application state."""
 
     if not template.credential_template_id:
         raise ValueError("Application template missing credential template ID")
     if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
         raise ValueError(f"Cannot approve application in {app.status} status")
-
-    canvas_application = _is_canvas_bound_application(app)
     existing_tx: IssuanceTransaction | None = None
     if app.issuance_transaction_id:
         existing_tx = await repo.get_transaction(app.issuance_transaction_id)
@@ -167,8 +169,6 @@ async def approve_application_for_issuance(
                 tx.claims = {**tx.claims, "_vct": credential_context.credential_vct}
         if issuer_context_applier is not None:
             await issuer_context_applier(tx)
-        if not canvas_application:
-            await repo.save_transaction(tx)
     else:
         merged_claims = {**app.form_data}
         default_credential_type = str(
@@ -215,18 +215,47 @@ async def approve_application_for_issuance(
         )
         if issuer_context_applier is not None:
             await issuer_context_applier(tx)
-        if not canvas_application:
-            await repo.save_transaction(tx)
+
+    return tx
+
+
+async def commit_prepared_application_issuance(
+    *,
+    repo: IIssuanceRepository,
+    app: Application,
+    tx: IssuanceTransaction,
+    reviewer_id: str,
+    review_notes: str,
+    evidence_fact: EvidenceFact | None = None,
+    audit_events: tuple[IssuanceEvent, ...] = (),
+) -> IssuanceTransaction:
+    """Atomically bind a prepared transaction and any evidence-side writes."""
+
+    if app.status not in (ApplicationStatus.PENDING, ApplicationStatus.APPROVED):
+        raise ValueError(f"Cannot approve application in {app.status} status")
+    expected_status = app.status
+    expected_updated_at = app.updated_at
+    canvas_application = _is_canvas_bound_application(app)
 
     now = datetime.now(UTC)
     if canvas_application:
         prepared_transaction_id = tx.id
-        canonical_app, tx, already_issued = await repo.reserve_canvas_application_issuance(
+        preserve_candidate_revision = evidence_fact is not None or bool(audit_events)
+        reserved = await repo.reserve_canvas_application_issuance(
             tx,
+            application=app if preserve_candidate_revision else None,
+            expected_updated_at=(expected_updated_at if preserve_candidate_revision else None),
             reviewer_id=reviewer_id,
             review_notes=review_notes,
             reviewed_at=now,
+            evidence_fact=evidence_fact,
+            audit_events=audit_events,
         )
+        if reserved is None:
+            raise ApplicationTransitionConflictError(
+                "Application lifecycle changed during approval"
+            )
+        canonical_app, tx, already_issued = reserved
         app.status = canonical_app.status
         app.review_notes = canonical_app.review_notes
         app.reviewer_id = canonical_app.reviewer_id
@@ -243,11 +272,58 @@ async def approve_application_for_issuance(
             raise ValueError("Canvas credential claim is already in progress")
         return tx
 
-    app.status = ApplicationStatus.APPROVED
-    app.review_notes = review_notes
-    app.reviewer_id = reviewer_id
-    app.reviewed_at = now
-    app.issuance_transaction_id = tx.id
-    app.updated_at = now
-    await repo.save_application(app)
+    reserved = await repo.reserve_application_issuance(
+        app,
+        tx,
+        expected_status=expected_status,
+        reviewer_id=reviewer_id,
+        review_notes=review_notes,
+        reviewed_at=now,
+        evidence_fact=evidence_fact,
+        audit_events=audit_events,
+    )
+    if reserved is None:
+        raise ApplicationTransitionConflictError(
+            "Application lifecycle changed during approval"
+        )
+    canonical_app, tx = reserved
+    app.status = canonical_app.status
+    app.review_notes = canonical_app.review_notes
+    app.reviewer_id = canonical_app.reviewer_id
+    app.reviewed_at = canonical_app.reviewed_at
+    app.issuance_transaction_id = canonical_app.issuance_transaction_id
+    app.credential_id = canonical_app.credential_id
+    app.updated_at = canonical_app.updated_at
     return tx
+
+
+async def approve_application_for_issuance(
+    *,
+    repo: IIssuanceRepository,
+    app: Application,
+    template: ApplicationTemplate,
+    reviewer_id: str,
+    review_notes: str,
+    credential_context: CredentialContext | None = None,
+    issuer_context_applier: IssuerContextApplier | None = None,
+    evidence_fact: EvidenceFact | None = None,
+    audit_events: tuple[IssuanceEvent, ...] = (),
+) -> IssuanceTransaction:
+    """Prepare and atomically commit application issuance."""
+
+    tx = await prepare_application_issuance(
+        repo=repo,
+        app=app,
+        template=template,
+        credential_context=credential_context,
+        issuer_context_applier=issuer_context_applier,
+    )
+    return await commit_prepared_application_issuance(
+        repo=repo,
+        app=app,
+        tx=tx,
+        reviewer_id=reviewer_id,
+        review_notes=review_notes,
+        evidence_fact=evidence_fact,
+        audit_events=audit_events,
+    )

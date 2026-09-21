@@ -313,6 +313,16 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def save_evidence_fact_with_events(
+        self,
+        fact: EvidenceFact,
+        *,
+        audit_events: tuple[IssuanceEvent, ...],
+    ) -> None:
+        """Atomically persist an immutable fact and its audit write set."""
+        pass
+
+    @abstractmethod
     async def list_evidence_facts_for_application(
         self,
         application_id: str,
@@ -394,14 +404,53 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
+    async def save_application_if_status(
+        self,
+        app: Application,
+        *,
+        expected_status: ApplicationStatus,
+        expected_updated_at: datetime | None = None,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
+    ) -> bool:
+        """Atomically persist an application revision and evidence-side writes."""
+        pass
+
+    @abstractmethod
+    async def reserve_application_issuance(
+        self,
+        application: Application,
+        prepared_transaction: IssuanceTransaction,
+        *,
+        expected_status: ApplicationStatus,
+        reviewer_id: str,
+        review_notes: str,
+        reviewed_at: datetime,
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
+    ) -> tuple[Application, IssuanceTransaction] | None:
+        """Atomically approve a non-Canvas application and bind one transaction.
+
+        Implementations must lock the application, reject a stale lifecycle
+        state or updated-at revision without inserting or updating a
+        transaction, and commit the complete candidate application and
+        transaction together.
+        """
+        pass
+
+    @abstractmethod
     async def reserve_canvas_application_issuance(
         self,
         prepared_transaction: IssuanceTransaction,
         *,
+        application: Application | None = None,
+        expected_updated_at: datetime | None = None,
         reviewer_id: str,
         review_notes: str,
         reviewed_at: datetime,
-    ) -> tuple[Application, IssuanceTransaction, bool]:
+        evidence_fact: EvidenceFact | None = None,
+        audit_events: tuple[IssuanceEvent, ...] = (),
+    ) -> tuple[Application, IssuanceTransaction, bool] | None:
         """Atomically approve a Canvas application and reserve one transaction.
 
         Implementations must lock the application, reuse any transaction that

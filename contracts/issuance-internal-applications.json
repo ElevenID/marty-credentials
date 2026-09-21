@@ -1,0 +1,561 @@
+{
+  "schema": "marty.issuance-internal-applications/v1",
+  "purpose": "Language-neutral behavior and security floor for replacing the Python internal Application lifecycle with the shared Rust issuance service",
+  "source_revision": {
+    "repository": "ElevenID/marty-credentials",
+    "baseline": "f127f55b",
+    "approved_repairs": [
+      "9907d99: read issuance state from IssuanceTransaction while applications remain approved",
+      "843c0e5: restore name, email, then generated applicant identifier precedence",
+      "073b177: redact provider transport exception details from external evidence API responses",
+      "877253d: reserve replayed application offers idempotently",
+      "1dda8ac: map invalid status filters to a stable validation response",
+      "3bee6f7: fail closed on missing offer dependencies and issuer context",
+      "validate active tenant-owned revocation bindings before ordinary approval",
+      "commit manual lifecycle transitions and non-Canvas issuance reservations atomically",
+      "commit external-evidence and reconciliation application, fact, transaction, and audit write sets atomically",
+      "preserve issuance-specific Canvas offer readiness errors separately from approval errors",
+      "retain secret-safe structured diagnostics for provider, Canvas, issuer-context, and wallet-catalog failures"
+    ]
+  },
+  "coverage": {
+    "implemented_case_groups": [
+      "surface",
+      "authentication",
+      "tenant_boundary",
+      "request_models",
+      "typed_response_projection",
+      "lifecycle_success_and_invalid_state_transitions",
+      "dependency_failure_matrix",
+      "manual_transition_failure_atomicity",
+      "offer_replay_and_concurrency",
+      "external_api_failure_and_secret_redaction",
+      "canvas_and_non_canvas_approval_lifecycle",
+      "complete_http_success_lifecycle_replay",
+      "external_evidence_concurrent_lifecycle_write_set",
+      "reconciliation_concurrent_lifecycle_write_set",
+      "external_evidence_failure_injection_and_postgres_write_set_replay",
+      "reconciliation_failure_injection_and_postgres_write_set_replay",
+      "secret_safe_operational_diagnostics"
+    ],
+    "required_before_rust_implementation": [],
+    "rust_implementation_authorized": true
+  },
+  "surface": {
+    "base_path": "/internal/applications",
+    "routes": [
+      {"method": "POST", "path": "/internal/applications", "operation": "create_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications", "operation": "list_applications", "response_model": "list", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}", "operation": "get_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/evidence-facts", "operation": "list_application_evidence_facts", "response_model": "list", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/evidence-summary", "operation": "get_application_evidence_summary", "response_model": "ApplicationEvidenceSummaryResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run", "operation": "run_external_evidence_api_check", "response_model": "ExternalEvidenceApiCheckResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/evidence/reconcile", "operation": "reconcile_application_evidence", "response_model": "dict", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/evidence/reconciliation-report", "operation": "get_application_evidence_reconciliation_report", "response_model": "dict", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/submit-evidence", "operation": "submit_evidence", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/approve", "operation": "approve_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/reject", "operation": "reject_application", "response_model": "ApplicationResponse", "success_status": 200},
+      {"method": "POST", "path": "/internal/applications/{application_id}/issuance-offer", "operation": "generate_issuance_offer", "response_model": "IssuanceOfferResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/issuance-offer", "operation": "get_issuance_offer", "response_model": "IssuanceOfferResponse", "success_status": 200},
+      {"method": "GET", "path": "/internal/applications/{application_id}/issuance-events", "operation": "list_issuance_events", "response_model": "list", "success_status": 200}
+    ],
+    "unsupported_siblings": [
+      {"method": "GET", "path": "/v1/applications", "status": 404},
+      {"method": "DELETE", "path": "/internal/applications/application-1", "status": 405},
+      {"method": "PUT", "path": "/internal/applications/application-1/approve", "status": 405}
+    ]
+  },
+  "security": {
+    "route_dependencies": ["_verify_management_api_key", "_trusted_application_organization_id"],
+    "authentication_cases": [
+      {"id": "server-key-unconfigured", "configured_key": "", "supplied_key": null, "status": 503, "detail": "ISSUANCE_API_KEY not configured on server"},
+      {"id": "header-missing", "configured_key": "secret", "supplied_key": null, "status": 401, "detail": "X-API-Key header is missing"},
+      {"id": "header-invalid", "configured_key": "secret", "supplied_key": "wrong", "status": 401, "detail": "Invalid API Key"},
+      {"id": "header-valid", "configured_key": "secret", "supplied_key": "secret", "result": "secret"}
+    ],
+    "tenant_cases": {
+      "missing_header": {"status": 400, "detail": "X-Organization-ID is required for application management"},
+      "claimed_mismatch": {"status": 404, "detail": "Application resource not found"},
+      "foreign_item": {"status": 404, "detail": "Application not found"}
+    },
+    "route_probes": [
+      {"operation": "create_application", "method": "POST", "path": "/internal/applications", "json": {"application_template_id": "template-1", "applicant_data": {}}},
+      {"operation": "list_applications", "method": "GET", "path": "/internal/applications?organization_id=org-123"},
+      {"operation": "get_application", "method": "GET", "path": "/internal/applications/application-1"},
+      {"operation": "list_application_evidence_facts", "method": "GET", "path": "/internal/applications/application-1/evidence-facts"},
+      {"operation": "get_application_evidence_summary", "method": "GET", "path": "/internal/applications/application-1/evidence-summary"},
+      {"operation": "run_external_evidence_api_check", "method": "POST", "path": "/internal/applications/application-1/evidence/api-checks/check-1/run", "json": {}},
+      {"operation": "reconcile_application_evidence", "method": "POST", "path": "/internal/applications/evidence/reconcile", "json": {"organization_id": "org-123"}},
+      {"operation": "get_application_evidence_reconciliation_report", "method": "GET", "path": "/internal/applications/evidence/reconciliation-report?organization_id=org-123"},
+      {"operation": "submit_evidence", "method": "POST", "path": "/internal/applications/application-1/submit-evidence", "json": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}},
+      {"operation": "approve_application", "method": "POST", "path": "/internal/applications/application-1/approve", "json": {}},
+      {"operation": "reject_application", "method": "POST", "path": "/internal/applications/application-1/reject", "json": {"review_notes": "Rejected"}},
+      {"operation": "generate_issuance_offer", "method": "POST", "path": "/internal/applications/application-1/issuance-offer"},
+      {"operation": "get_issuance_offer", "method": "GET", "path": "/internal/applications/application-1/issuance-offer"},
+      {"operation": "list_issuance_events", "method": "GET", "path": "/internal/applications/application-1/issuance-events"}
+    ]
+  },
+  "operational_diagnostics": {
+    "event": "internal_application_failure",
+    "fields": ["event", "stage", "category", "application_correlation_sha256", "check_correlation_sha256", "resource_correlation_sha256"],
+    "stages": [
+      "external_evidence_transport",
+      "canvas_approval_readiness",
+      "canvas_approval_issuer_context",
+      "canvas_offer_readiness",
+      "canvas_offer_issuer_context",
+      "ordinary_issuer_context",
+      "wallet_catalog_template",
+      "wallet_catalog_configuration",
+      "wallet_catalog_list",
+      "wallet_catalog_get"
+    ],
+    "categories": [
+      "dependency_unavailable",
+      "invalid_response",
+      "invalid_configuration",
+      "not_found",
+      "rollout_disabled",
+      "invalid_status",
+      "not_ready",
+      "transaction_plan_unavailable",
+      "issuer_context_invalid"
+    ],
+    "correlation": {
+      "algorithm": "sha256",
+      "encoding": "lowercase_hex",
+      "length": 64,
+      "domain_separated": true
+    },
+    "forbidden_fields": ["application_id", "check_id", "resource_id", "url", "headers", "body", "token", "error_message", "applicant_data"]
+  },
+  "request_models": {
+    "ApplicationCreate": {"unknown_fields": "ignore", "fields": ["application_template_id", "applicant_data", "integration_context"]},
+    "EvidenceSubmission": {"unknown_fields": "ignore", "fields": ["evidence_type", "evidence_data"]},
+    "ApplicationApproval": {"unknown_fields": "forbid", "fields": ["review_notes"]},
+    "ApplicationRejection": {"unknown_fields": "forbid", "fields": ["review_notes"]},
+    "EvidenceReconciliationRequest": {"unknown_fields": "ignore", "fields": ["organization_id", "application_id", "limit", "dry_run", "issue_on_permit"]},
+    "ExternalEvidenceApiCheckRequest": {"unknown_fields": "ignore", "fields": ["inputs", "issue_on_permit"]}
+  },
+  "request_cases": [
+    {"id": "create-minimum", "model": "ApplicationCreate", "input": {"application_template_id": "template-1", "applicant_data": {}}, "outcome": "accept", "normalized": {"application_template_id": "template-1", "applicant_data": {}, "integration_context": {}}},
+    {"id": "create-missing", "model": "ApplicationCreate", "input": {"applicant_data": {}}, "outcome": "reject"},
+    {"id": "create-null", "model": "ApplicationCreate", "input": {"application_template_id": "template-1", "applicant_data": null}, "outcome": "reject"},
+    {"id": "create-malformed", "model": "ApplicationCreate", "input": {"application_template_id": {}, "applicant_data": {}}, "outcome": "reject"},
+    {"id": "create-unknown-ignored", "model": "ApplicationCreate", "input": {"application_template_id": "template-1", "applicant_data": {}, "unknown": true}, "outcome": "accept", "normalized": {"application_template_id": "template-1", "applicant_data": {}, "integration_context": {}}},
+
+    {"id": "evidence-minimum", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}, "outcome": "accept", "normalized": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}},
+    {"id": "evidence-missing", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN"}, "outcome": "reject"},
+    {"id": "evidence-null", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": null}, "outcome": "reject"},
+    {"id": "evidence-malformed", "model": "EvidenceSubmission", "input": {"evidence_type": [], "evidence_data": {}}, "outcome": "reject"},
+    {"id": "evidence-unknown-ignored", "model": "EvidenceSubmission", "input": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}, "unknown": true}, "outcome": "accept", "normalized": {"evidence_type": "DOCUMENT_SCAN", "evidence_data": {}}},
+
+    {"id": "approval-minimum", "model": "ApplicationApproval", "input": {}, "outcome": "accept", "normalized": {"review_notes": null}},
+    {"id": "approval-null", "model": "ApplicationApproval", "input": {"review_notes": null}, "outcome": "accept", "normalized": {"review_notes": null}},
+    {"id": "approval-malformed", "model": "ApplicationApproval", "input": {"review_notes": []}, "outcome": "reject"},
+    {"id": "approval-unknown-forbidden", "model": "ApplicationApproval", "input": {"reviewer_id": "caller"}, "outcome": "reject"},
+
+    {"id": "rejection-minimum", "model": "ApplicationRejection", "input": {"review_notes": "insufficient evidence"}, "outcome": "accept", "normalized": {"review_notes": "insufficient evidence"}},
+    {"id": "rejection-missing", "model": "ApplicationRejection", "input": {}, "outcome": "reject"},
+    {"id": "rejection-null", "model": "ApplicationRejection", "input": {"review_notes": null}, "outcome": "reject"},
+    {"id": "rejection-malformed", "model": "ApplicationRejection", "input": {"review_notes": []}, "outcome": "reject"},
+    {"id": "rejection-unknown-forbidden", "model": "ApplicationRejection", "input": {"review_notes": "no", "reviewer_id": "caller"}, "outcome": "reject"},
+
+    {"id": "reconcile-minimum", "model": "EvidenceReconciliationRequest", "input": {"organization_id": "org-123"}, "outcome": "accept", "normalized": {"organization_id": "org-123", "application_id": null, "limit": 100, "dry_run": false, "issue_on_permit": true}},
+    {"id": "reconcile-missing", "model": "EvidenceReconciliationRequest", "input": {}, "outcome": "reject"},
+    {"id": "reconcile-null", "model": "EvidenceReconciliationRequest", "input": {"organization_id": null}, "outcome": "reject"},
+    {"id": "reconcile-malformed", "model": "EvidenceReconciliationRequest", "input": {"organization_id": "org-123", "limit": {}}, "outcome": "reject"},
+    {"id": "reconcile-unknown-ignored", "model": "EvidenceReconciliationRequest", "input": {"organization_id": "org-123", "unknown": true}, "outcome": "accept", "normalized": {"organization_id": "org-123", "application_id": null, "limit": 100, "dry_run": false, "issue_on_permit": true}},
+
+    {"id": "api-check-minimum", "model": "ExternalEvidenceApiCheckRequest", "input": {}, "outcome": "accept", "normalized": {"inputs": {}, "issue_on_permit": true}},
+    {"id": "api-check-null", "model": "ExternalEvidenceApiCheckRequest", "input": {"inputs": null}, "outcome": "reject"},
+    {"id": "api-check-malformed", "model": "ExternalEvidenceApiCheckRequest", "input": {"inputs": []}, "outcome": "reject"},
+    {"id": "api-check-unknown-ignored", "model": "ExternalEvidenceApiCheckRequest", "input": {"unknown": true}, "outcome": "accept", "normalized": {"inputs": {}, "issue_on_permit": true}}
+  ],
+  "response_models": {
+    "ApplicationResponse": ["id", "organization_id", "application_template_id", "applicant_identifier", "form_data", "evidence_submissions", "integration_context", "status", "review_notes", "reviewer_id", "submitted_at", "reviewed_at", "expires_at", "issuance_transaction_id"],
+    "EvidenceFactResponse": ["id", "organization_id", "application_id", "subject_id", "provider", "fact_type", "scope", "assertion", "verification", "source", "requirement_id", "logical_key", "source_revision", "payload_hash", "observed_at", "effective_at", "superseded_fact_id", "created_at"],
+    "ApplicationEvidenceSummaryResponse": ["application_id", "organization_id", "status", "evidence_facts", "policy_decision", "policy_source", "policy_set_id", "issuance_transaction_id", "canvas", "available_api_checks"],
+    "ExternalEvidenceApiCheckResponse": ["application_id", "organization_id", "check_id", "status", "application_status", "evidence_fact", "policy_decision", "issuance_transaction_id", "response_metadata"],
+    "IssuanceOfferWallet": ["id", "name", "logo_url", "deep_link_url", "platforms"],
+    "IssuanceOfferResponse": ["offer_url", "qr_payload", "wallets", "email_payload", "expires_at", "transaction_id", "status", "credential_offer_uris"],
+    "IssuanceEventResponse": ["id", "transaction_id", "application_id", "event_type", "metadata", "created_at"]
+  },
+  "lifecycle": {
+    "application_statuses": ["pending", "under_review", "approved", "rejected", "withdrawn"],
+    "transitions": [
+      {"operation": "create", "precondition": "active same-tenant application template", "to": "pending"},
+      {"operation": "submit_evidence", "from": ["pending"], "to": "pending"},
+      {"operation": "approve", "from": ["pending"], "to": "approved"},
+      {"operation": "reject", "from": ["pending"], "to": "rejected"},
+      {"operation": "run_external_evidence_api_check", "from": ["pending", "approved"], "to": "policy-dependent"},
+      {"operation": "generate_issuance_offer", "from": ["approved"], "to": "approved"},
+      {"operation": "get_issuance_offer", "from": ["approved"], "transaction_state": "authoritative"}
+    ],
+    "reviewer_identity": "server-owned",
+    "reviewer_id": "issuance-management-api",
+    "applicant_identifier_precedence": ["trimmed_given_and_family_name", "trimmed_email", "generated_applicant_prefix_plus_8_hex"],
+    "http_success_replay": {
+      "operation_order": [
+        "create_application",
+        "list_applications",
+        "get_application",
+        "run_external_evidence_api_check",
+        "list_application_evidence_facts",
+        "get_application_evidence_summary",
+        "reconcile_application_evidence",
+        "get_application_evidence_reconciliation_report",
+        "submit_evidence",
+        "approve_application",
+        "generate_issuance_offer",
+        "get_issuance_offer",
+        "list_issuance_events",
+        "reject_application"
+      ],
+      "created_status": "pending",
+      "created_applicant_identifier": "Ada_Lovelace",
+      "submitted_evidence_count": 1,
+      "approved_status": "approved",
+      "rejected_status": "rejected",
+      "minimum_offer_event_count": 2
+    },
+    "template_failure_cases": [
+      {"id": "create-missing-template", "template": "missing", "trusted_organization_id": "org-123", "status": 404, "detail": "Application template not found"},
+      {"id": "create-inactive-template", "template": "DRAFT", "trusted_organization_id": "org-123", "status": 422, "detail": "Application template must be active"},
+      {"id": "create-foreign-template", "template": "ACTIVE", "trusted_organization_id": "org-other", "status": 404, "detail": "Application resource not found"}
+    ],
+    "approval_dependency_cases": [
+      {"id": "approval-missing-application-template", "arrange": "missing_application_template", "status": 400, "detail": "Application template missing credential template ID"},
+      {"id": "approval-missing-credential-template-id", "arrange": "missing_credential_template_id", "status": 400, "detail": "Application template missing credential template ID"},
+      {"id": "approval-credential-template-unavailable", "arrange": "remote_unavailable", "status": 503, "detail": "Credential Template validation is unavailable."},
+      {"id": "approval-credential-template-not-found", "arrange": "remote_not_found", "status": 422, "detail": "Credential Template not found."},
+      {"id": "approval-foreign-credential-template", "arrange": "remote_override", "override": {"organization_id": "org-other"}, "status": 422, "detail": "Credential Template is not owned by this organization"},
+      {"id": "approval-inactive-credential-template", "arrange": "remote_override", "override": {"status": "DRAFT"}, "status": 422, "detail": "Credential Template must be active"},
+      {"id": "approval-missing-credential-type", "arrange": "remote_override", "override": {"credential_type": ""}, "status": 422, "detail": "Credential Template must define a credential type"},
+      {"id": "approval-missing-payload-format", "arrange": "remote_override", "override": {"credential_payload_format": ""}, "status": 422, "detail": "Credential Template must define a credential payload format"},
+      {"id": "approval-missing-issuer-did", "arrange": "remote_override", "override": {"issuer_did": ""}, "status": 422, "detail": "Credential Template must define an issuer DID"},
+      {"id": "approval-unsupported-issuer-algorithm", "arrange": "remote_override", "override": {"issuer_algorithm": "HS256"}, "status": 422, "detail": "Credential Template must define a supported issuer algorithm"},
+      {"id": "approval-missing-revocation-profile", "arrange": "revocation_missing_binding", "override": {"revocation_profile_id": ""}, "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "approval-revocation-profile-not-found", "arrange": "revocation_not_found", "status": 422, "detail": "Revocation Profile not found."},
+      {"id": "approval-foreign-revocation-profile", "arrange": "revocation_foreign", "status": 422, "detail": "The Revocation Profile belongs to another organization."},
+      {"id": "approval-inactive-revocation-profile", "arrange": "revocation_inactive", "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "approval-revocation-profile-unavailable", "arrange": "revocation_unavailable", "status": 503, "detail": "Revocation Profile validation is unavailable."},
+      {"id": "approval-issuer-context-unavailable", "arrange": "issuer_context_unavailable", "status": 503, "detail": "Issuer signing context is unavailable.", "forbidden_detail": "Bearer secret-token"}
+    ],
+    "offer_dependency_cases": [
+      {"id": "offer-missing-application-template", "arrange": "missing_application_template", "status": 422, "detail": "Credential Template is required."},
+      {"id": "offer-missing-credential-template-id", "arrange": "missing_credential_template_id", "status": 422, "detail": "Credential Template is required."},
+      {"id": "offer-credential-template-unavailable", "arrange": "remote_unavailable", "status": 503, "detail": "Credential Template validation is unavailable."},
+      {"id": "offer-credential-template-not-found", "arrange": "remote_not_found", "status": 422, "detail": "Credential Template not found."},
+      {"id": "offer-missing-revocation-profile", "arrange": "revocation_missing_binding", "override": {"revocation_profile_id": ""}, "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "offer-revocation-profile-not-found", "arrange": "revocation_not_found", "status": 422, "detail": "Revocation Profile not found."},
+      {"id": "offer-foreign-revocation-profile", "arrange": "revocation_foreign", "status": 422, "detail": "The Revocation Profile belongs to another organization."},
+      {"id": "offer-inactive-revocation-profile", "arrange": "revocation_inactive", "status": 422, "detail": "Credential Templates must reference an active Revocation Profile before issuance."},
+      {"id": "offer-revocation-profile-unavailable", "arrange": "revocation_unavailable", "status": 503, "detail": "Revocation Profile validation is unavailable."},
+      {"id": "offer-issuer-context-unavailable", "arrange": "issuer_context_unavailable", "status": 503, "detail": "Issuer signing context is unavailable.", "forbidden_detail": "Bearer secret-token"}
+    ],
+    "ordinary_approval_success": {
+      "application_status": "approved",
+      "reviewer_id": "issuance-management-api",
+      "review_notes": "Reviewed",
+      "transaction": {
+        "credential_template_id": "credential-template-1",
+        "credential_type": "EmployeeCredential",
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "revocation_profile_id": "revocation-profile-1",
+        "issuer_did_override": "did:web:issuer.example:orgs:org-123",
+        "issuer_algorithm": "ES256",
+        "issuer_profile_id": "issuer-profile-1",
+        "signing_service_id": "kms-service-1",
+        "delivery_mode": "wallet_only",
+        "claims": {"employee_id": "E-1", "_vct": "https://issuer.example/credentials/employee"}
+      }
+    },
+    "offer_replay_success": {
+      "application_status": "approved",
+      "transaction_count_after_two_generations": 1,
+      "transaction_count_after_concurrent_generation": 1,
+      "concurrent_responses_share_offer": true,
+      "reservation_hash_length": 64,
+      "raw_reservation_key_persisted": false,
+      "transaction_status_still_readable": "issued",
+      "offer_status": "active",
+      "offer_scheme": "openid-credential-offer://?credential_offer=",
+      "wallet": {"id": "wallet-1", "name": "Example Wallet", "logo_url": "https://wallet.example/logo.svg", "platforms": ["ios", "android"]},
+      "email_subject": "Your credential is ready",
+      "event_types": ["offer_generated", "offer_generated", "offer_viewed"]
+    },
+    "concurrent_transition": {
+      "approval_rejection_race": {
+        "forced_winner": "rejection",
+        "final_application_status": "rejected",
+        "approval_loser_status": 409,
+        "approval_loser_detail": "Application lifecycle changed during approval",
+        "transaction_count": 0
+      },
+      "approval_approval_race": {
+        "success_count": 1,
+        "conflict_count": 1,
+        "conflict_status": 409,
+        "final_application_status": "approved",
+        "transaction_count": 1
+      },
+      "evidence_rejection_race": {
+        "forced_winner": "rejection",
+        "final_application_status": "rejected",
+        "evidence_loser_status": 409,
+        "evidence_loser_detail": "Application lifecycle changed during evidence submission",
+        "evidence_submission_count": 0
+      }
+    },
+    "external_api_failure_cases": [
+      {"id": "api-check-missing-template", "arrange": "missing_template", "status": 404, "detail": "Application template not found"},
+      {"id": "api-check-missing-requirement", "arrange": "missing_requirement", "status": 404, "detail": "External evidence API check not found on application template"},
+      {"id": "api-check-invalid-configuration", "arrange": "invalid_configuration", "status": 400, "detail": "External evidence requirement is missing api configuration"},
+      {"id": "api-check-provider-transport", "arrange": "provider_transport", "status": 502, "detail": "External evidence API request failed", "forbidden_detail": "Bearer secret-token"}
+    ],
+    "external_api_outcomes": {
+      "permit": {
+        "application_status": "approved",
+        "transaction_created": true,
+        "policy_allowed": true,
+        "provider": "passport_verifier",
+        "fact_type": "passport.document_verified",
+        "scope": {"document_type": "passport", "issuing_country": "US"},
+        "verification_status": "VERIFIED",
+        "request_passport_number": "X1234567",
+        "request_authorization": "Bearer secret-token",
+        "summary_check_id": "passport-document-check",
+        "summary_forbidden_fields": ["secret_headers"],
+        "fact_count": 1,
+        "event_types": [
+          "evidence_fact_created",
+          "evidence_policy_permitted",
+          "approval_issuance_succeeded"
+        ]
+      },
+      "deny": {
+        "application_status": "pending",
+        "transaction_created": false,
+        "policy_allowed": false,
+        "verification_status": "UNVERIFIED",
+        "fact_count": 1,
+        "event_types": ["evidence_fact_created", "evidence_policy_denied"]
+      },
+      "lifecycle_conflict": {
+        "forced_winner": "rejection",
+        "status": 409,
+        "detail": "Application lifecycle changed during evidence processing",
+        "final_application_status": "rejected",
+        "transaction_count": 0,
+        "retained_fact_count": 1,
+        "application_evidence_submission_count": 0,
+        "event_types": [
+          "evidence_fact_created",
+          "evidence_policy_permitted",
+          "approval_issuance_failed"
+        ]
+      },
+      "atomic_persistence_failure": {
+        "application_status": "pending",
+        "application_evidence_submission_count": 0,
+        "fact_count": 0,
+        "transaction_count": 0,
+        "event_types": []
+      }
+    },
+    "reconciliation_outcomes": {
+      "evaluate_missing_policy": {
+        "metrics": {"scanned_applications": 1, "evaluated_policies": 1, "policy_permits": 1, "approval_issuance_successes": 1},
+        "application_status": "approved",
+        "reviewer_id": "canvas:evidence-reconciliation",
+        "transaction_created": true,
+        "policy_allowed": true,
+        "event_types": ["evidence_policy_permitted", "approval_issuance_succeeded"]
+      },
+      "recover_existing_permit": {
+        "action": "approval_issuance_recovered_from_policy_permit",
+        "evaluated_policies": 0,
+        "approval_issuance_successes": 1,
+        "application_status": "approved",
+        "transaction_created": true
+      },
+      "dry_run_stale_receipt": {
+        "dry_run": true,
+        "action": "would_create_or_refresh_issuance_transaction",
+        "stale_receipts": 1,
+        "reasons": ["receipt_without_evidence_fact_metadata", "receipt_without_policy_decision"],
+        "application_mutated": false
+      },
+      "lifecycle_conflict": {
+        "forced_winner": "rejection",
+        "action": "skipped_concurrent_application_change",
+        "final_application_status": "rejected",
+        "transaction_count": 0,
+        "errors": ["Application lifecycle changed during reconciliation"],
+        "event_types": [
+          "evidence_policy_permitted",
+          "approval_issuance_failed"
+        ]
+      },
+      "atomic_persistence_failure": {
+        "application_status": "pending",
+        "policy_persisted": false,
+        "existing_fact_count": 1,
+        "transaction_count": 0,
+        "event_types": []
+      }
+    },
+    "canvas_approval_outcomes": {
+      "ready": {
+        "credential_template_id": "credential-template-1",
+        "credential_type": "OpenBadgeCredential",
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "revocation_profile_id": "status-profile-1",
+        "issuer_profile_id": "resolved-profile-1",
+        "issuer_did_override": "did:web:issuer.example:orgs:org-1",
+        "signing_service_id": "kms-service-1",
+        "kms_calls_per_approval_or_refresh": 1
+      },
+      "stale_readiness": {
+        "status": 409,
+        "detail": "Canvas application is not ready for approval",
+        "application_status": "pending",
+        "transaction_created": false
+      }
+    },
+    "canvas_offer_outcomes": {
+      "stale_readiness": {
+        "status": 409,
+        "detail": "Canvas application is not ready for issuance",
+        "application_status": "approved",
+        "transaction_created": false
+      }
+    },
+    "read_projection": {
+      "application": {
+        "id": "application-read",
+        "organization_id": "org-123",
+        "application_template_id": "application-template-1",
+        "applicant_identifier": "ada@example.test",
+        "form_data": {"given_name": "Ada", "family_name": "Lovelace"},
+        "evidence_submissions": [{"evidence_type": "DOCUMENT_SCAN", "evidence_data": {"digest": "sha256:1"}}],
+        "integration_context": {
+          "source": "contract",
+          "policy": {"allowed": true, "policy_source": "contract", "policy_set_id": "policy-1"},
+          "canvas": {"course_id": "course-1"}
+        },
+        "status": "under_review",
+        "review_notes": "Reviewing",
+        "reviewer_id": "reviewer-1",
+        "submitted_at": "2026-09-19T12:34:56+00:00",
+        "reviewed_at": "2026-09-19T12:35:56+00:00",
+        "expires_at": "2026-10-19T12:34:56+00:00",
+        "issuance_transaction_id": "transaction-1"
+      },
+      "previous_evidence_fact": {
+        "id": "fact-0",
+        "organization_id": "org-123",
+        "application_id": "application-read",
+        "subject_id": "ada@example.test",
+        "provider": "contract-provider",
+        "fact_type": "identity.document",
+        "scope": {"document_type": "passport"},
+        "assertion": {"verified": false},
+        "verification": {"method": "CONTRACT", "status": "UNVERIFIED"},
+        "source": {"event_id": "event-0"},
+        "requirement_id": "requirement-1",
+        "logical_key": "logical-key-1",
+        "source_revision": "revision-0",
+        "payload_hash": "payload-hash-0",
+        "observed_at": "2026-09-19T12:30:56+00:00",
+        "effective_at": "2026-09-19T12:31:56+00:00",
+        "superseded_fact_id": null,
+        "created_at": "2026-09-19T12:32:56+00:00"
+      },
+      "evidence_fact": {
+        "id": "fact-1",
+        "organization_id": "org-123",
+        "application_id": "application-read",
+        "subject_id": "ada@example.test",
+        "provider": "contract-provider",
+        "fact_type": "identity.document",
+        "scope": {"document_type": "passport"},
+        "assertion": {"verified": true},
+        "verification": {"method": "CONTRACT", "status": "VERIFIED"},
+        "source": {"event_id": "event-1"},
+        "requirement_id": "requirement-1",
+        "logical_key": "logical-key-1",
+        "source_revision": "revision-1",
+        "payload_hash": "payload-hash-1",
+        "observed_at": "2026-09-19T12:36:56+00:00",
+        "effective_at": "2026-09-19T12:37:56+00:00",
+        "superseded_fact_id": "fact-0",
+        "created_at": "2026-09-19T12:38:56+00:00"
+      },
+      "issuance_event": {
+        "id": "issuance-event-1",
+        "transaction_id": "transaction-1",
+        "application_id": "application-read",
+        "event_type": "offer_viewed",
+        "metadata": {"channel": "contract"},
+        "created_at": "2026-09-19T12:39:56+00:00"
+      },
+      "evidence_summary": {
+        "application_id": "application-read",
+        "organization_id": "org-123",
+        "status": "under_review",
+        "policy_decision": {"allowed": true, "policy_source": "contract", "policy_set_id": "policy-1"},
+        "policy_source": "contract",
+        "policy_set_id": "policy-1",
+        "issuance_transaction_id": "transaction-1",
+        "canvas": {"course_id": "course-1"},
+        "available_api_checks": [
+          {
+            "check_id": "check-1",
+            "evidence_type": "EXTERNAL_API",
+            "description": "Contract API check",
+            "provider": "contract-provider",
+            "fact_type": "identity.document",
+            "required": true,
+            "verification_method": "CONTRACT_API",
+            "auto_issue_on_permit": false,
+            "api_method": "GET",
+            "scope": {"document_type": "passport"}
+          }
+        ]
+      },
+      "invalid_status": {"value": "not-a-status", "status": 422, "detail": "Invalid application status"}
+    },
+    "invalid_state_cases": [
+      {"id": "submit-under-review", "operation": "submit_evidence", "application_status": "under_review", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "submit-approved", "operation": "submit_evidence", "application_status": "approved", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.APPROVED status"},
+      {"id": "submit-rejected", "operation": "submit_evidence", "application_status": "rejected", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.REJECTED status"},
+      {"id": "submit-withdrawn", "operation": "submit_evidence", "application_status": "withdrawn", "status": 400, "detail": "Cannot submit evidence for application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "approve-under-review", "operation": "approve", "application_status": "under_review", "status": 400, "detail": "Cannot approve application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "approve-approved", "operation": "approve", "application_status": "approved", "status": 400, "detail": "Cannot approve application in ApplicationStatus.APPROVED status"},
+      {"id": "approve-rejected", "operation": "approve", "application_status": "rejected", "status": 400, "detail": "Cannot approve application in ApplicationStatus.REJECTED status"},
+      {"id": "approve-withdrawn", "operation": "approve", "application_status": "withdrawn", "status": 400, "detail": "Cannot approve application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "reject-under-review", "operation": "reject", "application_status": "under_review", "status": 400, "detail": "Cannot reject application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "reject-approved", "operation": "reject", "application_status": "approved", "status": 400, "detail": "Cannot reject application in ApplicationStatus.APPROVED status"},
+      {"id": "reject-rejected", "operation": "reject", "application_status": "rejected", "status": 400, "detail": "Cannot reject application in ApplicationStatus.REJECTED status"},
+      {"id": "reject-withdrawn", "operation": "reject", "application_status": "withdrawn", "status": 400, "detail": "Cannot reject application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "api-check-under-review", "operation": "run_external_evidence_api_check", "application_status": "under_review", "status": 400, "detail": "Cannot run evidence check for application in ApplicationStatus.UNDER_REVIEW status"},
+      {"id": "api-check-rejected", "operation": "run_external_evidence_api_check", "application_status": "rejected", "status": 400, "detail": "Cannot run evidence check for application in ApplicationStatus.REJECTED status"},
+      {"id": "api-check-withdrawn", "operation": "run_external_evidence_api_check", "application_status": "withdrawn", "status": 400, "detail": "Cannot run evidence check for application in ApplicationStatus.WITHDRAWN status"},
+
+      {"id": "generate-offer-pending", "operation": "generate_issuance_offer", "application_status": "pending", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is pending"},
+      {"id": "generate-offer-under-review", "operation": "generate_issuance_offer", "application_status": "under_review", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is under_review"},
+      {"id": "generate-offer-rejected", "operation": "generate_issuance_offer", "application_status": "rejected", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is rejected"},
+      {"id": "generate-offer-withdrawn", "operation": "generate_issuance_offer", "application_status": "withdrawn", "status": 400, "detail": "Issuance offer requires APPROVED status; current status is withdrawn"},
+
+      {"id": "get-offer-pending", "operation": "get_issuance_offer", "application_status": "pending", "status": 404, "detail": "No issuance offer available for this application"},
+      {"id": "get-offer-under-review", "operation": "get_issuance_offer", "application_status": "under_review", "status": 404, "detail": "No issuance offer available for this application"},
+      {"id": "get-offer-rejected", "operation": "get_issuance_offer", "application_status": "rejected", "status": 404, "detail": "No issuance offer available for this application"},
+      {"id": "get-offer-withdrawn", "operation": "get_issuance_offer", "application_status": "withdrawn", "status": 404, "detail": "No issuance offer available for this application"}
+    ]
+  }
+}

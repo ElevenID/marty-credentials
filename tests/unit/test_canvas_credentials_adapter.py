@@ -20,13 +20,28 @@ for _path in (_SERVICES, _PYTHON):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
+from issuance.application.evidence_policy import EvidencePolicyDecision
+from issuance.domain.entities import (
+    Application,
+    ApplicationStatus,
+    ApplicationTemplate,
+    ApprovalPolicySet,
+    CanvasPlatform,
+    CanvasProgramBinding,
+    CredentialDeliveryRecord,
+    CredentialDeliveryStatus,
+    CredentialStatus,
+    DeliveryTarget,
+    IssuanceTransaction,
+    IssuedCredential,
+)
 from issuance.infrastructure.adapters.canvas_credentials_adapter import (
     CanvasAgsScoreEvent,
     CanvasEvidenceEvent,
     CanvasNrpsMembershipEvent,
     map_canvas_ags_score_to_evidence_event,
-    map_canvas_nrps_membership_to_evidence_event,
     map_canvas_event_to_mip_evidence_receipt,
+    map_canvas_nrps_membership_to_evidence_event,
     process_canvas_ags_score_event,
     process_canvas_evidence_event,
     process_canvas_nrps_membership_event,
@@ -35,25 +50,8 @@ from issuance.infrastructure.adapters.canvas_credentials_adapter import (
     validate_canvas_credentials_config,
     verify_canvas_signature,
 )
-from issuance.infrastructure.api.application_routes import get_application_evidence_summary
-from issuance.infrastructure.api.canvas_routes import get_canvas_evidence_event_status
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
-from issuance.application.evidence_policy import EvidencePolicyDecision
-from issuance.domain.entities import (
-    Application,
-    ApplicationStatus,
-    ApplicationTemplate,
-    ApprovalPolicySet,
-    CredentialDeliveryRecord,
-    CredentialDeliveryStatus,
-    CredentialStatus,
-    CanvasPlatform,
-    CanvasProgramBinding,
-    DeliveryTarget,
-    IssuanceTransaction,
-    IssuedCredential,
-)
-
+from issuance.infrastructure.api.canvas_routes import get_canvas_evidence_event_status
 
 CANVAS_SECRET = "canvas-test-secret"
 
@@ -140,7 +138,9 @@ def _sample_nrps_membership_event(**overrides) -> dict[str, object]:
 
 
 def _sign_payload(raw_body: bytes, *, timestamp: str, secret: str = CANVAS_SECRET) -> str:
-    digest = hmac.new(secret.encode("utf-8"), f"{timestamp}.".encode("utf-8") + raw_body, hashlib.sha256).hexdigest()
+    digest = hmac.new(
+        secret.encode("utf-8"), f"{timestamp}.".encode("utf-8") + raw_body, hashlib.sha256
+    ).hexdigest()
     return f"sha256={digest}"
 
 
@@ -230,13 +230,16 @@ class TestCanvasSignatureVerification:
         timestamp = str(now)
         signature = _sign_payload(raw_body, timestamp=timestamp)
 
-        assert verify_canvas_signature(
-            raw_body=raw_body,
-            timestamp=timestamp,
-            signature=signature,
-            secret=CANVAS_SECRET,
-            now=now,
-        ) is True
+        assert (
+            verify_canvas_signature(
+                raw_body=raw_body,
+                timestamp=timestamp,
+                signature=signature,
+                secret=CANVAS_SECRET,
+                now=now,
+            )
+            is True
+        )
 
     def test_verify_canvas_signature_rejects_stale_timestamp(self) -> None:
         raw_body = json.dumps(_sample_event(), separators=(",", ":")).encode("utf-8")
@@ -244,14 +247,17 @@ class TestCanvasSignatureVerification:
         timestamp = str(now - 3600)
         signature = _sign_payload(raw_body, timestamp=timestamp)
 
-        assert verify_canvas_signature(
-            raw_body=raw_body,
-            timestamp=timestamp,
-            signature=signature,
-            secret=CANVAS_SECRET,
-            now=now,
-            tolerance_seconds=300,
-        ) is False
+        assert (
+            verify_canvas_signature(
+                raw_body=raw_body,
+                timestamp=timestamp,
+                signature=signature,
+                secret=CANVAS_SECRET,
+                now=now,
+                tolerance_seconds=300,
+            )
+            is False
+        )
 
     def test_verify_canvas_signature_rejects_missing_secret(self) -> None:
         raw_body = json.dumps(_sample_event(), separators=(",", ":")).encode("utf-8")
@@ -259,13 +265,16 @@ class TestCanvasSignatureVerification:
         timestamp = str(now)
         signature = _sign_payload(raw_body, timestamp=timestamp)
 
-        assert verify_canvas_signature(
-            raw_body=raw_body,
-            timestamp=timestamp,
-            signature=signature,
-            secret="",
-            now=now,
-        ) is False
+        assert (
+            verify_canvas_signature(
+                raw_body=raw_body,
+                timestamp=timestamp,
+                signature=signature,
+                secret="",
+                now=now,
+            )
+            is False
+        )
 
 
 class TestCanvasCredentialsRealApi:
@@ -343,7 +352,9 @@ class TestCanvasCredentialsRealApi:
                 lifecycle_action="suspend",
             )
 
-    async def test_publish_posts_badgr_assertion_payload(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_publish_posts_badgr_assertion_payload(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from issuance.infrastructure.adapters import canvas_credentials_adapter
 
         monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
@@ -404,8 +415,14 @@ class TestCanvasCredentialsRealApi:
         assert result.external_issuer_id == "issuer-entity-1"
         assert result.metadata["provider"] == "badgr_api"
         assert result.metadata["badgeclass_id"] == "badgeclass-entity-1"
-        assert result.metadata["credential_url"] == "https://api.badgr.test/public/assertions/assertion-entity-1"
-        assert captured["url"] == "https://api.badgr.test/v2/badgeclasses/badgeclass-entity-1/assertions"
+        assert (
+            result.metadata["credential_url"]
+            == "https://api.badgr.test/public/assertions/assertion-entity-1"
+        )
+        assert (
+            captured["url"]
+            == "https://api.badgr.test/v2/badgeclasses/badgeclass-entity-1/assertions"
+        )
         assert captured["headers"] == {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -418,7 +435,9 @@ class TestCanvasCredentialsRealApi:
             "hashed": True,
         }
         assert payload["allowDuplicateAwards"] is False
-        assert payload["evidence"][0]["url"].startswith("https://beta.elevenidllc.com/console/org/operate/verify?")
+        assert payload["evidence"][0]["url"].startswith(
+            "https://beta.elevenidllc.com/console/org/operate/verify?"
+        )
         assert payload["extensions"]["value"]["elevenid"]["credential_id"] == "cred-real-1"
 
     async def test_publish_can_use_delivery_record_canvas_credentials_config(
@@ -503,9 +522,14 @@ class TestCanvasCredentialsRealApi:
         assert result.external_credential_id == "assertion-record-1"
         assert result.metadata["api_base_url"] == "https://api.record.badgr.test"
         assert result.metadata["badgeclass_id"] == "badgeclass-record-1"
-        assert captured["url"] == "https://api.record.badgr.test/v2/badgeclasses/badgeclass-record-1/assertions"
+        assert (
+            captured["url"]
+            == "https://api.record.badgr.test/v2/badgeclasses/badgeclass-record-1/assertions"
+        )
         assert captured["headers"]["Authorization"] == "Bearer record-token"
-        assert captured["json"]["extensions"]["value"]["elevenid"]["delivery_record_id"] == record.id
+        assert (
+            captured["json"]["extensions"]["value"]["elevenid"]["delivery_record_id"] == record.id
+        )
 
     async def test_validate_real_api_uses_delivery_record_canvas_credentials_config(
         self,
@@ -570,10 +594,14 @@ class TestCanvasCredentialsRealApi:
         assert result.token_configured is True
         assert result.status_code == 200
         assert result.request_id == "req-validate-1"
-        assert captured["url"] == "https://api.record.badgr.test/v2/badgeclasses/badgeclass-record-1"
+        assert (
+            captured["url"] == "https://api.record.badgr.test/v2/badgeclasses/badgeclass-record-1"
+        )
         assert captured["headers"]["Authorization"] == "Bearer record-token"
 
-    async def test_validate_real_api_reports_missing_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_validate_real_api_reports_missing_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("CANVAS_CREDENTIALS_API_TOKEN", raising=False)
         monkeypatch.setenv(
             "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
@@ -617,7 +645,9 @@ class TestCanvasCredentialsRealApi:
         assert result.token_configured is False
         assert "CANVAS_CREDENTIALS_API_TOKEN" in (result.error or "")
 
-    async def test_publish_real_api_requires_badgeclass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_publish_real_api_requires_badgeclass(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
         monkeypatch.delenv("CANVAS_CREDENTIALS_BADGECLASS_ID", raising=False)
         monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "badgr_api")
@@ -633,7 +663,9 @@ class TestCanvasCredentialsRealApi:
 
         assert "CANVAS_CREDENTIALS_BADGECLASS_ID" in str(excinfo.value)
 
-    async def test_revoke_real_api_deletes_badgr_assertion(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_revoke_real_api_deletes_badgr_assertion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from issuance.infrastructure.adapters import canvas_credentials_adapter
 
         monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "badgr_api")
@@ -691,7 +723,9 @@ class TestCanvasCredentialsRealApi:
         assert result.metadata["provider"] == "badgr_api"
         assert result.metadata["status_sync_http_status"] == 204
 
-    async def test_suspend_real_api_maps_to_canonical_provenance_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_suspend_real_api_maps_to_canonical_provenance_only(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from issuance.infrastructure.adapters import canvas_credentials_adapter
 
         monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "badgr_api")
@@ -727,7 +761,9 @@ class TestCanvasCredentialsRealApi:
 
 
 class TestCanvasEventProcessing:
-    async def test_process_canvas_evidence_event_attaches_application_evidence_and_replays(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_attaches_application_evidence_and_replays(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -797,18 +833,14 @@ class TestCanvasEventProcessing:
         assert receipt is not None
         assert receipt.status == "evidence_received"
 
-        summary = await get_application_evidence_summary(app.id, repo=repo)
-        assert summary.application_id == app.id
-        assert summary.evidence_facts[0].fact_type == "canvas.course_completion"
-        assert summary.canvas["canvas_platform_id"] == platform.id
-        assert summary.canvas["canvas_program_binding_id"] == binding.id
-
         event_status = await get_canvas_evidence_event_status("acct-1", "evt-123", repo=repo)
         assert event_status.application_id == app.id
         assert event_status.evidence_facts[0]["fact_type"] == "canvas.course_completion"
         assert event_status.response["application_id"] == app.id
 
-    async def test_process_canvas_evidence_event_auto_approves_when_requirements_satisfied(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_auto_approves_when_requirements_satisfied(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -865,12 +897,10 @@ class TestCanvasEventProcessing:
         assert tx.application_id == app.id
         assert response.policy_decision is not None
         assert response.policy_decision["allowed"] is True
-        summary = await get_application_evidence_summary(app.id, repo=repo)
-        assert summary.policy_decision["allowed"] is True
-        assert summary.policy_source == "bundled"
-        assert summary.issuance_transaction_id == stored_app.issuance_transaction_id
 
-    async def test_process_canvas_evidence_event_uses_program_binding_without_legacy_connector(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_uses_program_binding_without_legacy_connector(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -941,7 +971,9 @@ class TestCanvasEventProcessing:
         assert receipt is not None
         assert receipt.credential_template_id == "tmpl-from-binding"
 
-    async def test_process_canvas_evidence_event_rejects_disabled_profile_gate(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_rejects_disabled_profile_gate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1004,7 +1036,9 @@ class TestCanvasEventProcessing:
         assert stored_app.status == ApplicationStatus.PENDING
         assert receipt is None
 
-    async def test_process_canvas_evidence_event_policy_denies_wrong_scope(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_policy_denies_wrong_scope(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1062,7 +1096,9 @@ class TestCanvasEventProcessing:
         assert stored_app is not None
         assert stored_app.issuance_transaction_id is None
 
-    async def test_process_canvas_evidence_event_supports_external_fact_requirements(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_supports_external_fact_requirements(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1124,7 +1160,9 @@ class TestCanvasEventProcessing:
         assert response.policy_decision is not None
         assert response.policy_decision["context"]["all_required_evidence_satisfied"] is True
 
-    async def test_process_canvas_ags_score_event_creates_score_fact_and_auto_approves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_ags_score_event_creates_score_fact_and_auto_approves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1196,12 +1234,16 @@ class TestCanvasEventProcessing:
         assert replay.replayed is True
         assert stored_app is not None
         assert stored_app.status == ApplicationStatus.APPROVED
-        assert stored_app.integration_context["canvas"]["standard_source"] == "canvas_ags_score_event"
+        assert (
+            stored_app.integration_context["canvas"]["standard_source"] == "canvas_ags_score_event"
+        )
         assert len(stored_facts) == 1
         assert receipt is not None
         assert receipt.issuance_transaction_id == stored_app.issuance_transaction_id
 
-    async def test_process_canvas_nrps_membership_event_creates_role_fact_and_auto_approves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_nrps_membership_event_creates_role_fact_and_auto_approves(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1269,9 +1311,14 @@ class TestCanvasEventProcessing:
         assert response.policy_decision["context"]["all_required_evidence_satisfied"] is True
         assert stored_app is not None
         assert stored_app.status == ApplicationStatus.APPROVED
-        assert stored_app.integration_context["canvas"]["standard_source"] == "canvas_nrps_membership_event"
+        assert (
+            stored_app.integration_context["canvas"]["standard_source"]
+            == "canvas_nrps_membership_event"
+        )
 
-    async def test_process_canvas_evidence_event_uses_configured_approval_policy_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_uses_configured_approval_policy_set(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1349,7 +1396,9 @@ when {
         assert stored_app is not None
         assert stored_app.issuance_transaction_id is None
 
-    async def test_process_canvas_evidence_event_missing_approval_policy_set_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_missing_approval_policy_set_denies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1402,7 +1451,9 @@ when {
         assert response.policy_decision["engine"] == "policy_set_unavailable"
         assert response.policy_decision["policy_set_id"] == "missing-policy-set"
 
-    async def test_process_canvas_evidence_event_policy_deny_records_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_policy_deny_records_metadata(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1473,7 +1524,9 @@ when {
         assert stored_app is not None
         assert stored_app.integration_context["policy"]["errors"] == ["denied by test"]
 
-    async def test_process_canvas_evidence_event_rejects_unrequired_evidence_type(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_process_canvas_evidence_event_rejects_unrequired_evidence_type(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CANVAS_CREDENTIALS_SHARED_SECRET", CANVAS_SECRET)
         repo = InMemoryIssuanceRepository()
         template = ApplicationTemplate(
@@ -1520,4 +1573,3 @@ when {
             )
 
         assert exc_info.value.status_code == 409
-
