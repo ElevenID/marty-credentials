@@ -275,6 +275,8 @@ async def test_all_credential_formats_match_language_neutral_signing_contract(
         tx.id
     )
     assert builder_arguments["credential_id"] == expected_credential_id
+    if case["builder"] in {"sd_jwt", "jwt_vc"}:
+        assert builder_arguments["issuer_public_jwk"] == remote_context["public_jwk"]
     if case["holder_did_required"]:
         assert builder_arguments.get("subject_id") == CONTRACT["inputs"]["holder_did"]
     else:

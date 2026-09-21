@@ -64,6 +64,12 @@ def _configure_delivery_through_transport(
         "issuer_profile_id": transaction.issuer_profile_id,
         "algorithm": transaction.issuer_algorithm,
         "verification_method_id": "did:web:issuer.example#key-1",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "service": {"algorithm": "ES256"},
     }
 
@@ -1289,6 +1295,12 @@ async def test_delivery_rejects_private_or_unavailable_encryption(
         "issuer_did": "did:web:issuer.example",
         "issuer_profile_id": "profile-a",
         "verification_method_id": "did:web:issuer.example#key-1",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "service": {"algorithm": "ES256"},
     }
     monkeypatch.setattr(
@@ -1427,6 +1439,12 @@ async def test_signing_and_delivery_failures_retry_one_stable_status_reservation
         "issuer_profile_id": transaction.issuer_profile_id,
         "algorithm": transaction.issuer_algorithm,
         "verification_method_id": "did:web:issuer.example#key-1",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "service": {"algorithm": "ES256"},
     }
     allocation = AsyncMock(
@@ -1446,6 +1464,7 @@ async def test_signing_and_delivery_failures_retry_one_stable_status_reservation
     async def sign_credential(**kwargs):
         nonlocal signing_attempts
         signing_attempts += 1
+        assert kwargs["issuer_public_jwk"] == remote_context["public_jwk"]
         if signing_attempts == 1:
             raise RuntimeError("simulated signing outage")
         return "signed-credential", kwargs["credential_id"]

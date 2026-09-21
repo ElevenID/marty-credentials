@@ -1435,6 +1435,12 @@ async def test_concurrent_wallet_requests_execute_exactly_one_kms_signing_path(m
         "signing_service_id": "openbao-transit",
         "signing_key_reference": "badge-key",
         "verification_method_id": "did:web:issuer.example#badge-key",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "service": {"algorithm": "ES256"},
     }
 
@@ -1597,6 +1603,12 @@ async def test_concurrent_grpc_delivery_executes_one_signing_path(monkeypatch) -
         "issuer_did": transaction.issuer_did_override,
         "algorithm": "ES256",
         "verification_method_id": "did:web:issuer.example#badge-key",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "signing_service_id": "openbao-primary",
         "service": {"algorithm": "ES256"},
     }
@@ -1643,6 +1655,7 @@ async def test_concurrent_grpc_delivery_executes_one_signing_path(monkeypatch) -
 
     async def build_credential(*, remote_sign, credential_id, **_kwargs):
         counts["builder"] += 1
+        assert _kwargs["issuer_public_jwk"] == remote_context["public_jwk"]
         await asyncio.wait_for(both_claimed.wait(), timeout=2)
         await remote_sign(b"signing-input", "ES256")
         return "signed-credential", credential_id
@@ -1730,6 +1743,12 @@ async def test_grpc_signing_failure_marks_reserved_transaction_failed(monkeypatc
         "issuer_did": transaction.issuer_did_override,
         "algorithm": "ES256",
         "verification_method_id": "did:web:issuer.example#badge-key",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "service": {"algorithm": "ES256"},
     }
     builder_calls = 0
@@ -1960,6 +1979,12 @@ async def test_auth_code_only_concurrent_claims_share_one_canonical_transaction(
         "signing_service_id": "openbao-transit",
         "signing_key_reference": "badge-key",
         "verification_method_id": "did:web:issuer.example#badge-key",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "issuer-x",
+            "y": "issuer-y",
+        },
         "service": {"algorithm": "ES256"},
     }
 

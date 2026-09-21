@@ -4736,13 +4736,15 @@ async def issue_credential(
             if isinstance(remote_context, dict)
             else None
         )
-        if signing_format == "ldp_vc":
-            if signing_algorithm != "EdDSA":
-                raise RuntimeError("ldp_vc with eddsa-rdfc-2022 requires an EdDSA issuer profile")
-            if not isinstance(verification_method_id, str) or not verification_method_id:
-                raise RuntimeError("ldp_vc issuer DID resolution returned no verification method")
-            if not isinstance(remote_context.get("public_jwk"), dict):
-                raise RuntimeError("ldp_vc issuer DID resolution returned no public JWK")
+        issuer_public_jwk = (
+            remote_context.get("public_jwk") if isinstance(remote_context, dict) else None
+        )
+        if not isinstance(verification_method_id, str) or not verification_method_id:
+            raise RuntimeError("issuer DID resolution returned no verification method")
+        if signing_format != "mso_mdoc" and not isinstance(issuer_public_jwk, dict):
+            raise RuntimeError("issuer DID resolution returned no public JWK")
+        if signing_format == "ldp_vc" and signing_algorithm != "EdDSA":
+            raise RuntimeError("ldp_vc with eddsa-rdfc-2022 requires an EdDSA issuer profile")
         effective_issuer_did = tx.issuer_did_override
 
         async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
@@ -4829,6 +4831,7 @@ async def issue_credential(
             "expiration_seconds": 31536000,
             "algorithm": signing_algorithm,
             "verification_method_id": verification_method_id,
+            "issuer_public_jwk": issuer_public_jwk,
             "credential_id": credential_id,
         }
         if signing_format == "mso_mdoc":
@@ -4884,7 +4887,7 @@ async def issue_credential(
                 subject_id=holder_did or tx.subject_did,
                 credential_type=signing_credential_type,
                 claims_json=json.dumps(signing_claims),
-                public_jwk=remote_context["public_jwk"],
+                public_jwk=issuer_public_jwk,
                 credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
                 credential_document=credential_document,
                 expiration_seconds=tx.validity_days * 86400,
@@ -5164,6 +5167,13 @@ async def _didcomm_sign_and_deliver(
     verification_method_id = (
         remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
     )
+    issuer_public_jwk = (
+        remote_context.get("public_jwk") if isinstance(remote_context, dict) else None
+    )
+    if not isinstance(verification_method_id, str) or not verification_method_id:
+        raise RuntimeError("issuer DID resolution returned no verification method")
+    if not isinstance(issuer_public_jwk, dict):
+        raise RuntimeError("issuer DID resolution returned no public JWK")
     effective_issuer_did_dc = tx.issuer_did_override
 
     # Load the exhaustive issuer policy and validate recipient key agreement,
@@ -5228,6 +5238,7 @@ async def _didcomm_sign_and_deliver(
         selective_disclosure_claims=sd_claims_dc,
         algorithm=signing_algorithm,
         verification_method_id=verification_method_id,
+        issuer_public_jwk=issuer_public_jwk,
         credential_format=effective_request_format,
         credential_id=credential_id,
         issuer_certificate_chain=(

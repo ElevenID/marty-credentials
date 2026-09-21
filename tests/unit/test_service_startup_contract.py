@@ -286,12 +286,20 @@ async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) ->
 
     monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
 
+    issuer_public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "issuer-public-x",
+        "y": "issuer-public-y",
+    }
+
     sd_jwt = await rust_integration.create_sd_jwt_vc_with_remote_signing(
         issuer_did="did:web:issuer.example",
         remote_sign=remote_sign,
         subject_id="did:key:holder",
         credential_type="AccessBadge",
         claims_json='{"name":"Alice"}',
+        issuer_public_jwk=issuer_public_jwk,
         algorithm="ES256",
         verification_method_id="did:web:issuer.example#key-1",
     )
@@ -301,6 +309,7 @@ async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) ->
         subject_id="did:key:holder",
         credential_type="AccessBadge",
         claims_json='{"name":"Alice"}',
+        issuer_public_jwk=issuer_public_jwk,
         algorithm="ES256",
         verification_method_id="did:web:issuer.example#key-1",
     )
@@ -309,6 +318,11 @@ async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) ->
     assert jwt_vc == ("jwt.header.payload.AQID", "urn:uuid:jwt")
     assert ("sign", (b"sd.header.payload", "ES256")) in calls
     assert ("sign", (b"jwt.header.payload", "ES256")) in calls
+    expected_jwk_json = json.dumps(issuer_public_jwk, separators=(",", ":"))
+    prepare_sd_args = next(value for name, value in calls if name == "prepare_sd_jwt")
+    prepare_jwt_args = next(value for name, value in calls if name == "prepare_jwt_vc")
+    assert prepare_sd_args[3] == expected_jwk_json
+    assert prepare_jwt_args[3] == expected_jwk_json
     assert any(name == "assemble_sd_jwt" for name, _ in calls)
     assert any(name == "assemble_jwt_vc" for name, _ in calls)
 

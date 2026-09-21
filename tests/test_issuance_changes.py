@@ -123,6 +123,17 @@ def _sign_es256_test_payload(payload: bytes) -> str:
     return _b64url(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
 
 
+def _es256_test_public_jwk() -> dict[str, str]:
+    """Return the public JWK for the fixed test-only P-256 signing key."""
+    numbers = ec.derive_private_key(1, ec.SECP256R1()).public_key().public_numbers()
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": _b64url(numbers.x.to_bytes(32, "big")),
+        "y": _b64url(numbers.y.to_bytes(32, "big")),
+    }
+
+
 def _dpop_proof(
     *, access_token: str, htu: str = "https://issuer.example/v1/issuance/credential"
 ) -> str:
@@ -3452,6 +3463,7 @@ class TestRustIntegrationOrgIdValidation:
             holder_jwk=holder_jwk,
             credential_type="https://beta.elevenidllc.com/credentials/access_badge",
             claims_json=json.dumps({"name": "Alice"}),
+            issuer_public_jwk=_es256_test_public_jwk(),
             algorithm="ES256",
             verification_method_id=verification_method_id,
             # The final OID4VCI response selects this media type before it
@@ -3492,6 +3504,32 @@ class TestRustIntegrationOrgIdValidation:
                 holder_jwk={"kty": "EC", "crv": "P-256", "d": _b64url(bytes([1]) * 32)},
                 credential_type="https://issuer.example/credential",
                 claims_json="{}",
+                issuer_public_jwk=_es256_test_public_jwk(),
+                algorithm="ES256",
+                verification_method_id="did:web:issuer.example#key-1",
+            )
+
+    async def test_remote_sd_jwt_rejects_private_issuer_key_before_signing(self):
+        from issuance.application.rust_integration import create_sd_jwt_vc_with_remote_signing
+
+        async def unexpected_sign(_payload: bytes, _algorithm: str | None):
+            raise AssertionError("private issuer keys must be rejected before signing")
+
+        private_issuer_jwk = {
+            **_es256_test_public_jwk(),
+            "d": _b64url(bytes([1]) * 32),
+        }
+        with pytest.raises(
+            RuntimeError,
+            match="issuer public JWK must not contain private member",
+        ):
+            await create_sd_jwt_vc_with_remote_signing(
+                issuer_did="did:web:issuer.example",
+                remote_sign=unexpected_sign,
+                subject_id="did:example:holder",
+                credential_type="https://issuer.example/credential",
+                claims_json="{}",
+                issuer_public_jwk=private_issuer_jwk,
                 algorithm="ES256",
                 verification_method_id="did:web:issuer.example#key-1",
             )
@@ -3522,6 +3560,7 @@ class TestRustIntegrationOrgIdValidation:
                     },
                 }
             ),
+            issuer_public_jwk=_es256_test_public_jwk(),
             algorithm="ES256",
             verification_method_id=("did:web:beta.elevenidllc.com:orgs:acme#issuer-profile-v1"),
             credential_id=supplied_credential_id,
@@ -3550,6 +3589,7 @@ class TestRustIntegrationOrgIdValidation:
                 subject_id="did:key:z6Mk_subject",
                 credential_type="https://issuer.example/credentials/access_badge",
                 claims_json=json.dumps({"name": "Alice"}),
+                issuer_public_jwk=_es256_test_public_jwk(),
                 algorithm="ES256",
                 verification_method_id="did:web:attacker.example#key-1",
             )
@@ -3575,6 +3615,7 @@ class TestRustIntegrationOrgIdValidation:
             claims_json=json.dumps(
                 {"givenName": "Alice", "credentialStatus": {"type": "BitstringStatusListEntry"}}
             ),
+            issuer_public_jwk=_es256_test_public_jwk(),
             algorithm="ES256",
             verification_method_id="did:web:issuer.example#key-1",
         )
@@ -3622,6 +3663,7 @@ class TestRustIntegrationOrgIdValidation:
                 subject_id="did:example:holder",
                 credential_type="ExampleCredential",
                 claims_json="{}",
+                issuer_public_jwk=_es256_test_public_jwk(),
                 algorithm="ES256",
                 verification_method_id="did:web:issuer.example#key-1",
             )
@@ -3662,6 +3704,7 @@ class TestRustIntegrationOrgIdValidation:
                     "achievement_description": "Verified member",
                 }
             ),
+            issuer_public_jwk=_es256_test_public_jwk(),
             algorithm="ES256",
             verification_method_id="did:web:issuer.example#key-1",
             credential_profile="open_badge_v3",
@@ -3706,6 +3749,7 @@ class TestRustIntegrationOrgIdValidation:
                     }
                 }
             ),
+            issuer_public_jwk=_es256_test_public_jwk(),
             credential_subject=credential_subject,
             algorithm="ES256",
             verification_method_id="did:web:issuer.example#key-1",
@@ -3731,6 +3775,7 @@ class TestRustIntegrationOrgIdValidation:
             subject_id="did:key:z6MkHolder",
             credential_type="W3cVcdmTestCredential",
             claims_json="{}",
+            issuer_public_jwk=_es256_test_public_jwk(),
             credential_subject={
                 "id": "did:key:z6MkHolder",
                 "givenName": "Alice",
@@ -3758,6 +3803,7 @@ class TestRustIntegrationOrgIdValidation:
                 subject_id="did:key:z6MkHolder",
                 credential_type="W3cVcdmTestCredential",
                 claims_json=json.dumps({"givenName": "Alice"}),
+                issuer_public_jwk=_es256_test_public_jwk(),
                 credential_subject=[{"id": "did:example:subject"}],
                 algorithm="ES256",
                 verification_method_id="did:web:issuer.example#key-1",
@@ -4227,6 +4273,7 @@ class TestRustIntegrationOrgIdValidation:
             "issuer_mode": "org_managed",
             "algorithm": "ES256",
             "verification_method_id": verification_method_id,
+            "public_jwk": _es256_test_public_jwk(),
             "issuer_x5c": ["leaf-certificate", "issuer-certificate"],
             "signing_service_id": "svc-old",
         }
