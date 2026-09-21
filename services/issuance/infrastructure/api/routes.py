@@ -3116,6 +3116,7 @@ async def initiate_issuance(
                 status_code=503,
                 detail="Native issuance service requires an authenticated request context",
             )
+        _reject_direct_signing_headers(http_request.headers)
         forwarded = await _post_to_native_issuance(
             "/v1/issuance/initiate",
             request.model_dump(mode="json", exclude_unset=True),
