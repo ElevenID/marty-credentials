@@ -210,7 +210,7 @@ def test_ci_installs_exact_source_built_core_artifacts_with_split_profiles() -> 
     assert "marty-core-rs/marty-bindings/Cargo.toml" in CI
     assert "marty-core-verification/marty-verification/Cargo.toml" in CI
     verification_features = (
-        "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
+        "--features pyo3/extension-module,python,iaca,csca,eudi"
     )
     binding_features = (
         "--features extension-module,kms-only,ephemeral-session-keys"
@@ -232,8 +232,13 @@ def test_ci_installs_exact_source_built_core_artifacts_with_split_profiles() -> 
     assert "didcomm-local-keys" not in CI
     assert "didcomm-local-keys" not in WARM_CACHES
     binding_lines = [line for line in CI.splitlines() if "marty-bindings/Cargo.toml" in line]
+    verification_lines = [
+        line for line in CI.splitlines() if "marty-verification/Cargo.toml" in line
+    ]
     assert binding_lines
+    assert verification_lines
     assert all("local-key-operations" not in line for line in binding_lines)
+    assert all("local-key-operations" not in line for line in verification_lines)
 
 
 def test_transitional_local_binding_is_disjoint_from_production_core() -> None:
@@ -261,8 +266,7 @@ def test_transitional_local_binding_is_disjoint_from_production_core() -> None:
     assert "local-key-operations" in local_manifest
     assert "--features extension-module,kms-only,ephemeral-session-keys" in CI
     assert (
-        "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
-        in CI
+        "--features pyo3/extension-module,python,iaca,csca,eudi" in CI
     )
     assert "pattern: source-dist" in STABLE
     assert "pattern: wheels-" not in STABLE

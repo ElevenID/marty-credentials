@@ -412,7 +412,7 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert "maturin build --release --compatibility off" in ci_workflow
     assert "--features extension-module,kms-only,ephemeral-session-keys" in ci_workflow
     assert (
-        "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
+        "--features pyo3/extension-module,python,iaca,csca,eudi"
         in ci_workflow
     )
     assert "didcomm-local-keys" not in ci_workflow

@@ -86,7 +86,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install maturin==1.14.1
           maturin build --release --compatibility off --manifest-path marty-core-rs/marty-bindings/Cargo.toml --no-default-features --features extension-module,kms-only,ephemeral-session-keys --out core-wheels
-          maturin build --release --compatibility off --manifest-path marty-core-verification/marty-verification/Cargo.toml --no-default-features --features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core-verification/marty-verification/Cargo.toml --no-default-features --features pyo3/extension-module,python,iaca,csca,eudi --out core-wheels
       - name: Require both native distributions
         shell: bash
         run: |

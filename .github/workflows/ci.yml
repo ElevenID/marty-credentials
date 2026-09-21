@@ -493,7 +493,7 @@ jobs:
           # v0.2 boundary. Verification stays on its exact compatibility
           # release until integration-secret storage has an opaque replacement.
           maturin build --release --compatibility off --manifest-path marty-core-rs/marty-bindings/Cargo.toml --no-default-features --features extension-module,kms-only,ephemeral-session-keys --out core-wheels
-          maturin build --release --compatibility off --manifest-path marty-core-verification/marty-verification/Cargo.toml --no-default-features --features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi --out core-wheels
+          maturin build --release --compatibility off --manifest-path marty-core-verification/marty-verification/Cargo.toml --no-default-features --features pyo3/extension-module,python,iaca,csca,eudi --out core-wheels
 
       - name: Validate built Core module exports
         run: |
