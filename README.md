@@ -137,10 +137,21 @@ an integrity failure that must be investigated rather than overwritten.
 
 ### Artifacts
 
+Production service images never install the Credentials-owned local
+`rust/marty-rs` compatibility wheel. They install the exact independently
+pinned Core wheels and hashes in `release/dependencies.json`: canonical
+`marty-rs` `v0.2.0` uses the KMS-only binding profile, while
+`marty-verification` remains at `v0.1.60` to preserve integration-secret
+AES-GCM until `INTEGRATION-SECRET-KMS-001` provides an opaque secure-storage
+replacement. The local native/Python/WASM extension remains on its older Core
+revision temporarily so its CSCA, OID4VCI, and demo exports can be migrated
+without deletion; CI tests it separately, and the stable artifact collector
+excludes its wheels. See the
+[`DIDComm KMS delivery contract`](docs/rust-migrations/didcomm-kms-delivery-contract.md#transitional-dual-revision-boundary).
+
 Each release produces:
-- **Python wheels** for multiple platforms (manylinux, macOS, Windows)
+- **A Python source distribution** for the Credentials package
 - **WASM packages** for browser and Node.js
-- **Source distribution** (.tar.gz)
 - **The issuance service image**, pinned by digest in GHCR
 - **SBOMs, SHA256 checksums, Sigstore signatures, and GitHub provenance**
 

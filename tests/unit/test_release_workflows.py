@@ -200,32 +200,80 @@ def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
     assert "- os: ubuntu-latest\n            target: aarch64" in wheel_matrix
 
 
-def test_ci_installs_exact_source_built_core_artifacts_with_compatibility_features() -> None:
+def test_ci_installs_exact_source_built_core_artifacts_with_split_profiles() -> None:
     assert CI.count("run: bash scripts/run-python-ci.sh") == 2
     assert "release-deps" in PYTHON_CI
     assert "len(wheels) == 2" in PYTHON_CI
     assert "install_pinned_core.py" not in PYTHON_CI
-    assert "ref: ${{ env.MARTY_CORE_REVISION }}" in CI
-    assert "marty-core/marty-bindings/Cargo.toml" in CI
-    assert "marty-core/marty-verification/Cargo.toml" in CI
+    assert "ref: ${{ env.MARTY_RS_CORE_REVISION }}" in CI
+    assert "ref: ${{ env.MARTY_VERIFICATION_CORE_REVISION }}" in CI
+    assert "marty-core-rs/marty-bindings/Cargo.toml" in CI
+    assert "marty-core-verification/marty-verification/Cargo.toml" in CI
     verification_features = (
         "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
     )
     binding_features = (
-        "--features extension-module,didcomm-local-keys,local-key-operations,ephemeral-session-keys"
+        "--features extension-module,kms-only,ephemeral-session-keys"
     )
-    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
-    core_revision = manifest["workspace"]["dependencies"]["marty-oid4vci"]["rev"]
+    dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
+    rs_revision = dependencies["marty-rs"]["commit"]
+    verification_revision = dependencies["marty-verification"]["commit"]
     for workflow in (CI, WARM_CACHES):
         assert verification_features in workflow
         assert binding_features in workflow
-        assert f"MARTY_CORE_REVISION: {core_revision}" in workflow
-        assert "core-python-wheels-v3-" in workflow
+        assert f"MARTY_RS_CORE_REVISION: {rs_revision}" in workflow
+        assert f"MARTY_VERIFICATION_CORE_REVISION: {verification_revision}" in workflow
+        assert "core-python-wheels-v4-" in workflow
     assert "Validate built Core module exports" in CI
     assert "cert-builder" not in CI
     assert "cert-builder" not in WARM_CACHES
     assert "authority-issuance" not in CI
     assert "authority-issuance" not in WARM_CACHES
+    assert "didcomm-local-keys" not in CI
+    assert "didcomm-local-keys" not in WARM_CACHES
+    binding_lines = [line for line in CI.splitlines() if "marty-bindings/Cargo.toml" in line]
+    assert binding_lines
+    assert all("local-key-operations" not in line for line in binding_lines)
+
+
+def test_transitional_local_binding_is_disjoint_from_production_core() -> None:
+    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
+    local_manifest = (ROOT / "rust" / "marty-rs" / "Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+
+    local_revisions = {
+        manifest["workspace"]["dependencies"][package]["rev"]
+        for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
+    }
+    assert local_revisions == {"08a0d435390f13186cb6f6278b9a15f9020067a7"}
+    assert dependencies["marty-rs"]["version"] == "0.2.0"
+    assert dependencies["marty-rs"]["commit"] == (
+        "7d501aea7a2a815b4cf842ab37ff729520d8191c"
+    )
+    assert dependencies["marty-verification"]["version"] == "0.1.60"
+    assert dependencies["marty-verification"]["commit"] == (
+        "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f"
+    )
+    assert dependencies["marty-rs"]["commit"] not in local_revisions
+
+    assert "local-key-operations" in local_manifest
+    assert "--features extension-module,kms-only,ephemeral-session-keys" in CI
+    assert (
+        "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
+        in CI
+    )
+    assert "pattern: source-dist" in STABLE
+    assert "pattern: wheels-" not in STABLE
+    assert "release-deps" in PYTHON_CI
+    assert "local-wheels" not in PYTHON_CI
+    assert "--ignore=tests/unit/test_legacy_service_native_boundary.py" in PYTHON_CI
+    assert "--ignore=tests/unit/test_verification_adapter_native_boundary.py" in PYTHON_CI
+    assert "--ignore=tests/unit/test_integration_secret_encryption.py" not in PYTHON_CI
+    assert "tests/unit/test_legacy_service_native_boundary.py" in CI
+    assert "tests/unit/test_verification_adapter_native_boundary.py" in CI
+    assert "tests/unit/test_integration_secret_encryption.py" in CI
 
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:

@@ -19,8 +19,10 @@ wasm-opt = false
 
 [features]
 default = ["python"]
-# Existing binding profiles expose local signing. Keep that compatibility
-# capability explicit and shared across native, Python and browser builds.
+# The separately shipped local compatibility binding still exposes these
+# non-production issuer/demo capabilities against its older pinned Core API.
+# Production services install the canonical KMS-only marty-rs wheel recorded
+# in release/dependencies.json instead.
 local-key-operations = [
     "marty-oid4vci/local-key-operations",
     "marty-verification/local-key-operations",

@@ -364,7 +364,6 @@ def test_key_attestation_binding_passes_only_the_exact_validated_token(monkeypat
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
     dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
-    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
 
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
@@ -393,24 +392,51 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert verification_release["asset"].startswith(
         f"marty_verification_py-{verification_release['version']}-"
     )
-    assert verification_release["commit"] == core_release["commit"]
+    assert verification_release["commit"] != core_release["commit"]
     assert set(verification_release["platform_assets"]) == {
         "linux-x86_64",
         "macos-arm64",
         "windows-x86_64",
     }
-    core_revisions = {
-        cargo["workspace"]["dependencies"][package]["rev"]
-        for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
-    }
-    assert len(core_revisions) == 1
-    source_revision = core_revisions.pop()
+    source_revision = core_release["commit"]
+    verification_source_revision = verification_release["commit"]
     assert len(source_revision) == 40
+    assert len(verification_source_revision) == 40
 
     ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert f"MARTY_CORE_REVISION: {source_revision}" in ci_workflow
+    assert f"MARTY_RS_CORE_REVISION: {source_revision}" in ci_workflow
+    assert (
+        f"MARTY_VERIFICATION_CORE_REVISION: {verification_source_revision}"
+        in ci_workflow
+    )
     assert "maturin build --release --compatibility off" in ci_workflow
+    assert "--features extension-module,kms-only,ephemeral-session-keys" in ci_workflow
+    assert (
+        "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
+        in ci_workflow
+    )
+    assert "didcomm-local-keys" not in ci_workflow
     assert "name: core-python-${{ runner.os }}" in ci_workflow
+
+
+def test_local_compatibility_binding_cannot_replace_the_production_core_wheel() -> None:
+    from issuance.application import rust_integration
+
+    local_source = (ROOT / "rust" / "marty-rs" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    python_ci = (ROOT / "scripts" / "run-python-ci.sh").read_text(encoding="utf-8")
+
+    # This startup capability is owned by canonical Core and deliberately is
+    # not exported by Credentials' separately tested compatibility extension.
+    assert "canvas_normalize_base_url" in rust_integration.required_marty_rs_capabilities()
+    assert "canvas_normalize_base_url" not in local_source
+    assert "COPY release-deps /release-deps" in dockerfile
+    assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
+    assert "pathlib.Path('release-deps').glob('*.whl')" in python_ci
+    assert "local-wheels" not in dockerfile
+    assert "local-wheels" not in python_ci
 
 
 def test_release_image_uses_the_pinned_canonical_core_wheels() -> None:
