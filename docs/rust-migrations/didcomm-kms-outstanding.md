@@ -17,7 +17,15 @@ Rust does not itself make them KMS-only. Production remains unchanged.
 ## Outstanding correction
 
 Credentials currently reads a deployment-owned X25519 sender private key for
-authcrypt. Core `1ae5b71e53ebfd2bad29b2e7c23c3d048461245c` removes the old
+authcrypt only when the explicit legacy delivery owner remains selected. The
+native consumer selector delegates complete initiation and direct delivery to
+the Rust issuance service before Python repository or crypto work and therefore
+does not require the five Python DIDComm delivery bindings. Legacy remains the
+standalone default until every deployment selects the qualified Rust owner, so
+its implementation and capability checks are not deleted yet. There is no
+native-to-legacy fallback.
+
+Core `1ae5b71e53ebfd2bad29b2e7c23c3d048461245c` removes the old
 private-key Python APIs from its production binding and does not provide an
 opaque KMS authcrypt/decrypt replacement. Anoncrypt encryption uses recipient
 public keys and short-lived envelope keys; its optional Core feature and the

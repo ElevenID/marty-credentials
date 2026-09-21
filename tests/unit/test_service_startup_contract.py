@@ -98,6 +98,46 @@ def test_native_extension_does_not_require_retired_internal_didcomm_adapters(mon
     rust_integration.validate_marty_rs_capabilities()
 
 
+def test_native_didcomm_owner_does_not_require_unreachable_python_crypto_bindings(
+    monkeypatch,
+) -> None:
+    from issuance.application import rust_integration
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    required = rust_integration.required_marty_rs_capabilities()
+    assert {
+        "didcomm_encrypt",
+        "didcomm_encrypt_authcrypt",
+        "didcomm_extract_endpoint",
+        "didcomm_pack_credential",
+        "didcomm_resolve_did_with_metadata",
+    }.isdisjoint(required)
+    module = SimpleNamespace(**{name: (lambda: None) for name in required})
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: module)
+
+    rust_integration.validate_marty_rs_capabilities()
+
+
+@pytest.mark.parametrize(
+    ("owner", "url"),
+    [
+        ("native", ""),
+        ("other", "http://issuance-native:8005"),
+        ("native", "file:///run/issuance.sock"),
+        ("native", "http://user:secret@issuance-native:8005"),
+        ("native", "http://issuance-native:8005/untrusted-path"),
+    ],
+)
+def test_native_didcomm_owner_configuration_fails_closed(monkeypatch, owner, url) -> None:
+    from issuance.application.didcomm_owner import didcomm_delivery_owner
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", owner)
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", url)
+    with pytest.raises(RuntimeError):
+        didcomm_delivery_owner()
+
+
 @pytest.mark.parametrize("missing", [True, False], ids=["missing", "noncallable"])
 def test_native_extension_still_rejects_every_remaining_invalid_capability(
     monkeypatch,

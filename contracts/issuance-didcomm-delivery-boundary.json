@@ -35,6 +35,21 @@
     "other_transaction_state_status": 400,
     "tenant_order": ["request_claim_before_lookup", "transaction_owner_after_lookup", "state_before_delivery"]
   },
+  "consumer_owner": {
+    "selector": "DIDCOMM_DELIVERY_OWNER",
+    "allowed_values": ["legacy", "native"],
+    "default": "legacy",
+    "native_service_origin": "ISSUANCE_NATIVE_SERVICE_URL",
+    "native_service_origin_policy": "required HTTP(S) origin without credentials, path, query, or fragment",
+    "native_routes": ["POST /v1/issuance/initiate", "POST /v1/issuance/didcomm/deliver"],
+    "forwarded_headers": ["x-api-key", "x-organization-id", "idempotency-key"],
+    "forbidden_header_forwarding": "all other caller headers including authorization",
+    "native_unavailable": {"status": 503, "detail": "Native issuance service is unavailable"},
+    "fallback": "none",
+    "legacy_behavior": "unchanged when selector is absent or legacy",
+    "native_python_crypto_capabilities": "not required because both delivery entrypoints leave Python before repository, signing, packing, encryption, or transport",
+    "grpc_boundary": "deployment routing selects the qualified native gRPC owner; retained legacy gRPC is offer-only and uses no DIDComm encryption"
+  },
   "encryption": {
     "required_modes": ["anoncrypt", "authcrypt"],
     "missing_policy_mode": "anoncrypt",
@@ -179,6 +194,10 @@
     "test_encryption_logs_do_not_retain_holder_or_exception_details",
     "test_delivery_error_omits_remote_body_and_transport_exception_text",
     "test_delivery_rechecks_gateway_tenant_against_transaction",
+    "test_native_owner_delegates_delivery_without_touching_python_crypto_or_repository",
+    "test_native_owner_unavailable_fails_closed_without_legacy_fallback",
+    "test_native_owner_preserves_structured_upstream_error_without_fallback",
+    "test_native_owner_delegates_automatic_initiation_before_python_reservation",
     "test_delivery_hides_cross_tenant_transaction",
     "test_delivery_rejects_claimed_tenant_before_transaction_lookup",
     "test_delivery_rejects_private_or_unavailable_encryption",

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from issuance.application.didcomm_owner import didcomm_delivery_owner
 from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 
 logger = logging.getLogger(__name__)
@@ -71,16 +72,22 @@ def get_marty_rs():
     return require_marty_rs()
 
 
-REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
+_DIDCOMM_DELIVERY_CAPABILITIES = frozenset(
     {
-        "canvas_normalize_base_url",
-        "canvas_probe_lti_platform",
-        "complete_vcdm_data_integrity_credential",
         "didcomm_encrypt",
         "didcomm_encrypt_authcrypt",
         "didcomm_extract_endpoint",
         "didcomm_pack_credential",
         "didcomm_resolve_did_with_metadata",
+    }
+)
+
+
+_BASE_REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
+    {
+        "canvas_normalize_base_url",
+        "canvas_probe_lti_platform",
+        "complete_vcdm_data_integrity_credential",
         "evidence_reconciliation_plan",
         "evidence_reconciliation_stale_reasons",
         "lti_verify_launch_jwt",
@@ -117,13 +124,28 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
     }
 )
 
+# The exported legacy set remains a stable inventory for release and source
+# contract tooling. Runtime validation uses the selected consumer owner below.
+REQUIRED_MARTY_RS_CAPABILITIES = (
+    _BASE_REQUIRED_MARTY_RS_CAPABILITIES | _DIDCOMM_DELIVERY_CAPABILITIES
+)
+
+
+def required_marty_rs_capabilities() -> frozenset[str]:
+    """Return only capabilities reachable in the selected service composition."""
+
+    if didcomm_delivery_owner().is_native:
+        return _BASE_REQUIRED_MARTY_RS_CAPABILITIES
+    return REQUIRED_MARTY_RS_CAPABILITIES
+
 
 def validate_marty_rs_capabilities() -> None:
     """Fail startup when the deployed native extension is not service-compatible."""
     marty_rs = get_marty_rs()
+    required = required_marty_rs_capabilities()
     missing = sorted(
         capability
-        for capability in REQUIRED_MARTY_RS_CAPABILITIES
+        for capability in required
         if not callable(getattr(marty_rs, capability, None))
     )
     if missing:

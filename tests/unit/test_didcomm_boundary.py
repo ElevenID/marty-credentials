@@ -796,6 +796,232 @@ async def test_delivery_rechecks_gateway_tenant_against_transaction(
 
 
 @pytest.mark.asyncio
+async def test_native_owner_delegates_delivery_without_touching_python_crypto_or_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    observed: dict[str, object] = {}
+
+    class Client:
+        def __init__(self, **options: object) -> None:
+            observed["options"] = options
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **options: object):
+            observed["url"] = url
+            observed["request"] = options
+            return routes.httpx.Response(
+                200,
+                request=routes.httpx.Request("POST", url),
+                json={
+                    "transaction_id": "tx-a",
+                    "credential_id": "credential-a",
+                    "holder_did": "did:peer:2.EzExample",
+                    "service_endpoint": "https://wallet.example/inbox",
+                    "didcomm_message_id": "message-a",
+                    "status": "delivered",
+                    "error": None,
+                },
+            )
+
+    monkeypatch.setattr(routes.httpx, "AsyncClient", Client)
+    legacy_delivery = AsyncMock()
+    monkeypatch.setattr(routes, "_didcomm_sign_and_deliver", legacy_delivery)
+    repo = SimpleNamespace(get_transaction=AsyncMock())
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/issuance/didcomm/deliver",
+            "headers": [
+                (b"x-api-key", b"management-secret"),
+                (b"x-organization-id", b"org-a"),
+                (b"authorization", b"Bearer must-not-forward"),
+            ],
+            "app": SimpleNamespace(state=SimpleNamespace()),
+        }
+    )
+
+    response = await routes.didcomm_deliver(
+        routes.DidcommDeliverRequest(
+            organization_id="org-a",
+            transaction_id="tx-a",
+            holder_did="did:peer:2.EzExample",
+        ),
+        request,
+        repo,
+    )
+
+    assert response.status == "delivered"
+    assert observed["url"] == "http://issuance-native:8005/v1/issuance/didcomm/deliver"
+    forwarded = observed["request"]
+    assert isinstance(forwarded, dict)
+    assert forwarded["headers"] == {
+        "x-api-key": "management-secret",
+        "x-organization-id": "org-a",
+    }
+    assert forwarded["json"] == {
+        "organization_id": "org-a",
+        "transaction_id": "tx-a",
+        "holder_did": "did:peer:2.EzExample",
+    }
+    repo.get_transaction.assert_not_awaited()
+    legacy_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_owner_unavailable_fails_closed_without_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+
+    class Client:
+        def __init__(self, **_options: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_options: object):
+            request = routes.httpx.Request("POST", url)
+            raise routes.httpx.ConnectError("native internal detail", request=request)
+
+    monkeypatch.setattr(routes.httpx, "AsyncClient", Client)
+    legacy_delivery = AsyncMock()
+    monkeypatch.setattr(routes, "_didcomm_sign_and_deliver", legacy_delivery)
+    repo = SimpleNamespace(get_transaction=AsyncMock())
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.didcomm_deliver(
+            routes.DidcommDeliverRequest(
+                organization_id="org-a",
+                transaction_id="tx-a",
+                holder_did="did:peer:2.EzExample",
+            ),
+            _request("org-a"),
+            repo,
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Native issuance service is unavailable"
+    assert "internal detail" not in str(exc.value.detail)
+    repo.get_transaction.assert_not_awaited()
+    legacy_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_owner_preserves_structured_upstream_error_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+
+    class Client:
+        def __init__(self, **_options: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_options: object):
+            return routes.httpx.Response(
+                422,
+                request=routes.httpx.Request("POST", url),
+                json={"detail": "DIDComm authcrypt sender policy is not configured"},
+            )
+
+    monkeypatch.setattr(routes.httpx, "AsyncClient", Client)
+    legacy_delivery = AsyncMock()
+    monkeypatch.setattr(routes, "_didcomm_sign_and_deliver", legacy_delivery)
+    repo = SimpleNamespace(get_transaction=AsyncMock())
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.didcomm_deliver(
+            routes.DidcommDeliverRequest(
+                organization_id="org-a",
+                transaction_id="tx-a",
+                holder_did="did:peer:2.EzExample",
+            ),
+            _request("org-a"),
+            repo,
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "DIDComm authcrypt sender policy is not configured"
+    repo.get_transaction.assert_not_awaited()
+    legacy_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_owner_delegates_automatic_initiation_before_python_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    response = routes.IssuanceResponse(
+        id="tx-a",
+        organization_id="org-a",
+        credential_template_id="template-a",
+        status="issued",
+        credential_offer_uri="openid-credential-offer://synthetic",
+        credential_offer_uris={"didcomm": "didcomm://https://wallet.example/inbox"},
+        credential_offer_labels={"didcomm": "DIDComm Wallet"},
+        pre_auth_code="pre-auth-a",
+        expires_at="2026-09-21T00:00:00+00:00",
+    )
+    forward = AsyncMock(return_value=response)
+    monkeypatch.setattr(routes, "_post_to_native_issuance", forward)
+    repo = SimpleNamespace(recover_transaction_idempotently=AsyncMock())
+    http_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/issuance/initiate",
+            "headers": [
+                (b"x-api-key", b"management-secret"),
+                (b"x-organization-id", b"org-a"),
+            ],
+            "app": SimpleNamespace(state=SimpleNamespace()),
+        }
+    )
+    request = routes.InitiateIssuanceRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example",
+        credential_template_id="template-a",
+        holder_did="did:peer:2.EzExample",
+    )
+
+    actual = await routes.initiate_issuance(request, http_request=http_request, repo=repo)
+
+    assert actual == response
+    forward.assert_awaited_once_with(
+        "/v1/issuance/initiate",
+        {
+            "organization_id": "org-a",
+            "issuer_did": "did:web:issuer.example",
+            "credential_template_id": "template-a",
+            "holder_did": "did:peer:2.EzExample",
+        },
+        http_request,
+        routes.IssuanceResponse,
+    )
+    repo.recover_transaction_idempotently.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delivery_hides_cross_tenant_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
