@@ -3110,21 +3110,6 @@ async def initiate_issuance(
     logged and allowed to proceed for internal service-to-service resilience.
     """
 
-    if didcomm_delivery_owner().is_native:
-        if http_request is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Native issuance service requires an authenticated request context",
-            )
-        _reject_direct_signing_headers(http_request.headers)
-        forwarded = await _post_to_native_issuance(
-            "/v1/issuance/initiate",
-            request.model_dump(mode="json", exclude_unset=True),
-            http_request,
-            IssuanceResponse,
-        )
-        return forwarded
-
     try:
         raw_idempotency_key = (
             http_request.headers.get("Idempotency-Key") if http_request is not None else None
@@ -3139,6 +3124,20 @@ async def initiate_issuance(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if http_request is not None:
         _reject_direct_signing_headers(http_request.headers)
+
+    if didcomm_delivery_owner().is_native:
+        if http_request is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Native issuance service requires an authenticated request context",
+            )
+        forwarded = await _post_to_native_issuance(
+            "/v1/issuance/initiate",
+            request.model_dump(mode="json", exclude_unset=True),
+            http_request,
+            IssuanceResponse,
+        )
+        return forwarded
 
     request_semantics = canonical_issuance_request(
         organization_id=request.organization_id,

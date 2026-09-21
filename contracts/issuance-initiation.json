@@ -134,6 +134,12 @@
     "reserve-transaction-atomically",
     "project-offer-from-committed-transaction"
   ],
+  "owner_precheck_order": [
+    "normalize-idempotency-key",
+    "normalize-delivery-mode",
+    "reject-direct-signing-headers",
+    "select-delivery-owner"
+  ],
   "idempotent_recovery_branch": [
     "recover-idempotent-transaction",
     "project-offer-from-committed-transaction",

@@ -1149,6 +1149,68 @@ async def test_native_owner_rejects_direct_signing_headers_before_delegation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("idempotency_key", "expected_detail"),
+    [
+        (
+            " padded",
+            "idempotency key must not contain surrounding whitespace",
+        ),
+        (
+            "valid-key",
+            "Invalid delivery_mode 'direct-kms'. Must be one of "
+            "['wallet_only', 'wallet_plus_canvas_mirror']",
+        ),
+    ],
+)
+async def test_native_owner_preserves_combined_invalid_precheck_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    idempotency_key: str,
+    expected_detail: str,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    forward = AsyncMock()
+    crypto = AsyncMock()
+    monkeypatch.setattr(routes, "_post_to_native_issuance", forward)
+    monkeypatch.setattr(routes, "_didcomm_sign_and_deliver", crypto)
+    repo = SimpleNamespace(
+        recover_transaction_idempotently=AsyncMock(),
+        reserve_transaction_idempotently=AsyncMock(),
+    )
+    http_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/issuance/initiate",
+            "headers": [
+                (b"x-api-key", b"management-secret"),
+                (b"x-organization-id", b"org-a"),
+                (b"idempotency-key", idempotency_key.encode("ascii")),
+                (b"x-issuer-mode", b"caller-selected"),
+            ],
+            "app": SimpleNamespace(state=SimpleNamespace()),
+        }
+    )
+    request = routes.InitiateIssuanceRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example",
+        credential_template_id="template-a",
+        holder_did="did:peer:2.EzExample",
+        delivery_mode="direct-kms",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await routes.initiate_issuance(request, http_request=http_request, repo=repo)
+
+    assert (exc.value.status_code, exc.value.detail) == (422, expected_detail)
+    forward.assert_not_awaited()
+    repo.recover_transaction_idempotently.assert_not_awaited()
+    repo.reserve_transaction_idempotently.assert_not_awaited()
+    crypto.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_delivery_hides_cross_tenant_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

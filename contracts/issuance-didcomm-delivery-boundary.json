@@ -201,6 +201,7 @@
     "test_native_owner_preserves_structured_upstream_error_without_fallback",
     "test_native_owner_delegates_automatic_initiation_before_python_reservation",
     "test_native_owner_rejects_direct_signing_headers_before_delegation",
+    "test_native_owner_preserves_combined_invalid_precheck_precedence",
     "test_delivery_hides_cross_tenant_transaction",
     "test_delivery_rejects_claimed_tenant_before_transaction_lookup",
     "test_delivery_rejects_private_or_unavailable_encryption",
