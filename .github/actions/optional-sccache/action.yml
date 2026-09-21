@@ -1,0 +1,35 @@
+name: Optional sccache
+description: Enable the pinned compiler cache without making cache availability a test gate.
+
+inputs:
+  version:
+    description: Pinned sccache release to install.
+    required: false
+    default: v0.16.0
+
+runs:
+  using: composite
+  steps:
+    - name: Install compiler cache
+      id: install
+      # This covers both the action's main phase and its deferred post phase:
+      # cache telemetry must never become a build or test result.
+      continue-on-error: true
+      uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+      with:
+        version: ${{ inputs.version }}
+
+    - name: Select cached or direct compiler
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ steps.install.outcome }}" = success ] && command -v sccache >/dev/null 2>&1; then
+          echo "sccache is available; Rust commands will use the compiler cache"
+          exit 0
+        fi
+
+        echo "sccache is unavailable; Rust commands will run directly" >&2
+        echo "RUSTC_WRAPPER=" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_RW_MODE=" >> "$GITHUB_ENV"

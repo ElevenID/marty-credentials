@@ -25,6 +25,7 @@ def _image_workflow_step(name: str) -> str:
 
 def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
     source_job = STABLE.split("  build-source-dist:", 1)[1].split("\n  test:", 1)[0]
+    test_job = STABLE.split("  test:", 1)[1].split("\n  create-release-draft:", 1)[0]
     assert "validate-release-source:" in STABLE
     assert "python scripts/release_contract.py validate-source" in STABLE
     assert "+refs/heads/main:refs/remotes/origin/main" in STABLE
@@ -54,6 +55,9 @@ def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
     assert "gh workflow run release-images.yml --ref main" not in README
     assert "softprops/action-gh-release" not in STABLE
     assert "SHA256SUMS" not in STABLE
+    assert "python scripts/install_pinned_core.py" in test_job
+    assert 'PYTHONPATH="$GITHUB_WORKSPACE/services" bash scripts/run-python-ci.sh' in test_job
+    assert "pytest tests/ packages/tests/" not in test_job
 
 
 def test_stable_tag_requires_exact_main_gate_evidence() -> None:

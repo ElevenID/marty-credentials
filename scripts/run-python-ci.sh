@@ -4,7 +4,7 @@ set -euo pipefail
 python -m pip install --disable-pip-version-check --upgrade pip
 python -m pip install --disable-pip-version-check pytest pytest-asyncio
 python -c "import pathlib, subprocess, sys; wheels = sorted(map(str, pathlib.Path('release-deps').glob('*.whl'))); assert len(wheels) == 2, wheels; subprocess.run([sys.executable, '-m', 'pip', 'install', *wheels], check=True)"
-python -m pip install --disable-pip-version-check -e '.[dev]'
+scripts/retry-command.sh python -m pip install --disable-pip-version-check -e '.[dev]'
 DIDCOMM_DELIVERY_OWNER=native \
 ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005 \
 python -c "from issuance.application.rust_integration import validate_marty_rs_capabilities as validate_issuance; validate_issuance()"

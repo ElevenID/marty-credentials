@@ -99,4 +99,8 @@ def test_credentials_ci_requires_and_publishes_the_compose_contract() -> None:
         if "uses:" in line
     ]
     assert uses
-    assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in uses)
+    local_actions = [action for action in uses if action.startswith("./")]
+    remote_actions = [action for action in uses if not action.startswith("./")]
+    assert local_actions == ["./marty-credentials/.github/actions/optional-sccache"]
+    assert remote_actions
+    assert all(re.fullmatch(r"[^@\s]+@[0-9a-f]{40}", action) for action in remote_actions)
