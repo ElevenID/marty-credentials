@@ -43,6 +43,30 @@ surface explicit. These are source findings, not a newly executed wheel test.
 Pinning this Core revision alone is therefore not a feature-preserving consumer
 migration; a qualified opaque sender key-agreement capability is still needed.
 
+### Transitional dual revision boundary
+
+Credentials has deliberately disjoint native dependency surfaces during this
+migration. Production services and release images install canonical
+`marty-rs` `v0.2.0` at
+`7d501aea7a2a815b4cf842ab37ff729520d8191c`, selected and hash-pinned by
+`release/dependencies.json`. Source-built production CI uses that same commit
+with `kms-only`; it does not enable the retired `local-key-operations` or
+`didcomm-local-keys` features. The separately named `marty-verification`
+wheel remains at `v0.1.60` solely to preserve the deployed integration-secret
+AES-GCM format; its replacement is tracked by
+[INTEGRATION-SECRET-KMS-001](integration-secret-secure-storage-outstanding.md).
+
+The Credentials-owned `rust/marty-rs` compatibility extension remains locked
+to Core `08a0d435390f13186cb6f6278b9a15f9020067a7` while its existing
+native, Python and WASM CSCA/OID4VCI/demo surfaces are migrated. It is built and
+tested separately, lacks mandatory production startup capabilities, and is
+excluded from the stable release asset set and service images. This temporary
+split preserves those public compatibility features without allowing their
+local private-key profile to replace the canonical `marty-rs` production
+wheel. It must not be collapsed by deleting features or by adding local-key
+features back to Core v0.2. DIDCOMM-KMS-001 remains the owner of the later
+opaque authcrypt key agreement design.
+
 ## Existing evidence
 
 Unmodified baseline command:

@@ -53,8 +53,9 @@ jobs:
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
+          expected_image_workflow="$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/tags/$TAG"
           case "$WORKFLOW_REF" in
-            "$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/heads/main"|\
+            "$expected_image_workflow"|\
             "$GITHUB_REPOSITORY/.github/workflows/publish-pypi.yml@refs/heads/main")
               ;;
             *)

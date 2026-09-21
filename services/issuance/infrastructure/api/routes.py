@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
@@ -38,6 +38,7 @@ from issuance.application.canvas_issuance_guard import (
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
 from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.didcomm_owner import didcomm_delivery_owner
 from issuance.application.issuance_idempotency import (
     canonical_issuance_request,
     hash_idempotency_key,
@@ -125,6 +126,66 @@ _CANVAS_ISSUANCE_DENIAL = {
     "error": "invalid_credential_request",
     "error_description": "Credential eligibility requirements are not satisfied",
 }
+
+_NATIVE_ISSUANCE_FORWARD_HEADERS = (
+    "x-api-key",
+    "x-organization-id",
+    "idempotency-key",
+)
+_NativeResponse = TypeVar("_NativeResponse", bound=BaseModel)
+
+
+async def _post_to_native_issuance(
+    path: str,
+    payload: dict[str, Any],
+    http_request: Request,
+    response_model: type[_NativeResponse],
+) -> _NativeResponse:
+    """Call the selected Rust owner without a Python or weaker-mode fallback."""
+
+    owner = didcomm_delivery_owner()
+    headers = {
+        name: value
+        for name in _NATIVE_ISSUANCE_FORWARD_HEADERS
+        if (value := http_request.headers.get(name)) is not None
+    }
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0, connect=5.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.post(owner.endpoint(path), headers=headers, json=payload)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        logger.error("Native issuance owner is unavailable (%s)", type(exc).__name__)
+        raise HTTPException(
+            status_code=503,
+            detail="Native issuance service is unavailable",
+        ) from exc
+
+    try:
+        response_body = response.json()
+    except ValueError as exc:
+        logger.error("Native issuance owner returned a non-JSON response")
+        raise HTTPException(
+            status_code=503,
+            detail="Native issuance service returned an invalid response",
+        ) from exc
+    if not response.is_success:
+        detail = (
+            response_body.get("detail")
+            if isinstance(response_body, dict) and "detail" in response_body
+            else "Native issuance request failed"
+        )
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    try:
+        return response_model.model_validate(response_body)
+    except (TypeError, ValueError) as exc:
+        logger.error("Native issuance owner returned an invalid success response")
+        raise HTTPException(
+            status_code=503,
+            detail="Native issuance service returned an invalid response",
+        ) from exc
 
 
 def _log_credential_creation_failure(request_id: str, error: Exception) -> None:
@@ -3064,6 +3125,20 @@ async def initiate_issuance(
     if http_request is not None:
         _reject_direct_signing_headers(http_request.headers)
 
+    if didcomm_delivery_owner().is_native:
+        if http_request is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Native issuance service requires an authenticated request context",
+            )
+        forwarded = await _post_to_native_issuance(
+            "/v1/issuance/initiate",
+            request.model_dump(mode="json", exclude_unset=True),
+            http_request,
+            IssuanceResponse,
+        )
+        return forwarded
+
     request_semantics = canonical_issuance_request(
         organization_id=request.organization_id,
         credential_template_id=request.credential_template_id,
@@ -4661,13 +4736,15 @@ async def issue_credential(
             if isinstance(remote_context, dict)
             else None
         )
-        if signing_format == "ldp_vc":
-            if signing_algorithm != "EdDSA":
-                raise RuntimeError("ldp_vc with eddsa-rdfc-2022 requires an EdDSA issuer profile")
-            if not isinstance(verification_method_id, str) or not verification_method_id:
-                raise RuntimeError("ldp_vc issuer DID resolution returned no verification method")
-            if not isinstance(remote_context.get("public_jwk"), dict):
-                raise RuntimeError("ldp_vc issuer DID resolution returned no public JWK")
+        issuer_public_jwk = (
+            remote_context.get("public_jwk") if isinstance(remote_context, dict) else None
+        )
+        if not isinstance(verification_method_id, str) or not verification_method_id:
+            raise RuntimeError("issuer DID resolution returned no verification method")
+        if signing_format != "mso_mdoc" and not isinstance(issuer_public_jwk, dict):
+            raise RuntimeError("issuer DID resolution returned no public JWK")
+        if signing_format == "ldp_vc" and signing_algorithm != "EdDSA":
+            raise RuntimeError("ldp_vc with eddsa-rdfc-2022 requires an EdDSA issuer profile")
         effective_issuer_did = tx.issuer_did_override
 
         async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
@@ -4754,6 +4831,7 @@ async def issue_credential(
             "expiration_seconds": 31536000,
             "algorithm": signing_algorithm,
             "verification_method_id": verification_method_id,
+            "issuer_public_jwk": issuer_public_jwk,
             "credential_id": credential_id,
         }
         if signing_format == "mso_mdoc":
@@ -4809,7 +4887,7 @@ async def issue_credential(
                 subject_id=holder_did or tx.subject_did,
                 credential_type=signing_credential_type,
                 claims_json=json.dumps(signing_claims),
-                public_jwk=remote_context["public_jwk"],
+                public_jwk=issuer_public_jwk,
                 credential_subject=tx.claims.get(_CREDENTIAL_SUBJECT_FIELD),
                 credential_document=credential_document,
                 expiration_seconds=tx.validity_days * 86400,
@@ -5089,6 +5167,13 @@ async def _didcomm_sign_and_deliver(
     verification_method_id = (
         remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
     )
+    issuer_public_jwk = (
+        remote_context.get("public_jwk") if isinstance(remote_context, dict) else None
+    )
+    if not isinstance(verification_method_id, str) or not verification_method_id:
+        raise RuntimeError("issuer DID resolution returned no verification method")
+    if not isinstance(issuer_public_jwk, dict):
+        raise RuntimeError("issuer DID resolution returned no public JWK")
     effective_issuer_did_dc = tx.issuer_did_override
 
     # Load the exhaustive issuer policy and validate recipient key agreement,
@@ -5153,6 +5238,7 @@ async def _didcomm_sign_and_deliver(
         selective_disclosure_claims=sd_claims_dc,
         algorithm=signing_algorithm,
         verification_method_id=verification_method_id,
+        issuer_public_jwk=issuer_public_jwk,
         credential_format=effective_request_format,
         credential_id=credential_id,
         issuer_certificate_chain=(
@@ -5308,6 +5394,14 @@ async def didcomm_deliver(
         request.organization_id,
         hide_resource=True,
     )
+    if didcomm_delivery_owner().is_native:
+        forwarded = await _post_to_native_issuance(
+            "/v1/issuance/didcomm/deliver",
+            request.model_dump(mode="json"),
+            http_request,
+            DidcommDeliveryResponse,
+        )
+        return forwarded
     tx = await repo.get_transaction(request.transaction_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found")

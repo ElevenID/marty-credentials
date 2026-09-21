@@ -81,14 +81,20 @@ Existing warning/info messages and cancellation/fencing behavior are retained.
   skipped, relaxed or changed. The temporary baseline worktree was verified
   clean and removed; test output/directories were retained outside it.
 
-The local interpreter loads globally installed `marty-rs==0.1.60`. Credentials'
-release manifest pins Core `dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f`, while
-its CI builds Core `08a0d435390f13186cb6f6278b9a15f9020067a7`. Protected-main
-CI34026589471 passed with its configured dependencies. This is a remaining
-release/binding qualification finding, not proof that this machine's installed
-wheel is equivalent to the CI artifact. Require fresh pinned-build CI and
-reconcile the release artifact before aggregate adoption; do not hide the
-finding by changing cryptographic assertions or the other worker's branch.
+The original local run loaded a globally installed `marty-rs==0.1.60`, which
+does not implement the issuer-public-JWK prepare signatures required here.
+Credentials now pins the canonical `marty-rs` source build and immutable
+release wheel to Core `v0.2.0` at
+`7d501aea7a2a815b4cf842ab37ff729520d8191c`, with each platform asset hash
+recorded in `release/dependencies.json`. CI builds that binding with the
+KMS-only boundary and without the retired local-key feature flags. The
+independently named `marty-verification` wheel remains pinned to `v0.1.60` at
+`dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f` to preserve the existing
+integration-secret AES-GCM format until an opaque secure-storage API is
+qualified. See `INTEGRATION-SECRET-KMS-001`; this compatibility pin does not
+authorize private issuer-key use. A stale global wheel is not qualification
+evidence and must not trigger a fallback. Require fresh pinned-build CI before
+aggregate adoption; do not hide a binding mismatch by changing assertions.
 
 After protected landing, record the exact revised source provenance and capture
 the hardened language-neutral privacy observations for Rust comparison. Retain

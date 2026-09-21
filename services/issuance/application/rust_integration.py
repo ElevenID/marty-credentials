@@ -11,9 +11,23 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from issuance.application.didcomm_owner import didcomm_delivery_owner
 from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 
 logger = logging.getLogger(__name__)
+
+_PRIVATE_JWK_MEMBERS = frozenset(
+    {
+        "d",
+        "p",
+        "q",
+        "dp",
+        "dq",
+        "qi",
+        "oth",
+        "k",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,16 +85,22 @@ def get_marty_rs():
     return require_marty_rs()
 
 
-REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
+_DIDCOMM_DELIVERY_CAPABILITIES = frozenset(
     {
-        "canvas_normalize_base_url",
-        "canvas_probe_lti_platform",
-        "complete_vcdm_data_integrity_credential",
         "didcomm_encrypt",
         "didcomm_encrypt_authcrypt",
         "didcomm_extract_endpoint",
         "didcomm_pack_credential",
         "didcomm_resolve_did_with_metadata",
+    }
+)
+
+
+_BASE_REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
+    {
+        "canvas_normalize_base_url",
+        "canvas_probe_lti_platform",
+        "complete_vcdm_data_integrity_credential",
         "evidence_reconciliation_plan",
         "evidence_reconciliation_stale_reasons",
         "lti_verify_launch_jwt",
@@ -117,13 +137,28 @@ REQUIRED_MARTY_RS_CAPABILITIES = frozenset(
     }
 )
 
+# The exported legacy set remains a stable inventory for release and source
+# contract tooling. Runtime validation uses the selected consumer owner below.
+REQUIRED_MARTY_RS_CAPABILITIES = (
+    _BASE_REQUIRED_MARTY_RS_CAPABILITIES | _DIDCOMM_DELIVERY_CAPABILITIES
+)
+
+
+def required_marty_rs_capabilities() -> frozenset[str]:
+    """Return only capabilities reachable in the selected service composition."""
+
+    if didcomm_delivery_owner().is_native:
+        return _BASE_REQUIRED_MARTY_RS_CAPABILITIES
+    return REQUIRED_MARTY_RS_CAPABILITIES
+
 
 def validate_marty_rs_capabilities() -> None:
     """Fail startup when the deployed native extension is not service-compatible."""
     marty_rs = get_marty_rs()
+    required = required_marty_rs_capabilities()
     missing = sorted(
         capability
-        for capability in REQUIRED_MARTY_RS_CAPABILITIES
+        for capability in required
         if not callable(getattr(marty_rs, capability, None))
     )
     if missing:
@@ -138,6 +173,29 @@ def _json_dumps_compact(value: Any) -> str:
     # ensure_ascii=True produces ASCII-safe JSON (non-ASCII escaped as \\uXXXX),
     # matching serde_json default serialization used by sd-jwt-rs and other Rust JWT libs.
     return json.dumps(value, separators=(",", ":"), ensure_ascii=True)
+
+
+def _public_jwk_json(
+    public_jwk: Mapping[str, Any],
+    *,
+    label: str,
+    verification_method_id: str | None = None,
+) -> str:
+    if not isinstance(public_jwk, Mapping):
+        raise RuntimeError(f"{label} must be an object")
+    private_members = sorted(_PRIVATE_JWK_MEMBERS.intersection(public_jwk))
+    if private_members:
+        raise RuntimeError(
+            f"{label} must not contain private member '{private_members[0]}'"
+        )
+    kid = public_jwk.get("kid")
+    if (
+        kid is not None
+        and verification_method_id is not None
+        and kid != verification_method_id
+    ):
+        raise RuntimeError("issuer public JWK kid does not match the DID verification method")
+    return _json_dumps_compact(dict(public_jwk))
 
 
 def _env_truthy(name: str, default: bool = False) -> bool:
@@ -155,6 +213,7 @@ async def create_sd_jwt_vc_with_remote_signing(
     holder_jwk: dict[str, Any] | None = None,
     credential_type: str,
     claims_json: str,
+    issuer_public_jwk: Mapping[str, Any],
     expiration_seconds: int = 31536000,
     selective_disclosure_claims: list[str] | None = None,
     algorithm: str | None = None,
@@ -180,12 +239,23 @@ async def create_sd_jwt_vc_with_remote_signing(
         )
 
     expected_algorithm = algorithm or "ES256"
+    issuer_public_jwk_json = _public_jwk_json(
+        issuer_public_jwk,
+        label="issuer public JWK",
+        verification_method_id=verification_method_id,
+    )
+    holder_jwk_json = (
+        _public_jwk_json(holder_jwk, label="holder JWK")
+        if holder_jwk is not None
+        else None
+    )
     binding = get_marty_rs()
     try:
         prepared = binding.oid4vci_prepare_sd_jwt(
             issuer_did,
             verification_method_id,
             expected_algorithm,
+            issuer_public_jwk_json,
             subject_id,
             credential_type,
             json.dumps(claims),
@@ -193,7 +263,7 @@ async def create_sd_jwt_vc_with_remote_signing(
             list(selective_disclosure_claims or []),
             credential_format,
             credential_id,
-            json.dumps(holder_jwk) if holder_jwk is not None else None,
+            holder_jwk_json,
             list(issuer_certificate_chain or []),
         )
     except (RuntimeError, TypeError, ValueError) as exc:
@@ -224,6 +294,7 @@ async def create_jwt_vc_with_remote_signing(
     subject_id: str | None,
     credential_type: str,
     claims_json: str,
+    issuer_public_jwk: Mapping[str, Any],
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None,
     expiration_seconds: int = 31536000,
     algorithm: str | None = None,
@@ -250,12 +321,18 @@ async def create_jwt_vc_with_remote_signing(
         )
 
     expected_algorithm = algorithm or "ES256"
+    issuer_public_jwk_json = _public_jwk_json(
+        issuer_public_jwk,
+        label="issuer public JWK",
+        verification_method_id=verification_method_id,
+    )
     binding = get_marty_rs()
     try:
         prepare_args = (
             issuer_did,
             verification_method_id,
             expected_algorithm,
+            issuer_public_jwk_json,
             subject_id,
             credential_type,
             json.dumps(claims),
@@ -291,18 +368,6 @@ async def create_jwt_vc_with_remote_signing(
         raise NativeOperationError(f"Native JWT-VC assembly failed: {exc}") from exc
 
 
-_PRIVATE_JWK_MEMBERS = frozenset(
-    {
-        "d",
-        "p",
-        "q",
-        "dp",
-        "dq",
-        "qi",
-        "oth",
-        "k",
-    }
-)
 _VCDM_CONTEXT = "https://www.w3.org/ns/credentials/v2"
 _VCDM_PROTECTED_TERMS = frozenset(
     {

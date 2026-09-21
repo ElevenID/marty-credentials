@@ -177,6 +177,20 @@ def test_dependency_order_and_custody_boundary_are_frozen() -> None:
     ]
     prefix_positions = [source.index(marker) for marker in prefix_markers]
     assert prefix_positions == sorted(prefix_positions)
+    owner_precheck_markers = [
+        "normalize_idempotency_key",
+        "normalize_delivery_mode",
+        "_reject_direct_signing_headers",
+        "didcomm_delivery_owner",
+    ]
+    assert CONTRACT["owner_precheck_order"] == [
+        "normalize-idempotency-key",
+        "normalize-delivery-mode",
+        "reject-direct-signing-headers",
+        "select-delivery-owner",
+    ]
+    owner_precheck_positions = [source.index(marker) for marker in owner_precheck_markers]
+    assert owner_precheck_positions == sorted(owner_precheck_positions)
 
     recovery_position = source.index("recover_transaction_idempotently")
     recovery_response_position = source.index(

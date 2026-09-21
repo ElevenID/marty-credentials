@@ -43,9 +43,15 @@ def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
     assert "--draft" in STABLE
     assert "--verify-tag" in STABLE
     assert "--clobber" not in STABLE
-    assert "credentials-release-draft-ready" in STABLE
-    assert "client_payload[release_id]" in STABLE
-    assert "client_payload[commit_sha]" in STABLE
+    assert "credentials-release-draft-ready" not in STABLE
+    assert "gh workflow run release-images.yml" in STABLE
+    assert '--ref "$TAG"' in STABLE
+    assert '-f "release_id=$RELEASE_ID"' in STABLE
+    assert '-f "commit_sha=$COMMIT"' in STABLE
+    create_draft = STABLE.split("  create-release-draft:", 1)[1]
+    assert "actions: write" in create_draft.split("    steps:", 1)[0]
+    assert "gh workflow run release-images.yml --ref v0.2.0" in README
+    assert "gh workflow run release-images.yml --ref main" not in README
     assert "softprops/action-gh-release" not in STABLE
     assert "SHA256SUMS" not in STABLE
 
@@ -81,7 +87,9 @@ def test_stable_tag_push_gates_run_on_main() -> None:
 
 
 def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
-    assert "types: [credentials-release-draft-ready]" in IMAGES
+    assert "repository_dispatch:" not in IMAGES
+    assert "credentials-release-draft-ready" not in IMAGES
+    assert "workflow_dispatch:" in IMAGES
     assert "release_id:" in IMAGES
     assert "commit_sha:" in IMAGES
     assert "validate-draft:" in IMAGES
@@ -116,6 +124,33 @@ def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
     assert (
         IMAGES.count("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8")
         == 2
+    )
+
+
+def test_image_release_run_and_evidence_are_bound_to_the_exact_tag_commit() -> None:
+    validate = IMAGES.split("  validate-draft:", 1)[1].split("\n  publish-by-digest:", 1)[0]
+    image_provenance = _image_workflow_step("Verify every image's tag-scoped provenance")
+    complete_payload = _image_workflow_step("Verify the existing complete-payload attestation")
+    checksum = _image_workflow_step("Sign final checksum manifest")
+
+    assert 'if [ "$EVENT_NAME" != workflow_dispatch ]' in validate
+    assert 'expected_ref="refs/tags/$TAG"' in validate
+    assert '[ "$RUN_REF" != "$expected_ref" ]' in validate
+    assert '[ "$RUN_SHA" != "$COMMIT" ]' in validate
+    assert (
+        "refs/heads/main"
+        not in validate.split("Validate the tag binding before running tag-scoped code", 1)[0]
+    )
+    for step in (image_provenance, complete_payload):
+        assert '--source-ref "refs/tags/$TAG"' in step
+        assert '--source-digest "$COMMIT"' in step
+        assert "--deny-self-hosted-runners" in step
+        assert "$GITHUB_REPOSITORY/.github/workflows/release-images.yml" in step
+    assert "oci://$image@$digest" in image_provenance
+    assert 'docker pull "$image@$digest"' in image_provenance
+    assert (
+        "release-images.yml@refs/tags/$TAG" in checksum
+        and "release-images.yml@refs/heads/main" not in checksum
     )
 
 
@@ -165,32 +200,84 @@ def test_stable_release_excludes_unsupported_linux_arm64_wheel() -> None:
     assert "- os: ubuntu-latest\n            target: aarch64" in wheel_matrix
 
 
-def test_ci_installs_exact_source_built_core_artifacts_with_compatibility_features() -> None:
+def test_ci_installs_exact_source_built_core_artifacts_with_split_profiles() -> None:
     assert CI.count("run: bash scripts/run-python-ci.sh") == 2
     assert "release-deps" in PYTHON_CI
     assert "len(wheels) == 2" in PYTHON_CI
     assert "install_pinned_core.py" not in PYTHON_CI
-    assert "ref: ${{ env.MARTY_CORE_REVISION }}" in CI
-    assert "marty-core/marty-bindings/Cargo.toml" in CI
-    assert "marty-core/marty-verification/Cargo.toml" in CI
+    assert "ref: ${{ env.MARTY_RS_CORE_REVISION }}" in CI
+    assert "ref: ${{ env.MARTY_VERIFICATION_CORE_REVISION }}" in CI
+    assert "marty-core-rs/marty-bindings/Cargo.toml" in CI
+    assert "marty-core-verification/marty-verification/Cargo.toml" in CI
     verification_features = (
-        "--features pyo3/extension-module,python,local-key-operations,iaca,csca,eudi"
+        "--features pyo3/extension-module,python,iaca,csca,eudi"
     )
     binding_features = (
-        "--features extension-module,didcomm-local-keys,local-key-operations,ephemeral-session-keys"
+        "--features extension-module,kms-only,ephemeral-session-keys"
     )
-    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
-    core_revision = manifest["workspace"]["dependencies"]["marty-oid4vci"]["rev"]
+    dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
+    rs_revision = dependencies["marty-rs"]["commit"]
+    verification_revision = dependencies["marty-verification"]["commit"]
     for workflow in (CI, WARM_CACHES):
         assert verification_features in workflow
         assert binding_features in workflow
-        assert f"MARTY_CORE_REVISION: {core_revision}" in workflow
-        assert "core-python-wheels-v3-" in workflow
+        assert f"MARTY_RS_CORE_REVISION: {rs_revision}" in workflow
+        assert f"MARTY_VERIFICATION_CORE_REVISION: {verification_revision}" in workflow
+        assert "core-python-wheels-v4-" in workflow
     assert "Validate built Core module exports" in CI
     assert "cert-builder" not in CI
     assert "cert-builder" not in WARM_CACHES
     assert "authority-issuance" not in CI
     assert "authority-issuance" not in WARM_CACHES
+    assert "didcomm-local-keys" not in CI
+    assert "didcomm-local-keys" not in WARM_CACHES
+    binding_lines = [line for line in CI.splitlines() if "marty-bindings/Cargo.toml" in line]
+    verification_lines = [
+        line for line in CI.splitlines() if "marty-verification/Cargo.toml" in line
+    ]
+    assert binding_lines
+    assert verification_lines
+    assert all("local-key-operations" not in line for line in binding_lines)
+    assert all("local-key-operations" not in line for line in verification_lines)
+
+
+def test_transitional_local_binding_is_disjoint_from_production_core() -> None:
+    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+    dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
+    local_manifest = (ROOT / "rust" / "marty-rs" / "Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+
+    local_revisions = {
+        manifest["workspace"]["dependencies"][package]["rev"]
+        for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
+    }
+    assert local_revisions == {"08a0d435390f13186cb6f6278b9a15f9020067a7"}
+    assert dependencies["marty-rs"]["version"] == "0.2.0"
+    assert dependencies["marty-rs"]["commit"] == (
+        "7d501aea7a2a815b4cf842ab37ff729520d8191c"
+    )
+    assert dependencies["marty-verification"]["version"] == "0.1.60"
+    assert dependencies["marty-verification"]["commit"] == (
+        "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f"
+    )
+    assert dependencies["marty-rs"]["commit"] not in local_revisions
+
+    assert "local-key-operations" in local_manifest
+    assert "--features extension-module,kms-only,ephemeral-session-keys" in CI
+    assert (
+        "--features pyo3/extension-module,python,iaca,csca,eudi" in CI
+    )
+    assert "pattern: source-dist" in STABLE
+    assert "pattern: wheels-" not in STABLE
+    assert "release-deps" in PYTHON_CI
+    assert "local-wheels" not in PYTHON_CI
+    assert "--ignore=tests/unit/test_legacy_service_native_boundary.py" in PYTHON_CI
+    assert "--ignore=tests/unit/test_verification_adapter_native_boundary.py" in PYTHON_CI
+    assert "--ignore=tests/unit/test_integration_secret_encryption.py" not in PYTHON_CI
+    assert "tests/unit/test_legacy_service_native_boundary.py" in CI
+    assert "tests/unit/test_verification_adapter_native_boundary.py" in CI
+    assert "tests/unit/test_integration_secret_encryption.py" in CI
 
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:
@@ -204,6 +291,8 @@ def test_pypi_waits_for_the_immutable_stable_release() -> None:
     assert "python -m build" not in PYPI
     assert "uses: ./.github/workflows/publish-pypi.yml" in IMAGES
     assert "needs.finalize-release.result == 'success'" in IMAGES
+    assert "release-images.yml@refs/tags/$TAG" in PYPI
+    assert "release-images.yml@refs/heads/main" not in PYPI
 
 
 def test_deprecated_mutable_release_workflows_are_removed() -> None:
@@ -233,6 +322,7 @@ def test_image_release_has_fail_closed_recovery_states() -> None:
     assert "for artifact in release-assets/*" in IMAGES
     assert "cp existing-assets/SHA256SUMS.sigstore.json" in IMAGES
     assert "cosign verify-blob" in IMAGES
+    assert "Verify every image's tag-scoped provenance" in IMAGES
     assert "Existing $name is identical; retaining it" in IMAGES
 
 
@@ -240,21 +330,21 @@ def test_image_release_derives_one_canonical_handoff_from_the_checked_out_tag() 
     validate = IMAGES.split("  validate-draft:", 1)[1].split("\n  publish-by-digest:", 1)[0]
     matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
 
-    assert "ref: ${{ github.sha }}" in validate
     assert "ref: ${{ steps.contract.outputs.tag }}" in validate
-    assert "path: release-source" in validate
+    assert validate.count("actions/checkout@") == 1
+    assert "path: release-source" not in validate
     assert "Tag must be a canonical stable release tag" in validate
     binding_position = validate.index("Validate the tag binding before running tag-scoped code")
     handoff_position = validate.index("Derive the canonical tag-scoped service matrix")
-    tag_code_position = validate.index("release-source/scripts/release_contract.py validate-source")
+    tag_code_position = validate.index("scripts/release_contract.py validate-source")
     assert binding_position < handoff_position < tag_code_position
     assert 'rev-parse "refs/tags/$TAG^{commit}"' in validate
     assert "merge-base --is-ancestor" in validate
     assert "scripts/release_service_handoff.py" in validate
-    assert "--repository release-source" in validate
+    assert "--repository ." in validate
     assert "service_matrix: ${{ steps.service_contract.outputs.service_matrix }}" in validate
-    assert "release-source/scripts/release_contract.py validate-source" in validate
-    assert "release-source/scripts/release_contract.py validate-release" in validate
+    assert "scripts/release_contract.py validate-source" in validate
+    assert "scripts/release_contract.py validate-release" in validate
     assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
     assert IMAGES.count("ref: ${{ needs.validate-draft.outputs.commit }}") == 2
 

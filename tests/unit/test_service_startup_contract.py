@@ -98,6 +98,49 @@ def test_native_extension_does_not_require_retired_internal_didcomm_adapters(mon
     rust_integration.validate_marty_rs_capabilities()
 
 
+def test_native_didcomm_owner_does_not_require_unreachable_python_crypto_bindings(
+    monkeypatch,
+) -> None:
+    from issuance.application import rust_integration
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    required = rust_integration.required_marty_rs_capabilities()
+    assert {
+        "didcomm_encrypt",
+        "didcomm_encrypt_authcrypt",
+        "didcomm_extract_endpoint",
+        "didcomm_pack_credential",
+        "didcomm_resolve_did_with_metadata",
+    }.isdisjoint(required)
+    module = SimpleNamespace(**{name: (lambda: None) for name in required})
+    monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: module)
+
+    rust_integration.validate_marty_rs_capabilities()
+
+
+@pytest.mark.parametrize(
+    ("owner", "url"),
+    [
+        ("native", ""),
+        ("other", "http://issuance-native:8005"),
+        ("native", "file:///run/issuance.sock"),
+        ("native", "http://user:secret@issuance-native:8005"),
+        ("native", "http://issuance-native:8005/untrusted-path"),
+        ("native", "http://issuance-native:not-a-port"),
+        ("native", "http://issuance-native:0"),
+        ("native", "http://issuance-native:65536"),
+    ],
+)
+def test_native_didcomm_owner_configuration_fails_closed(monkeypatch, owner, url) -> None:
+    from issuance.application.didcomm_owner import didcomm_delivery_owner
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", owner)
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", url)
+    with pytest.raises(RuntimeError):
+        didcomm_delivery_owner()
+
+
 @pytest.mark.parametrize("missing", [True, False], ids=["missing", "noncallable"])
 def test_native_extension_still_rejects_every_remaining_invalid_capability(
     monkeypatch,
@@ -243,12 +286,20 @@ async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) ->
 
     monkeypatch.setattr(rust_integration, "get_marty_rs", lambda: Extension())
 
+    issuer_public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "issuer-public-x",
+        "y": "issuer-public-y",
+    }
+
     sd_jwt = await rust_integration.create_sd_jwt_vc_with_remote_signing(
         issuer_did="did:web:issuer.example",
         remote_sign=remote_sign,
         subject_id="did:key:holder",
         credential_type="AccessBadge",
         claims_json='{"name":"Alice"}',
+        issuer_public_jwk=issuer_public_jwk,
         algorithm="ES256",
         verification_method_id="did:web:issuer.example#key-1",
     )
@@ -258,6 +309,7 @@ async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) ->
         subject_id="did:key:holder",
         credential_type="AccessBadge",
         claims_json='{"name":"Alice"}',
+        issuer_public_jwk=issuer_public_jwk,
         algorithm="ES256",
         verification_method_id="did:web:issuer.example#key-1",
     )
@@ -266,6 +318,11 @@ async def test_remote_jwt_signing_uses_native_opaque_preparation(monkeypatch) ->
     assert jwt_vc == ("jwt.header.payload.AQID", "urn:uuid:jwt")
     assert ("sign", (b"sd.header.payload", "ES256")) in calls
     assert ("sign", (b"jwt.header.payload", "ES256")) in calls
+    expected_jwk_json = json.dumps(issuer_public_jwk, separators=(",", ":"))
+    prepare_sd_args = next(value for name, value in calls if name == "prepare_sd_jwt")
+    prepare_jwt_args = next(value for name, value in calls if name == "prepare_jwt_vc")
+    assert prepare_sd_args[3] == expected_jwk_json
+    assert prepare_jwt_args[3] == expected_jwk_json
     assert any(name == "assemble_sd_jwt" for name, _ in calls)
     assert any(name == "assemble_jwt_vc" for name, _ in calls)
 
@@ -307,11 +364,12 @@ def test_key_attestation_binding_passes_only_the_exact_validated_token(monkeypat
 def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
     dependencies = json.loads((ROOT / "release" / "dependencies.json").read_text())
-    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
 
     assert "COPY release-deps /release-deps" in dockerfile
     assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
     assert "validate_marty_rs_capabilities()" in dockerfile
+    assert "DIDCOMM_DELIVERY_OWNER=native" in dockerfile
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in dockerfile
     assert "COPY python/marty_credentials /app/marty_credentials" in dockerfile
     assert "COPY marty-core/" not in dockerfile
     assert dependencies["marty-rs"]["repository"] == "ElevenID/marty-core"
@@ -336,24 +394,53 @@ def test_issuance_image_uses_release_wheels_instead_of_sibling_sources() -> None
     assert verification_release["asset"].startswith(
         f"marty_verification_py-{verification_release['version']}-"
     )
-    assert verification_release["commit"] == core_release["commit"]
+    assert verification_release["commit"] != core_release["commit"]
     assert set(verification_release["platform_assets"]) == {
         "linux-x86_64",
         "macos-arm64",
         "windows-x86_64",
     }
-    core_revisions = {
-        cargo["workspace"]["dependencies"][package]["rev"]
-        for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
-    }
-    assert len(core_revisions) == 1
-    source_revision = core_revisions.pop()
+    source_revision = core_release["commit"]
+    verification_source_revision = verification_release["commit"]
     assert len(source_revision) == 40
+    assert len(verification_source_revision) == 40
 
     ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert f"MARTY_CORE_REVISION: {source_revision}" in ci_workflow
+    assert f"MARTY_RS_CORE_REVISION: {source_revision}" in ci_workflow
+    assert (
+        f"MARTY_VERIFICATION_CORE_REVISION: {verification_source_revision}"
+        in ci_workflow
+    )
     assert "maturin build --release --compatibility off" in ci_workflow
+    assert "--features extension-module,kms-only,ephemeral-session-keys" in ci_workflow
+    assert (
+        "--features pyo3/extension-module,python,iaca,csca,eudi"
+        in ci_workflow
+    )
+    assert "didcomm-local-keys" not in ci_workflow
     assert "name: core-python-${{ runner.os }}" in ci_workflow
+
+
+def test_local_compatibility_binding_cannot_replace_the_production_core_wheel() -> None:
+    from issuance.application import rust_integration
+
+    local_source = (ROOT / "rust" / "marty-rs" / "src" / "lib.rs").read_text(
+        encoding="utf-8"
+    )
+    dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    python_ci = (ROOT / "scripts" / "run-python-ci.sh").read_text(encoding="utf-8")
+
+    # This startup capability is owned by canonical Core and deliberately is
+    # not exported by Credentials' separately tested compatibility extension.
+    assert "canvas_normalize_base_url" in rust_integration.required_marty_rs_capabilities()
+    assert "canvas_normalize_base_url" not in local_source
+    assert "COPY release-deps /release-deps" in dockerfile
+    assert "pip install --no-cache-dir /release-deps/*.whl" in dockerfile
+    assert "pathlib.Path('release-deps').glob('*.whl')" in python_ci
+    assert "DIDCOMM_DELIVERY_OWNER=native" in python_ci
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in python_ci
+    assert "local-wheels" not in dockerfile
+    assert "local-wheels" not in python_ci
 
 
 def test_release_image_uses_the_pinned_canonical_core_wheels() -> None:
@@ -371,6 +458,12 @@ def test_release_image_uses_the_pinned_canonical_core_wheels() -> None:
     assert "ARG MARTY_VERIFICATION_WHEEL" in issuance_image
     assert "ARG MARTY_VERIFICATION_SHA256" in issuance_image
     assert "validate_marty_rs_capabilities()" in issuance_image
+
+    stable_release = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "DIDCOMM_DELIVERY_OWNER=native" in stable_release
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in stable_release
 
 
 def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:

@@ -286,6 +286,8 @@ jobs:
           python scripts/install_pinned_core.py --repository . --destination release-deps
           python -m pip install pytest==9.1.1
           pip install -e .[dev]
+          DIDCOMM_DELIVERY_OWNER=native \
+          ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005 \
           PYTHONPATH="$GITHUB_WORKSPACE/services" python -c \
             "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; issuance()"
           pytest tests/ packages/tests/
@@ -301,6 +303,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     permissions:
+      actions: write
       contents: write
       id-token: write
       attestations: write
@@ -394,8 +397,9 @@ jobs:
           TAG: ${{ needs.validate-release-source.outputs.tag }}
         run: |
           set -euo pipefail
-          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
-            -f event_type=credentials-release-draft-ready \
-            -f "client_payload[tag]=$TAG" \
-            -f "client_payload[release_id]=$RELEASE_ID" \
-            -f "client_payload[commit_sha]=$COMMIT"
+          gh workflow run release-images.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$TAG" \
+            -f "tag=$TAG" \
+            -f "release_id=$RELEASE_ID" \
+            -f "commit_sha=$COMMIT"

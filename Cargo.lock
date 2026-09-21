@@ -3450,7 +3450,7 @@ dependencies = [
 
 [[package]]
 name = "marty-rs"
-version = "0.1.74"
+version = "0.1.75"
 dependencies = [
  "base64 0.23.1",
  "bs58 0.5.1",

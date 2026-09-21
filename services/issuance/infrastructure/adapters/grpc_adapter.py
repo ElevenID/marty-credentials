@@ -165,6 +165,11 @@ async def _create_remote_signed_sd_jwt_for_tx(
 
     algorithm = str(tx.issuer_algorithm)
     verification_method_id = issuer_context.get("verification_method_id")
+    issuer_public_jwk = issuer_context.get("public_jwk")
+    if not isinstance(verification_method_id, str) or not verification_method_id:
+        raise RuntimeError("issuer DID resolution returned no verification method")
+    if not isinstance(issuer_public_jwk, dict):
+        raise RuntimeError("issuer DID resolution returned no public JWK")
 
     async def _remote_sign(payload: bytes, algorithm_hint: str | None) -> dict[str, Any]:
         if algorithm_hint and algorithm_hint != algorithm:
@@ -190,6 +195,7 @@ async def _create_remote_signed_sd_jwt_for_tx(
         selective_disclosure_claims=selective_disclosure_claims or [],
         algorithm=algorithm,
         verification_method_id=verification_method_id,
+        issuer_public_jwk=issuer_public_jwk,
         credential_format=credential_format,
         credential_id=credential_id,
         issuer_certificate_chain=issuer_context.get("issuer_x5c"),

@@ -105,11 +105,14 @@ git push origin refs/tags/v0.2.0
 ```
 
 The stable workflow runs Rust and Python tests, builds the exact Python, WASM,
-and source artifact set, attests it, and creates a draft release. A separate
-workflow loaded only from protected `main` builds both service images by
-digest, signs and attests them, creates their SBOMs, verifies every draft asset,
-and publishes the release exactly once. Published releases are immutable and
-`v*` tags cannot be updated or deleted.
+and source artifact set, attests it, and creates a draft release. It then starts
+the image finalizer at that exact release tag and commit. The finalizer verifies
+that the release commit is reachable from protected `main`, builds both service
+images by digest, signs and attests them, creates their SBOMs, verifies every
+draft asset, and publishes the release exactly once. This makes the signed image
+and SBOM provenance identify the immutable release tag rather than a later
+protected-main workflow revision. Published releases are immutable and `v*`
+tags cannot be updated or deleted.
 
 If the stable workflow must be started manually before it creates a draft, run
 it from the tag itself:
@@ -118,12 +121,12 @@ it from the tag itself:
 gh workflow run release-stable.yml --ref v0.2.0 -f tag=v0.2.0
 ```
 
-If a valid draft already exists, resume only the finalizer from protected
-`main`, using the draft's numeric release ID and the tag's fully dereferenced
-commit SHA:
+If a valid draft already exists, resume only the finalizer from the exact tag,
+using the draft's numeric release ID and the tag's fully dereferenced commit
+SHA:
 
 ```bash
-gh workflow run release-images.yml --ref main \
+gh workflow run release-images.yml --ref v0.2.0 \
   -f tag=v0.2.0 \
   -f release_id=<release-id> \
   -f commit_sha=<40-character-commit-sha>
@@ -134,10 +137,21 @@ an integrity failure that must be investigated rather than overwritten.
 
 ### Artifacts
 
+Production service images never install the Credentials-owned local
+`rust/marty-rs` compatibility wheel. They install the exact independently
+pinned Core wheels and hashes in `release/dependencies.json`: canonical
+`marty-rs` `v0.2.0` uses the KMS-only binding profile, while
+`marty-verification` remains at `v0.1.60` to preserve integration-secret
+AES-GCM until `INTEGRATION-SECRET-KMS-001` provides an opaque secure-storage
+replacement. The local native/Python/WASM extension remains on its older Core
+revision temporarily so its CSCA, OID4VCI, and demo exports can be migrated
+without deletion; CI tests it separately, and the stable artifact collector
+excludes its wheels. See the
+[`DIDComm KMS delivery contract`](docs/rust-migrations/didcomm-kms-delivery-contract.md#transitional-dual-revision-boundary).
+
 Each release produces:
-- **Python wheels** for multiple platforms (manylinux, macOS, Windows)
+- **A Python source distribution** for the Credentials package
 - **WASM packages** for browser and Node.js
-- **Source distribution** (.tar.gz)
 - **The issuance service image**, pinned by digest in GHCR
 - **SBOMs, SHA256 checksums, Sigstore signatures, and GitHub provenance**
 
