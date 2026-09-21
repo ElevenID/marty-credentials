@@ -127,6 +127,9 @@ def test_native_didcomm_owner_does_not_require_unreachable_python_crypto_binding
         ("native", "file:///run/issuance.sock"),
         ("native", "http://user:secret@issuance-native:8005"),
         ("native", "http://issuance-native:8005/untrusted-path"),
+        ("native", "http://issuance-native:not-a-port"),
+        ("native", "http://issuance-native:0"),
+        ("native", "http://issuance-native:65536"),
     ],
 )
 def test_native_didcomm_owner_configuration_fails_closed(monkeypatch, owner, url) -> None:

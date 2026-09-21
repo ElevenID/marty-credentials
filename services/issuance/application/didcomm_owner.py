@@ -46,9 +46,14 @@ def didcomm_delivery_owner() -> DidcommDeliveryOwner:
         raise RuntimeError(f"{_NATIVE_URL_ENV} is required when {_OWNER_ENV}=native")
 
     parsed = urlparse(configured_url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise RuntimeError(f"{_NATIVE_URL_ENV} has an invalid port") from exc
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
+        or (port is not None and port == 0)
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query

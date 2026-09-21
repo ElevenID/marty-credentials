@@ -153,9 +153,10 @@ async def _post_to_native_issuance(
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(30.0, connect=5.0),
             follow_redirects=False,
+            trust_env=False,
         ) as client:
             response = await client.post(owner.endpoint(path), headers=headers, json=payload)
-    except (httpx.TimeoutException, httpx.TransportError) as exc:
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         logger.error("Native issuance owner is unavailable (%s)", type(exc).__name__)
         raise HTTPException(
             status_code=503,

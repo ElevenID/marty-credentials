@@ -801,7 +801,10 @@ async def test_native_owner_delegates_delivery_without_touching_python_crypto_or
 ) -> None:
     monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
     monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    monkeypatch.setenv("HTTP_PROXY", "http://ambient-proxy.example:8080")
+    monkeypatch.setenv("HTTPS_PROXY", "http://ambient-proxy.example:8080")
     observed: dict[str, object] = {}
+    ambient_proxy_received: list[dict[str, object]] = []
 
     class Client:
         def __init__(self, **options: object) -> None:
@@ -814,6 +817,10 @@ async def test_native_owner_delegates_delivery_without_touching_python_crypto_or
             return None
 
         async def post(self, url: str, **options: object):
+            client_options = observed["options"]
+            assert isinstance(client_options, dict)
+            if client_options.get("trust_env") is not False:
+                ambient_proxy_received.append({"url": url, **options})
             observed["url"] = url
             observed["request"] = options
             return routes.httpx.Response(
@@ -842,6 +849,7 @@ async def test_native_owner_delegates_delivery_without_touching_python_crypto_or
             "headers": [
                 (b"x-api-key", b"management-secret"),
                 (b"x-organization-id", b"org-a"),
+                (b"idempotency-key", b"idempotency-secret"),
                 (b"authorization", b"Bearer must-not-forward"),
             ],
             "app": SimpleNamespace(state=SimpleNamespace()),
@@ -860,17 +868,76 @@ async def test_native_owner_delegates_delivery_without_touching_python_crypto_or
 
     assert response.status == "delivered"
     assert observed["url"] == "http://issuance-native:8005/v1/issuance/didcomm/deliver"
+    assert observed["options"] == {
+        "timeout": routes.httpx.Timeout(30.0, connect=5.0),
+        "follow_redirects": False,
+        "trust_env": False,
+    }
+    assert ambient_proxy_received == []
     forwarded = observed["request"]
     assert isinstance(forwarded, dict)
     assert forwarded["headers"] == {
         "x-api-key": "management-secret",
         "x-organization-id": "org-a",
+        "idempotency-key": "idempotency-secret",
     }
     assert forwarded["json"] == {
         "organization_id": "org-a",
         "transaction_id": "tx-a",
         "holder_did": "did:peer:2.EzExample",
     }
+    repo.get_transaction.assert_not_awaited()
+    legacy_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        routes.httpx.InvalidURL("native request URL includes private detail"),
+        ValueError("native request construction includes private detail"),
+    ],
+)
+async def test_native_owner_sanitizes_request_construction_failures_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+
+    class Client:
+        def __init__(self, **_options: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, _url: str, **_options: object):
+            raise failure
+
+    monkeypatch.setattr(routes.httpx, "AsyncClient", Client)
+    legacy_delivery = AsyncMock()
+    monkeypatch.setattr(routes, "_didcomm_sign_and_deliver", legacy_delivery)
+    repo = SimpleNamespace(get_transaction=AsyncMock())
+
+    with caplog.at_level(logging.ERROR), pytest.raises(HTTPException) as exc:
+        await routes.didcomm_deliver(
+            routes.DidcommDeliverRequest(
+                organization_id="org-a",
+                transaction_id="tx-a",
+                holder_did="did:peer:2.EzExample",
+            ),
+            _request("org-a"),
+            repo,
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Native issuance service is unavailable"
+    assert "private detail" not in caplog.text
     repo.get_transaction.assert_not_awaited()
     legacy_delivery.assert_not_awaited()
 
