@@ -1,8 +1,6 @@
 name: Finalize stable release and service images
 
 on:
-  repository_dispatch:
-    types: [credentials-release-draft-ready]
   workflow_dispatch:
     inputs:
       tag:
@@ -19,7 +17,7 @@ on:
         type: string
 
 concurrency:
-  group: credentials-images-${{ github.event.client_payload.tag || github.event.inputs.tag }}
+  group: credentials-images-${{ inputs.tag }}
   cancel-in-progress: false
 
 permissions:
@@ -48,29 +46,21 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          DISPATCH_TAG: ${{ github.event.client_payload.tag }}
-          DISPATCH_RELEASE_ID: ${{ github.event.client_payload.release_id }}
-          DISPATCH_COMMIT: ${{ github.event.client_payload.commit_sha }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           INPUT_RELEASE_ID: ${{ github.event.inputs.release_id }}
           INPUT_COMMIT: ${{ github.event.inputs.commit_sha }}
+          RUN_REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.sha }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/heads/main"
-          if [ "$WORKFLOW_REF" != "$expected_workflow_ref" ]; then
-            echo "::error::Release finalization must use the workflow from protected main"
+          if [ "$EVENT_NAME" != workflow_dispatch ]; then
+            echo "::error::Release finalization requires an explicit workflow dispatch"
             exit 1
           fi
-          if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            TAG="$INPUT_TAG"
-            RELEASE_ID="$INPUT_RELEASE_ID"
-            COMMIT="$INPUT_COMMIT"
-          else
-            TAG="$DISPATCH_TAG"
-            RELEASE_ID="$DISPATCH_RELEASE_ID"
-            COMMIT="$DISPATCH_COMMIT"
-          fi
+          TAG="$INPUT_TAG"
+          RELEASE_ID="$INPUT_RELEASE_ID"
+          COMMIT="$INPUT_COMMIT"
           if [[ ! "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::Release ID must be a positive integer"
             exit 1
@@ -83,20 +73,22 @@ jobs:
             echo "::error::Tag must be a canonical stable release tag"
             exit 1
           fi
+          expected_ref="refs/tags/$TAG"
+          expected_workflow_ref="$GITHUB_REPOSITORY/.github/workflows/release-images.yml@$expected_ref"
+          if [ "$WORKFLOW_REF" != "$expected_workflow_ref" ] || \
+            [ "$RUN_REF" != "$expected_ref" ] || [ "$RUN_SHA" != "$COMMIT" ]; then
+            echo "::error::Release finalization must run from the exact release tag and commit"
+            exit 1
+          fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
           echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
 
-      - name: Check out the protected-main workflow source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ github.sha }}
-      - name: Check out the exact tag-scoped release source
+      - name: Check out the exact tag-scoped workflow source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ steps.contract.outputs.tag }}
           fetch-depth: 0
-          path: release-source
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
@@ -108,15 +100,15 @@ jobs:
           TAG: ${{ steps.contract.outputs.tag }}
         run: |
           set -euo pipefail
-          git -C release-source fetch --no-tags origin \
+          git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main
-          head_commit="$(git -C release-source rev-parse 'HEAD^{commit}')"
-          tag_commit="$(git -C release-source rev-parse "refs/tags/$TAG^{commit}")"
+          head_commit="$(git rev-parse 'HEAD^{commit}')"
+          tag_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
           if [ "$head_commit" != "$COMMIT" ] || [ "$tag_commit" != "$COMMIT" ]; then
             echo "::error::Checked-out tag does not resolve to the approved commit"
             exit 1
           fi
-          if ! git -C release-source merge-base --is-ancestor \
+          if ! git merge-base --is-ancestor \
             "$COMMIT" refs/remotes/origin/main; then
             echo "::error::Release commit is not reachable from protected main"
             exit 1
@@ -128,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           service_matrix="$(python scripts/release_service_handoff.py \
-            --repository release-source)"
+            --repository .)"
           echo "service_matrix=$service_matrix" >> "$GITHUB_OUTPUT"
 
       - name: Validate source and draft by numeric release ID
@@ -141,11 +133,11 @@ jobs:
           TAG: ${{ steps.contract.outputs.tag }}
         run: |
           set -euo pipefail
-          python release-source/scripts/release_contract.py validate-source \
-            --repository release-source --tag "$TAG" --commit "$COMMIT"
+          python scripts/release_contract.py validate-source \
+            --repository . --tag "$TAG" --commit "$COMMIT"
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release.json
-          STATE="$(python release-source/scripts/release_contract.py validate-release \
+          STATE="$(python scripts/release_contract.py validate-release \
             --json release.json --release-id "$RELEASE_ID" --tag "$TAG" \
             --commit "$COMMIT" --phase resumable)"
           service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
@@ -175,7 +167,7 @@ jobs:
               gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
                 "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
                 > "package-terminal-$service.json"
-              python release-source/scripts/release_contract.py validate-package-tag \
+              python scripts/release_contract.py validate-package-tag \
                 --json "package-terminal-$service.json" --tag "$TAG" \
                 --digest "$image_digest"
             done <<< "$service_lines"
@@ -440,6 +432,8 @@ jobs:
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign final checksum manifest
+        env:
+          TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
           if [ -f existing-assets/SHA256SUMS.sigstore.json ]; then
@@ -452,7 +446,7 @@ jobs:
             cosign verify-blob \
               --bundle release-assets/SHA256SUMS.sigstore.json \
               --certificate-identity \
-              "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/heads/main" \
+              "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release-images.yml@refs/tags/$TAG" \
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               release-assets/SHA256SUMS >/dev/null
           else
@@ -471,6 +465,8 @@ jobs:
         if: needs.validate-draft.outputs.state == 'complete'
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
         run: |
           set -euo pipefail
           for artifact in release-assets/*; do
@@ -478,6 +474,8 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --signer-workflow \
               "$GITHUB_REPOSITORY/.github/workflows/release-images.yml" \
+              --source-ref "refs/tags/$TAG" \
+              --source-digest "$COMMIT" \
               --deny-self-hosted-runners
           done
 
@@ -575,6 +573,32 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+
+      - name: Verify every image's tag-scoped provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate-draft.outputs.commit }}
+          SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}
+          TAG: ${{ needs.validate-draft.outputs.tag }}
+        run: |
+          set -euo pipefail
+          service_lines="$(jq -er '.include[].service' <<< "$SERVICE_MATRIX")"
+          while IFS= read -r service; do
+            image="ghcr.io/elevenid/marty-credentials-$service"
+            digest="$(tr -d '\r\n' < "release-assets/marty-credentials-$service.digest")"
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Invalid $service image digest"
+              exit 1
+            fi
+            docker pull "$image@$digest"
+            gh attestation verify "oci://$image@$digest" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow \
+              "$GITHUB_REPOSITORY/.github/workflows/release-images.yml" \
+              --source-ref "refs/tags/$TAG" \
+              --source-digest "$COMMIT" \
+              --deny-self-hosted-runners
+          done <<< "$service_lines"
 
       - name: Revalidate the remote tag before image tag promotion
         env:

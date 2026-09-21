@@ -105,11 +105,14 @@ git push origin refs/tags/v0.2.0
 ```
 
 The stable workflow runs Rust and Python tests, builds the exact Python, WASM,
-and source artifact set, attests it, and creates a draft release. A separate
-workflow loaded only from protected `main` builds both service images by
-digest, signs and attests them, creates their SBOMs, verifies every draft asset,
-and publishes the release exactly once. Published releases are immutable and
-`v*` tags cannot be updated or deleted.
+and source artifact set, attests it, and creates a draft release. It then starts
+the image finalizer at that exact release tag and commit. The finalizer verifies
+that the release commit is reachable from protected `main`, builds both service
+images by digest, signs and attests them, creates their SBOMs, verifies every
+draft asset, and publishes the release exactly once. This makes the signed image
+and SBOM provenance identify the immutable release tag rather than a later
+protected-main workflow revision. Published releases are immutable and `v*`
+tags cannot be updated or deleted.
 
 If the stable workflow must be started manually before it creates a draft, run
 it from the tag itself:
@@ -118,12 +121,12 @@ it from the tag itself:
 gh workflow run release-stable.yml --ref v0.2.0 -f tag=v0.2.0
 ```
 
-If a valid draft already exists, resume only the finalizer from protected
-`main`, using the draft's numeric release ID and the tag's fully dereferenced
-commit SHA:
+If a valid draft already exists, resume only the finalizer from the exact tag,
+using the draft's numeric release ID and the tag's fully dereferenced commit
+SHA:
 
 ```bash
-gh workflow run release-images.yml --ref main \
+gh workflow run release-images.yml --ref v0.2.0 \
   -f tag=v0.2.0 \
   -f release_id=<release-id> \
   -f commit_sha=<40-character-commit-sha>

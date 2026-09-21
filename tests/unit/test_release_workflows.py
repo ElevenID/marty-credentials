@@ -43,9 +43,15 @@ def test_stable_release_is_a_fail_closed_draft_handoff() -> None:
     assert "--draft" in STABLE
     assert "--verify-tag" in STABLE
     assert "--clobber" not in STABLE
-    assert "credentials-release-draft-ready" in STABLE
-    assert "client_payload[release_id]" in STABLE
-    assert "client_payload[commit_sha]" in STABLE
+    assert "credentials-release-draft-ready" not in STABLE
+    assert "gh workflow run release-images.yml" in STABLE
+    assert '--ref "$TAG"' in STABLE
+    assert '-f "release_id=$RELEASE_ID"' in STABLE
+    assert '-f "commit_sha=$COMMIT"' in STABLE
+    create_draft = STABLE.split("  create-release-draft:", 1)[1]
+    assert "actions: write" in create_draft.split("    steps:", 1)[0]
+    assert "gh workflow run release-images.yml --ref v0.2.0" in README
+    assert "gh workflow run release-images.yml --ref main" not in README
     assert "softprops/action-gh-release" not in STABLE
     assert "SHA256SUMS" not in STABLE
 
@@ -81,7 +87,9 @@ def test_stable_tag_push_gates_run_on_main() -> None:
 
 
 def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
-    assert "types: [credentials-release-draft-ready]" in IMAGES
+    assert "repository_dispatch:" not in IMAGES
+    assert "credentials-release-draft-ready" not in IMAGES
+    assert "workflow_dispatch:" in IMAGES
     assert "release_id:" in IMAGES
     assert "commit_sha:" in IMAGES
     assert "validate-draft:" in IMAGES
@@ -116,6 +124,33 @@ def test_image_release_uses_exact_draft_and_digest_first_publication() -> None:
     assert (
         IMAGES.count("actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8")
         == 2
+    )
+
+
+def test_image_release_run_and_evidence_are_bound_to_the_exact_tag_commit() -> None:
+    validate = IMAGES.split("  validate-draft:", 1)[1].split("\n  publish-by-digest:", 1)[0]
+    image_provenance = _image_workflow_step("Verify every image's tag-scoped provenance")
+    complete_payload = _image_workflow_step("Verify the existing complete-payload attestation")
+    checksum = _image_workflow_step("Sign final checksum manifest")
+
+    assert 'if [ "$EVENT_NAME" != workflow_dispatch ]' in validate
+    assert 'expected_ref="refs/tags/$TAG"' in validate
+    assert '[ "$RUN_REF" != "$expected_ref" ]' in validate
+    assert '[ "$RUN_SHA" != "$COMMIT" ]' in validate
+    assert (
+        "refs/heads/main"
+        not in validate.split("Validate the tag binding before running tag-scoped code", 1)[0]
+    )
+    for step in (image_provenance, complete_payload):
+        assert '--source-ref "refs/tags/$TAG"' in step
+        assert '--source-digest "$COMMIT"' in step
+        assert "--deny-self-hosted-runners" in step
+        assert "$GITHUB_REPOSITORY/.github/workflows/release-images.yml" in step
+    assert "oci://$image@$digest" in image_provenance
+    assert 'docker pull "$image@$digest"' in image_provenance
+    assert (
+        "release-images.yml@refs/tags/$TAG" in checksum
+        and "release-images.yml@refs/heads/main" not in checksum
     )
 
 
@@ -204,6 +239,8 @@ def test_pypi_waits_for_the_immutable_stable_release() -> None:
     assert "python -m build" not in PYPI
     assert "uses: ./.github/workflows/publish-pypi.yml" in IMAGES
     assert "needs.finalize-release.result == 'success'" in IMAGES
+    assert "release-images.yml@refs/tags/$TAG" in PYPI
+    assert "release-images.yml@refs/heads/main" not in PYPI
 
 
 def test_deprecated_mutable_release_workflows_are_removed() -> None:
@@ -233,6 +270,7 @@ def test_image_release_has_fail_closed_recovery_states() -> None:
     assert "for artifact in release-assets/*" in IMAGES
     assert "cp existing-assets/SHA256SUMS.sigstore.json" in IMAGES
     assert "cosign verify-blob" in IMAGES
+    assert "Verify every image's tag-scoped provenance" in IMAGES
     assert "Existing $name is identical; retaining it" in IMAGES
 
 
@@ -240,21 +278,21 @@ def test_image_release_derives_one_canonical_handoff_from_the_checked_out_tag() 
     validate = IMAGES.split("  validate-draft:", 1)[1].split("\n  publish-by-digest:", 1)[0]
     matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
 
-    assert "ref: ${{ github.sha }}" in validate
     assert "ref: ${{ steps.contract.outputs.tag }}" in validate
-    assert "path: release-source" in validate
+    assert validate.count("actions/checkout@") == 1
+    assert "path: release-source" not in validate
     assert "Tag must be a canonical stable release tag" in validate
     binding_position = validate.index("Validate the tag binding before running tag-scoped code")
     handoff_position = validate.index("Derive the canonical tag-scoped service matrix")
-    tag_code_position = validate.index("release-source/scripts/release_contract.py validate-source")
+    tag_code_position = validate.index("scripts/release_contract.py validate-source")
     assert binding_position < handoff_position < tag_code_position
     assert 'rev-parse "refs/tags/$TAG^{commit}"' in validate
     assert "merge-base --is-ancestor" in validate
     assert "scripts/release_service_handoff.py" in validate
-    assert "--repository release-source" in validate
+    assert "--repository ." in validate
     assert "service_matrix: ${{ steps.service_contract.outputs.service_matrix }}" in validate
-    assert "release-source/scripts/release_contract.py validate-source" in validate
-    assert "release-source/scripts/release_contract.py validate-release" in validate
+    assert "scripts/release_contract.py validate-source" in validate
+    assert "scripts/release_contract.py validate-release" in validate
     assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
     assert IMAGES.count("ref: ${{ needs.validate-draft.outputs.commit }}") == 2
 
