@@ -62,13 +62,17 @@ jobs:
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+          persist-credentials: false
       - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
       - name: Enable compiler cache
         if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
       - name: Cache Core build inputs
@@ -123,7 +127,7 @@ jobs:
             ~/.cargo/git/db
           key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('Cargo.lock') }}
       - name: Enable compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        uses: ./.github/actions/optional-sccache
         with:
           version: v0.16.0
       - name: Compile native test targets
@@ -132,7 +136,13 @@ jobs:
         run: cargo clippy --locked --no-default-features --features native -- -D warnings
       - name: Report compiler cache effectiveness
         if: always()
-        run: sccache --show-stats
+        shell: bash
+        run: |
+          if command -v sccache >/dev/null 2>&1; then
+            sccache --show-stats
+          else
+            echo "sccache was unavailable; Rust commands ran directly"
+          fi
 
   python:
     name: Warm Python cache (${{ matrix.os }}, ${{ matrix.python }})
@@ -155,6 +165,6 @@ jobs:
       - name: Populate the dependency download cache
         shell: bash
         run: |
-          python -m pip download --disable-pip-version-check \
+          scripts/retry-command.sh python -m pip download --disable-pip-version-check \
             --dest "$RUNNER_TEMP/marty-credentials-wheelhouse" \
             '.[dev]' pytest pytest-asyncio

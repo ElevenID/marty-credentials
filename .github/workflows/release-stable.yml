@@ -182,7 +182,10 @@ jobs:
           working-directory: rust/marty-rs
           target: ${{ matrix.target }}
           args: --locked --release --out ../../dist --features python
-          sccache: 'true'
+          # Release compilation must not depend on a separately downloaded
+          # cache executable. CI still uses optional sccache with direct-rustc
+          # fallback; immutable release artifacts always compile directly.
+          sccache: 'false'
           manylinux: auto
           before-script-linux: yum install -y perl-IPC-Cmd perl-Time-Piece
       - name: Upload wheels
@@ -285,12 +288,7 @@ jobs:
           set -euo pipefail
           python scripts/install_pinned_core.py --repository . --destination release-deps
           python -m pip install pytest==9.1.1
-          pip install -e .[dev]
-          DIDCOMM_DELIVERY_OWNER=native \
-          ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005 \
-          PYTHONPATH="$GITHUB_WORKSPACE/services" python -c \
-            "from issuance.application.rust_integration import validate_marty_rs_capabilities as issuance; issuance()"
-          pytest tests/ packages/tests/
+          PYTHONPATH="$GITHUB_WORKSPACE/services" bash scripts/run-python-ci.sh
 
   create-release-draft:
     name: Create complete source-artifact draft

@@ -462,8 +462,10 @@ def test_release_image_uses_the_pinned_canonical_core_wheels() -> None:
     stable_release = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(
         encoding="utf-8"
     )
-    assert "DIDCOMM_DELIVERY_OWNER=native" in stable_release
-    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in stable_release
+    python_ci = (ROOT / "scripts" / "run-python-ci.sh").read_text(encoding="utf-8")
+    assert "bash scripts/run-python-ci.sh" in stable_release
+    assert "DIDCOMM_DELIVERY_OWNER=native" in python_ci
+    assert "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005" in python_ci
 
 
 def test_runtime_and_release_inputs_do_not_depend_on_python_mmf() -> None:
