@@ -416,6 +416,16 @@ mod python_bindings {
             .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)
     }
 
+    /// Verify a compact W3C VCDM v2 VC-JWT with public issuer material.
+    ///
+    /// Keep this compatibility binding as a thin adapter over the pinned Core
+    /// implementation so Python consumers cannot diverge from the canonical
+    /// Rust verification decision or expose unauthenticated claims.
+    #[pyfunction]
+    pub fn verify_vcdm_jwt(request_json: &str) -> String {
+        marty_verification::vcdm::verify_vcdm_jwt_json(request_json)
+    }
+
     /// Select issuer-bound disclosures for an unbound SD-JWT presentation.
     ///
     /// Nonce or audience binding requires a holder-key-aware OID4VP flow and
@@ -460,6 +470,7 @@ mod python_bindings {
             complete_vcdm_data_integrity_credential,
             m
         )?)?;
+        m.add_function(wrap_pyfunction!(verify_vcdm_jwt, m)?)?;
         m.add_function(wrap_pyfunction!(sd_jwt_create_presentation, m)?)?;
         crate::canonical_verification::register(m)?;
 

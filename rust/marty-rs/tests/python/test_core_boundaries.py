@@ -10,6 +10,8 @@ from _marty_rs import (
     generate_p256_jwk,
     generate_p256_key,
     sd_jwt_create_presentation,
+    verify_mdoc_issuer,
+    verify_vcdm_jwt,
 )
 
 
@@ -81,3 +83,22 @@ def test_retained_local_key_adapter_exports_private_and_public_jwks() -> None:
 def test_retained_sd_jwt_adapter_rejects_unimplemented_holder_binding() -> None:
     with pytest.raises(ValueError, match="holder-key-aware OID4VP flow"):
         sd_jwt_create_presentation("not-an-sd-jwt", [], "nonce", "audience")
+
+
+def test_retained_vcdm_jwt_adapter_fails_closed_without_a_token() -> None:
+    result = json.loads(verify_vcdm_jwt("{}"))
+
+    assert result["valid"] is False
+    assert result["claims"] is None
+    assert result["errors"]
+
+
+def test_retained_mdoc_issuer_adapter_preserves_failure_evidence() -> None:
+    result = verify_mdoc_issuer(b"\xff", [])
+
+    assert result.signature_valid is False
+    assert result.issuer_trusted is False
+    assert result.document_evidence == []
+    assert result.revocation_checked is False
+    assert result.not_revoked is None
+    assert result.error

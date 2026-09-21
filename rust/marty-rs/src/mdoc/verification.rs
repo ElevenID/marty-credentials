@@ -178,6 +178,97 @@ pub struct MdocDocumentVerificationEvidence {
     pub not_revoked: Option<bool>,
 }
 
+impl From<marty_verification::mdoc::MdocDocumentVerificationEvidence>
+    for MdocDocumentVerificationEvidence
+{
+    fn from(value: marty_verification::mdoc::MdocDocumentVerificationEvidence) -> Self {
+        Self {
+            document_type: value.document_type,
+            signature_algorithm: value.signature_algorithm,
+            digest_algorithm: value.digest_algorithm,
+            signed_at: value.signed_at,
+            valid_from: value.valid_from,
+            valid_until: value.valid_until,
+            issuer_certificate_sha256: value.issuer_certificate_sha256,
+            validity_checked: value.validity_checked,
+            valid_at_verification_time: value.valid_at_verification_time,
+            revocation_checked: value.revocation_checked,
+            not_revoked: value.not_revoked,
+        }
+    }
+}
+
+/// Result of issuer-only mdoc authentication for stored credentials.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone)]
+pub struct MdocIssuerVerificationResult {
+    #[pyo3(get)]
+    pub signature_valid: bool,
+    #[pyo3(get)]
+    pub issuer_trusted: bool,
+    #[pyo3(get)]
+    pub document_types: Vec<String>,
+    #[pyo3(get)]
+    pub document_evidence: Vec<MdocDocumentVerificationEvidence>,
+    #[pyo3(get)]
+    pub revocation_checked: bool,
+    #[pyo3(get)]
+    pub not_revoked: Option<bool>,
+    #[pyo3(get)]
+    pub error: Option<String>,
+}
+
+impl From<marty_verification::mdoc::MdocIssuerVerificationResult> for MdocIssuerVerificationResult {
+    fn from(value: marty_verification::mdoc::MdocIssuerVerificationResult) -> Self {
+        Self {
+            signature_valid: value.signature_valid,
+            issuer_trusted: value.issuer_trusted,
+            document_types: value.document_types,
+            document_evidence: value
+                .document_evidence
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            revocation_checked: value.revocation_checked,
+            not_revoked: value.not_revoked,
+            error: value.error,
+        }
+    }
+}
+
+#[pymethods]
+impl MdocIssuerVerificationResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "MdocIssuerVerificationResult(signature_valid={}, issuer_trusted={}, document_types={:?})",
+            self.signature_valid, self.issuer_trusted, self.document_types
+        )
+    }
+}
+
+/// Authenticate stored mdoc issuer signatures against verifier-owned trust.
+///
+/// This binding delegates to the pinned Core implementation. Interactive
+/// holder authentication remains the separate `verify_mdoc_presentation`
+/// operation and requires a verifier-owned session transcript.
+#[pyfunction(signature = (
+    mdoc_bytes,
+    trusted_root_certs_pem,
+    pinned_issuer_certs_pem = None
+))]
+pub fn verify_mdoc_issuer(
+    mdoc_bytes: Vec<u8>,
+    trusted_root_certs_pem: Vec<String>,
+    pinned_issuer_certs_pem: Option<Vec<String>>,
+) -> MdocIssuerVerificationResult {
+    marty_verification::mdoc::verify_mdoc_issuer(
+        &mdoc_bytes,
+        &trusted_root_certs_pem,
+        pinned_issuer_certs_pem.as_deref().unwrap_or_default(),
+    )
+    .into()
+}
+
 #[pymethods]
 impl MdocVerificationResult {
     fn __repr__(&self) -> String {
