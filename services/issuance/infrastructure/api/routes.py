@@ -163,6 +163,11 @@ async def _post_to_native_issuance(
             detail="Native issuance service is unavailable",
         ) from exc
 
+    if not response.is_success:
+        logger.warning(
+            "Native issuance owner rejected request (HTTP %d)",
+            response.status_code,
+        )
     try:
         response_body = response.json()
     except ValueError as exc:

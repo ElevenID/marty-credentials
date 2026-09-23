@@ -10,11 +10,13 @@ from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import Response
 from issuance.application.credential_vct import resolve_credential_vct
+from issuance.application.didcomm_owner import didcomm_delivery_owner
 from issuance.application.rust_integration import validate_marty_rs_capabilities
 from issuance.domain.ports import IIssuanceRepository
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -331,6 +333,39 @@ ISSUANCE_GRPC_ENABLED = os.environ.get("ISSUANCE_GRPC_ENABLED", "true").lower() 
 )
 
 
+async def _require_didcomm_owner_ready() -> None:
+    """Require the explicitly selected native DIDComm owner to be healthy."""
+
+    owner = didcomm_delivery_owner()
+    if not owner.is_native:
+        return
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(5.0, connect=2.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
+            response = await client.get(owner.endpoint("/health"))
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        logger.warning(
+            "Selected native DIDComm owner readiness check failed (%s)",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Native issuance service is unavailable",
+        ) from exc
+    if not response.is_success:
+        logger.warning(
+            "Selected native DIDComm owner is not ready (HTTP %d)",
+            response.status_code,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Native issuance service is unavailable",
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifecycle management."""
@@ -429,6 +464,11 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
+
+    @app.get("/ready")
+    async def readiness_check() -> dict:
+        await _require_didcomm_owner_ready()
+        return {"status": "ready", "service": SERVICE_NAME}
 
     # ------------------------------------------------------------------
     # OID4VCI v1 §12.2.2 — Credential Issuer Metadata

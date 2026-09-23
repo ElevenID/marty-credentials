@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import sys
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -139,6 +141,147 @@ def test_native_didcomm_owner_configuration_fails_closed(monkeypatch, owner, url
     monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", url)
     with pytest.raises(RuntimeError):
         didcomm_delivery_owner()
+
+
+@pytest.mark.asyncio
+async def test_legacy_didcomm_owner_readiness_never_contacts_native(monkeypatch) -> None:
+    from issuance import main
+
+    monkeypatch.delenv("DIDCOMM_DELIVERY_OWNER", raising=False)
+    monkeypatch.delenv("ISSUANCE_NATIVE_SERVICE_URL", raising=False)
+
+    class UnexpectedClient:
+        def __init__(self, **_options) -> None:
+            raise AssertionError("legacy readiness must not contact the native owner")
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", UnexpectedClient)
+
+    await main._require_didcomm_owner_ready()
+
+
+@pytest.mark.asyncio
+async def test_native_didcomm_owner_readiness_is_bounded_and_ignores_ambient_proxy(
+    monkeypatch,
+) -> None:
+    from issuance import main
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    monkeypatch.setenv("HTTP_PROXY", "http://ambient-proxy.example:8080")
+    observed = {}
+
+    class Client:
+        def __init__(self, **options) -> None:
+            observed["options"] = options
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def get(self, url):
+            observed["url"] = url
+            return main.httpx.Response(
+                200,
+                request=main.httpx.Request("GET", url),
+                json={"status": "healthy"},
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", Client)
+
+    await main._require_didcomm_owner_ready()
+
+    assert observed == {
+        "options": {
+            "timeout": main.httpx.Timeout(5.0, connect=2.0),
+            "follow_redirects": False,
+            "trust_env": False,
+        },
+        "url": "http://issuance-native:8005/health",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_kind", ["status", "transport"])
+async def test_native_didcomm_owner_readiness_fails_closed_without_private_details(
+    monkeypatch,
+    caplog,
+    failure_kind,
+) -> None:
+    from fastapi import HTTPException
+    from issuance import main
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+
+    class Client:
+        def __init__(self, **_options) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def get(self, url):
+            request = main.httpx.Request("GET", url)
+            if failure_kind == "transport":
+                raise main.httpx.ConnectError("private-native-detail", request=request)
+            return main.httpx.Response(
+                503,
+                request=request,
+                text="private-native-detail",
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", Client)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as failure:
+        await main._require_didcomm_owner_ready()
+
+    assert failure.value.status_code == 503
+    assert failure.value.detail == "Native issuance service is unavailable"
+    assert "private-native-detail" not in caplog.text
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "issuance.main" and "DIDComm owner" in record.getMessage()
+    ]
+    assert len(records) == 1
+
+
+@pytest.mark.asyncio
+async def test_health_remains_local_liveness_when_native_owner_is_unavailable(
+    monkeypatch,
+) -> None:
+    from issuance import main
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+
+    class UnexpectedClient:
+        def __init__(self, **_options) -> None:
+            raise AssertionError("liveness must not contact the native owner")
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", UnexpectedClient)
+    application = main.create_app()
+    health = next(route.endpoint for route in application.routes if route.path == "/health")
+
+    assert await health() == {"status": "healthy", "service": main.SERVICE_NAME}
+
+
+@pytest.mark.asyncio
+async def test_ready_endpoint_requires_selected_didcomm_owner(monkeypatch) -> None:
+    from issuance import main
+
+    require_owner = AsyncMock()
+    monkeypatch.setattr(main, "_require_didcomm_owner_ready", require_owner)
+    application = main.create_app()
+    readiness = next(route.endpoint for route in application.routes if route.path == "/ready")
+
+    assert await readiness() == {"status": "ready", "service": main.SERVICE_NAME}
+    require_owner.assert_awaited_once_with()
 
 
 @pytest.mark.parametrize("missing", [True, False], ids=["missing", "noncallable"])
