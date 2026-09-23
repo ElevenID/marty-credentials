@@ -112,6 +112,39 @@ def _git_is_clean(checkout: Path) -> bool:
     return result.returncode == 0 and not result.stdout.strip()
 
 
+def _git_is_from_protected_main(checkout: Path, commit: str) -> bool:
+    remote = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if remote.returncode != 0 or re.fullmatch(
+        r"(?:https://github\.com/|git@github\.com:)ElevenID/marty-ui(?:\.git)?/?",
+        remote.stdout.strip(),
+        flags=re.IGNORECASE,
+    ) is None:
+        return False
+    main = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if main.returncode != 0:
+        return False
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, main.stdout.strip()],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return ancestor.returncode == 0
+
+
 def verify(contract_path: Path, marty_ui: Path) -> dict:
     contract = _json(contract_path)
     _require(
@@ -175,6 +208,10 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
     _require(_git_head(marty_ui) == commit, "marty-ui checkout does not match the pinned commit")
     _require(
         _git_is_clean(marty_ui), "marty-ui checkout has tracked changes outside the pinned commit"
+    )
+    _require(
+        _git_is_from_protected_main(marty_ui, commit),
+        "Pinned marty-ui commit is not proven reachable from fetched protected origin/main",
     )
     for relative, expected_digest in artifact_map.items():
         _require(

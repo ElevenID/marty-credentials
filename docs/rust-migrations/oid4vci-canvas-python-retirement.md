@@ -5,6 +5,10 @@ ownership checkpoint in `ElevenID/marty-ui#844` and demo qualification in
 `ElevenID/marty-ui#845` land. The cross-repository retirement qualification
 contract remains blocked with no pinned UI commit or artifact hashes.
 
+When it is qualified, fetch `ElevenID/marty-ui` protected `main` in the clean
+UI checkout first: the verifier requires the pinned commit to be an ancestor
+of `origin/main` as well as matching the checkout and artifact hashes.
+
 This checkpoint removes Python implementations only after their language-neutral
 contracts were implemented by the Rust issuance service. The paired contracts
 are `contracts/issuance-oid4vci-authorization.json` and

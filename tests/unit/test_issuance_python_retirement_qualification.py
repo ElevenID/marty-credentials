@@ -98,6 +98,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     _write(contract_path, contract)
     monkeypatch.setattr(gate, "_git_head", lambda _checkout: "a" * 40)
     monkeypatch.setattr(gate, "_git_is_clean", lambda _checkout: True)
+    monkeypatch.setattr(gate, "_git_is_from_protected_main", lambda _checkout, _commit: True)
     return contract_path, source, contract
 
 
@@ -153,6 +154,15 @@ def test_wrong_commit_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     contract, source, _ = _fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(gate, "_git_head", lambda _checkout: "b" * 40)
     with pytest.raises(gate.QualificationError, match="pinned commit"):
+        gate.verify(contract, source)
+
+
+def test_unmerged_feature_commit_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract, source, _ = _fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(gate, "_git_is_from_protected_main", lambda _checkout, _commit: False)
+    with pytest.raises(gate.QualificationError, match="protected origin/main"):
         gate.verify(contract, source)
 
 
