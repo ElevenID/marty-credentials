@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import logging
 import sys
@@ -198,7 +199,7 @@ async def test_native_didcomm_owner_readiness_is_bounded_and_ignores_ambient_pro
             "follow_redirects": False,
             "trust_env": False,
         },
-        "url": "http://issuance-native:8005/health",
+        "url": "http://issuance-native:8005/ready",
     }
 
 
@@ -249,6 +250,101 @@ async def test_native_didcomm_owner_readiness_fails_closed_without_private_detai
         if record.name == "issuance.main" and "DIDComm owner" in record.getMessage()
     ]
     assert len(records) == 1
+
+
+@pytest.mark.asyncio
+async def test_native_didcomm_owner_does_not_treat_liveness_as_readiness(monkeypatch) -> None:
+    from fastapi import HTTPException
+    from issuance import main
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    requested = []
+
+    class Client:
+        def __init__(self, **_options) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def get(self, url):
+            requested.append(url)
+            status = 200 if url.endswith("/health") else 503
+            return main.httpx.Response(
+                status,
+                request=main.httpx.Request("GET", url),
+            )
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", Client)
+
+    with pytest.raises(HTTPException) as failure:
+        await main._require_didcomm_owner_ready()
+
+    assert failure.value.status_code == 503
+    assert requested == ["http://issuance-native:8005/ready"]
+
+
+@pytest.mark.asyncio
+async def test_native_didcomm_owner_readiness_has_strict_wall_clock_deadline(
+    monkeypatch,
+    caplog,
+) -> None:
+    from fastapi import HTTPException
+    from issuance import main
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+    monkeypatch.setattr(main, "_DIDCOMM_OWNER_READY_TIMEOUT_SECONDS", 0.01)
+
+    class Client:
+        def __init__(self, **_options) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def get(self, _url):
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(main.httpx, "AsyncClient", Client)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as failure:
+        await asyncio.wait_for(main._require_didcomm_owner_ready(), timeout=1.0)
+
+    assert failure.value.status_code == 503
+    assert failure.value.detail == "Native issuance service is unavailable"
+    assert "TimeoutError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_native_didcomm_owner_invalid_configuration_is_sanitized(
+    monkeypatch,
+    caplog,
+) -> None:
+    from fastapi import HTTPException
+    from issuance import main
+
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv(
+        "ISSUANCE_NATIVE_SERVICE_URL",
+        "http://private-user:private-password@issuance-native:8005",
+    )
+
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as failure:
+        await main._require_didcomm_owner_ready()
+
+    assert failure.value.status_code == 503
+    assert failure.value.detail == "Native issuance service is unavailable"
+    assert "private-user" not in caplog.text
+    assert "private-password" not in caplog.text
+    assert "RuntimeError" in caplog.text
 
 
 @pytest.mark.asyncio

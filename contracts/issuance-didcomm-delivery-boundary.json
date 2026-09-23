@@ -199,6 +199,7 @@
     "test_native_owner_sanitizes_request_construction_failures_without_fallback",
     "test_native_owner_unavailable_fails_closed_without_legacy_fallback",
     "test_native_owner_preserves_structured_upstream_error_without_fallback",
+    "test_native_owner_logs_status_without_non_json_error_body",
     "test_native_owner_delegates_automatic_initiation_before_python_reservation",
     "test_native_owner_rejects_direct_signing_headers_before_delegation",
     "test_native_owner_preserves_combined_invalid_precheck_precedence",

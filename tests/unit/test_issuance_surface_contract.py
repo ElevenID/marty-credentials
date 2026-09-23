@@ -32,7 +32,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "b01d52fd789d17f26ab99d6348cc63208c0b17e512a61e3bf3d46161b9659671"
+        "670586abace3f3029fa7b5df2ca2be0d47cc1ad37a221a83ec6657d65ca39c7c"
     )
 
 
@@ -40,7 +40,7 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
     contract = surface.build_contract()
 
     assert contract["schema"] == "marty.issuance-runtime-surface/v1"
-    assert contract["http"]["route_count"] == 109
+    assert contract["http"]["route_count"] == 110
     assert contract["grpc"]["method_count"] == 12
     assert {mode["name"] for mode in contract["runtime"]["modes"]} == {
         "api",
@@ -56,6 +56,7 @@ def test_contract_retains_critical_protocol_and_lifecycle_operations() -> None:
     grpc = {method["method"]: method["transport"] for method in contract["grpc"]["methods"]}
 
     assert ("GET", "/.well-known/openid-credential-issuer") in routes
+    assert ("GET", "/ready") in routes
     assert ("POST", "/v1/issuance/token") in routes
     assert ("POST", "/v1/issuance/credential") in routes
     assert ("POST", "/v1/issued-credentials/{credential_id}/revoke") in routes

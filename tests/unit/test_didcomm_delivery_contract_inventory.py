@@ -45,7 +45,7 @@ def test_inventory_names_every_existing_boundary_test() -> None:
         and node.name.startswith("test_")
     }
     inventory = CONTRACT["boundary_test_inventory"]
-    assert len(inventory) == len(set(inventory)) == 32
+    assert len(inventory) == len(set(inventory)) == 33
     assert set(inventory) == existing
 
 

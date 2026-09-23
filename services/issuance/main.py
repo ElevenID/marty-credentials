@@ -331,22 +331,25 @@ ISSUANCE_GRPC_ENABLED = os.environ.get("ISSUANCE_GRPC_ENABLED", "true").lower() 
     "true",
     "yes",
 )
+_DIDCOMM_OWNER_READY_TIMEOUT_SECONDS = 5.0
 
 
 async def _require_didcomm_owner_ready() -> None:
     """Require the explicitly selected native DIDComm owner to be healthy."""
 
-    owner = didcomm_delivery_owner()
-    if not owner.is_native:
-        return
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(5.0, connect=2.0),
-            follow_redirects=False,
-            trust_env=False,
-        ) as client:
-            response = await client.get(owner.endpoint("/health"))
-    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
+        async with asyncio.timeout(_DIDCOMM_OWNER_READY_TIMEOUT_SECONDS):
+            owner = didcomm_delivery_owner()
+            if not owner.is_native:
+                return
+            endpoint = owner.endpoint("/ready")
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(5.0, connect=2.0),
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
+                response = await client.get(endpoint)
+    except (TimeoutError, RuntimeError, httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         logger.warning(
             "Selected native DIDComm owner readiness check failed (%s)",
             type(exc).__name__,
