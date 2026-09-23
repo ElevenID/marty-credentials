@@ -118,6 +118,32 @@ _integration_secret_encryption = None
 _EPHEMERAL_CAPABILITY_CLEANUP_LIMIT = 1000
 
 
+# Rust's DIDComm transport state machine persists finer-grained states in the
+# shared delivery table.  Python management reads intentionally retain the
+# language-neutral, three-state delivery contract.  Keep this mapping closed:
+# an unrecognised writer state must fail instead of being misreported.
+_DELIVERY_STATUS_READ_COMPATIBILITY = {
+    "pending": CredentialDeliveryStatus.PENDING,
+    "delivered": CredentialDeliveryStatus.DELIVERED,
+    "failed": CredentialDeliveryStatus.FAILED,
+    "transport_ready": CredentialDeliveryStatus.PENDING,
+    "transporting": CredentialDeliveryStatus.PENDING,
+    "transport_retryable": CredentialDeliveryStatus.PENDING,
+    "transported": CredentialDeliveryStatus.DELIVERED,
+    "delivery_unknown": CredentialDeliveryStatus.PENDING,
+}
+
+
+def _delivery_status_for_management_read(status: str) -> CredentialDeliveryStatus:
+    """Project a persisted writer state onto the management delivery contract."""
+    try:
+        return _DELIVERY_STATUS_READ_COMPATIBILITY[status]
+    except KeyError:
+        # Preserve the existing fail-closed ValueError contract without putting
+        # row metadata (which can contain encrypted payloads) in the exception.
+        raise ValueError("unsupported credential delivery status") from None
+
+
 def _get_integration_secret_encryption():
     """Return AES-GCM encryption for organization integration secrets."""
     global _integration_secret_encryption
@@ -368,7 +394,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             organization_id=row.organization_id,
             delivery_target=DeliveryTarget(row.delivery_target),
             delivery_mode=row.delivery_mode or "wallet_only",
-            status=CredentialDeliveryStatus(row.status),
+            status=_delivery_status_for_management_read(row.status),
             canvas_account_id=row.canvas_account_id,
             external_credential_id=row.external_credential_id,
             external_issuer_id=row.external_issuer_id,

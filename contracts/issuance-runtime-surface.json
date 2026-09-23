@@ -54,15 +54,15 @@
         "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
       },
       {
-        "line": 134,
+        "line": 160,
         "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
       },
       {
-        "line": 135,
+        "line": 161,
         "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
       },
       {
-        "line": 139,
+        "line": 165,
         "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
       },
       {
