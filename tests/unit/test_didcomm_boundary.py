@@ -995,6 +995,7 @@ async def test_native_owner_unavailable_fails_closed_without_legacy_fallback(
 @pytest.mark.asyncio
 async def test_native_owner_preserves_structured_upstream_error_without_fallback(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
     monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
@@ -1013,7 +1014,7 @@ async def test_native_owner_preserves_structured_upstream_error_without_fallback
             return routes.httpx.Response(
                 422,
                 request=routes.httpx.Request("POST", url),
-                json={"detail": "DIDComm authcrypt sender policy is not configured"},
+                json={"detail": "private-upstream-detail"},
             )
 
     monkeypatch.setattr(routes.httpx, "AsyncClient", Client)
@@ -1021,7 +1022,7 @@ async def test_native_owner_preserves_structured_upstream_error_without_fallback
     monkeypatch.setattr(routes, "_didcomm_sign_and_deliver", legacy_delivery)
     repo = SimpleNamespace(get_transaction=AsyncMock())
 
-    with pytest.raises(HTTPException) as exc:
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as exc:
         await routes.didcomm_deliver(
             routes.DidcommDeliverRequest(
                 organization_id="org-a",
@@ -1033,9 +1034,66 @@ async def test_native_owner_preserves_structured_upstream_error_without_fallback
         )
 
     assert exc.value.status_code == 422
-    assert exc.value.detail == "DIDComm authcrypt sender policy is not configured"
+    assert exc.value.detail == "private-upstream-detail"
+    records = [
+        record
+        for record in caplog.records
+        if record.name == routes.__name__
+        and record.msg == "Native issuance owner rejected request (HTTP %d)"
+    ]
+    assert len(records) == 1
+    assert records[0].args == (422,)
+    assert "private-upstream-detail" not in caplog.text
     repo.get_transaction.assert_not_awaited()
     legacy_delivery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_native_owner_logs_status_without_non_json_error_body(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("DIDCOMM_DELIVERY_OWNER", "native")
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
+
+    class Client:
+        def __init__(self, **_options: object) -> None:
+            pass
+
+        async def __aenter__(self) -> Client:
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(self, url: str, **_options: object):
+            return routes.httpx.Response(
+                502,
+                request=routes.httpx.Request("POST", url),
+                text="private-native-error-body",
+            )
+
+    monkeypatch.setattr(routes.httpx, "AsyncClient", Client)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(HTTPException) as exc:
+        await routes._post_to_native_issuance(
+            "/v1/didcomm/deliver",
+            {},
+            _request("org-a"),
+            routes.DidcommDeliveryResponse,
+        )
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Native issuance service returned an invalid response"
+    assert "private-native-error-body" not in caplog.text
+    records = [
+        record
+        for record in caplog.records
+        if record.name == routes.__name__
+        and record.msg == "Native issuance owner rejected request (HTTP %d)"
+    ]
+    assert len(records) == 1
+    assert records[0].args == (502,)
 
 
 @pytest.mark.asyncio
