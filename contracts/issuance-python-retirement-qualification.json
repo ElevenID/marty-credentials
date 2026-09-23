@@ -1,0 +1,53 @@
+{
+  "schema": "marty.issuance-python-retirement-qualification/v1",
+  "state": "blocked_pending_marty_ui_checkpoint",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "commit": null,
+    "artifacts": [
+      {
+        "path": "contracts/issuance-universal-ownership.json",
+        "sha256": null
+      },
+      {
+        "path": "contracts/issuance-native-coverage.json",
+        "sha256": null
+      }
+    ]
+  },
+  "authorized_scopes": [
+    "oid4vci-public-and-management-http",
+    "canvas-mirror-http",
+    "canvas-mirror-automation-loop"
+  ],
+  "authorized_native_http_deletions": [
+    {"method": "GET", "path": "/v1/issuance/authorize"},
+    {"method": "GET", "path": "/v1/issuance/credentials"},
+    {"method": "GET", "path": "/v1/issuance/delivery-records/canvas-credentials/provenance"},
+    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/canvas-mirror-health"},
+    {"method": "POST", "path": "/v1/issuance/deferred-credential"},
+    {"method": "POST", "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending"},
+    {"method": "POST", "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures"},
+    {"method": "POST", "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle"},
+    {"method": "POST", "path": "/v1/issuance/notification"},
+    {"method": "POST", "path": "/v1/issuance/par"},
+    {"method": "POST", "path": "/v1/issuance/transactions/{tx_id}/revoke"},
+    {"method": "POST", "path": "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish"},
+    {"method": "PUT", "path": "/v1/issuance/oid4vci-clients"}
+  ],
+  "retained_python_http": [
+    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention"},
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "required_packaged_main_lifecycle_gate": "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
+  "full_python_service_deletion_authorized": false
+}
