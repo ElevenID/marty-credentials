@@ -1,7 +1,9 @@
 # OID4VCI and Canvas mirror Python retirement
 
 Status: prepared locally; do not publish or deploy before the universal native
-ownership checkpoint in `ElevenID/marty-ui#844` lands.
+ownership checkpoint in `ElevenID/marty-ui#844` and demo qualification in
+`ElevenID/marty-ui#845` land. The cross-repository retirement qualification
+contract remains blocked with no pinned UI commit or artifact hashes.
 
 This checkpoint removes Python implementations only after their language-neutral
 contracts were implemented by the Rust issuance service. The paired contracts
@@ -9,6 +11,9 @@ are `contracts/issuance-oid4vci-authorization.json` and
 `contracts/issuance-canvas-mirror.json` in `marty-ui`. The retirement covers the
 seven frozen OID4VCI public/management routes and the six Canvas Credentials
 mirror publication, automation, health, and provenance routes.
+The rebased Credentials surface has 97 HTTP routes after those 13 deletions.
+It retains the `/ready` delivery-status compatibility route added by the later
+Credentials checkpoint, along with the legacy routes listed below.
 
 The deletion deliberately retains:
 
