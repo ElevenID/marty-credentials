@@ -320,7 +320,7 @@
     "route_count": 109,
     "routes": [
       {
-        "line": 928,
+        "line": 929,
         "method": "GET",
         "operation": "get_as_metadata",
         "path": "/.well-known/oauth-authorization-server",
@@ -328,7 +328,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 904,
+        "line": 905,
         "method": "GET",
         "operation": "get_org_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}",
@@ -336,7 +336,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 873,
+        "line": 874,
         "method": "GET",
         "operation": "get_org_apple_wallet_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet",
@@ -344,7 +344,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 842,
+        "line": 843,
         "method": "GET",
         "operation": "get_org_credential_manager_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}/credential-manager",
@@ -352,7 +352,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 731,
+        "line": 732,
         "method": "GET",
         "operation": "get_issuer_metadata_root",
         "path": "/.well-known/openid-credential-issuer",
@@ -360,7 +360,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 576,
+        "line": 577,
         "method": "GET",
         "operation": "get_org_issuer_metadata",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}",
@@ -368,7 +368,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 506,
+        "line": 507,
         "method": "GET",
         "operation": "get_org_issuer_metadata_apple_wallet",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet",
@@ -376,7 +376,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 443,
+        "line": 444,
         "method": "GET",
         "operation": "get_org_issuer_metadata_credential_manager",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}/credential-manager",
@@ -384,7 +384,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 812,
+        "line": 813,
         "method": "GET",
         "operation": "get_sd_jwt_vc_type_metadata",
         "path": "/credentials/{credential_type:path}",
@@ -392,7 +392,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 428,
+        "line": 429,
         "method": "GET",
         "operation": "health_check",
         "path": "/health",

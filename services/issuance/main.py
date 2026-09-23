@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.base import BaseHTTPMiddleware
 
 _VCDM_V2_CONTEXT = "https://www.w3.org/ns/credentials/v2"
+_CORS_ALLOWED_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
 
 # ── Staged-rollout feature flag ───────────────────────────────────────────────
 # Set VDSNC_RUST_ENABLED=false in an environment to suppress VDS-NC credential
@@ -409,7 +410,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=_cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=_CORS_ALLOWED_METHODS,
         allow_headers=["*"],
     )
     app.add_middleware(RequestIdMiddleware)

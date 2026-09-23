@@ -54,7 +54,7 @@
         },
         "status_code": 200,
         "response_headers": {
-          "vary": "Origin",
+          "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
           "access-control-allow-methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
           "access-control-max-age": "600",
           "access-control-allow-credentials": "true",
@@ -75,7 +75,7 @@
         },
         "status_code": 400,
         "response_headers": {
-          "vary": "Origin",
+          "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
           "access-control-allow-methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
           "access-control-max-age": "600",
           "access-control-allow-credentials": "true",
@@ -94,7 +94,7 @@
         },
         "status_code": 400,
         "response_headers": {
-          "vary": "Origin",
+          "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network",
           "access-control-allow-methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
           "access-control-max-age": "600",
           "access-control-allow-credentials": "true",
