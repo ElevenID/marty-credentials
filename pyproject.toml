@@ -32,7 +32,10 @@ dependencies = [
     "sqlalchemy>=2.0",
     "asyncpg>=0.29.0",
     "cryptography>=44.0.0",
-    "fastapi>=0.104.0",
+    "fastapi>=0.141.1",
+    # Preflight responses must vary on every request header that affects the
+    # CORS decision. Starlette 1.7.0 is the first release with that behavior.
+    "starlette>=1.7.0",
     "prometheus-client>=0.19.0",
     # FastAPI form endpoints import this parser at route-registration time.
     # Keep it explicit instead of relying on an unrelated framework wheel.
