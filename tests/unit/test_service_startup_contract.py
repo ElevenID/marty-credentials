@@ -362,7 +362,11 @@ async def test_health_remains_local_liveness_when_native_owner_is_unavailable(
 
     monkeypatch.setattr(main.httpx, "AsyncClient", UnexpectedClient)
     application = main.create_app()
-    health = next(route.endpoint for route in application.routes if route.path == "/health")
+    health = next(
+        route.endpoint
+        for route in application.routes
+        if getattr(route, "path", None) == "/health"
+    )
 
     assert await health() == {"status": "healthy", "service": main.SERVICE_NAME}
 
@@ -374,7 +378,11 @@ async def test_ready_endpoint_requires_selected_didcomm_owner(monkeypatch) -> No
     require_owner = AsyncMock()
     monkeypatch.setattr(main, "_require_didcomm_owner_ready", require_owner)
     application = main.create_app()
-    readiness = next(route.endpoint for route in application.routes if route.path == "/ready")
+    readiness = next(
+        route.endpoint
+        for route in application.routes
+        if getattr(route, "path", None) == "/ready"
+    )
 
     assert await readiness() == {"status": "ready", "service": main.SERVICE_NAME}
     require_owner.assert_awaited_once_with()
