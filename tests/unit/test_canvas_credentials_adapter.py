@@ -222,6 +222,19 @@ class TestCanvasEventMapping:
         assert evidence.passed is True
 
 
+def test_status_sync_timeout_preserves_legacy_publish_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from issuance.infrastructure.adapters import canvas_credentials_adapter
+
+    monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "37")
+    monkeypatch.delenv("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", raising=False)
+    assert canvas_credentials_adapter._status_sync_timeout_seconds() == 37.0
+
+    monkeypatch.setenv("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "11")
+    assert canvas_credentials_adapter._status_sync_timeout_seconds() == 11.0
+
+
 class TestCanvasSignatureVerification:
     def test_verify_canvas_signature_accepts_valid_signature(self) -> None:
         raw_body = json.dumps(_sample_event(), separators=(",", ":")).encode("utf-8")

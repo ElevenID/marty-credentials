@@ -199,6 +199,7 @@ def test_retained_issuance_regression_tests_are_not_deleted_with_route_tests() -
         "test_completed_renewal_supersedes_source_credential",
     }
     canvas_retained = {
+        "test_status_sync_timeout_preserves_legacy_publish_fallback",
         "test_map_canvas_event_to_mip_evidence_receipt_uses_application_primitive",
         "test_verify_canvas_signature_rejects_stale_timestamp",
         "test_validate_real_api_reports_missing_token",

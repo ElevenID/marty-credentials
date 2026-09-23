@@ -46,6 +46,10 @@ calling Rust-owned authorization, revocation, Canvas publication, and mirror
 operations are skipped; their language-neutral OID4VCI and Canvas contracts
 are exercised in `marty-ui`. The retirement guard checks that representative
 retained tests are neither deleted nor skipped with the old route tests.
+Status sync also retains its historical timeout fallback to
+`CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS` when no dedicated status-sync
+timeout is configured; removing the publisher must not silently change this
+still-owned behavior.
 
 ## Next linked retirement
 

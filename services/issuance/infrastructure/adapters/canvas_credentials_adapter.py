@@ -50,9 +50,18 @@ from pydantic import BaseModel, Field, ValidationError
 CANVAS_SIGNATURE_HEADER = "x-canvas-signature-256"
 CANVAS_TIMESTAMP_HEADER = "x-canvas-timestamp"
 _CANVAS_SIGNATURE_TOLERANCE_SECONDS = int(os.environ.get("CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS", "300"))
-_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS = float(
-    os.environ.get("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "20")
-)
+
+
+def _status_sync_timeout_seconds() -> float:
+    return float(
+        os.environ.get(
+            "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
+            os.environ.get("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "20"),
+        )
+    )
+
+
+_CANVAS_STATUS_SYNC_TIMEOUT_SECONDS = _status_sync_timeout_seconds()
 _CANVAS_CREDENTIALS_DEFAULT_API_BASE_URL = "https://api.badgr.io"
 _CANVAS_CREDENTIALS_REAL_PROVIDERS = {"badgr_api", "canvas_credentials_api"}
 CanvasSecretResolver = Callable[[str, str], Awaitable[str | None]]
