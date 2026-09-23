@@ -19,7 +19,7 @@ from issuance.infrastructure.adapters.postgres_repository import (  # noqa: E402
 
 
 @pytest.mark.asyncio
-async def test_real_postgres_capabilities_are_shared_digest_only_and_single_use() -> None:
+async def test_real_postgres_proof_nonces_are_shared_digest_only_and_single_use() -> None:
     database_url = os.environ.get("OID4VCI_CAPABILITY_TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("OID4VCI_CAPABILITY_TEST_DATABASE_URL is not configured")
@@ -60,15 +60,9 @@ async def test_real_postgres_capabilities_are_shared_digest_only_and_single_use(
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     creator = PostgresIssuanceRepository(session_factory)
     consumer = PostgresIssuanceRepository(session_factory)
-    request_uri = "urn:ietf:params:oauth:request_uri:cross-instance-secret"
     nonce = "cross-instance-wallet-proof-nonce"
 
     try:
-        assert await creator.save_pushed_authorization_request(
-            request_uri,
-            {"client_id": "wallet", "organization_id": "org-a"},
-            ttl_seconds=90,
-        )
         assert await creator.save_proof_nonce(nonce, ttl_seconds=300)
 
         async with session_factory() as session:
@@ -85,16 +79,9 @@ async def test_real_postgres_capabilities_are_shared_digest_only_and_single_use(
                 .all()
             )
         assert {row["key_digest"] for row in rows} == {
-            hashlib.sha256(request_uri.encode()).hexdigest(),
             hashlib.sha256(nonce.encode()).hexdigest(),
         }
-        assert all(request_uri not in str(row) and nonce not in str(row) for row in rows)
-
-        assert await consumer.consume_pushed_authorization_request(request_uri) == {
-            "client_id": "wallet",
-            "organization_id": "org-a",
-        }
-        assert await creator.consume_pushed_authorization_request(request_uri) is None
+        assert all(nonce not in str(row) for row in rows)
 
         contenders = [PostgresIssuanceRepository(session_factory) for _ in range(12)]
         winners = await asyncio.gather(*(repo.consume_proof_nonce(nonce) for repo in contenders))

@@ -15,7 +15,6 @@ from issuance.domain.entities import (
     IssuedCredential,
 )
 from issuance.infrastructure.adapters.canvas_credentials_adapter import (
-    publish_canvas_credential_mirror,
     sync_canvas_credential_status,
 )
 from issuance.infrastructure.adapters.memory_repository import (
@@ -245,7 +244,7 @@ async def test_pending_oauth_callback_is_consumed_without_token_exchange(
 
 
 @pytest.mark.asyncio
-async def test_canvas_credentials_delivery_and_status_network_are_blocked() -> None:
+async def test_canvas_credentials_status_network_is_blocked() -> None:
     credential = IssuedCredential(
         id="credential-1",
         transaction_id="transaction-1",
@@ -269,13 +268,6 @@ async def test_canvas_credentials_delivery_and_status_network_are_blocked() -> N
         delivery_target=DeliveryTarget.CANVAS_CREDENTIALS,
     )
 
-    with pytest.raises(RuntimeError, match="delivery is not enabled"):
-        await publish_canvas_credential_mirror(
-            credential=credential,
-            transaction=transaction,
-            platform=platform,
-            delivery_record=delivery,
-        )
     with pytest.raises(RuntimeError, match="delivery is not enabled"):
         await sync_canvas_credential_status(
             credential=credential,

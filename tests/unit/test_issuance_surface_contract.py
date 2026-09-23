@@ -32,7 +32,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "6ed786dd9b15806be26e38b5d41a74d8e66c628568fab25628b54f4d1f1405ba"
+        "59e9870d7d553d63bef2fabef484e9edf8be3a039f3b29eaa2106e52b3e4e6bd"
     )
 
 
@@ -40,7 +40,9 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
     contract = surface.build_contract()
 
     assert contract["schema"] == "marty.issuance-runtime-surface/v1"
-    assert contract["http"]["route_count"] == 110
+    # The delivery-status compatibility checkpoint added /ready; retirement
+    # removes only the 13 Rust-owned OID4VCI and Canvas mirror routes.
+    assert contract["http"]["route_count"] == 97
     assert contract["grpc"]["method_count"] == 12
     assert {mode["name"] for mode in contract["runtime"]["modes"]} == {
         "api",

@@ -10,7 +10,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import HTTPException
@@ -50,12 +50,8 @@ from pydantic import BaseModel, Field, ValidationError
 CANVAS_SIGNATURE_HEADER = "x-canvas-signature-256"
 CANVAS_TIMESTAMP_HEADER = "x-canvas-timestamp"
 _CANVAS_SIGNATURE_TOLERANCE_SECONDS = int(os.environ.get("CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS", "300"))
-_CANVAS_PUBLISH_TIMEOUT_SECONDS = float(os.environ.get("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "20"))
 _CANVAS_STATUS_SYNC_TIMEOUT_SECONDS = float(
-    os.environ.get(
-        "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS",
-        str(_CANVAS_PUBLISH_TIMEOUT_SECONDS),
-    )
+    os.environ.get("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "20")
 )
 _CANVAS_CREDENTIALS_DEFAULT_API_BASE_URL = "https://api.badgr.io"
 _CANVAS_CREDENTIALS_REAL_PROVIDERS = {"badgr_api", "canvas_credentials_api"}
@@ -180,14 +176,6 @@ class CanvasEvidenceEventResponse(BaseModel):
     policy_decision: dict[str, Any] | None = None
 
 
-class CanvasCredentialsPublishResult(BaseModel):
-    """Normalized result from an outbound Canvas Credentials publish attempt."""
-
-    external_credential_id: str | None = None
-    external_issuer_id: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
 class CanvasCredentialsStatusSyncResult(BaseModel):
     """Normalized result from an outbound Canvas Credentials lifecycle sync."""
 
@@ -299,13 +287,6 @@ def _truncate_text(value: str, limit: int = 1000) -> str:
     if len(value) <= limit:
         return value
     return f"{value[:limit]}…"
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _canvas_credentials_provider(delivery_record: CredentialDeliveryRecord | None = None) -> str:
@@ -436,49 +417,6 @@ def _first_non_empty_string(*values: object) -> str | None:
     return None
 
 
-def _first_badgr_result(response_payload: dict[str, Any]) -> dict[str, Any]:
-    result = response_payload.get("result")
-    if isinstance(result, list) and result:
-        first = result[0]
-        return first if isinstance(first, dict) else {}
-    if isinstance(result, dict):
-        return result
-    data = response_payload.get("data")
-    if isinstance(data, list) and data:
-        first = data[0]
-        return first if isinstance(first, dict) else {}
-    if isinstance(data, dict):
-        return data
-    return response_payload if isinstance(response_payload, dict) else {}
-
-
-def _extract_badgr_assertion_id(response_payload: dict[str, Any]) -> str | None:
-    assertion = _first_badgr_result(response_payload)
-    value = (
-        assertion.get("entityId")
-        or assertion.get("id")
-        or assertion.get("openBadgeId")
-        or ((assertion.get("assertionRef") or {}).get("assertionUrl") if isinstance(assertion.get("assertionRef"), dict) else None)
-    )
-    return str(value) if value is not None else None
-
-
-def _extract_badgr_issuer_id(response_payload: dict[str, Any], fallback: str | None) -> str | None:
-    assertion = _first_badgr_result(response_payload)
-    value = assertion.get("issuer") or assertion.get("issuerOpenBadgeId") or fallback
-    return str(value) if value is not None else None
-
-
-def _extract_badgr_public_assertion_url(response_payload: dict[str, Any]) -> str | None:
-    assertion = _first_badgr_result(response_payload)
-    value = (
-        assertion.get("openBadgeId")
-        or ((assertion.get("assertionRef") or {}).get("assertionUrl") if isinstance(assertion.get("assertionRef"), dict) else None)
-        or assertion.get("sourceUrl")
-    )
-    return str(value) if value is not None else None
-
-
 def _canvas_credentials_assertion_scope(delivery_record: CredentialDeliveryRecord | None = None) -> str:
     scope = (
         _canvas_credentials_config_value(
@@ -520,30 +458,6 @@ def _canvas_credentials_issuer_id(delivery_record: CredentialDeliveryRecord) -> 
     )
 
 
-def _badgr_assertion_url(
-    *,
-    scope: str,
-    badgeclass_id: str,
-    issuer_id: str | None,
-    api_base_url: str,
-) -> str:
-    template = (os.environ.get("CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE") or "").strip()
-    if template:
-        return template.format(
-            api_base_url=api_base_url,
-            scope=quote(scope, safe=""),
-            badgeclass_id=quote(badgeclass_id, safe=""),
-            issuer_id=quote(issuer_id or "", safe=""),
-        )
-    id_or_entity_id = issuer_id if scope == "issuers" else badgeclass_id
-    if not id_or_entity_id:
-        raise RuntimeError("CANVAS_CREDENTIALS_ISSUER_ID is required when assertion scope is 'issuers'")
-    return (
-        f"{api_base_url}"
-        f"/v2/{quote(scope, safe='')}/{quote(id_or_entity_id, safe='')}/assertions"
-    )
-
-
 def _badgr_validation_url(
     *,
     delivery_record: CredentialDeliveryRecord,
@@ -581,171 +495,6 @@ def _badgr_revoke_url(external_credential_id: str, *, api_base_url: str) -> str:
         f"{api_base_url}"
         f"/v2/assertions/{quote(external_credential_id, safe='')}"
     )
-
-
-def _public_marty_base_url() -> str:
-    for name in (
-        "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
-        "MARTY_ISSUER_BASE_URL",
-        "ISSUER_BASE_URL",
-        "PUBLIC_API_URL",
-        "PUBLIC_BASE_URL",
-    ):
-        value = (os.environ.get(name) or "").strip().rstrip("/")
-        if value:
-            return value
-    raise RuntimeError(
-        "Canvas Credentials verification base URL is required; set "
-        "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL or a public issuer/base URL"
-    )
-
-
-def _build_elevenid_provenance_url(
-    *,
-    credential: IssuedCredential,
-    platform: CanvasPlatform,
-    delivery_record: CredentialDeliveryRecord,
-) -> str:
-    params = {
-        "delivery_record_id": delivery_record.id,
-        "credential_id": credential.id,
-    }
-    if platform.canvas_account_id:
-        params["canvas_account_id"] = platform.canvas_account_id
-    if credential.organization_id:
-        params["organization_id"] = credential.organization_id
-    return f"{_public_marty_base_url()}/console/org/operate/verify?{urlencode(params)}"
-
-
-def _canvas_credentials_recipient_identity(
-    *,
-    transaction: IssuanceTransaction,
-    delivery_record: CredentialDeliveryRecord,
-) -> str:
-    claims = transaction.claims or {}
-    metadata = delivery_record.metadata or {}
-    identity = _first_non_empty_string(
-        metadata.get("recipient_email"),
-        metadata.get("learner_email"),
-        metadata.get("canvas_learner_email"),
-        claims.get("email"),
-        claims.get("learner_email"),
-        claims.get("recipient_email"),
-        claims.get("holder_email"),
-        claims.get("lis_person_contact_email_primary"),
-    )
-    if not identity:
-        raise RuntimeError("Canvas Credentials publish requires a recipient email in transaction claims or delivery metadata")
-    return identity
-
-
-def _build_badgr_assertion_payload(
-    *,
-    credential: IssuedCredential,
-    transaction: IssuanceTransaction,
-    platform: CanvasPlatform,
-    delivery_record: CredentialDeliveryRecord,
-    badgeclass_id: str,
-    scope: str,
-) -> dict[str, Any]:
-    claims = transaction.claims or {}
-    provenance_url = _build_elevenid_provenance_url(
-        credential=credential,
-        platform=platform,
-        delivery_record=delivery_record,
-    )
-    narrative = _first_non_empty_string(
-        os.environ.get("CANVAS_CREDENTIALS_ASSERTION_NARRATIVE"),
-        claims.get("achievement_description"),
-        claims.get("description"),
-        "Issued by ElevenID from verified Canvas course activity.",
-    )
-    payload: dict[str, Any] = {
-        "issuedOn": credential.issued_at.isoformat(),
-        "recipient": {
-            "identity": _canvas_credentials_recipient_identity(
-                transaction=transaction,
-                delivery_record=delivery_record,
-            ),
-            "type": "email",
-            "hashed": _env_bool("CANVAS_CREDENTIALS_RECIPIENT_HASHED", True),
-        },
-        "allowDuplicateAwards": _env_bool("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", False),
-        "narrative": narrative,
-        "evidence": [
-            {
-                "url": provenance_url,
-                "name": "ElevenID canonical credential record",
-                "description": "Links this Canvas Credentials badge to the canonical ElevenID issuance, issuer DID, and lifecycle status.",
-                "narrative": "Canvas was the learning context; ElevenID holds the signed credential, issuer identity, and revocation status.",
-                "genre": "Credential provenance",
-                "audience": "Verifiers and employers",
-            }
-        ],
-        "extensions": {
-            "value": {
-                "elevenid": {
-                    "credential_id": credential.id,
-                    "credential_hash": credential.credential_hash,
-                    "issuer_did": credential.issuer_did or transaction.issuer_did_override,
-                    "delivery_record_id": delivery_record.id,
-                    "canvas_account_id": platform.canvas_account_id,
-                    "provenance_url": provenance_url,
-                },
-            }
-        },
-    }
-    if scope == "issuers":
-        payload["badgeclass"] = badgeclass_id
-    if credential.expires_at:
-        payload["expires"] = credential.expires_at.isoformat()
-    ob3_award_properties = claims.get("ob3AwardProperties")
-    if isinstance(ob3_award_properties, dict):
-        payload["ob3AwardProperties"] = ob3_award_properties
-    return payload
-
-
-def _build_canvas_publish_payload(
-    *,
-    credential: IssuedCredential,
-    transaction: IssuanceTransaction,
-    platform: CanvasPlatform,
-    delivery_record: CredentialDeliveryRecord,
-    issuer_id: str | None,
-) -> dict[str, Any]:
-    return {
-        "issuer_id": issuer_id,
-        "organization_id": credential.organization_id or transaction.organization_id,
-        "canvas_platform_id": platform.id,
-        "canvas_program_binding_id": (delivery_record.metadata or {}).get("canvas_program_binding_id"),
-        "canvas_account_id": platform.canvas_account_id,
-        "canvas_base_url": platform.canvas_base_url,
-        "credential": {
-            "id": credential.id,
-            "transaction_id": transaction.id,
-            "credential_template_id": credential.credential_template_id,
-            "format": transaction.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
-            "jwt": credential.credential_jwt,
-            "hash": credential.credential_hash,
-            "issuer_did": credential.issuer_did or transaction.issuer_did_override,
-            "revocation_profile_id": credential.revocation_profile_id,
-            "status_list_entries": credential.status_list_entries,
-            "issued_at": credential.issued_at.isoformat(),
-            "expires_at": credential.expires_at.isoformat() if credential.expires_at else None,
-        },
-        "recipient": {
-            "applicant_id": credential.applicant_id or transaction.applicant_id,
-            "subject_did": credential.subject_did or transaction.subject_did,
-        },
-        "source": {
-            "delivery_record_id": delivery_record.id,
-            "delivery_mode": delivery_record.delivery_mode,
-            "application_id": transaction.application_id,
-        },
-        "metadata": _sanitize_canvas_credentials_outbound_metadata(
-            delivery_record.metadata or {}
-        ),
-    }
 
 
 def _build_canvas_status_sync_payload(
@@ -806,18 +555,6 @@ _CANVAS_CREDENTIAL_SECRET_SELECTOR_KEYS = {
     "canvas_credentials_api_token_secret_id",
     "canvas_credentials_api_token_secret_ref",
 }
-
-
-def _sanitize_canvas_credentials_outbound_metadata(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key): _sanitize_canvas_credentials_outbound_metadata(item)
-            for key, item in value.items()
-            if str(key) not in _CANVAS_CREDENTIAL_SECRET_SELECTOR_KEYS
-        }
-    if isinstance(value, list):
-        return [_sanitize_canvas_credentials_outbound_metadata(item) for item in value]
-    return value
 
 
 async def validate_canvas_credentials_config(
@@ -945,87 +682,6 @@ async def validate_canvas_credentials_config(
     )
 
 
-async def _publish_canvas_badgr_assertion(
-    *,
-    credential: IssuedCredential,
-    transaction: IssuanceTransaction,
-    platform: CanvasPlatform,
-    delivery_record: CredentialDeliveryRecord,
-    secret_resolver: CanvasSecretResolver | None = None,
-) -> CanvasCredentialsPublishResult:
-    api_token = await _canvas_credentials_secret_value(
-        delivery_record,
-        default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
-        secret_resolver=secret_resolver,
-    )
-    if not api_token:
-        raise RuntimeError("CANVAS_CREDENTIALS_API_TOKEN is required for real Canvas Credentials publish")
-
-    api_base_url = _normalize_canvas_credentials_api_base_url(delivery_record)
-    scope = _canvas_credentials_assertion_scope(delivery_record)
-    badgeclass_id = _canvas_credentials_badgeclass_id(delivery_record)
-    issuer_id = _canvas_credentials_issuer_id(delivery_record)
-    assertion_url = _badgr_assertion_url(
-        scope=scope,
-        badgeclass_id=badgeclass_id,
-        issuer_id=issuer_id,
-        api_base_url=api_base_url,
-    )
-    payload = _build_badgr_assertion_payload(
-        credential=credential,
-        transaction=transaction,
-        platform=platform,
-        delivery_record=delivery_record,
-        badgeclass_id=badgeclass_id,
-        scope=scope,
-    )
-    headers = _canvas_credentials_headers(api_token)
-
-    try:
-        async with canvas_http_client(timeout=_CANVAS_PUBLISH_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                assertion_url,
-                json=payload,
-                headers=headers,
-            )
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        body = _truncate_text(exc.response.text or "")
-        raise RuntimeError(
-            f"Canvas Credentials assertion publish failed (HTTP {exc.response.status_code}): {body}"
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"Canvas Credentials assertion publish request failed: {exc}") from exc
-
-    response_payload = _response_json_or_excerpt(response)
-    open_badge_url = _extract_badgr_public_assertion_url(response_payload)
-    external_credential_id = _extract_badgr_assertion_id(response_payload)
-    if not external_credential_id:
-        raise RuntimeError("Canvas Credentials assertion publish response did not include an assertion id")
-    return CanvasCredentialsPublishResult(
-        external_credential_id=external_credential_id,
-        external_issuer_id=_extract_badgr_issuer_id(response_payload, issuer_id),
-        metadata={
-            "provider": "badgr_api",
-            "api_base_url": api_base_url,
-            "assertion_scope": scope,
-            "badgeclass_id": badgeclass_id,
-            "publish_url": assertion_url,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "http_status": response.status_code,
-            "publish_response": response_payload,
-            "request_id": response.headers.get("x-request-id"),
-            "credential_url": open_badge_url,
-            "open_badge_id": open_badge_url,
-            "provenance_url": _build_elevenid_provenance_url(
-                credential=credential,
-                platform=platform,
-                delivery_record=delivery_record,
-            ),
-        },
-    )
-
-
 async def _sync_canvas_badgr_assertion_status(
     *,
     credential: IssuedCredential,
@@ -1135,93 +791,6 @@ def _require_canvas_delivery_ownership(
     )
     if organization_ids != {organization_id} or not identifiers_match:
         raise RuntimeError("Canvas delivery resources are unavailable")
-
-
-async def publish_canvas_credential_mirror(
-    *,
-    credential: IssuedCredential,
-    transaction: IssuanceTransaction,
-    platform: CanvasPlatform,
-    delivery_record: CredentialDeliveryRecord,
-    secret_resolver: CanvasSecretResolver | None = None,
-) -> CanvasCredentialsPublishResult:
-    """Publish a canonical issued credential to the Canvas Credentials bridge/API."""
-
-    if not portable_canvas_enabled_for_organization(delivery_record.organization_id):
-        raise RuntimeError(
-            "Portable Canvas delivery is not enabled for this organization"
-        )
-    _require_canvas_delivery_ownership(
-        credential=credential,
-        transaction=transaction,
-        platform=platform,
-        delivery_record=delivery_record,
-    )
-    if _is_real_canvas_credentials_provider(delivery_record):
-        return await _publish_canvas_badgr_assertion(
-            credential=credential,
-            transaction=transaction,
-            platform=platform,
-            delivery_record=delivery_record,
-            secret_resolver=secret_resolver,
-        )
-
-    publish_url = _normalize_publish_url()
-    api_token = await _canvas_credentials_secret_value(
-        delivery_record,
-        default_secret_name="CANVAS_CREDENTIALS_API_TOKEN",
-        secret_resolver=secret_resolver,
-    )
-    issuer_id = _canvas_credentials_issuer_id(delivery_record)
-    payload = _build_canvas_publish_payload(
-        credential=credential,
-        transaction=transaction,
-        platform=platform,
-        delivery_record=delivery_record,
-        issuer_id=issuer_id,
-    )
-    headers = _canvas_credentials_headers(api_token)
-
-    try:
-        async with canvas_http_client(timeout=_CANVAS_PUBLISH_TIMEOUT_SECONDS) as client:
-            response = await client.post(publish_url, json=payload, headers=headers)
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        body = _truncate_text(exc.response.text or "")
-        raise RuntimeError(
-            f"Canvas Credentials publish failed (HTTP {exc.response.status_code}): {body}"
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise RuntimeError(f"Canvas Credentials publish request failed: {exc}") from exc
-
-    response_payload = _response_json_or_excerpt(response)
-    external_credential_id = None
-    external_issuer_id = issuer_id
-    if isinstance(response_payload, dict):
-        external_credential_id = (
-            response_payload.get("credential_id")
-            or response_payload.get("id")
-            or ((response_payload.get("credential") or {}).get("id") if isinstance(response_payload.get("credential"), dict) else None)
-            or ((response_payload.get("data") or {}).get("id") if isinstance(response_payload.get("data"), dict) else None)
-        )
-        external_issuer_id = (
-            response_payload.get("issuer_id")
-            or ((response_payload.get("issuer") or {}).get("id") if isinstance(response_payload.get("issuer"), dict) else None)
-            or ((response_payload.get("data") or {}).get("issuer_id") if isinstance(response_payload.get("data"), dict) else None)
-            or issuer_id
-        )
-
-    return CanvasCredentialsPublishResult(
-        external_credential_id=str(external_credential_id) if external_credential_id is not None else None,
-        external_issuer_id=str(external_issuer_id) if external_issuer_id is not None else None,
-        metadata={
-            "publish_url": publish_url,
-            "published_at": datetime.now(timezone.utc).isoformat(),
-            "http_status": response.status_code,
-            "publish_response": response_payload,
-            "request_id": response.headers.get("x-request-id"),
-        },
-    )
 
 
 async def sync_canvas_credential_status(

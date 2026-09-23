@@ -333,15 +333,6 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             copy.deepcopy(tx) for tx in self._transactions.values() if tx.organization_id == org_id
         ]
 
-    async def save_oid4vci_client(self, client: Oid4vciRegisteredClient) -> None:
-        key = (client.organization_id, client.client_id)
-        existing = self._oid4vci_clients.get(key)
-        stored = copy.deepcopy(client)
-        if existing is not None:
-            stored.created_at = existing.created_at
-        stored.updated_at = datetime.now(UTC)
-        self._oid4vci_clients[key] = stored
-
     async def get_oid4vci_client(
         self,
         organization_id: str,
@@ -415,30 +406,6 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         if entry is None or entry[0] <= time.monotonic():
             return False, None
         return True, copy.deepcopy(entry[1])
-
-    async def save_pushed_authorization_request(
-        self,
-        request_uri: str,
-        params: dict[str, Any],
-        *,
-        ttl_seconds: int,
-    ) -> bool:
-        return await self._save_ephemeral_capability(
-            purpose="par",
-            value=request_uri,
-            payload=params,
-            ttl_seconds=ttl_seconds,
-        )
-
-    async def consume_pushed_authorization_request(
-        self,
-        request_uri: str,
-    ) -> dict[str, Any] | None:
-        live, payload = await self._consume_ephemeral_capability(
-            purpose="par",
-            value=request_uri,
-        )
-        return payload if live and isinstance(payload, dict) else None
 
     async def save_proof_nonce(self, nonce: str, *, ttl_seconds: int) -> bool:
         return await self._save_ephemeral_capability(

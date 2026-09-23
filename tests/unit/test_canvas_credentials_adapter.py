@@ -45,7 +45,6 @@ from issuance.infrastructure.adapters.canvas_credentials_adapter import (
     process_canvas_ags_score_event,
     process_canvas_evidence_event,
     process_canvas_nrps_membership_event,
-    publish_canvas_credential_mirror,
     sync_canvas_credential_status,
     validate_canvas_credentials_config,
     verify_canvas_signature,
@@ -338,198 +337,12 @@ class TestCanvasCredentialsRealApi:
         platform.organization_id = "org-foreign"
 
         with pytest.raises(RuntimeError, match="resources are unavailable"):
-            await publish_canvas_credential_mirror(
-                credential=self._issued_credential(),
-                transaction=self._transaction(),
-                platform=platform,
-                delivery_record=self._delivery_record(),
-            )
-        with pytest.raises(RuntimeError, match="resources are unavailable"):
             await sync_canvas_credential_status(
                 credential=self._issued_credential(),
                 platform=platform,
                 delivery_record=self._delivery_record(),
                 lifecycle_action="suspend",
             )
-
-    async def test_publish_posts_badgr_assertion_payload(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from issuance.infrastructure.adapters import canvas_credentials_adapter
-
-        monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
-        monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "badgr_api")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_API_BASE_URL", "https://api.badgr.test")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_API_TOKEN", "real-token")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_ISSUER_ID", "issuer-entity-1")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_BADGECLASS_ID", "badgeclass-entity-1")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_PROVENANCE_BASE_URL", "https://beta.elevenidllc.com")
-
-        captured: dict[str, object] = {}
-
-        class FakeResponse:
-            status_code = 201
-            headers = {"x-request-id": "req-real-1"}
-            text = "{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {
-                    "result": [
-                        {
-                            "entityId": "assertion-entity-1",
-                            "openBadgeId": "https://api.badgr.test/public/assertions/assertion-entity-1",
-                            "issuer": "issuer-entity-1",
-                        }
-                    ]
-                }
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs):
-                captured["timeout"] = kwargs.get("timeout")
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                return None
-
-            async def post(self, url, json=None, headers=None):
-                captured["url"] = url
-                captured["json"] = json
-                captured["headers"] = headers
-                return FakeResponse()
-
-        monkeypatch.setattr(canvas_credentials_adapter, "canvas_http_client", FakeClient)
-
-        result = await publish_canvas_credential_mirror(
-            credential=self._issued_credential(),
-            transaction=self._transaction(),
-            platform=self._platform(),
-            delivery_record=self._delivery_record(),
-        )
-
-        assert result.external_credential_id == "assertion-entity-1"
-        assert result.external_issuer_id == "issuer-entity-1"
-        assert result.metadata["provider"] == "badgr_api"
-        assert result.metadata["badgeclass_id"] == "badgeclass-entity-1"
-        assert (
-            result.metadata["credential_url"]
-            == "https://api.badgr.test/public/assertions/assertion-entity-1"
-        )
-        assert (
-            captured["url"]
-            == "https://api.badgr.test/v2/badgeclasses/badgeclass-entity-1/assertions"
-        )
-        assert captured["headers"] == {
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": "Bearer real-token",
-        }
-        payload = captured["json"]
-        assert payload["recipient"] == {
-            "identity": "learner@example.edu",
-            "type": "email",
-            "hashed": True,
-        }
-        assert payload["allowDuplicateAwards"] is False
-        assert payload["evidence"][0]["url"].startswith(
-            "https://beta.elevenidllc.com/console/org/operate/verify?"
-        )
-        assert payload["extensions"]["value"]["elevenid"]["credential_id"] == "cred-real-1"
-
-    async def test_publish_can_use_delivery_record_canvas_credentials_config(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        from issuance.infrastructure.adapters import canvas_credentials_adapter
-
-        monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "bridge")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_URL", "https://bridge.example/publish")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_API_BASE_URL", "https://api.global.badgr.test")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_API_TOKEN", "global-token")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_BADGECLASS_ID", "global-badgeclass")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_PROVENANCE_BASE_URL", "https://verify.example")
-        monkeypatch.setenv(
-            "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
-            "https://api.record.badgr.test",
-        )
-
-        record = self._delivery_record()
-        record.metadata["canvas_credentials"] = {
-            "provider": "badgr_api",
-            "api_base_url": "https://api.record.badgr.test",
-            "api_token_secret_id": "record-secret",
-            "issuer_id": "issuer-record-1",
-            "badgeclass_id": "badgeclass-record-1",
-            "assertion_scope": "badgeclasses",
-        }
-
-        captured: dict[str, object] = {}
-
-        class FakeResponse:
-            status_code = 201
-            headers = {"x-request-id": "req-record-1"}
-            text = "{}"
-
-            def raise_for_status(self):
-                return None
-
-            def json(self):
-                return {
-                    "result": [
-                        {
-                            "entityId": "assertion-record-1",
-                            "openBadgeId": "https://api.record.badgr.test/public/assertions/assertion-record-1",
-                            "issuer": "issuer-record-1",
-                        }
-                    ]
-                }
-
-        class FakeClient:
-            def __init__(self, *args, **kwargs):
-                captured["timeout"] = kwargs.get("timeout")
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                return None
-
-            async def post(self, url, json=None, headers=None):
-                captured["url"] = url
-                captured["json"] = json
-                captured["headers"] = headers
-                return FakeResponse()
-
-        monkeypatch.setattr(canvas_credentials_adapter, "canvas_http_client", FakeClient)
-
-        async def resolve_secret(organization_id: str, secret_id: str) -> str | None:
-            assert organization_id == "org-123"
-            assert secret_id == "record-secret"
-            return "record-token"
-
-        result = await publish_canvas_credential_mirror(
-            credential=self._issued_credential(),
-            transaction=self._transaction(),
-            platform=self._platform(),
-            delivery_record=record,
-            secret_resolver=resolve_secret,
-        )
-
-        assert result.external_credential_id == "assertion-record-1"
-        assert result.metadata["api_base_url"] == "https://api.record.badgr.test"
-        assert result.metadata["badgeclass_id"] == "badgeclass-record-1"
-        assert (
-            captured["url"]
-            == "https://api.record.badgr.test/v2/badgeclasses/badgeclass-record-1/assertions"
-        )
-        assert captured["headers"]["Authorization"] == "Bearer record-token"
-        assert (
-            captured["json"]["extensions"]["value"]["elevenid"]["delivery_record_id"] == record.id
-        )
 
     async def test_validate_real_api_uses_delivery_record_canvas_credentials_config(
         self,
@@ -644,24 +457,6 @@ class TestCanvasCredentialsRealApi:
         assert result.ok is False
         assert result.token_configured is False
         assert "CANVAS_CREDENTIALS_API_TOKEN" in (result.error or "")
-
-    async def test_publish_real_api_requires_badgeclass(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
-        monkeypatch.delenv("CANVAS_CREDENTIALS_BADGECLASS_ID", raising=False)
-        monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "badgr_api")
-        monkeypatch.setenv("CANVAS_CREDENTIALS_API_TOKEN", "real-token")
-
-        with pytest.raises(RuntimeError) as excinfo:
-            await publish_canvas_credential_mirror(
-                credential=self._issued_credential(),
-                transaction=self._transaction(),
-                platform=self._platform(),
-                delivery_record=self._delivery_record(),
-            )
-
-        assert "CANVAS_CREDENTIALS_BADGECLASS_ID" in str(excinfo.value)
 
     async def test_revoke_real_api_deletes_badgr_assertion(
         self, monkeypatch: pytest.MonkeyPatch
