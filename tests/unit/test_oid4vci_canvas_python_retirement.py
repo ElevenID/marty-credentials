@@ -183,3 +183,34 @@ def test_storage_history_and_didcomm_kms_follow_up_remain() -> None:
         encoding="utf-8"
     )
     assert "DIDCOMM-KMS-001" in outstanding
+
+
+def test_retained_issuance_regression_tests_are_not_deleted_with_route_tests() -> None:
+    tree = ast.parse((ROOT / "tests" / "test_issuance_changes.py").read_text(encoding="utf-8"))
+    retained = {
+        "test_dpop_proof_is_bound_to_its_key_token_and_endpoint",
+        "test_dpop_accepts_ps256_rsa_proofs_used_by_oidf_conformance",
+        "test_root_issuer_metadata_advertises_selectable_oid4vci_formats",
+        "test_postgres_transaction_mapper_preserves_lifecycle_dependencies",
+        "test_issuer_profile_mdoc_signing_uses_only_trusted_certificate_chain",
+        "test_post_issuance_records_wallet_and_pending_canvas_mirror",
+        "test_revoke_syncs_delivered_canvas_mirror",
+        "test_transaction_id_substitution_fails_closed",
+        "test_renewal_offer_links_new_transaction_to_source_credential",
+        "test_completed_renewal_supersedes_source_credential",
+    }
+    tests = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert retained <= tests.keys()
+    for name in retained:
+        assert all("skip" not in ast.unparse(mark) for mark in tests[name].decorator_list)
+    for owner in tree.body:
+        if isinstance(owner, ast.ClassDef) and any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and child.name in retained
+            for child in owner.body
+        ):
+            assert all("skip" not in ast.unparse(mark) for mark in owner.decorator_list)
