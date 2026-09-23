@@ -186,8 +186,7 @@ def test_storage_history_and_didcomm_kms_follow_up_remain() -> None:
 
 
 def test_retained_issuance_regression_tests_are_not_deleted_with_route_tests() -> None:
-    tree = ast.parse((ROOT / "tests" / "test_issuance_changes.py").read_text(encoding="utf-8"))
-    retained = {
+    issuance_retained = {
         "test_dpop_proof_is_bound_to_its_key_token_and_endpoint",
         "test_dpop_accepts_ps256_rsa_proofs_used_by_oidf_conformance",
         "test_root_issuer_metadata_advertises_selectable_oid4vci_formats",
@@ -199,18 +198,31 @@ def test_retained_issuance_regression_tests_are_not_deleted_with_route_tests() -
         "test_renewal_offer_links_new_transaction_to_source_credential",
         "test_completed_renewal_supersedes_source_credential",
     }
-    tests = {
-        node.name: node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    canvas_retained = {
+        "test_map_canvas_event_to_mip_evidence_receipt_uses_application_primitive",
+        "test_verify_canvas_signature_rejects_stale_timestamp",
+        "test_validate_real_api_reports_missing_token",
+        "test_tenant_metadata_cannot_select_environment_or_file_secrets",
+        "test_process_canvas_evidence_event_attaches_application_evidence_and_replays",
+        "test_process_canvas_evidence_event_policy_denies_wrong_scope",
     }
-    assert retained <= tests.keys()
-    for name in retained:
-        assert all("skip" not in ast.unparse(mark) for mark in tests[name].decorator_list)
-    for owner in tree.body:
-        if isinstance(owner, ast.ClassDef) and any(
-            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and child.name in retained
-            for child in owner.body
-        ):
-            assert all("skip" not in ast.unparse(mark) for mark in owner.decorator_list)
+    for path, retained in (
+        (ROOT / "tests" / "test_issuance_changes.py", issuance_retained),
+        (ROOT / "tests" / "unit" / "test_canvas_credentials_adapter.py", canvas_retained),
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        tests = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert retained <= tests.keys()
+        for name in retained:
+            assert all("skip" not in ast.unparse(mark) for mark in tests[name].decorator_list)
+        for owner in tree.body:
+            if isinstance(owner, ast.ClassDef) and any(
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name in retained
+                for child in owner.body
+            ):
+                assert all("skip" not in ast.unparse(mark) for mark in owner.decorator_list)

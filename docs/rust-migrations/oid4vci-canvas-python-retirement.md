@@ -38,13 +38,14 @@ worker, publication, and repository-writer surfaces from returning while also
 asserting that the retained lifecycle, validation, evidence, storage, worker,
 and DIDComm boundaries remain available.
 
-The broad issuance regression module remains in place: its DPoP, issuer
-metadata, transaction/lifecycle, signing, delivery-record, and tenant-isolation
-checks still cover Python behavior that has **not** retired. Only historical
-tests calling the 13 Rust-owned HTTP routes are skipped in that module; their
-language-neutral OID4VCI and Canvas contracts are exercised in `marty-ui`.
-The retirement guard also checks that representative retained test cases are
-not accidentally deleted with the old route tests.
+The broad issuance and Canvas adapter regression modules remain in place.
+Their DPoP, issuer metadata, transaction/lifecycle, signing, delivery-record,
+tenant-isolation, Canvas evidence, signature, and provider-validation checks
+still cover Python behavior that has **not** retired. Only historical tests
+calling Rust-owned authorization, revocation, Canvas publication, and mirror
+operations are skipped; their language-neutral OID4VCI and Canvas contracts
+are exercised in `marty-ui`. The retirement guard checks that representative
+retained tests are neither deleted nor skipped with the old route tests.
 
 ## Next linked retirement
 
