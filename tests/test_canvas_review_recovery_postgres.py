@@ -43,6 +43,28 @@ NEW_HEAD = "canvas_review_recovery_claim"
 CONSTRAINT = "ck_evidence_policy_reviews_resolution_claim"
 
 
+class _HistoricalSchemaRepository(PostgresIssuanceRepository):
+    """Replay the historical audit insert while the test pins an old schema.
+
+    The current repository writes the later issuance-event owner column. This
+    migration oracle deliberately downgrades below that column and must keep
+    testing review recovery without pretending the old schema contains it.
+    """
+
+    @staticmethod
+    async def _save_event_in_session(session, event: IssuanceEvent) -> None:
+        await session.execute(
+            issuance_events_table.insert().values(
+                id=event.id,
+                transaction_id=event.transaction_id,
+                application_id=event.application_id,
+                event_type=event.event_type.value,
+                metadata=event.metadata,
+                created_at=event.created_at,
+            )
+        )
+
+
 def test_real_postgres_review_recovery_migration_and_fences() -> None:
     configured = os.environ.get("CANVAS_REVIEW_RECOVERY_TEST_DATABASE_URL")
     if not configured:
@@ -91,8 +113,8 @@ def test_real_postgres_review_recovery_migration_and_fences() -> None:
 async def _exercise(url, config) -> None:
     engine = create_async_engine(url, hide_parameters=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    repo = PostgresIssuanceRepository(factory)
-    competitor = PostgresIssuanceRepository(factory)
+    repo = _HistoricalSchemaRepository(factory)
+    competitor = _HistoricalSchemaRepository(factory)
     try:
         async with engine.begin() as connection:
             for statement in (
