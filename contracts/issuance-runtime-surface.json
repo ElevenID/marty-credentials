@@ -26,15 +26,15 @@
         "source": "services/issuance/application/rust_integration.py"
       },
       {
-        "line": 204,
+        "line": 213,
         "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
       },
       {
-        "line": 207,
+        "line": 216,
         "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
       },
       {
-        "line": 241,
+        "line": 250,
         "source": "services/issuance/infrastructure/adapters/canvas_credentials_adapter.py"
       },
       {
@@ -70,7 +70,7 @@
         "source": "services/issuance/infrastructure/security/encryption.py"
       }
     ],
-    "environment_variable_count": 82,
+    "environment_variable_count": 83,
     "environment_variables": [
       "APP_ENV",
       "CANVAS_ADMIN_API_TOKEN",
@@ -80,6 +80,7 @@
       "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
       "CANVAS_CREDENTIALS_API_BASE_URL",
       "CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST",
+      "CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS",
       "CANVAS_CREDENTIALS_PUBLISH_URL",
       "CANVAS_CREDENTIALS_REVOKE_URL_TEMPLATE",
       "CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS",
