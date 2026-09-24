@@ -1,5 +1,6 @@
 """Main FastAPI application for issuance service."""
 
+import asyncio
 import logging
 import os
 import re
