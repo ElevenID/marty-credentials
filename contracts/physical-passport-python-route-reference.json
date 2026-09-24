@@ -1,0 +1,31 @@
+{
+  "schema": "elevenid.physical-passport-python-route-reference/v1",
+  "qualification": "route-boundary-only; no native cutover or Python deletion",
+  "remaining_oracles": [
+    "repository-backed insert, lookup, update, and tenant-scope effects",
+    "real signer and personalization bureau transport/error behavior",
+    "webhook signature verification against the configured secret"
+  ],
+  "sources": {
+    "services/issuance/infrastructure/api/physical_document_routes.py": "a7b67c47257eef0b4400741e641e2f668395b97d64156d1be958e062bb7162d0",
+    "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "cdda75e4be405498c634f9dd486ac76942e5452466745e905ea7d5c55a471aa5",
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "8ae7ad62e746e8783e2304c4176f5050a3d01bc5c409274b4faffd0721626e1f"
+  },
+  "operations": [
+    {"method": "GET", "path": "/v1/passport/capabilities", "outcome": "readiness-with-blockers"},
+    {"method": "POST", "path": "/v1/passport/applications", "outcome": "DRAFT", "effect": "encrypted-artifact-insert"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups", "outcome": "DATA_GENERATED", "effect": "status-update"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod", "outcome": "SOD_SIGNED", "effect": "signed-sod-hash-update"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization", "outcome": "SUBMITTED", "effect": "bureau-submission-update"},
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status", "outcome": "IN_PRODUCTION", "effect": "conditional-bureau-poll"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify", "outcome": "READY_FOR_ACTIVATION", "effect": "quality-audit-update"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate", "outcome": "ACTIVE", "effect": "artifact-scrub-update"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization", "outcome": "accepted", "effect": "signed-bureau-event-update"}
+  ],
+  "negative_observations": {
+    "quality_before_bureau_ready": {"status": 409, "detail": "Document is not ready for quality verification"},
+    "activation_without_passing_quality": {"status": 409, "detail": "A passing quality result is required before activation"},
+    "invalid_webhook_signature": {"status": 401, "detail": "Invalid personalization webhook signature"},
+    "unknown_webhook_job": {"status": 404, "detail": "Physical document job not found"}
+  }
+}
