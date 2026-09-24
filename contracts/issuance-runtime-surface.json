@@ -872,7 +872,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6078,
+        "line": 6085,
         "method": "GET",
         "operation": "list_credentials",
         "path": "/v1/issuance/credentials",
@@ -880,7 +880,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 5994,
+        "line": 6001,
         "method": "POST",
         "operation": "reinstate_credential",
         "path": "/v1/issuance/credentials/{credential_id}/reinstate",
@@ -888,7 +888,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 5902,
+        "line": 5909,
         "method": "POST",
         "operation": "revoke_credential",
         "path": "/v1/issuance/credentials/{credential_id}/revoke",
@@ -896,7 +896,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6049,
+        "line": 6056,
         "method": "GET",
         "operation": "get_credential_status",
         "path": "/v1/issuance/credentials/{credential_id}/status",
@@ -904,7 +904,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 5942,
+        "line": 5949,
         "method": "POST",
         "operation": "suspend_credential",
         "path": "/v1/issuance/credentials/{credential_id}/suspend",
@@ -920,7 +920,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6201,
+        "line": 6208,
         "method": "POST",
         "operation": "process_pending_canvas_mirror_deliveries",
         "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
@@ -928,7 +928,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6220,
+        "line": 6227,
         "method": "POST",
         "operation": "process_failed_canvas_mirror_status_syncs",
         "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
@@ -936,7 +936,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6393,
+        "line": 6400,
         "method": "GET",
         "operation": "get_canvas_mirror_provenance",
         "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
@@ -944,7 +944,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6237,
+        "line": 6244,
         "method": "POST",
         "operation": "run_canvas_mirror_automation_cycle_endpoint",
         "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
@@ -1000,7 +1000,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6256,
+        "line": 6263,
         "method": "GET",
         "operation": "get_canvas_mirror_health",
         "path": "/v1/issuance/organizations/{organization_id}/canvas-mirror-health",
@@ -1016,7 +1016,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 5711,
+        "line": 5715,
         "method": "POST",
         "operation": "purge_organization_retention_data",
         "path": "/v1/issuance/organizations/{organization_id}/retention/purge",
@@ -1056,7 +1056,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 5734,
+        "line": 5741,
         "method": "GET",
         "operation": "get_transaction_revocation_status",
         "path": "/v1/issuance/transactions/{tx_id}/revocation-status",
@@ -1072,7 +1072,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6110,
+        "line": 6117,
         "method": "GET",
         "operation": "list_issued_credentials",
         "path": "/v1/issued-credentials",
@@ -1080,7 +1080,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6130,
+        "line": 6137,
         "method": "GET",
         "operation": "get_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}",
@@ -1088,7 +1088,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6151,
+        "line": 6158,
         "method": "POST",
         "operation": "publish_issued_credential_canvas_mirror",
         "path": "/v1/issued-credentials/{credential_id}/deliveries/canvas-credentials/publish",
@@ -1096,7 +1096,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6492,
+        "line": 6499,
         "method": "POST",
         "operation": "reinstate_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/reinstate",
@@ -1104,7 +1104,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6523,
+        "line": 6530,
         "method": "POST",
         "operation": "renew_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/renew",
@@ -1112,7 +1112,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6430,
+        "line": 6437,
         "method": "POST",
         "operation": "revoke_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/revoke",
@@ -1120,7 +1120,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 6461,
+        "line": 6468,
         "method": "POST",
         "operation": "suspend_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/suspend",

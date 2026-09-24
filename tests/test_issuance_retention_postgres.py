@@ -104,7 +104,8 @@ async def _exercise(database_url) -> None:
                 for org in ("a", "b"):
                     await session.execute(
                         insert(application_templates_table).values(
-                            id=f"template-{org}", organization_id=f"organization-{org}", name="Synthetic"
+                            id=f"template-{org}", organization_id=f"organization-{org}",
+                            name="Synthetic", credential_template_id="synthetic",
                         )
                     )
                     await session.execute(
