@@ -113,6 +113,117 @@ def test_passport_reference_keeps_durable_and_tenant_gates_explicit() -> None:
     assert "before native cutover or Python deletion" in boundary["unresolved_gate"]
 
 
+def test_passport_request_response_and_bureau_status_reference_is_closed() -> None:
+    reference = _reference()
+    application = reference["request_models"]["application"]
+    assert {
+        name
+        for name, field in PassportApplicationRequest.model_fields.items()
+        if field.is_required()
+    } == set(application["required"])
+    assert (
+        PassportApplicationRequest.model_fields["document_type"].default
+        == application["default_document_type"]
+    )
+    assert PassportApplicationRequest.model_config["extra"] == application["extra_fields"]
+    assert (
+        routes.QualityResultRequest.model_config["extra"]
+        == reference["request_models"]["quality"]["extra_fields"]
+    )
+    assert {
+        name
+        for name, field in routes.QualityResultRequest.model_fields.items()
+        if field.is_required()
+    } == set(reference["request_models"]["quality"]["required"])
+    assert (
+        routes.QualityResultRequest(passed=True).failure_codes
+        == reference["request_models"]["quality"]["default_failure_codes"]
+    )
+
+    projection = reference["response_projection"]
+    assert set(_safe_response(_job())) == set(projection["safe_job_fields"])
+    assert not set(projection["sensitive_fields_excluded"]) & _safe_response(_job()).keys()
+    create = next(
+        route
+        for route in routes.physical_document_router.routes
+        if route.path == "/v1/passport/applications"
+    )
+    assert create.status_code == projection["create_http_status"]
+    assert projection["generate_sod_additional_fields"] == ["sod_sha256"]
+    assert {status.value: _production_status(status) for status in ProductionStatus} == reference[
+        "bureau_status_projection"
+    ]
+
+
+def test_passport_request_validation_reference_rejects_invalid_fields() -> None:
+    reference = _reference()["request_models"]["application"]
+    payload = {
+        "organization_id": "org-1",
+        "flow_execution_id": "flow-1",
+        "application_template_id": "template-1",
+        "credential_template_id": "credential-1",
+        "delivery_destination_profile_id": "bureau-1",
+        "country_code": "USA",
+        "applicant": {},
+        "mrz": {},
+        "data_groups": {"DG1": "AQ==", "DG2": "Ag=="},
+    }
+    for document_type in reference["document_types"]:
+        assert PassportApplicationRequest(**payload, document_type=document_type).document_type == (
+            document_type
+        )
+    for invalid in [
+        {"document_type": "TD4"},
+        {"country_code": "us"},
+        {
+            "delivery_destination_profile_id": "x"
+            * (reference["delivery_destination_profile_id_max_length"] + 1)
+        },
+        {"data_groups": {"DG1": "AQ=="}},
+        {"data_groups": {"DG1": "AQ==", "DG2": "Ag==", "wrong": "Aw=="}},
+        {"data_groups": {"DG1": "AQ==", "DG2": "not-base64"}},
+        {"unexpected": "field"},
+    ]:
+        with pytest.raises(ValidationError):
+            PassportApplicationRequest(**(payload | invalid))
+
+
+def test_passport_store_key_and_decrypt_errors_match_frozen_public_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    negatives = _reference()["negative_observations"]
+    monkeypatch.setattr(routes, "_session_factory", None)
+    with pytest.raises(HTTPException) as unavailable:
+        routes._factory()
+    assert (unavailable.value.status_code, unavailable.value.detail) == (
+        negatives["job_store_unavailable"]["status"],
+        negatives["job_store_unavailable"]["detail"],
+    )
+
+    monkeypatch.delenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", raising=False)
+    with pytest.raises(HTTPException) as missing:
+        routes._fernet()
+    assert (missing.value.status_code, missing.value.detail) == (
+        negatives["artifact_key_missing"]["status"],
+        negatives["artifact_key_missing"]["detail"],
+    )
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "invalid-key")
+    with pytest.raises(HTTPException) as invalid:
+        routes._fernet()
+    assert (invalid.value.status_code, invalid.value.detail) == (
+        negatives["artifact_key_invalid"]["status"],
+        negatives["artifact_key_invalid"]["detail"],
+    )
+
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", Fernet.generate_key().decode())
+    with pytest.raises(HTTPException) as undecryptable:
+        routes._decrypt_artifact(_job())
+    assert (undecryptable.value.status_code, undecryptable.value.detail) == (
+        negatives["artifact_cannot_decrypt"]["status"],
+        negatives["artifact_cannot_decrypt"]["detail"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_passport_capability_blockers_preserve_order_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
