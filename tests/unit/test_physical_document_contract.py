@@ -92,11 +92,11 @@ def test_passport_reference_keeps_durable_and_tenant_gates_explicit() -> None:
     assert "PostgreSQL" in durable["database"]
     assert "new engine and session" in durable["restart"]
     assert "Fernet-encrypted" in durable["artifact"]
-    assert durable["lifecycle"] == [
+    assert durable["observed_lifecycle"] == [
         "DRAFT",
         "DATA_GENERATED",
         "SOD_SIGNED",
-        "QUALITY_CHECK",
+        "SUBMITTED",
         "READY_FOR_ACTIVATION",
         "ACTIVE",
     ]
