@@ -144,6 +144,7 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
                 .one()
             )
         assert row["organization_id"] == "org-passport-reference"
+        assert row["revocation_profile_id"] is None
         assert row["status"] == "DRAFT"
         assert row["secure_artifact_reference"] == f"physical-artifact://{row['id']}"
         assert "Synthetic Applicant" not in row["secure_artifact_ciphertext"]

@@ -32,7 +32,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "7da6857d87257badaa23ccbfec891de7c551dc137812388e4ba88741d9a66432"
+        "336ea444908a262d178b90c34727d6c256cbbf768659464f25683a378ff31e6b"
     )
 
 
@@ -46,8 +46,8 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
         "api",
         "canvas-sync-worker",
     }
-    assert contract["migrations"]["revision_count"] == 46
-    assert contract["migrations"]["heads"] == ["application_template_management"]
+    assert contract["migrations"]["revision_count"] == 47
+    assert contract["migrations"]["heads"] == ["physical_document_revocation_profile"]
 
 
 def test_contract_retains_critical_protocol_and_lifecycle_operations() -> None:
