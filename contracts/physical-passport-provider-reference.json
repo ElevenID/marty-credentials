@@ -1,0 +1,155 @@
+{
+  "schema": "elevenid.physical-passport-provider-reference/v1",
+  "scope": "Synthetic remote signer, bureau submission/polling, and webhook adapter behavior; not tenant authorization or durable job state.",
+  "python_source_sha256": {
+    "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472",
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb"
+  },
+  "signer": {
+    "capabilities": [
+      {
+        "url": "",
+        "allow_self_signed": "false",
+        "expected": {
+          "configured": false,
+          "mode": "UNAVAILABLE",
+          "blockers": ["Configure ICAO_DOCUMENT_SIGNER_URL. Self-signed document certificates are permitted only in explicit test mode."]
+        }
+      },
+      {
+        "url": "https://synthetic-signer.invalid",
+        "allow_self_signed": "false",
+        "expected": {"configured": true, "mode": "REMOTE", "blockers": []}
+      },
+      {
+        "url": "",
+        "allow_self_signed": "true",
+        "expected": {"configured": true, "mode": "SELF_SIGNED_TEST", "blockers": []}
+      },
+      {
+        "url": "https://synthetic-signer.invalid",
+        "allow_self_signed": "true",
+        "expected": {"configured": true, "mode": "REMOTE", "blockers": []}
+      }
+    ],
+    "request": {
+      "country_code": "UTO",
+      "organization": "org-reference",
+      "data_groups": {"2": "Ag==", "1": "AQ=="}
+    },
+    "http": {
+      "method": "POST",
+      "path": "/v1/icao/emrtd/sign",
+      "authorization": "Bearer synthetic-signer-key",
+      "timeout_seconds": 30,
+      "json": {
+        "country_code": "UTO",
+        "organization": "org-reference",
+        "data_groups": {"DG1": "AQ==", "DG2": "Ag=="}
+      }
+    },
+    "success": {"sod_der_base64": "U09E", "dsc_cert_pem": "synthetic-cert"},
+    "incomplete_error": "ICAO document signer returned incomplete signing material"
+  },
+  "bureau": {
+    "job": {
+      "id": "job-reference",
+      "application_id": "app-reference",
+      "organization_id": "org-reference",
+      "country_code": "UTO",
+      "data_groups": {"2": "Ag==", "1": "AQ=="},
+      "sod_der_base64": "U09E",
+      "dsc_cert_pem": "synthetic-cert",
+      "mrz_line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<",
+      "mrz_line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
+    },
+    "submit_http": {
+      "method": "POST",
+      "path": "/v1/personalization/jobs",
+      "authorization": "Bearer synthetic-bureau-key",
+      "timeout_seconds": 30,
+      "json": {
+        "job_id": "job-reference",
+        "application_id": "app-reference",
+        "organization_id": "org-reference",
+        "country_code": "UTO",
+        "document_type": "TD3",
+        "data_groups": {"DG1": "AQ==", "DG2": "Ag=="},
+        "sod_der_base64": "U09E",
+        "dsc_cert_pem": "synthetic-cert",
+        "mrz": {
+          "line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<",
+          "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
+        }
+      }
+    },
+    "accepted": {
+      "http_status": 202,
+      "response": {"bureau_job_id": "bureau-reference", "status": "QUEUED", "tracking_number": "TRACK-42"},
+      "job_status": "QUEUED"
+    },
+    "rejected": {
+      "http_status": 503,
+      "job_status": "FAILED",
+      "error_message": "Bureau returned HTTP 503"
+    },
+    "poll_http": {
+      "method": "GET",
+      "path": "/v1/personalization/jobs/bureau-reference",
+      "authorization": "Bearer synthetic-bureau-key",
+      "timeout_seconds": 15,
+      "response": {"bureau_job_id": "bureau-reference", "status": "SHIPPED", "tracking_number": "TRACK-42"}
+    },
+    "batch_http": {
+      "method": "POST",
+      "path": "/v1/personalization/batches",
+      "authorization": "Bearer synthetic-bureau-key",
+      "timeout_seconds": 60,
+      "json": {
+        "batch_id": "batch-reference",
+        "organization_id": "org-reference",
+        "jobs": [
+          {
+            "job_id": "job-reference",
+            "application_id": "app-reference",
+            "country_code": "UTO",
+            "data_groups": {"DG1": "AQ==", "DG2": "Ag=="},
+            "sod_der_base64": "U09E",
+            "dsc_cert_pem": "synthetic-cert",
+            "mrz": {
+              "line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<",
+              "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
+            }
+          },
+          {
+            "job_id": "job-second",
+            "application_id": "app-second",
+            "country_code": "GBR",
+            "data_groups": {"DG3": "Aw=="},
+            "sod_der_base64": "U09E",
+            "dsc_cert_pem": "synthetic-cert",
+            "mrz": {
+              "line_1": "P<UTOSYNTHETIC<<APPLICANT<<<<<<<<<<<<<<<<<<<",
+              "line_2": "L898902C36UTO7408122F1204159ZE184226B<<<<<10"
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": "QUEUED",
+        "jobs": [
+          {"job_id": "job-second", "bureau_job_id": "bureau-second", "status": "PRINTING"},
+          {"job_id": "job-reference", "bureau_job_id": "bureau-reference", "status": "QUEUED"}
+        ]
+      },
+      "failure_status": "FAILED"
+    }
+  },
+  "webhook": {
+    "secret": "synthetic-webhook-secret",
+    "body": "{\"bureau_job_id\":\"bureau-reference\",\"status\":\"SHIPPED\",\"tracking_number\":\"TRACK-42\"}",
+    "bureau_job_id": "bureau-reference",
+    "status": "SHIPPED",
+    "metadata": {"tracking_number": "TRACK-42"}
+  }
+}

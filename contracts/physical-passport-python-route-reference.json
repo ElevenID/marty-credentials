@@ -2,15 +2,15 @@
   "schema": "elevenid.physical-passport-python-route-reference/v1",
   "qualification": "route-boundary-only; no native cutover or Python deletion",
   "remaining_oracles": [
-    "repository-backed insert, lookup, update, and tenant-scope effects",
-    "real signer and personalization bureau transport/error behavior",
-    "webhook signature verification against the configured secret"
+    "tenant-scoped repository authorization and webhook-to-durable-job effects",
+    "live configured signer and personalization bureau integration beyond synthetic HTTP transport",
+    "native Rust parity for route, persistence, provider, and webhook references before Python deletion"
   ],
   "source_hash_encoding": "utf8-lf",
   "sources": {
     "services/issuance/infrastructure/api/physical_document_routes.py": "2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37",
     "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472",
-    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "ab9484131667629ea914d9528f219c03c40246b7a63940fbe5fa6f6e61cd9560"
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb"
   },
   "operations": [
     {"method": "GET", "path": "/v1/passport/capabilities", "outcome": "readiness-with-blockers"},
