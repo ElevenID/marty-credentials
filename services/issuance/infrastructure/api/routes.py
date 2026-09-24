@@ -5688,14 +5688,18 @@ async def revoke_transaction(
 
 
 @issuance_router.get(
-    "/organizations/{organization_id}/retention", response_model=IssuanceRetentionSummaryResponse
+    "/organizations/{organization_id}/retention",
+    response_model=IssuanceRetentionSummaryResponse,
+    dependencies=[Depends(_verify_management_api_key)],
 )
 async def get_organization_retention_summary(
     organization_id: str,
+    http_request: Request,
     retention_days: int = Query(30, ge=1, le=3650),
-    repo: IIssuanceRepository = Depends(),
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
 ) -> IssuanceRetentionSummaryResponse:
     """Return Hosted Pilot retention status for an organization."""
+    _require_trusted_organization(http_request, organization_id)
     summary = await repo.get_retention_summary(organization_id, retention_days)
     return IssuanceRetentionSummaryResponse(
         organization_id=summary["organization_id"],
@@ -5711,13 +5715,16 @@ async def get_organization_retention_summary(
 @issuance_router.post(
     "/organizations/{organization_id}/retention/purge",
     response_model=IssuanceRetentionPurgeResponse,
+    dependencies=[Depends(_verify_management_api_key)],
 )
 async def purge_organization_retention_data(
     organization_id: str,
+    http_request: Request,
     retention_days: int = Query(30, ge=1, le=3650),
-    repo: IIssuanceRepository = Depends(),
+    repo: IIssuanceRepository = Depends(),  # noqa: B008
 ) -> IssuanceRetentionPurgeResponse:
     """Purge Hosted Pilot data that has aged past the retention window."""
+    _require_trusted_organization(http_request, organization_id)
     purge_result = await repo.purge_retention_records(organization_id, retention_days)
     return IssuanceRetentionPurgeResponse(
         organization_id=purge_result["organization_id"],

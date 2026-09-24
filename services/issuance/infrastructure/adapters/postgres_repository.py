@@ -5309,6 +5309,17 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                     applications_table.c.created_at < cutoff_at,
                 )
             )
+            # The migrated database does not have a cascading FK from issued
+            # credentials to transactions. Delete them explicitly while the
+            # old transaction ids are still available for tenant scoping.
+            delete_credentials_result = await session.execute(
+                delete(issued_credentials_table).where(
+                    issued_credentials_table.c.organization_id == org_id,
+                    issued_credentials_table.c.transaction_id.in_(
+                        self._old_transaction_ids_query(org_id, cutoff_at)
+                    ),
+                )
+            )
             delete_transactions_result = await session.execute(
                 delete(issuance_transactions_table).where(
                     issuance_transactions_table.c.organization_id == org_id,
@@ -5323,7 +5334,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             "applications": self._result_rowcount(delete_applications_result),
             "authorization_sessions": self._result_rowcount(delete_auth_sessions_result),
             "issuance_events": self._result_rowcount(delete_events_result),
-            "issued_credentials": int(summary["eligible_for_purge"].get("issued_credentials", 0)),
+            "issued_credentials": self._result_rowcount(delete_credentials_result),
         }
         purged_records["total"] = sum(purged_records.values())
 

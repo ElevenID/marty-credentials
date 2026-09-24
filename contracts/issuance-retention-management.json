@@ -1,0 +1,23 @@
+{
+  "schema": "marty.issuance-retention-management/v1",
+  "routes": [
+    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention", "operation": "get_organization_retention_summary"},
+    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge", "operation": "purge_organization_retention_data"}
+  ],
+  "boundary": {
+    "missing_api_key": 401,
+    "invalid_api_key": 401,
+    "missing_trusted_organization": 403,
+    "different_trusted_organization": 403,
+    "authorized": 200
+  },
+  "retention_days": {"default": 30, "minimum": 1, "maximum": 3650, "invalid": 422},
+  "tracked_scope": [
+    "applications", "submitted_evidence", "issuance_transactions",
+    "issued_credentials", "authorization_sessions", "issuance_events"
+  ],
+  "record_count_fields": [
+    "issuance_transactions", "applications", "authorization_sessions",
+    "issuance_events", "issued_credentials", "total"
+  ]
+}
