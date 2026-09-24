@@ -162,6 +162,9 @@ async def test_retention_repository_preserves_new_and_other_tenant_records() -> 
         SimpleNamespace(transaction_id=transaction_id, application_id=None, created_at=old)
         for transaction_id in ("old-a", "old-b")
     ]
+    repository._events.append(
+        SimpleNamespace(transaction_id="old-a", application_id=None, created_at=recent)
+    )
 
     before = await repository.get_retention_summary("organization-a", 30)
     assert before["eligible_for_purge"] == {
@@ -182,6 +185,10 @@ async def test_retention_repository_preserves_new_and_other_tenant_records() -> 
     assert set(repository._applications) == {"app-b"}
     assert set(repository._authorization_sessions) == {"auth-b"}
     assert set(repository._credentials) == {"cred-b"}
-    assert [event.transaction_id for event in repository._events] == ["old-b"]
+    assert [event.transaction_id for event in repository._events] == ["old-b", "old-a"]
+    assert (
+        await repository.get_retention_summary("organization-a", 30)
+    )["oldest_retained_record_at"] == recent.isoformat()
+    assert repository._event_belongs_to_org(repository._events[1], "organization-a")
     again = await repository.purge_retention_records("organization-a", 30)
     assert again["purged_records"]["total"] == 0

@@ -1082,6 +1082,20 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
 
     # Lifecycle event methods
     async def save_event(self, event: IssuanceEvent) -> None:
+        transaction = self._transactions.get(event.transaction_id) if event.transaction_id else None
+        application = self._applications.get(event.application_id) if event.application_id else None
+        owners = {
+            owner
+            for owner in (
+                event.organization_id,
+                transaction.organization_id if transaction else None,
+                application.organization_id if application else None,
+            )
+            if owner
+        }
+        if len(owners) > 1:
+            raise ValueError("Issuance event references conflicting organizations")
+        event.organization_id = next(iter(owners), None)
         self._events.append(event)
 
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
@@ -2207,7 +2221,7 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             review.resolution_claimed_at = None
             review.resolution_recovery_pending = False
             review.updated_at = resolved_at
-            self._events.append(audit_event)
+            await self.save_event(audit_event)
             return copy.deepcopy(review)
 
     async def get_evidence_policy_review_for_org(
@@ -2513,6 +2527,12 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
             and credential.transaction_id in expired_transaction_ids
         }
 
+        # Preserve the owner of a younger audit event before its old parent is
+        # removed. The event remains eligible when its own timestamp expires.
+        for event in self._events:
+            if event.created_at >= cutoff_at and self._event_belongs_to_org(event, org_id):
+                event.organization_id = org_id
+
         self._events = [
             event
             for event in self._events
@@ -2570,6 +2590,9 @@ class InMemoryIssuanceRepository(IIssuanceRepository):
         }
 
     def _event_belongs_to_org(self, event: IssuanceEvent, org_id: str) -> bool:
+        stored_owner = getattr(event, "organization_id", None)
+        if stored_owner is not None:
+            return stored_owner == org_id
         if event.transaction_id:
             tx = self._transactions.get(event.transaction_id)
             if tx and tx.organization_id == org_id:

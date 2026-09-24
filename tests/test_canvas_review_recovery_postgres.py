@@ -10,6 +10,7 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -31,7 +32,8 @@ from issuance.domain.entities import (
     IssuanceTransaction,
 )
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
-from sqlalchemy import create_engine, text
+from issuance.infrastructure.models import issuance_events_table
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -39,6 +41,28 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 OLD_HEAD = "merge_issuance_heads"
 NEW_HEAD = "canvas_review_recovery_claim"
 CONSTRAINT = "ck_evidence_policy_reviews_resolution_claim"
+
+
+class _HistoricalSchemaRepository(PostgresIssuanceRepository):
+    """Replay the historical audit insert while the test pins an old schema.
+
+    The current repository writes the later issuance-event owner column. This
+    migration oracle deliberately downgrades below that column and must keep
+    testing review recovery without pretending the old schema contains it.
+    """
+
+    @staticmethod
+    async def _save_event_in_session(session, event: IssuanceEvent) -> None:
+        await session.execute(
+            issuance_events_table.insert().values(
+                id=event.id,
+                transaction_id=event.transaction_id,
+                application_id=event.application_id,
+                event_type=event.event_type.value,
+                metadata=event.metadata,
+                created_at=event.created_at,
+            )
+        )
 
 
 def test_real_postgres_review_recovery_migration_and_fences() -> None:
@@ -89,8 +113,8 @@ def test_real_postgres_review_recovery_migration_and_fences() -> None:
 async def _exercise(url, config) -> None:
     engine = create_async_engine(url, hide_parameters=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    repo = PostgresIssuanceRepository(factory)
-    competitor = PostgresIssuanceRepository(factory)
+    repo = _HistoricalSchemaRepository(factory)
+    competitor = _HistoricalSchemaRepository(factory)
     try:
         async with engine.begin() as connection:
             for statement in (
@@ -117,7 +141,17 @@ async def _exercise(url, config) -> None:
             return result
 
         async def events():
-            return await repo.list_events_for_application("application-review")
+            # This test intentionally downgrades to a historical schema. Read
+            # only the stable audit projection, not later model columns.
+            async with factory() as session:
+                metadata = (
+                    await session.execute(
+                        select(issuance_events_table.c.metadata)
+                        .where(issuance_events_table.c.application_id == "application-review")
+                        .order_by(issuance_events_table.c.created_at)
+                    )
+                ).scalars()
+                return [SimpleNamespace(metadata=value) for value in metadata]
 
         async def credential_rows():
             async with engine.connect() as connection:

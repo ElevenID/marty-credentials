@@ -497,6 +497,7 @@ issuance_events_table = Table(
     "issuance_events",
     mapper_registry.metadata,
     Column("id", String, primary_key=True),
+    Column("organization_id", String, nullable=True),
     Column(
         "transaction_id",
         String,
@@ -515,6 +516,7 @@ issuance_events_table = Table(
     Index("ix_issuance_events_application_id", "application_id"),
     Index("ix_issuance_events_transaction_id", "transaction_id"),
     Index("ix_issuance_events_event_type", "event_type"),
+    Index("ix_issuance_events_organization_id", "organization_id"),
     schema="issuance_service",
 )
 

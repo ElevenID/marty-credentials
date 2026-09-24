@@ -455,6 +455,9 @@ class _FakeSession:
             raise result
         return result
 
+    async def scalar(self, _statement):
+        return "org-1"
+
 
 class _FakeSessionFactory:
     def __init__(self, session: _FakeSession) -> None:

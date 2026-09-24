@@ -89,6 +89,9 @@ class _Session:
             raise result
         return result
 
+    async def scalar(self, _statement):
+        return "org-1"
+
     async def commit(self):
         self.committed = True
 
