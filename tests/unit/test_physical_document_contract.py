@@ -85,6 +85,33 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     assert len(expected) == 9
 
 
+def test_passport_reference_keeps_durable_and_tenant_gates_explicit() -> None:
+    reference = _reference()
+    durable = reference["durable_repository_reference"]
+    assert durable["oracle"] == "tests/test_physical_passport_repository_postgres.py"
+    assert "PostgreSQL" in durable["database"]
+    assert "new engine and session" in durable["restart"]
+    assert "Fernet-encrypted" in durable["artifact"]
+    assert durable["lifecycle"] == [
+        "DRAFT",
+        "DATA_GENERATED",
+        "SOD_SIGNED",
+        "QUALITY_CHECK",
+        "READY_FOR_ACTIVATION",
+        "ACTIVE",
+    ]
+    assert "encrypted empty object" in durable["activation"]
+    assert "not provider, webhook or tenant authorization" in durable["qualification"]
+    assert (Path(__file__).resolve().parents[2] / durable["oracle"]).is_file()
+
+    boundary = reference["tenant_boundary_observation"]
+    assert not routes.physical_document_router.dependencies
+    assert all(not route.dependencies for route in routes.physical_document_router.routes)
+    assert "no route-level API-key" in boundary["router"]
+    assert "X-API-Key" in boundary["flow_consumer"]
+    assert "before native cutover or Python deletion" in boundary["unresolved_gate"]
+
+
 @pytest.mark.asyncio
 async def test_passport_capability_blockers_preserve_order_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,

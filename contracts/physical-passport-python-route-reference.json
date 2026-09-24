@@ -28,5 +28,19 @@
     "activation_without_passing_quality": {"status": 409, "detail": "A passing quality result is required before activation"},
     "invalid_webhook_signature": {"status": 401, "detail": "Invalid personalization webhook signature"},
     "unknown_webhook_job": {"status": 404, "detail": "Physical document job not found"}
+  },
+  "durable_repository_reference": {
+    "oracle": "tests/test_physical_passport_repository_postgres.py",
+    "database": "fresh disposable PostgreSQL database with issuance Alembic migrations through head",
+    "restart": "new engine and session read the same application_id after creation",
+    "artifact": "Fernet-encrypted applicant, MRZ and DG1/DG2; plaintext absent from ciphertext",
+    "lifecycle": ["DRAFT", "DATA_GENERATED", "SOD_SIGNED", "QUALITY_CHECK", "READY_FOR_ACTIVATION", "ACTIVE"],
+    "activation": "persist passing quality reviewer and SOD hash; replace sensitive ciphertext with an encrypted empty object",
+    "qualification": "owned PostgreSQL persistence only; not provider, webhook or tenant authorization"
+  },
+  "tenant_boundary_observation": {
+    "router": "physical_document_router currently has no route-level API-key or organization authorization dependency",
+    "flow_consumer": "Flow sends X-API-Key and uses the trusted organization_id at creation and returned application_id for follow-ups",
+    "unresolved_gate": "prove and enforce tenant-scoped HTTP and repository access, including webhook-to-durable-job effects, before native cutover or Python deletion"
   }
 }
