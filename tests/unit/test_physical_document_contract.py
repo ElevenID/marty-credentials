@@ -61,6 +61,7 @@ def _job() -> dict:
 def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     reference = _reference()
     assert reference["schema"] == "elevenid.physical-passport-python-route-reference/v1"
+    assert reference["source_hash_encoding"] == "utf8-lf"
     assert reference["qualification"] == "route-boundary-only; no native cutover or Python deletion"
     assert len(reference["remaining_oracles"]) == 3
     root = Path(__file__).resolve().parents[2]
@@ -70,7 +71,9 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
         "services/issuance/infrastructure/adapters/personalization_bureau_client.py",
     }
     for relative_path, digest in reference["sources"].items():
-        assert hashlib.sha256((root / relative_path).read_bytes()).hexdigest() == digest
+        source = (root / relative_path).read_bytes()
+        assert b"\r" not in source.replace(b"\r\n", b"")
+        assert hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest() == digest
     actual = {
         (method, route.path)
         for route in routes.physical_document_router.routes

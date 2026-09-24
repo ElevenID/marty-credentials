@@ -6,10 +6,11 @@
     "real signer and personalization bureau transport/error behavior",
     "webhook signature verification against the configured secret"
   ],
+  "source_hash_encoding": "utf8-lf",
   "sources": {
-    "services/issuance/infrastructure/api/physical_document_routes.py": "b84a4f4be70094b7b31850f5e7a75d0a0fa3149e446efd9597570c72cc6eb6ca",
-    "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "cdda75e4be405498c634f9dd486ac76942e5452466745e905ea7d5c55a471aa5",
-    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "8ae7ad62e746e8783e2304c4176f5050a3d01bc5c409274b4faffd0721626e1f"
+    "services/issuance/infrastructure/api/physical_document_routes.py": "2206f15dfd8a8040e997cba0e4a7f27cc8e3f4e84d6094c62ae71beae5d90e37",
+    "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472",
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "ab9484131667629ea914d9528f219c03c40246b7a63940fbe5fa6f6e61cd9560"
   },
   "operations": [
     {"method": "GET", "path": "/v1/passport/capabilities", "outcome": "readiness-with-blockers"},
