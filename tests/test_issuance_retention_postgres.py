@@ -28,7 +28,7 @@ from issuance.infrastructure.models import (
     issuance_transactions_table,
     issued_credentials_table,
 )
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, delete, insert, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -83,7 +83,10 @@ def test_retention_purge_is_tenant_scoped_in_owned_postgres() -> None:
         config.set_main_option(
             "sqlalchemy.url", sync_url.render_as_string(hide_password=False).replace("%", "%%")
         )
+        command.upgrade(config, "physical_document_revocation_profile")
+        _seed_pre_migration_events(sync_url)
         command.upgrade(config, "head")
+        _verify_and_clear_backfilled_events(sync_url)
         asyncio.run(asyncio.wait_for(_exercise(base.set(database=database)), timeout=90))
     finally:
         try:
@@ -92,6 +95,63 @@ def test_retention_purge_is_tenant_scoped_in_owned_postgres() -> None:
                     connection.exec_driver_sql(f'DROP DATABASE "{database}"')
         finally:
             admin.dispose()
+
+
+def _seed_pre_migration_events(sync_url) -> None:
+    engine = create_engine(sync_url, hide_parameters=True)
+    try:
+        with engine.begin() as connection:
+            now = datetime.now(UTC)
+            connection.execute(
+                insert(issuance_transactions_table).values(
+                    id="legacy-tx", organization_id="organization-legacy",
+                    credential_template_id="synthetic", pre_auth_code="preauth-legacy",
+                    expires_at=now + timedelta(days=90),
+                )
+            )
+            connection.execute(
+                insert(application_templates_table).values(
+                    id="legacy-template", organization_id="organization-legacy",
+                    name="Synthetic", credential_template_id="synthetic",
+                )
+            )
+            connection.execute(
+                insert(applications_table).values(
+                    id="legacy-app", organization_id="organization-legacy",
+                    application_template_id="legacy-template", applicant_identifier="synthetic",
+                    expires_at=now + timedelta(days=90),
+                )
+            )
+            for event_id, link in (
+                ("legacy-transaction-event", {"transaction_id": "legacy-tx"}),
+                ("legacy-application-event", {"application_id": "legacy-app"}),
+            ):
+                connection.execute(
+                    insert(issuance_events_table).values(
+                        id=event_id, event_type="synthetic", **link,
+                    )
+                )
+    finally:
+        engine.dispose()
+
+
+def _verify_and_clear_backfilled_events(sync_url) -> None:
+    engine = create_engine(sync_url, hide_parameters=True)
+    try:
+        with engine.begin() as connection:
+            owners = connection.execute(
+                select(issuance_events_table.c.id, issuance_events_table.c.organization_id)
+            ).all()
+            assert dict(owners) == {
+                "legacy-transaction-event": "organization-legacy",
+                "legacy-application-event": "organization-legacy",
+            }
+            connection.execute(delete(issuance_events_table))
+            connection.execute(delete(applications_table))
+            connection.execute(delete(application_templates_table))
+            connection.execute(delete(issuance_transactions_table))
+    finally:
+        engine.dispose()
 
 
 async def _exercise(database_url) -> None:
