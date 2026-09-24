@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import uuid
@@ -146,11 +145,7 @@ async def submit_personalization_job(job: PersonalizationJob) -> Personalization
         )
 
         if resp.status_code not in (200, 201, 202):
-            logger.error(
-                "Bureau submission failed: status=%d body=%s",
-                resp.status_code,
-                resp.text[:500],
-            )
+            logger.error("Bureau submission failed: status=%d", resp.status_code)
             job.status = ProductionStatus.FAILED
             job.error_message = f"Bureau returned HTTP {resp.status_code}"
             return job
