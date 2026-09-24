@@ -101,7 +101,8 @@ def test_passport_reference_keeps_durable_and_tenant_gates_explicit() -> None:
         "ACTIVE",
     ]
     assert "encrypted empty object" in durable["activation"]
-    assert "not provider, webhook or tenant authorization" in durable["qualification"]
+    assert "signed SHIPPED event" in durable["webhook"]
+    assert "not live provider transport or tenant authorization" in durable["qualification"]
     assert (Path(__file__).resolve().parents[2] / durable["oracle"]).is_file()
 
     boundary = reference["tenant_boundary_observation"]

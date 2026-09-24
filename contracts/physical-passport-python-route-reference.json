@@ -36,7 +36,8 @@
     "artifact": "Fernet-encrypted applicant, MRZ and DG1/DG2; plaintext absent from ciphertext",
     "lifecycle": ["DRAFT", "DATA_GENERATED", "SOD_SIGNED", "QUALITY_CHECK", "READY_FOR_ACTIVATION", "ACTIVE"],
     "activation": "persist passing quality reviewer and SOD hash; replace sensitive ciphertext with an encrypted empty object",
-    "qualification": "owned PostgreSQL persistence only; not provider, webhook or tenant authorization"
+    "webhook": "invalid HMAC does not update the job; a signed SHIPPED event persists READY_FOR_ACTIVATION and tracking number",
+    "qualification": "owned PostgreSQL persistence and signed webhook-to-job effects; not live provider transport or tenant authorization"
   },
   "tenant_boundary_observation": {
     "router": "physical_document_router currently has no route-level API-key or organization authorization dependency",

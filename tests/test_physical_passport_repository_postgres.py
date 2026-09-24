@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
+import json
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -19,6 +21,8 @@ import yaml
 from alembic import command
 from alembic.config import Config
 from cryptography.fernet import Fernet
+from fastapi import HTTPException
+from issuance.infrastructure.adapters import personalization_bureau_client as bureau
 from issuance.infrastructure.api import physical_document_routes as routes
 from issuance.infrastructure.models import physical_document_jobs_table
 from sqlalchemy import create_engine, select
@@ -170,7 +174,35 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
         assert signed["status"] == "SOD_SIGNED"
         assert signed["sod_sha256"] == hashlib.sha256(b"SOD").hexdigest()
 
-        await routes._update_job(application_id, status="QUALITY_CHECK")
+        await routes._update_job(
+            application_id, status="SUBMITTED", bureau_job_id="bureau-reference"
+        )
+        webhook = {
+            "bureau_job_id": "bureau-reference",
+            "status": "SHIPPED",
+            "tracking_number": "TRACK-42",
+        }
+        body = json.dumps(webhook, separators=(",", ":")).encode()
+        monkeypatch.setattr(bureau, "BUREAU_WEBHOOK_SECRET", "synthetic-webhook-secret")
+
+        class WebhookRequest:
+            async def body(self) -> bytes:
+                return body
+
+        with pytest.raises(HTTPException) as rejected:
+            await routes.personalization_webhook(WebhookRequest(), "invalid-signature")
+        assert rejected.value.status_code == 401
+        assert (await routes._get_job(application_id))["status"] == "SUBMITTED"
+        signature = hmac.new(
+            b"synthetic-webhook-secret", body, hashlib.sha256
+        ).hexdigest()
+        assert await routes.personalization_webhook(WebhookRequest(), signature) == {
+            "accepted": True
+        }
+        after_webhook = await routes._get_job(application_id)
+        assert after_webhook["status"] == "READY_FOR_ACTIVATION"
+        assert after_webhook["tracking_number"] == "TRACK-42"
+
         quality = await routes.record_passport_quality_result(
             application_id,
             routes.QualityResultRequest(passed=True),
@@ -195,6 +227,7 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             )
         assert final["organization_id"] == "org-passport-reference"
         assert final["status"] == "ACTIVE"
+        assert final["tracking_number"] == "TRACK-42"
         assert final["quality_result"]["checked_by"] == "synthetic-reviewer"
         assert final["completed_at"] is not None
         assert final["sod_sha256"] == hashlib.sha256(b"SOD").hexdigest()
