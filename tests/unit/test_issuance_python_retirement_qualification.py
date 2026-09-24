@@ -90,6 +90,14 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
             )
         ),
     )
+    _write(
+        source / ".github/workflows/e2e-tests.yml",
+        "\n".join(gate.EXPECTED_DEMO_WORKFLOW_MARKERS),
+    )
+    _write(
+        source / "rust/crates/release-evidence/src/demo_qualification.rs",
+        "\n".join(gate.EXPECTED_DEMO_VALIDATOR_MARKERS),
+    )
     contract = json.loads(gate.DEFAULT_CONTRACT.read_text(encoding="utf-8"))
     contract["state"] = "qualified"
     contract["source"]["commit"] = "a" * 40
@@ -206,6 +214,39 @@ def test_provenance_mismatch_is_rejected(tmp_path: Path, monkeypatch: pytest.Mon
     path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     with pytest.raises(gate.QualificationError, match="provenance mismatch"):
         gate.verify(contract, source)
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker", "message"),
+    [
+        (
+            ".github/workflows/e2e-tests.yml",
+            gate.EXPECTED_DEMO_WORKFLOW_MARKERS[0],
+            "Recorder review provenance workflow is absent",
+        ),
+        (
+            "rust/crates/release-evidence/src/demo_qualification.rs",
+            gate.EXPECTED_DEMO_VALIDATOR_MARKERS[0],
+            "Rust recorder review provenance validation is absent",
+        ),
+    ],
+)
+def test_qualified_retirement_requires_recorder_review_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    relative: str,
+    marker: str,
+    message: str,
+) -> None:
+    contract_path, source, contract = _fixture(tmp_path, monkeypatch)
+    path = source / relative
+    path.write_text(path.read_text(encoding="utf-8").replace(marker, ""), encoding="utf-8")
+    next(
+        item for item in contract["source"]["artifacts"] if item["path"] == relative
+    )["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    _write(contract_path, contract)
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.verify(contract_path, source)
 
 
 def test_unowned_deleted_route_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

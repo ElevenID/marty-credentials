@@ -1,9 +1,14 @@
 # OID4VCI and Canvas mirror Python retirement
 
-Status: prepared locally; do not publish or deploy before the universal native
-ownership checkpoint in `ElevenID/marty-ui#844` and demo qualification in
-`ElevenID/marty-ui#845` land. The cross-repository retirement qualification
-contract remains blocked with no pinned UI commit or artifact hashes.
+Status: prepared locally. The universal native ownership checkpoint in
+`ElevenID/marty-ui#844` has landed, but demo qualification in
+`ElevenID/marty-ui#845` has not. Do not publish or deploy this retirement yet.
+The cross-repository qualification contract remains blocked with no pinned UI
+commit or artifact hashes.
+Qualification must also pin the landed #845 recorder workflow and Rust review
+validator: the gate rejects a protected-main source that lacks server-fetched
+review-comment permission and record-digest binding. #844 ownership alone is
+not sufficient to authorize this deletion.
 
 When it is qualified, fetch `ElevenID/marty-ui` protected `main` in the clean
 UI checkout first: the verifier requires the pinned commit to be an ancestor

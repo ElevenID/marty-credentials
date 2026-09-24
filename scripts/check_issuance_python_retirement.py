@@ -55,8 +55,20 @@ EXPECTED_RETAINED = {
 EXPECTED_ARTIFACTS = {
     "contracts/issuance-universal-ownership.json",
     "contracts/issuance-native-coverage.json",
+    ".github/workflows/e2e-tests.yml",
+    "rust/crates/release-evidence/src/demo_qualification.rs",
 }
 EXPECTED_LIFECYCLE_GATE = "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly"
+EXPECTED_DEMO_WORKFLOW_MARKERS = (
+    'issues/comments/$DEMO_REVIEW_RECORD_ID',
+    'collaborators/$review_author/permission',
+    '--bin validate-demo-qualification',
+)
+EXPECTED_DEMO_VALIDATOR_MARKERS = (
+    'report.maintainer_review_record_id != expected.review_record_id',
+    'permission.permission != report.maintainer_review_permission',
+    'sha256_hex(&canonical_bytes) != report.maintainer_review_record_sha256',
+)
 
 
 class QualificationError(RuntimeError):
@@ -232,6 +244,19 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
         )
         actual = hashlib.sha256((marty_ui / relative).read_bytes()).hexdigest()
         _require(actual == expected_digest, f"SHA-256 provenance mismatch for {relative}")
+
+    workflow = (marty_ui / ".github/workflows/e2e-tests.yml").read_text(encoding="utf-8")
+    _require(
+        all(marker in workflow for marker in EXPECTED_DEMO_WORKFLOW_MARKERS),
+        "Recorder review provenance workflow is absent",
+    )
+    validator = (
+        marty_ui / "rust/crates/release-evidence/src/demo_qualification.rs"
+    ).read_text(encoding="utf-8")
+    _require(
+        all(marker in validator for marker in EXPECTED_DEMO_VALIDATOR_MARKERS),
+        "Rust recorder review provenance validation is absent",
+    )
 
     ownership = _json(marty_ui / "contracts/issuance-universal-ownership.json")
     coverage = _json(marty_ui / "contracts/issuance-native-coverage.json")

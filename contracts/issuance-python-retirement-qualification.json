@@ -12,6 +12,14 @@
       {
         "path": "contracts/issuance-native-coverage.json",
         "sha256": null
+      },
+      {
+        "path": ".github/workflows/e2e-tests.yml",
+        "sha256": null
+      },
+      {
+        "path": "rust/crates/release-evidence/src/demo_qualification.rs",
+        "sha256": null
       }
     ]
   },
