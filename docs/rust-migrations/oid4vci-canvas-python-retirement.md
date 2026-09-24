@@ -63,12 +63,13 @@ still tracked by [DIDCOMM-KMS-001](didcomm-kms-outstanding.md); this checkpoint
 does not alter that boundary or claim that the KMS work is complete.
 
 The eleven retained HTTP routes are a separate future port, not cleanup in this
-checkpoint. Before moving the nine physical-passport routes, capture executable
-Python reference cases for encrypted artifact creation and redaction, SOD/data
-group generation, bureau submission and polling, quality/activation transitions,
-and signed-webhook failures. `tests/unit/test_physical_document_contract.py`
-currently covers validation, response redaction, capability failure, and a
-subset of status mapping, but not those complete route lifecycles. The two
-organization-retention routes likewise need an exact repository-backed summary
-and purge oracle, including tenant scope and cross-table effects, before any
-native replacement or Python deletion is authorized.
+checkpoint. `tests/unit/test_physical_document_contract.py` already captures
+synthetic route-boundary cases for encrypted artifact creation and redaction,
+SOD/data-group generation, bureau submission and polling, quality/activation
+transitions, and signed-webhook rejection. Its reference explicitly does not
+qualify Python deletion: tenant-scoped durable authorization and webhook effects,
+live configured signer/bureau integration, and native Rust route, persistence,
+provider, and webhook parity still need proof. The two organization-retention
+routes likewise need an exact repository-backed summary and purge oracle,
+including tenant scope and cross-table effects, before native replacement or
+Python deletion is authorized.
