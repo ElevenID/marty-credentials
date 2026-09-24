@@ -300,7 +300,9 @@ def main() -> None:
         version = connection.execute(
             "SELECT version_num FROM issuance_service.alembic_version"
         ).fetchone()[0]
-        assert version == "application_template_management"
+        surface = json.loads(Path("/contract/issuance-runtime-surface.json").read_text())
+        assert surface["schema"] == "marty.issuance-runtime-surface/v1"
+        assert surface["migrations"]["heads"] == [version]
 
     created_count = sum(created for _, created in results)
     recovered_count = len(results) - created_count

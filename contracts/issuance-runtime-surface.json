@@ -1203,9 +1203,9 @@
   },
   "migrations": {
     "heads": [
-      "application_template_management"
+      "physical_document_revocation_profile"
     ],
-    "revision_count": 46,
+    "revision_count": 47,
     "revisions": [
       {
         "down_revisions": [],
@@ -1573,6 +1573,14 @@
         "line": 9,
         "revision": "application_template_management",
         "source": "services/issuance/infrastructure/migrations/versions/20260919_2200_application_template_management.py"
+      },
+      {
+        "down_revisions": [
+          "application_template_management"
+        ],
+        "line": 10,
+        "revision": "physical_document_revocation_profile",
+        "source": "services/issuance/infrastructure/migrations/versions/20260923_0100_add_physical_document_revocation_profile.py"
       }
     ],
     "roots": [

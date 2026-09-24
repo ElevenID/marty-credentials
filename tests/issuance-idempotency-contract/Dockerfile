@@ -19,6 +19,7 @@ RUN python -m pip install --no-deps --only-binary=:all: --require-hashes \
 
 COPY services/issuance/infrastructure/migrations/ /contract/migrations/
 COPY services/issuance/ /contract/issuance/
+COPY contracts/issuance-runtime-surface.json /contract/issuance-runtime-surface.json
 COPY tests/issuance-idempotency-contract/run_contract.py /contract/run_contract.py
 
 ENTRYPOINT ["python", "/contract/run_contract.py"]
