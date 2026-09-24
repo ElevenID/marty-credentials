@@ -135,6 +135,18 @@ def _git_is_from_protected_main(checkout: Path, commit: str) -> bool:
     )
     if main.returncode != 0:
         return False
+    live_main = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "origin", "refs/heads/main"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if live_main.returncode != 0:
+        return False
+    fields = live_main.stdout.strip().split()
+    if len(fields) != 2 or fields[1] != "refs/heads/main" or fields[0] != main.stdout.strip():
+        return False
     ancestor = subprocess.run(
         ["git", "merge-base", "--is-ancestor", commit, main.stdout.strip()],
         cwd=checkout,

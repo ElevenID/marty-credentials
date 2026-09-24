@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -164,6 +165,39 @@ def test_unmerged_feature_commit_is_rejected(
     monkeypatch.setattr(gate, "_git_is_from_protected_main", lambda _checkout, _commit: False)
     with pytest.raises(gate.QualificationError, match="protected origin/main"):
         gate.verify(contract, source)
+
+
+@pytest.mark.parametrize(
+    ("remote_tip", "remote_exit", "expected"),
+    [("b" * 40, 0, True), ("c" * 40, 0, False), ("", 1, False)],
+)
+def test_protected_main_provenance_requires_live_remote_tip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    remote_tip: str,
+    remote_exit: int,
+    expected: bool,
+) -> None:
+    calls = []
+
+    def run(command, **_kwargs):
+        calls.append(command)
+        if command[1:3] == ["remote", "get-url"]:
+            return subprocess.CompletedProcess(command, 0, "https://github.com/ElevenID/marty-ui.git\n")
+        if command[1] == "rev-parse":
+            return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n")
+        if command[1] == "ls-remote":
+            return subprocess.CompletedProcess(
+                command, remote_exit, f"{remote_tip}\trefs/heads/main\n" if remote_tip else ""
+            )
+        if command[1] == "merge-base":
+            return subprocess.CompletedProcess(command, 0, "")
+        raise AssertionError(f"Unexpected git command: {command}")
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    assert gate._git_is_from_protected_main(tmp_path, "a" * 40) is expected
+    assert any(command[1] == "ls-remote" for command in calls)
+    assert any(command[1] == "merge-base" for command in calls) is expected
 
 
 def test_provenance_mismatch_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
