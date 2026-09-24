@@ -10,6 +10,7 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -31,7 +32,8 @@ from issuance.domain.entities import (
     IssuanceTransaction,
 )
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
-from sqlalchemy import create_engine, text
+from issuance.infrastructure.models import issuance_events_table
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -117,7 +119,17 @@ async def _exercise(url, config) -> None:
             return result
 
         async def events():
-            return await repo.list_events_for_application("application-review")
+            # This test intentionally downgrades to a historical schema. Read
+            # only the stable audit projection, not later model columns.
+            async with factory() as session:
+                metadata = (
+                    await session.execute(
+                        select(issuance_events_table.c.metadata)
+                        .where(issuance_events_table.c.application_id == "application-review")
+                        .order_by(issuance_events_table.c.created_at)
+                    )
+                ).scalars()
+                return [SimpleNamespace(metadata=value) for value in metadata]
 
         async def credential_rows():
             async with engine.connect() as connection:
