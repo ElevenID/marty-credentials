@@ -1203,9 +1203,9 @@
   },
   "migrations": {
     "heads": [
-      "physical_document_revocation_profile"
+      "issuance_event_owner"
     ],
-    "revision_count": 47,
+    "revision_count": 48,
     "revisions": [
       {
         "down_revisions": [],
@@ -1581,6 +1581,14 @@
         "line": 10,
         "revision": "physical_document_revocation_profile",
         "source": "services/issuance/infrastructure/migrations/versions/20260923_0100_add_physical_document_revocation_profile.py"
+      },
+      {
+        "down_revisions": [
+          "physical_document_revocation_profile"
+        ],
+        "line": 10,
+        "revision": "issuance_event_owner",
+        "source": "services/issuance/infrastructure/migrations/versions/20260924_0100_add_issuance_event_owner.py"
       }
     ],
     "roots": [

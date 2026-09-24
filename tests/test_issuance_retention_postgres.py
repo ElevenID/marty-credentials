@@ -16,6 +16,7 @@ import pytest
 import yaml
 from alembic import command
 from alembic.config import Config
+from issuance.domain.entities import EventType, IssuanceEvent
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 from issuance.infrastructure.models import (
     application_templates_table,
@@ -99,7 +100,9 @@ async def _exercise(database_url) -> None:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         repository = PostgresIssuanceRepository(factory)
         now = datetime.now(UTC)
-        old, recent = now - timedelta(days=40), now - timedelta(days=5)
+        old, recent, newer = (
+            now - timedelta(days=40), now - timedelta(days=5), now - timedelta(days=2)
+        )
         async with factory() as session, session.begin():
                 for org in ("a", "b"):
                     await session.execute(
@@ -161,9 +164,22 @@ async def _exercise(database_url) -> None:
                     insert(issuance_transactions_table).values(
                         id="tx-new-a", organization_id="organization-a",
                         credential_template_id="synthetic", pre_auth_code="preauth-new-a",
-                        created_at=recent, expires_at=now + timedelta(days=90),
+                        created_at=newer, expires_at=now + timedelta(days=90),
                     )
                 )
+                await session.execute(
+                    insert(issuance_events_table).values(
+                        id="event-new-a", transaction_id="tx-a",
+                        event_type="synthetic", created_at=recent,
+                    )
+                )
+
+        await repository.save_event(
+            IssuanceEvent(
+                id="event-current-a", transaction_id="tx-new-a",
+                event_type=EventType.OFFER_GENERATED, created_at=recent,
+            )
+        )
 
         before = await repository.get_retention_summary("organization-a", 30)
         assert before["eligible_for_purge"] == {
@@ -173,6 +189,8 @@ async def _exercise(database_url) -> None:
         assert before["oldest_retained_record_at"] == recent.isoformat()
         purged = await repository.purge_retention_records("organization-a", 30)
         assert purged["purged_records"] == before["eligible_for_purge"]
+        after = await repository.get_retention_summary("organization-a", 30)
+        assert after["oldest_retained_record_at"] == recent.isoformat()
         again = await repository.purge_retention_records("organization-a", 30)
         assert again["purged_records"]["total"] == 0
 
@@ -181,11 +199,23 @@ async def _exercise(database_url) -> None:
                 (issuance_transactions_table, {"tx-new-a", "tx-b"}),
                 (applications_table, {"app-b"}),
                 (authorization_sessions_table, {"auth-b"}),
-                (issuance_events_table, {"event-b"}),
+                (issuance_events_table, {"event-b", "event-new-a", "event-current-a"}),
                 (issued_credentials_table, {"credential-b"}),
                 (credential_delivery_records_table, {"delivery-b"}),
                 (evidence_facts_table, {"fact-b"}),
             ):
                 assert set((await session.execute(select(table.c.id))).scalars()) == expected
+            retained_event = (
+                await session.execute(
+                    select(issuance_events_table).where(issuance_events_table.c.id == "event-new-a")
+                )
+            ).one()
+            assert retained_event.organization_id == "organization-a"
+            saved_event = (
+                await session.execute(
+                    select(issuance_events_table).where(issuance_events_table.c.id == "event-current-a")
+                )
+            ).one()
+            assert saved_event.organization_id == "organization-a"
     finally:
         await engine.dispose()

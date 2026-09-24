@@ -253,8 +253,14 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             applications_table.c.organization_id == org_id
         )
         return or_(
-            issuance_events_table.c.transaction_id.in_(transaction_ids),
-            issuance_events_table.c.application_id.in_(application_ids),
+            issuance_events_table.c.organization_id == org_id,
+            and_(
+                issuance_events_table.c.organization_id.is_(None),
+                or_(
+                    issuance_events_table.c.transaction_id.in_(transaction_ids),
+                    issuance_events_table.c.application_id.in_(application_ids),
+                ),
+            ),
         )
 
     @staticmethod
@@ -1814,9 +1820,29 @@ class PostgresIssuanceRepository(IIssuanceRepository):
 
     @staticmethod
     async def _save_event_in_session(session: AsyncSession, event: IssuanceEvent) -> None:
+        owners = {event.organization_id} if event.organization_id else set()
+        if event.transaction_id:
+            transaction_owner = await session.scalar(
+                select(issuance_transactions_table.c.organization_id).where(
+                    issuance_transactions_table.c.id == event.transaction_id
+                )
+            )
+            if transaction_owner:
+                owners.add(transaction_owner)
+        if event.application_id:
+            application_owner = await session.scalar(
+                select(applications_table.c.organization_id).where(
+                    applications_table.c.id == event.application_id
+                )
+            )
+            if application_owner:
+                owners.add(application_owner)
+        if len(owners) > 1:
+            raise ValueError("Issuance event references conflicting organizations")
         await session.execute(
             issuance_events_table.insert().values(
                 id=event.id,
+                organization_id=next(iter(owners), None),
                 transaction_id=event.transaction_id,
                 application_id=event.application_id,
                 event_type=event.event_type.value,
@@ -2658,15 +2684,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     # Lifecycle event methods
     async def save_event(self, event: IssuanceEvent) -> None:
         async with self._session_factory() as session:
-            stmt = issuance_events_table.insert().values(
-                id=event.id,
-                transaction_id=event.transaction_id,
-                application_id=event.application_id,
-                event_type=event.event_type.value,
-                metadata=event.metadata,
-                created_at=event.created_at,
-            )
-            await session.execute(stmt)
+            await self._save_event_in_session(session, event)
             await session.commit()
 
     async def list_events_for_application(self, application_id: str) -> list[IssuanceEvent]:
@@ -2681,6 +2699,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             return [
                 IssuanceEvent(
                     id=row.id,
+                    organization_id=row.organization_id,
                     transaction_id=row.transaction_id,
                     application_id=row.application_id,
                     event_type=EventType(row.event_type),
@@ -5291,6 +5310,15 @@ class PostgresIssuanceRepository(IIssuanceRepository):
         cutoff_at = datetime.now(UTC) - timedelta(days=retention_days)
 
         async with self._session_factory() as session:
+            await session.execute(
+                update(issuance_events_table)
+                .where(
+                    issuance_events_table.c.organization_id.is_(None),
+                    issuance_events_table.c.created_at >= cutoff_at,
+                    self._event_org_condition(org_id),
+                )
+                .values(organization_id=org_id)
+            )
             delete_events_result = await session.execute(
                 delete(issuance_events_table).where(
                     issuance_events_table.c.created_at < cutoff_at,

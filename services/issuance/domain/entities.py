@@ -206,6 +206,7 @@ class IssuanceEvent:
     event_type: EventType = EventType.OFFER_GENERATED
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    organization_id: str | None = None
 
 
 @dataclass
