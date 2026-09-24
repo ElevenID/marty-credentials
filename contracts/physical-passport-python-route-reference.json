@@ -24,10 +24,40 @@
     {"method": "POST", "path": "/v1/passport/webhooks/personalization", "outcome": "accepted", "effect": "signed-bureau-event-update"}
   ],
   "negative_observations": {
+    "job_store_unavailable": {"status": 503, "detail": "Physical document job store is unavailable"},
+    "artifact_key_missing": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is required for encrypted document artifacts"},
+    "artifact_key_invalid": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid"},
+    "application_not_found": {"status": 404, "detail": "Physical document application not found"},
+    "artifact_cannot_decrypt": {"status": 500, "detail": "Secure physical document artifact cannot be decrypted"},
+    "data_groups_missing": {"status": 422, "detail": "DG1 and DG2 are required for physical document issuance"},
     "quality_before_bureau_ready": {"status": 409, "detail": "Document is not ready for quality verification"},
     "activation_without_passing_quality": {"status": 409, "detail": "A passing quality result is required before activation"},
     "invalid_webhook_signature": {"status": 401, "detail": "Invalid personalization webhook signature"},
     "unknown_webhook_job": {"status": 404, "detail": "Physical document job not found"}
+  },
+  "request_models": {
+    "application": {
+      "required": ["organization_id", "flow_execution_id", "application_template_id", "credential_template_id", "delivery_destination_profile_id", "country_code", "applicant", "mrz", "data_groups"],
+      "default_document_type": "TD3",
+      "document_types": ["TD1", "TD2", "TD3"],
+      "country_code_pattern": "^[A-Z]{3}$",
+      "delivery_destination_profile_id_max_length": 128,
+      "data_groups_required": ["DG1", "DG2"],
+      "data_group_name_pattern": "^DG[0-9]+$",
+      "data_group_values": "strict-base64",
+      "extra_fields": "forbid"
+    },
+    "quality": {"required": ["passed"], "default_failure_codes": [], "extra_fields": "forbid"},
+    "webhook": {"required_header": "X-Personalization-Signature", "signature_input": "raw-request-body", "response": {"accepted": true}}
+  },
+  "response_projection": {
+    "safe_job_fields": ["id", "organization_id", "flow_execution_id", "application_id", "credential_template_id", "delivery_destination_profile_id", "document_type", "country_code", "secure_artifact_reference", "bureau_job_id", "tracking_number", "status", "quality_result", "error_code", "error_message", "submitted_at", "completed_at", "created_at", "updated_at"],
+    "sensitive_fields_excluded": ["secure_artifact_ciphertext", "applicant", "mrz", "data_groups"],
+    "create_http_status": 201,
+    "generate_sod_additional_fields": ["sod_sha256"]
+  },
+  "bureau_status_projection": {
+    "QUEUED": "SUBMITTED", "PRINTING": "IN_PRODUCTION", "ENCODING": "IN_PRODUCTION", "QUALITY_CHECK": "QUALITY_CHECK", "SHIPPED": "READY_FOR_ACTIVATION", "DELIVERED": "READY_FOR_ACTIVATION", "FAILED": "FAILED", "CANCELLED": "CANCELLED"
   },
   "durable_repository_reference": {
     "oracle": "tests/test_physical_passport_repository_postgres.py",
