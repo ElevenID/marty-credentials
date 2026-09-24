@@ -1,0 +1,31 @@
+{
+  "schema": "marty.issuance-retention-python-retirement-qualification/v1",
+  "state": "blocked_pending_retention_native_main",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "commit": null,
+    "artifacts": [
+      {"path": "contracts/issuance-universal-ownership.json", "sha256": null},
+      {"path": "contracts/issuance-native-coverage.json", "sha256": null},
+      {"path": "contracts/issuance-retention-management.json", "sha256": null},
+      {"path": "release/stack-lock.json", "sha256": null}
+    ]
+  },
+  "prior_retirement_qualification": "contracts/issuance-python-retirement-qualification.json",
+  "authorized_native_http_deletions": [
+    {"method": "GET", "path": "/v1/issuance/organizations/{organization_id}/retention"},
+    {"method": "POST", "path": "/v1/issuance/organizations/{organization_id}/retention/purge"}
+  ],
+  "retained_python_http": [
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "full_python_service_deletion_authorized": false
+}
