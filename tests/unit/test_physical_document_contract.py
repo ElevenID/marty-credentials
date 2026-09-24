@@ -105,7 +105,7 @@ async def test_passport_capability_blockers_preserve_order_and_fail_closed(
             "Configure PERSONALIZATION_BUREAU_URL for production handoff.",
         ],
     }
-    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "synthetic-key-for-readiness-only")
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", Fernet.generate_key().decode())
     monkeypatch.setattr(
         routes,
         "signer_capabilities",
@@ -117,6 +117,29 @@ async def test_passport_capability_blockers_preserve_order_and_fail_closed(
     assert ready["bureau_configured"] is True
     assert ready["encrypted_artifact_store"] is True
     assert ready["blockers"] == []
+
+
+@pytest.mark.parametrize("invalid_key", ["synthetic-invalid-key", "⚠"])
+@pytest.mark.asyncio
+async def test_passport_capabilities_reject_invalid_artifact_key(
+    monkeypatch: pytest.MonkeyPatch, invalid_key: str
+) -> None:
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", invalid_key)
+    monkeypatch.setattr(
+        routes,
+        "signer_capabilities",
+        lambda: {"configured": True, "mode": "EXTERNAL", "blockers": []},
+    )
+    monkeypatch.setattr(routes, "is_bureau_configured", lambda: True)
+    result = await routes.get_physical_document_capabilities()
+    assert result["supported"] is False
+    assert result["encrypted_artifact_store"] is False
+    assert result["blockers"] == [
+        "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid for encrypted sensitive artifacts."
+    ]
+    with pytest.raises(HTTPException) as rejected:
+        routes._fernet()
+    assert rejected.value.status_code == 503
 
 
 @pytest.mark.asyncio
