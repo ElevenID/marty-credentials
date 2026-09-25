@@ -111,7 +111,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.task == 'tests'
-        uses: taiki-e/install-action@fcf5432d9f50d67e37ee6e29bdb7a224ff67b4a7
+        uses: taiki-e/install-action@dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12
         with:
           tool: cargo-nextest@0.9.143
 
