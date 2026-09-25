@@ -1,17 +1,25 @@
 {
   "schema": "marty.issuance-python-retirement-qualification/v1",
-  "state": "blocked_pending_marty_ui_checkpoint",
+  "state": "qualified",
   "source": {
     "repository": "ElevenID/marty-ui",
-    "commit": null,
+    "commit": "207c84afc00b2f3b2b3db6b433823a9c7d59ab38",
     "artifacts": [
       {
         "path": "contracts/issuance-universal-ownership.json",
-        "sha256": null
+        "sha256": "0a8e589adf41678940cd72960813b3a7fbcce1c949938d538fdf0a3faba3f7f9"
       },
       {
         "path": "contracts/issuance-native-coverage.json",
-        "sha256": null
+        "sha256": "4816adcc715ff8b96a80e509341f07d3b374ed820422384a254af4299b52fe48"
+      },
+      {
+        "path": ".github/workflows/e2e-tests.yml",
+        "sha256": "6f8e38baf2487d392ac57941e6de3b19d8626340b90d5ba5b130997f5fe0f8b6"
+      },
+      {
+        "path": "rust/crates/release-evidence/src/demo_qualification.rs",
+        "sha256": "1942cbb76c3513ef49e88e85b6f7dfbe490dad297e3fae66ae984ed7fe770d42"
       }
     ]
   },

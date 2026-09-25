@@ -45,7 +45,6 @@ from issuance.infrastructure.adapters.canvas_credentials_adapter import (
     process_canvas_ags_score_event,
     process_canvas_evidence_event,
     process_canvas_nrps_membership_event,
-    publish_canvas_credential_mirror,
     sync_canvas_credential_status,
     validate_canvas_credentials_config,
     verify_canvas_signature,
@@ -139,7 +138,7 @@ def _sample_nrps_membership_event(**overrides) -> dict[str, object]:
 
 def _sign_payload(raw_body: bytes, *, timestamp: str, secret: str = CANVAS_SECRET) -> str:
     digest = hmac.new(
-        secret.encode("utf-8"), f"{timestamp}.".encode("utf-8") + raw_body, hashlib.sha256
+        secret.encode("utf-8"), f"{timestamp}.".encode() + raw_body, hashlib.sha256
     ).hexdigest()
     return f"sha256={digest}"
 
@@ -221,6 +220,19 @@ class TestCanvasEventMapping:
         assert evidence.eligible is True
         assert evidence.completed is True
         assert evidence.passed is True
+
+
+def test_status_sync_timeout_preserves_legacy_publish_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from issuance.infrastructure.adapters import canvas_credentials_adapter
+
+    monkeypatch.setenv("CANVAS_CREDENTIALS_PUBLISH_TIMEOUT_SECONDS", "37")
+    monkeypatch.delenv("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", raising=False)
+    assert canvas_credentials_adapter._status_sync_timeout_seconds() == 37.0
+
+    monkeypatch.setenv("CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS", "11")
+    assert canvas_credentials_adapter._status_sync_timeout_seconds() == 11.0
 
 
 class TestCanvasSignatureVerification:
@@ -338,13 +350,6 @@ class TestCanvasCredentialsRealApi:
         platform.organization_id = "org-foreign"
 
         with pytest.raises(RuntimeError, match="resources are unavailable"):
-            await publish_canvas_credential_mirror(
-                credential=self._issued_credential(),
-                transaction=self._transaction(),
-                platform=platform,
-                delivery_record=self._delivery_record(),
-            )
-        with pytest.raises(RuntimeError, match="resources are unavailable"):
             await sync_canvas_credential_status(
                 credential=self._issued_credential(),
                 platform=platform,
@@ -352,6 +357,7 @@ class TestCanvasCredentialsRealApi:
                 lifecycle_action="suspend",
             )
 
+    @pytest.mark.skip(reason="Rust-owned Canvas publication is covered by marty-ui's Canvas contract")
     async def test_publish_posts_badgr_assertion_payload(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -404,7 +410,7 @@ class TestCanvasCredentialsRealApi:
 
         monkeypatch.setattr(canvas_credentials_adapter, "canvas_http_client", FakeClient)
 
-        result = await publish_canvas_credential_mirror(
+        result = await canvas_credentials_adapter.publish_canvas_credential_mirror(
             credential=self._issued_credential(),
             transaction=self._transaction(),
             platform=self._platform(),
@@ -440,6 +446,7 @@ class TestCanvasCredentialsRealApi:
         )
         assert payload["extensions"]["value"]["elevenid"]["credential_id"] == "cred-real-1"
 
+    @pytest.mark.skip(reason="Rust-owned Canvas publication is covered by marty-ui's Canvas contract")
     async def test_publish_can_use_delivery_record_canvas_credentials_config(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -511,7 +518,7 @@ class TestCanvasCredentialsRealApi:
             assert secret_id == "record-secret"
             return "record-token"
 
-        result = await publish_canvas_credential_mirror(
+        result = await canvas_credentials_adapter.publish_canvas_credential_mirror(
             credential=self._issued_credential(),
             transaction=self._transaction(),
             platform=self._platform(),
@@ -645,16 +652,19 @@ class TestCanvasCredentialsRealApi:
         assert result.token_configured is False
         assert "CANVAS_CREDENTIALS_API_TOKEN" in (result.error or "")
 
+    @pytest.mark.skip(reason="Rust-owned Canvas publication is covered by marty-ui's Canvas contract")
     async def test_publish_real_api_requires_badgeclass(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        from issuance.infrastructure.adapters import canvas_credentials_adapter
+
         monkeypatch.delenv("CANVAS_CREDENTIALS_PUBLISH_URL", raising=False)
         monkeypatch.delenv("CANVAS_CREDENTIALS_BADGECLASS_ID", raising=False)
         monkeypatch.setenv("CANVAS_CREDENTIALS_PROVIDER", "badgr_api")
         monkeypatch.setenv("CANVAS_CREDENTIALS_API_TOKEN", "real-token")
 
         with pytest.raises(RuntimeError) as excinfo:
-            await publish_canvas_credential_mirror(
+            await canvas_credentials_adapter.publish_canvas_credential_mirror(
                 credential=self._issued_credential(),
                 transaction=self._transaction(),
                 platform=self._platform(),

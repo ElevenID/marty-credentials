@@ -12,6 +12,7 @@
     "authorized": 200
   },
   "retention_days": {"default": 30, "minimum": 1, "maximum": 3650, "invalid": 422},
+  "repository_failure": {"status": 500, "body": "Internal Server Error", "sensitive_detail_exposed": false},
   "tracked_scope": [
     "applications", "submitted_evidence", "issuance_transactions",
     "issued_credentials", "authorization_sessions", "issuance_events"

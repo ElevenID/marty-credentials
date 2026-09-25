@@ -187,7 +187,9 @@ jobs:
       - name: Build the local Python extension from the locked workspace
         working-directory: marty-credentials
         run: |
-          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest pytest-asyncio
+          # This isolated binding job does not install the project package.
+          # Install the async SQLAlchemy extra explicitly for route imports.
+          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest pytest-asyncio 'sqlalchemy[asyncio]>=2.0'
           python -m pip install --disable-pip-version-check ../compatibility-wheels/marty_verification_py-*.whl
           maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
           scripts/retry-command.sh python -m pip install --disable-pip-version-check local-wheels/*.whl

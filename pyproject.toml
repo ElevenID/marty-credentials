@@ -29,7 +29,8 @@ keywords = ["credentials", "verifiable-credentials", "mdl", "identity", "cryptog
 
 dependencies = [
     "pydantic>=2.0",
-    "sqlalchemy>=2.0",
+    # Async sessions require greenlet on clean Linux installs.
+    "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29.0",
     "cryptography>=44.0.0",
     "fastapi>=0.141.1",

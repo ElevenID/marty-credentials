@@ -214,11 +214,6 @@ class IIssuanceRepository(ABC):
         pass
 
     @abstractmethod
-    async def save_oid4vci_client(self, client: Oid4vciRegisteredClient) -> None:
-        """Create or update one tenant-owned OID4VCI wallet client."""
-        pass
-
-    @abstractmethod
     async def get_oid4vci_client(
         self,
         organization_id: str,
@@ -1191,25 +1186,6 @@ class IIssuanceRepository(ABC):
         pass
 
     # Ephemeral OID4VCI capabilities (PAR request URIs and proof nonces)
-    @abstractmethod
-    async def save_pushed_authorization_request(
-        self,
-        request_uri: str,
-        params: dict[str, Any],
-        *,
-        ttl_seconds: int,
-    ) -> bool:
-        """Persist one opaque PAR capability; return false on a key collision."""
-        pass
-
-    @abstractmethod
-    async def consume_pushed_authorization_request(
-        self,
-        request_uri: str,
-    ) -> dict[str, Any] | None:
-        """Atomically consume one unexpired PAR capability."""
-        pass
-
     @abstractmethod
     async def save_proof_nonce(self, nonce: str, *, ttl_seconds: int) -> bool:
         """Persist one opaque proof nonce; return false on a key collision."""

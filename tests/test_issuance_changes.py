@@ -64,6 +64,7 @@ from issuance.infrastructure.adapters.memory_repository import (
 from issuance.infrastructure.models import issuance_transactions_table, issued_credentials_table
 
 
+@pytest.mark.skip(reason="Rust-owned authorization behavior is frozen in marty-ui's OID4VCI contract")
 def test_authorization_redirect_preserves_registered_query_parameters():
     from issuance.infrastructure.api.routes import _authorization_redirect_uri
 
@@ -1693,6 +1694,7 @@ class TestStatusListAllocationOrganizationScope:
         assert exc_info.value.status_code == 503
 
 
+@pytest.mark.skip(reason="Rust-owned revoke route is covered by marty-ui's OID4VCI contract")
 class TestTransactionRevocationPropagation:
     @staticmethod
     def _request():
@@ -2027,6 +2029,7 @@ class TestDeliveryRecords:
         assert "canvas_program_binding_id" in (records[1].last_error or "")
 
 
+@pytest.mark.skip(reason="Rust-owned Canvas publication and provenance are covered by marty-ui's Canvas contract")
 class TestCanvasMirrorPublishing:
     @pytest.fixture(autouse=True)
     def _enable_portable_canvas_pilot(self, monkeypatch):
@@ -2389,6 +2392,7 @@ class TestCanvasMirrorPublishing:
         assert mismatched.value.status_code == 403
 
 
+@pytest.mark.skip(reason="Rust-owned Canvas batch processing is covered by marty-ui's Canvas contract")
 class TestCanvasMirrorBatchProcessing:
     @pytest.fixture(autouse=True)
     def _enable_portable_canvas_pilot(self, monkeypatch):
@@ -2716,6 +2720,7 @@ class TestCanvasMirrorBatchProcessing:
         assert updated.metadata.get("publish_attempts") is None
 
 
+@pytest.mark.skip(reason="Rust-owned Canvas operations are covered by marty-ui's Canvas contract")
 class TestCanvasMirrorOps:
     async def test_process_failed_status_syncs_retries_only_failed_records(self, repo, monkeypatch):
         from issuance.infrastructure.api import routes

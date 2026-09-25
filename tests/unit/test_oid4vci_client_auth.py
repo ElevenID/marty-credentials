@@ -55,6 +55,15 @@ def _key_material():
     return private_key, public_jwk
 
 
+def _seed_client(
+    repo: InMemoryIssuanceRepository,
+    client: Oid4vciRegisteredClient,
+) -> None:
+    """Seed the read-side fixture without restoring the retired Python writer."""
+
+    repo._oid4vci_clients[(client.organization_id, client.client_id)] = client
+
+
 def _assertion(
     private_key,
     *,
@@ -209,12 +218,13 @@ def test_verify_private_key_jwt_rejects_invalid_security_claims(
 async def test_registered_client_authentication_is_tenant_bound_and_one_time() -> None:
     private_key, public_jwk = _key_material()
     repo = InMemoryIssuanceRepository()
-    await repo.save_oid4vci_client(
+    _seed_client(
+        repo,
         Oid4vciRegisteredClient(
             organization_id="org-a",
             client_id=CLIENT_ID,
             jwks={"keys": [public_jwk]},
-        )
+        ),
     )
     assertion = _assertion(private_key, now=datetime.now(UTC))
 
@@ -260,12 +270,13 @@ async def test_registered_client_authentication_is_tenant_bound_and_one_time() -
 async def test_registered_client_identity_comes_from_bound_signed_assertion() -> None:
     private_key, public_jwk = _key_material()
     repo = InMemoryIssuanceRepository()
-    await repo.save_oid4vci_client(
+    _seed_client(
+        repo,
         Oid4vciRegisteredClient(
             organization_id="org-a",
             client_id=CLIENT_ID,
             jwks={"keys": [public_jwk]},
-        )
+        ),
     )
 
     omitted_form_client_id = await _authenticate_oid4vci_client(
@@ -372,43 +383,18 @@ def test_authorization_metadata_advertises_client_auth_only_where_resolvable(
 
 
 @pytest.mark.asyncio
-async def test_par_tenant_binding_cannot_be_overridden_by_form_body() -> None:
-    repo = InMemoryIssuanceRepository()
-    response = await routes.pushed_authorization_request(
-        http_request=_token_request(),
-        response_type="code",
-        client_id="public-wallet",
-        redirect_uri="https://wallet.example/callback",
-        scope=None,
-        state=None,
-        code_challenge="challenge",
-        code_challenge_method="S256",
-        issuer_state=None,
-        authorization_details=None,
-        organization_id="org-b",
-        issuer_org="org-a",
-        repo=repo,
-    )
-    payload = json.loads(response.body)
-    stored = await repo.consume_pushed_authorization_request(payload["request_uri"])
-
-    assert response.status_code == 201
-    assert stored is not None
-    assert stored["organization_id"] == "org-a"
-
-
-@pytest.mark.asyncio
 async def test_token_endpoint_requires_bound_client_and_preserves_pending_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     private_key, public_jwk = _key_material()
     repo = InMemoryIssuanceRepository()
-    await repo.save_oid4vci_client(
+    _seed_client(
+        repo,
         Oid4vciRegisteredClient(
             organization_id="org-a",
             client_id=CLIENT_ID,
             jwks={"keys": [public_jwk]},
-        )
+        ),
     )
     transaction = IssuanceTransaction(
         organization_id="org-a",
@@ -471,12 +457,13 @@ async def test_concurrent_pre_authorized_code_redemption_has_one_winner(
 ) -> None:
     private_key, public_jwk = _key_material()
     repo = InMemoryIssuanceRepository()
-    await repo.save_oid4vci_client(
+    _seed_client(
+        repo,
         Oid4vciRegisteredClient(
             organization_id="org-a",
             client_id=CLIENT_ID,
             jwks={"keys": [public_jwk]},
-        )
+        ),
     )
     transaction = IssuanceTransaction(
         organization_id="org-a",
@@ -590,12 +577,13 @@ async def test_grpc_token_exchange_cannot_bypass_registered_client_authenticatio
 
     private_key, public_jwk = _key_material()
     repo = InMemoryIssuanceRepository()
-    await repo.save_oid4vci_client(
+    _seed_client(
+        repo,
         Oid4vciRegisteredClient(
             organization_id="org-a",
             client_id=CLIENT_ID,
             jwks={"keys": [public_jwk]},
-        )
+        ),
     )
     transaction = IssuanceTransaction(
         organization_id="org-a",

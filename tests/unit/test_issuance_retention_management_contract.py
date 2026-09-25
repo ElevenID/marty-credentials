@@ -56,13 +56,13 @@ class _Repository:
         }
 
 
-def _client(monkeypatch) -> tuple[TestClient, _Repository]:
+def _client(monkeypatch, *, raise_server_exceptions: bool = True) -> tuple[TestClient, _Repository]:
     monkeypatch.setattr(routes, "_ISSUANCE_API_KEY", "synthetic-management-key")
     repository = _Repository()
     app = FastAPI()
     app.include_router(routes.issuance_router)
     app.dependency_overrides[IIssuanceRepository] = lambda: repository
-    return TestClient(app), repository
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions), repository
 
 
 def test_retention_routes_are_complete_and_management_authenticated() -> None:
@@ -133,6 +133,35 @@ def test_retention_responses_defaults_bounds_and_counts(monkeypatch) -> None:
         for operation in ("summary", "purge")
         for days in (30, 1, 3650)
     ]
+
+
+def test_retention_repository_failure_is_generic_for_both_routes(monkeypatch) -> None:
+    client, repository = _client(monkeypatch, raise_server_exceptions=False)
+    calls = []
+
+    async def fail_summary(org_id: str, days: int) -> dict:
+        calls.append(("summary", org_id, days))
+        raise RuntimeError("synthetic-private-repository-detail")
+
+    async def fail_purge(org_id: str, days: int) -> dict:
+        calls.append(("purge", org_id, days))
+        raise RuntimeError("synthetic-private-repository-detail")
+
+    repository.get_retention_summary = fail_summary
+    repository.purge_retention_records = fail_purge
+    headers = {
+        "X-API-Key": "synthetic-management-key",
+        "X-Organization-ID": "organization-a",
+    }
+    failure = CONTRACT["repository_failure"]
+    for route in CONTRACT["routes"]:
+        path = route["path"].replace("{organization_id}", "organization-a")
+        request = client.get if route["method"] == "GET" else client.post
+        response = request(path, headers=headers)
+        assert response.status_code == failure["status"]
+        assert response.text == failure["body"]
+        assert "synthetic-private-repository-detail" not in response.text
+    assert calls == [("summary", "organization-a", 30), ("purge", "organization-a", 30)]
 
 
 @pytest.mark.asyncio

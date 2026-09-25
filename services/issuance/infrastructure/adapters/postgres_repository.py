@@ -915,35 +915,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
 
             return transactions
 
-    async def save_oid4vci_client(self, client: Oid4vciRegisteredClient) -> None:
-        async with self._session_factory() as session:
-            now = datetime.now(UTC)
-            statement = (
-                pg_insert(oid4vci_registered_clients_table)
-                .values(
-                    organization_id=client.organization_id,
-                    client_id=client.client_id,
-                    jwks=client.jwks,
-                    redirect_uris=client.redirect_uris,
-                    token_endpoint_auth_method=client.token_endpoint_auth_method,
-                    active=client.active,
-                    created_at=client.created_at,
-                    updated_at=now,
-                )
-                .on_conflict_do_update(
-                    index_elements=["organization_id", "client_id"],
-                    set_={
-                        "jwks": client.jwks,
-                        "redirect_uris": client.redirect_uris,
-                        "token_endpoint_auth_method": client.token_endpoint_auth_method,
-                        "active": client.active,
-                        "updated_at": now,
-                    },
-                )
-            )
-            await session.execute(statement)
-            await session.commit()
-
     async def get_oid4vci_client(
         self,
         organization_id: str,
@@ -1078,30 +1049,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
                 return False, None
             payload = row.payload if isinstance(row.payload, dict) else None
             return True, payload
-
-    async def save_pushed_authorization_request(
-        self,
-        request_uri: str,
-        params: dict[str, Any],
-        *,
-        ttl_seconds: int,
-    ) -> bool:
-        return await self._save_ephemeral_capability(
-            purpose="par",
-            value=request_uri,
-            payload=params,
-            ttl_seconds=ttl_seconds,
-        )
-
-    async def consume_pushed_authorization_request(
-        self,
-        request_uri: str,
-    ) -> dict[str, Any] | None:
-        live, payload = await self._consume_ephemeral_capability(
-            purpose="par",
-            value=request_uri,
-        )
-        return payload if live and payload is not None else None
 
     async def save_proof_nonce(self, nonce: str, *, ttl_seconds: int) -> bool:
         return await self._save_ephemeral_capability(

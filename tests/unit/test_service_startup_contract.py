@@ -743,6 +743,15 @@ def test_fastapi_form_parser_is_an_explicit_runtime_dependency() -> None:
     )
 
 
+def test_sqlalchemy_asyncio_greenlet_is_an_explicit_runtime_dependency() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+    assert any(
+        dependency.startswith("sqlalchemy[asyncio]>=")
+        for dependency in project["dependencies"]
+    )
+
+
 def test_native_wheel_is_an_explicit_non_bootstrapping_extra() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 

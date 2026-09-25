@@ -6,7 +6,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -286,11 +286,9 @@ from issuance.infrastructure.api.physical_document_routes import (
     physical_document_router,
 )
 from issuance.infrastructure.api.routes import (
-    CanvasMirrorAutomationConfig,
     issuance_router,
     issued_credential_router,
     resource_owner_router,
-    run_canvas_mirror_automation_loop,
 )
 
 logging.basicConfig(
@@ -407,22 +405,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await grpc_server.start()
         logger.info(f"gRPC server started on port {ISSUANCE_GRPC_PORT}")
 
-    canvas_mirror_worker_task: asyncio.Task | None = None
-    canvas_mirror_worker_config = CanvasMirrorAutomationConfig.from_env()
-    if canvas_mirror_worker_config.enabled:
-        canvas_mirror_worker_task = asyncio.create_task(
-            run_canvas_mirror_automation_loop(get_repo, canvas_mirror_worker_config)
-        )
-
     try:
         yield
     finally:
         logger.info(f"Shutting down {SERVICE_NAME}...")
-        if canvas_mirror_worker_task:
-            canvas_mirror_worker_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await canvas_mirror_worker_task
-            logger.info("Canvas mirror automation worker stopped")
         if grpc_server:
             await grpc_server.stop(grace=5)
             logger.info("gRPC server stopped")
