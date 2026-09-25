@@ -1,14 +1,14 @@
 {
   "schema": "marty.issuance-retention-python-retirement-qualification/v1",
-  "state": "blocked_pending_retention_native_main",
+  "state": "qualified",
   "source": {
     "repository": "ElevenID/marty-ui",
-    "commit": null,
+    "commit": "91ea7e52d6a3822981bb42f002da8c68532ebf2e",
     "artifacts": [
-      {"path": "contracts/issuance-universal-ownership.json", "sha256": null},
-      {"path": "contracts/issuance-native-coverage.json", "sha256": null},
-      {"path": "contracts/issuance-retention-management.json", "sha256": null},
-      {"path": "release/stack-lock.json", "sha256": null}
+      {"path": "contracts/issuance-universal-ownership.json", "sha256": "a381e74dcd10ad40aba6e7efc2a42e60397ee7ba57300507ffd47713f6b58732"},
+      {"path": "contracts/issuance-native-coverage.json", "sha256": "4e7e2b29f400342ab254aad8538be8688050c64abde8af6095e8d10ec3c8f5ba"},
+      {"path": "contracts/issuance-retention-management.json", "sha256": "dbc6ad753ba16f2277e6c40040a1115cff257a7cf0d7ec32786f474a5881db0c"},
+      {"path": "release/stack-lock.json", "sha256": "89d8258041cc0ab7d4eb998ef7b34fc8b0816a66c3040fb2a83f1a9368ba168c"}
     ]
   },
   "prior_retirement_qualification": "contracts/issuance-python-retirement-qualification.json",

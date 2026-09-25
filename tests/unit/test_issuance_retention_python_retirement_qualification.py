@@ -115,8 +115,15 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     return contract_path, source, contract
 
 
-def test_checked_in_retention_contract_stays_blocked(tmp_path: Path) -> None:
-    with pytest.raises(prior_gate.QualificationError, match="blocked pending #849"):
+def test_checked_in_retention_contract_requires_pinned_ui_checkout(tmp_path: Path) -> None:
+    contract = json.loads(gate.DEFAULT_CONTRACT.read_text(encoding="utf-8"))
+    assert contract["state"] == "qualified"
+    assert contract["source"]["commit"] == "91ea7e52d6a3822981bb42f002da8c68532ebf2e"
+    assert all(
+        isinstance(digest, str) and len(digest) == 64
+        for digest in gate._artifact_map(contract["source"], gate.EXPECTED_ARTIFACTS).values()
+    )
+    with pytest.raises(prior_gate.QualificationError, match="not a Git worktree"):
         gate.verify(gate.DEFAULT_CONTRACT, tmp_path)
 
 
