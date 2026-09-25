@@ -63,6 +63,14 @@ Status sync also retains its historical timeout fallback to
 timeout is configured; removing the publisher must not silently change this
 still-owned behavior.
 
+With the repository's checksum-pinned `marty-rs` 0.2.0 Windows wheel, the
+retained broad `tests/test_issuance_changes.py` module passes on this exact
+deletion branch (124 passed, 21 skipped). A separate plain unit collection
+still fails while importing the published legacy adapter's removed raw-key
+Core capabilities; that compatibility gap is tracked in
+`ElevenID/marty-credentials#297` and must not be mistaken for a passing full
+suite or resolved by deleting the adapter without a parity review.
+
 ## Next linked retirement
 
 DIDComm Python retirement is intentionally separate. The local path remains
