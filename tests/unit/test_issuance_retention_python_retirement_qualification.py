@@ -104,7 +104,13 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     monkeypatch.setattr(prior_gate, "_git_is_clean", lambda _checkout: True)
     monkeypatch.setattr(prior_gate, "_git_is_from_protected_main", lambda _checkout, _commit: True)
     monkeypatch.setattr(
-        gate, "_committed_blob", lambda _checkout, _commit, relative: f"blob:{relative}".encode()
+        prior_gate,
+        "_git_blob",
+        lambda checkout, commit, relative: (
+            f"blob:{relative}".encode()
+            if commit == "b" * 40
+            else (checkout / relative).read_bytes()
+        ),
     )
     return contract_path, source, contract
 

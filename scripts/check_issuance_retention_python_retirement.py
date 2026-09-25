@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import re
-import subprocess
 from pathlib import Path
 
 from scripts import check_issuance_python_retirement as prior_gate
@@ -37,17 +36,6 @@ def _artifact_map(source: dict, expected: set[str]) -> dict[str, str | None]:
     values = {item.get("path"): item.get("sha256") for item in artifacts if isinstance(item, dict)}
     prior_gate._require(set(values) == expected, "Source artifact set changed")
     return values
-
-
-def _committed_blob(checkout: Path, commit: str, relative: str) -> bytes:
-    result = subprocess.run(
-        ["git", "show", f"{commit}:{relative}"],
-        cwd=checkout,
-        check=False,
-        capture_output=True,
-    )
-    prior_gate._require(result.returncode == 0, f"Prior source artifact is missing: {relative}")
-    return result.stdout
 
 
 def _verify_prior_retirement(contract: dict, checkout: Path) -> None:
@@ -102,7 +90,7 @@ def _verify_prior_retirement(contract: dict, checkout: Path) -> None:
             isinstance(expected_digest, str) and re.fullmatch(r"[0-9a-f]{64}", expected_digest),
             f"Prior SHA-256 provenance is missing for {relative}",
         )
-        actual = hashlib.sha256(_committed_blob(checkout, commit, relative)).hexdigest()
+        actual = hashlib.sha256(prior_gate._git_blob(checkout, commit, relative)).hexdigest()
         prior_gate._require(actual == expected_digest, f"Prior SHA-256 mismatch for {relative}")
 
 
@@ -158,7 +146,7 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
             isinstance(expected_digest, str) and re.fullmatch(r"[0-9a-f]{64}", expected_digest),
             f"Missing SHA-256 provenance for {relative}",
         )
-        actual = hashlib.sha256((marty_ui / relative).read_bytes()).hexdigest()
+        actual = hashlib.sha256(prior_gate._git_blob(marty_ui, commit, relative)).hexdigest()
         prior_gate._require(actual == expected_digest, f"SHA-256 mismatch for {relative}")
 
     _verify_prior_retirement(contract, marty_ui)

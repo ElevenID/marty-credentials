@@ -6,6 +6,8 @@ source lands on protected `main`, exact-head gates and a published-image
 dependency pass, and the prior OID4VCI/Canvas retirement is qualified. The
 new qualification contract deliberately has no source commit or artifact
 hashes and fails closed.
+When the gate can qualify, pin artifact SHA-256 values from committed Git
+blobs, not platform-converted checkout files.
 
 The local deletion is exactly the GET retention summary and POST retention
 purge handlers, their response-only models, and their now-unreferenced memory
@@ -23,7 +25,7 @@ and all unrelated issuance features remain Python-owned until separately
 qualified. No beta or production deployment is authorized by this local
 preparation.
 
-Local exact-head preparation gates: 1,647 unit tests passed, five skipped, with 200
+Local exact-head preparation gates: 1,648 unit tests passed, five skipped, with 200
 subtests passed in an isolated Starlette 1.7.0 environment; the route/surface
 guard and fail-closed qualification tests are included. The broader
 `tests/test_issuance_changes.py` module reported 115 passed, 21 skipped, and
