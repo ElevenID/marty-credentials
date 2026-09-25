@@ -1,11 +1,13 @@
 # Issuance retention Python retirement
 
-Status: local preparation only. The two native retention routes are still in
-draft `ElevenID/marty-ui#849`; their Python owners must remain until the Rust
-source lands on protected `main`, exact-head gates and a published-image
-dependency pass, and the prior OID4VCI/Canvas retirement is qualified. The
-new qualification contract deliberately has no source commit or artifact
-hashes and fails closed.
+Status: local preparation only. The two native retention routes are in reviewed
+`ElevenID/marty-ui#849`, but are not yet on protected `main`; their Python
+owners must remain until its exact-head and merge-group gates pass and its
+published-image dependency is verified. The prior OID4VCI/Canvas retirement
+landed as `ElevenID/marty-credentials#298` at
+`af041c2c3bd2e9fae189b566499146f97156120f`, with a qualified gate. This
+separate retention qualification deliberately has no source commit or artifact
+hashes yet and fails closed.
 When the gate can qualify, pin artifact SHA-256 values from committed Git
 blobs, not platform-converted checkout files.
 
