@@ -34,3 +34,10 @@ the repository's checksum-pinned Windows `marty-rs` 0.2.0 wheel into the
 isolated test environment, the exact-head module passed: 124 passed, 21
 skipped. The pinned binding exposes the expected issuer-public-JWK argument.
 A fresh hosted dependency gate remains required before merge.
+
+A separate plain `pytest tests/unit` collection with pinned `marty-rs` 0.2.0
+currently stops in two legacy adapter boundary modules: the compatibility
+`marty_credentials.adapters.services` package still imports removed raw-key
+capabilities (`create_verifiable_credential` and `generate_p256_jwk`). Its
+production-consumer status and migration path need review; the passing 1,648
+unit-test checkpoint above must not be treated as covering that collection.
