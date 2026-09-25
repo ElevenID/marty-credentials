@@ -106,6 +106,11 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     contract_path = tmp_path / "qualification.json"
     _write(contract_path, contract)
     monkeypatch.setattr(gate, "_git_head", lambda _checkout: "a" * 40)
+    monkeypatch.setattr(
+        gate,
+        "_git_blob",
+        lambda checkout, _commit, relative: (checkout / relative).read_bytes(),
+    )
     monkeypatch.setattr(gate, "_git_is_clean", lambda _checkout: True)
     monkeypatch.setattr(gate, "_git_is_from_protected_main", lambda _checkout, _commit: True)
     return contract_path, source, contract
@@ -191,7 +196,9 @@ def test_protected_main_provenance_requires_live_remote_tip(
     def run(command, **_kwargs):
         calls.append(command)
         if command[1:3] == ["remote", "get-url"]:
-            return subprocess.CompletedProcess(command, 0, "https://github.com/ElevenID/marty-ui.git\n")
+            return subprocess.CompletedProcess(
+                command, 0, "https://github.com/ElevenID/marty-ui.git\n"
+            )
         if command[1] == "rev-parse":
             return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n")
         if command[1] == "ls-remote":
@@ -214,6 +221,24 @@ def test_provenance_mismatch_is_rejected(tmp_path: Path, monkeypatch: pytest.Mon
     path.write_text(path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     with pytest.raises(gate.QualificationError, match="provenance mismatch"):
         gate.verify(contract, source)
+
+
+def test_checkout_line_ending_conversion_does_not_change_committed_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract_path, source, _ = _fixture(tmp_path, monkeypatch)
+    relative = ".github/workflows/e2e-tests.yml"
+    path = source / relative
+    committed = path.read_bytes()
+    path.write_bytes(committed.replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(
+        gate,
+        "_git_blob",
+        lambda checkout, _commit, requested: (
+            committed if requested == relative else (checkout / requested).read_bytes()
+        ),
+    )
+    assert gate.verify(contract_path, source)["status"] == "qualified"
 
 
 @pytest.mark.parametrize(
@@ -241,9 +266,9 @@ def test_qualified_retirement_requires_recorder_review_provenance(
     contract_path, source, contract = _fixture(tmp_path, monkeypatch)
     path = source / relative
     path.write_text(path.read_text(encoding="utf-8").replace(marker, ""), encoding="utf-8")
-    next(
-        item for item in contract["source"]["artifacts"] if item["path"] == relative
-    )["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    next(item for item in contract["source"]["artifacts"] if item["path"] == relative)["sha256"] = (
+        hashlib.sha256(path.read_bytes()).hexdigest()
+    )
     _write(contract_path, contract)
     with pytest.raises(gate.QualificationError, match=message):
         gate.verify(contract_path, source)

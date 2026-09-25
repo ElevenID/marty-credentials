@@ -60,14 +60,14 @@ EXPECTED_ARTIFACTS = {
 }
 EXPECTED_LIFECYCLE_GATE = "canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly"
 EXPECTED_DEMO_WORKFLOW_MARKERS = (
-    'issues/comments/$DEMO_REVIEW_RECORD_ID',
-    'collaborators/$review_author/permission',
-    '--bin validate-demo-qualification',
+    "issues/comments/$DEMO_REVIEW_RECORD_ID",
+    "collaborators/$review_author/permission",
+    "--bin validate-demo-qualification",
 )
 EXPECTED_DEMO_VALIDATOR_MARKERS = (
-    'report.maintainer_review_record_id != expected.review_record_id',
-    'permission.permission != report.maintainer_review_permission',
-    'sha256_hex(&canonical_bytes) != report.maintainer_review_record_sha256',
+    "report.maintainer_review_record_id != expected.review_record_id",
+    "permission.permission != report.maintainer_review_permission",
+    "sha256_hex(&canonical_bytes) != report.maintainer_review_record_sha256",
 )
 
 
@@ -113,6 +113,18 @@ def _git_head(checkout: Path) -> str:
     return result.stdout.strip()
 
 
+def _git_blob(checkout: Path, commit: str, relative: str) -> bytes:
+    """Hash committed bytes, not checkout bytes changed by platform line endings."""
+    result = subprocess.run(
+        ["git", "show", f"{commit}:{relative}"],
+        cwd=checkout,
+        check=False,
+        capture_output=True,
+    )
+    _require(result.returncode == 0, f"Committed source artifact is missing: {relative}")
+    return result.stdout
+
+
 def _git_is_clean(checkout: Path) -> bool:
     result = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=no"],
@@ -132,11 +144,15 @@ def _git_is_from_protected_main(checkout: Path, commit: str) -> bool:
         capture_output=True,
         text=True,
     )
-    if remote.returncode != 0 or re.fullmatch(
-        r"(?:https://github\.com/|git@github\.com:)ElevenID/marty-ui(?:\.git)?/?",
-        remote.stdout.strip(),
-        flags=re.IGNORECASE,
-    ) is None:
+    if (
+        remote.returncode != 0
+        or re.fullmatch(
+            r"(?:https://github\.com/|git@github\.com:)ElevenID/marty-ui(?:\.git)?/?",
+            remote.stdout.strip(),
+            flags=re.IGNORECASE,
+        )
+        is None
+    ):
         return False
     main = subprocess.run(
         ["git", "rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
@@ -242,7 +258,7 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
             isinstance(expected_digest, str) and re.fullmatch(r"[0-9a-f]{64}", expected_digest),
             f"Missing SHA-256 provenance for {relative}",
         )
-        actual = hashlib.sha256((marty_ui / relative).read_bytes()).hexdigest()
+        actual = hashlib.sha256(_git_blob(marty_ui, commit, relative)).hexdigest()
         _require(actual == expected_digest, f"SHA-256 provenance mismatch for {relative}")
 
     workflow = (marty_ui / ".github/workflows/e2e-tests.yml").read_text(encoding="utf-8")
@@ -250,9 +266,9 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
         all(marker in workflow for marker in EXPECTED_DEMO_WORKFLOW_MARKERS),
         "Recorder review provenance workflow is absent",
     )
-    validator = (
-        marty_ui / "rust/crates/release-evidence/src/demo_qualification.rs"
-    ).read_text(encoding="utf-8")
+    validator = (marty_ui / "rust/crates/release-evidence/src/demo_qualification.rs").read_text(
+        encoding="utf-8"
+    )
     _require(
         all(marker in validator for marker in EXPECTED_DEMO_VALIDATOR_MARKERS),
         "Rust recorder review provenance validation is absent",

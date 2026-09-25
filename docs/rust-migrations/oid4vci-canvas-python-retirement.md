@@ -13,6 +13,9 @@ not sufficient to authorize this deletion.
 When it is qualified, fetch `ElevenID/marty-ui` protected `main` in the clean
 UI checkout first: the verifier requires the pinned commit to be an ancestor
 of `origin/main` as well as matching the checkout and artifact hashes.
+Populate SHA-256 values from `git show <commit>:<path>` committed bytes, not
+working-tree file bytes; platform line-ending conversion can otherwise create
+a false mismatch between Windows preparation and Linux CI.
 
 This checkpoint removes Python implementations only after their language-neutral
 contracts were implemented by the Rust issuance service. The paired contracts
