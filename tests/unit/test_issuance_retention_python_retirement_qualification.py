@@ -35,9 +35,13 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
         {
             "schema": "marty.issuance-universal-ownership/v1",
             "runtime_surface": "contracts/issuance-runtime-surface.json",
+            "default_owner": "issuance-native",
+            "retained_legacy_owner": "issuance",
             "retained_legacy_http": _rows(gate.EXPECTED_RETAINED),
             "python_deletion_authorized": False,
             "rust_owned_python_retirement": {
+                "authorized": True,
+                "scope": sorted(prior_gate.EXPECTED_SCOPES),
                 "retained_http_route_count": 9,
                 "full_python_service_deletion_authorized": False,
             },
@@ -70,7 +74,13 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
                     "repository": "ElevenID/marty-credentials",
                     "version": "0.1.78",
                     "commit": gate.EXPECTED_CREDENTIALS_SOURCE,
-                    "artifacts": [{"digest": gate.EXPECTED_CREDENTIALS_DIGEST}],
+                    "artifacts": [
+                        {
+                            "type": "oci",
+                            "uri": "ghcr.io/elevenid/marty-credentials-issuance",
+                            "digest": gate.EXPECTED_CREDENTIALS_DIGEST,
+                        }
+                    ],
                 }
             ],
         },
@@ -166,4 +176,38 @@ def test_unprotected_retention_source_is_rejected(
     contract_path, source, _ = _fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(prior_gate, "_git_is_from_protected_main", lambda _checkout, _commit: False)
     with pytest.raises(prior_gate.QualificationError, match="not reachable from protected main"):
+        gate.verify(contract_path, source)
+
+
+def test_rehashed_release_lock_cannot_change_the_qualified_credentials_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract_path, source, contract = _fixture(tmp_path, monkeypatch)
+    relative = "release/stack-lock.json"
+    lock_path = source / relative
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["components"][0]["artifacts"][0]["digest"] = "sha256:" + "0" * 64
+    _write(lock_path, lock)
+    next(item for item in contract["source"]["artifacts"] if item["path"] == relative)["sha256"] = (
+        hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    )
+    _write(contract_path, contract)
+    with pytest.raises(prior_gate.QualificationError, match="Released Credentials image changed"):
+        gate.verify(contract_path, source)
+
+
+def test_rehashed_ownership_cannot_select_a_different_default_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    contract_path, source, contract = _fixture(tmp_path, monkeypatch)
+    relative = "contracts/issuance-universal-ownership.json"
+    ownership_path = source / relative
+    ownership = json.loads(ownership_path.read_text(encoding="utf-8"))
+    ownership["default_owner"] = "issuance"
+    _write(ownership_path, ownership)
+    next(item for item in contract["source"]["artifacts"] if item["path"] == relative)["sha256"] = (
+        hashlib.sha256(ownership_path.read_bytes()).hexdigest()
+    )
+    _write(contract_path, contract)
+    with pytest.raises(prior_gate.QualificationError, match="Source issuance ownership changed"):
         gate.verify(contract_path, source)

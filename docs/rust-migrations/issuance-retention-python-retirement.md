@@ -23,7 +23,7 @@ and all unrelated issuance features remain Python-owned until separately
 qualified. No beta or production deployment is authorized by this local
 preparation.
 
-Local preparation gates: 1,645 unit tests passed, five skipped, with 200
+Local exact-head preparation gates: 1,647 unit tests passed, five skipped, with 200
 subtests passed in an isolated Starlette 1.7.0 environment; the route/surface
 guard and fail-closed qualification tests are included. The broader
 `tests/test_issuance_changes.py` module reported 115 passed, 21 skipped, and

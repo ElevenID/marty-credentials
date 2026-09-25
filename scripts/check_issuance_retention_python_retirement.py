@@ -57,7 +57,22 @@ def _verify_prior_retirement(contract: dict, checkout: Path) -> None:
         "Prior retirement qualification link changed",
     )
     previous = prior_gate._json(ROOT / relative)
+    prior_gate._require(
+        previous.get("schema") == "marty.issuance-python-retirement-qualification/v1",
+        "Prior retirement schema changed",
+    )
     prior_gate._require(previous.get("state") == "qualified", "Prior retirement is not qualified")
+    prior_gate._require(
+        previous.get("full_python_service_deletion_authorized") is False,
+        "Prior retirement authorizes full service deletion",
+    )
+    prior_scopes = previous.get("authorized_scopes")
+    prior_gate._require(
+        isinstance(prior_scopes, list)
+        and len(prior_scopes) == len(prior_gate.EXPECTED_SCOPES)
+        and set(prior_scopes) == prior_gate.EXPECTED_SCOPES,
+        "Prior retirement scopes changed",
+    )
     prior_gate._require(
         prior_gate._route_keys(previous.get("authorized_native_http_deletions"), "prior deletions")
         == prior_gate.EXPECTED_DELETIONS,
@@ -70,6 +85,9 @@ def _verify_prior_retirement(contract: dict, checkout: Path) -> None:
     )
     source = previous.get("source")
     prior_gate._require(isinstance(source, dict), "Prior source checkpoint is missing")
+    prior_gate._require(
+        source.get("repository") == "ElevenID/marty-ui", "Prior source repository changed"
+    )
     commit = source.get("commit")
     prior_gate._require(
         isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit),
@@ -178,10 +196,20 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
         == EXPECTED_RETAINED,
         "Source retained-route allowlist changed",
     )
+    prior_gate._require(
+        ownership.get("default_owner") == "issuance-native"
+        and ownership.get("retained_legacy_owner") == "issuance",
+        "Source issuance ownership changed",
+    )
     retirement = ownership.get("rust_owned_python_retirement")
     prior_gate._require(isinstance(retirement, dict), "Source retirement gate is missing")
+    source_scopes = retirement.get("scope")
     prior_gate._require(
-        retirement.get("retained_http_route_count") == 9
+        retirement.get("authorized") is True
+        and isinstance(source_scopes, list)
+        and len(source_scopes) == len(prior_gate.EXPECTED_SCOPES)
+        and set(source_scopes) == prior_gate.EXPECTED_SCOPES
+        and retirement.get("retained_http_route_count") == 9
         and retirement.get("full_python_service_deletion_authorized") is False
         and ownership.get("python_deletion_authorized") is False,
         "Source authorizes the wrong Python remainder",
@@ -212,6 +240,8 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
         isinstance(images, list)
         and len(images) == 1
         and isinstance(images[0], dict)
+        and images[0].get("type") == "oci"
+        and images[0].get("uri") == "ghcr.io/elevenid/marty-credentials-issuance"
         and images[0].get("digest") == EXPECTED_CREDENTIALS_DIGEST,
         "Released Credentials image changed",
     )
