@@ -39,5 +39,6 @@ A separate plain `pytest tests/unit` collection with pinned `marty-rs` 0.2.0
 currently stops in two legacy adapter boundary modules: the compatibility
 `marty_credentials.adapters.services` package still imports removed raw-key
 capabilities (`create_verifiable_credential` and `generate_p256_jwk`). Its
-production-consumer status and migration path need review; the passing 1,648
+production-consumer status and migration path are tracked in
+`ElevenID/marty-credentials#297`; the passing 1,648
 unit-test checkpoint above must not be treated as covering that collection.
