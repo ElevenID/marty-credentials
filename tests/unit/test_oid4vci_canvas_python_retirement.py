@@ -70,8 +70,6 @@ RETIRED_ROUTE_SYMBOLS = frozenset(
 
 RETAINED_LEGACY_ROUTE_IDENTITIES = frozenset(
     {
-        ("GET", "/v1/issuance/organizations/{organization_id}/retention"),
-        ("POST", "/v1/issuance/organizations/{organization_id}/retention/purge"),
         ("GET", "/v1/passport/capabilities"),
         ("POST", "/v1/passport/applications"),
         ("POST", "/v1/passport/applications/{application_id}/generate-sod"),

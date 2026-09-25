@@ -170,6 +170,8 @@ jobs:
           path: compatibility-wheels
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.97.1
 
       - name: Enable compiler cache
         uses: ./marty-credentials/.github/actions/optional-sccache
@@ -617,11 +619,30 @@ jobs:
           PASSPORT_REPOSITORY_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
         run: pytest tests/test_physical_passport_repository_postgres.py -v
 
-      - name: Freeze retention purge over owned PostgreSQL
+  retention-retirement-provenance:
+    name: Retention Python Retirement Provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-ui
+          ref: 91ea7e52d6a3822981bb42f002da8c68532ebf2e
+          path: marty-ui
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch live protected UI main
+        working-directory: marty-ui
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Verify the exact two-route retirement qualification
         working-directory: marty-credentials
-        env:
-          RETENTION_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
-        run: pytest tests/test_issuance_retention_postgres.py -v
+        run: python -m scripts.check_issuance_retention_python_retirement --marty-ui ../marty-ui
 
   test-wasm:
     name: WASM Tests
@@ -654,7 +675,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, canvas-worker-consumer-ranges, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, canvas-worker-consumer-ranges, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, retention-retirement-provenance, test-wasm]
     runs-on: ubuntu-latest
     permissions:
       actions: read

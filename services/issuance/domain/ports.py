@@ -1221,13 +1221,3 @@ class IIssuanceRepository(ABC):
     ) -> AuthorizationSession | None:
         """Look up a session by its access token (post-exchange)."""
         pass
-
-    @abstractmethod
-    async def get_retention_summary(self, org_id: str, retention_days: int) -> dict[str, Any]:
-        """Return Hosted Pilot retention status for an organization."""
-        pass
-
-    @abstractmethod
-    async def purge_retention_records(self, org_id: str, retention_days: int) -> dict[str, Any]:
-        """Purge Hosted Pilot data older than the retention window."""
-        pass
