@@ -5098,6 +5098,7 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             result = await session.execute(stmt)
             row = result.first()
             return self._row_to_auth_session(row) if row else None
+
     async def get_authorization_session_by_access_token(
         self, token: str
     ) -> AuthorizationSession | None:
