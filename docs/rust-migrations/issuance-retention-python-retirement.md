@@ -28,9 +28,9 @@ preparation.
 Local exact-head preparation gates: 1,648 unit tests passed, five skipped, with 200
 subtests passed in an isolated Starlette 1.7.0 environment; the route/surface
 guard and fail-closed qualification tests are included. The broader
-`tests/test_issuance_changes.py` module reported 115 passed, 21 skipped, and
-nine native SD-JWT binding failures. Running that same module on the untouched
-parent branch produced the identical result and error (`oid4vci_prepare_sd_jwt`
-received 13 arguments from Python but the installed binding accepts at most
-12). This local binding mismatch is not retention regression evidence, but a
-compatible native binding or hosted equivalent is required before merge.
+`tests/test_issuance_changes.py` module initially reported nine native SD-JWT
+binding failures with the machine's stale `marty-rs` 0.1.60. After installing
+the repository's checksum-pinned Windows `marty-rs` 0.2.0 wheel into the
+isolated test environment, the exact-head module passed: 124 passed, 21
+skipped. The pinned binding exposes the expected issuer-public-JWK argument.
+A fresh hosted dependency gate remains required before merge.
