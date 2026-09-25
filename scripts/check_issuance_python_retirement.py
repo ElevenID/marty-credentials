@@ -385,7 +385,7 @@ def verify(contract_path: Path, marty_ui: Path) -> dict:
         'env("CANVAS_MIRROR_WORKER_ENABLED", "true")',
         'args(["-TERM", &child.0.id().to_string()])',
         "external_credential_id='automation-external'",
-        'stderr.contains("Issuance shutdown requested")',
+        'logs.contains("Issuance shutdown requested")',
     ):
         _require(evidence in lifecycle, f"Packaged-main lifecycle evidence is absent: {evidence}")
 

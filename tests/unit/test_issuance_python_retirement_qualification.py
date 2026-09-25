@@ -86,7 +86,7 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
                 'env("CANVAS_MIRROR_WORKER_ENABLED", "true")',
                 'args(["-TERM", &child.0.id().to_string()])',
                 "external_credential_id='automation-external'",
-                'stderr.contains("Issuance shutdown requested")',
+                'logs.contains("Issuance shutdown requested")',
             )
         ),
     )
@@ -116,8 +116,11 @@ def _fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Pat
     return contract_path, source, contract
 
 
-def test_checked_in_contract_fails_closed_until_checkpoint_lands(tmp_path: Path) -> None:
-    with pytest.raises(gate.QualificationError, match="blocked pending"):
+def test_checked_in_contract_requires_pinned_checkout(tmp_path: Path) -> None:
+    contract = json.loads(gate.DEFAULT_CONTRACT.read_text(encoding="utf-8"))
+    assert contract["state"] == "qualified"
+    assert contract["source"]["commit"] == "207c84afc00b2f3b2b3db6b433823a9c7d59ab38"
+    with pytest.raises(gate.QualificationError, match="not a Git worktree"):
         gate.verify(gate.DEFAULT_CONTRACT, tmp_path)
 
 

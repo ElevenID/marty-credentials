@@ -1,16 +1,18 @@
 # OID4VCI and Canvas mirror Python retirement
 
-Status: prepared locally. The universal native ownership checkpoint in
-`ElevenID/marty-ui#844` has landed, but demo qualification in
-`ElevenID/marty-ui#845` has not. Do not publish or deploy this retirement yet.
-The cross-repository qualification contract remains blocked with no pinned UI
-commit or artifact hashes.
-Qualification must also pin the landed #845 recorder workflow and Rust review
+Status: qualified locally against protected `marty-ui` main
+`207c84afc00b2f3b2b3db6b433823a9c7d59ab38`. Universal native ownership
+in `ElevenID/marty-ui#844` and demo qualification in `#845` have landed.
+The cross-repository contract pins that commit and four committed Git-blob
+digests; its fail-closed verifier passes with exactly 13 authorized deletions
+and 11 retained Python routes. This is not yet a merged Credentials PR or
+deployment acceptance.
+Qualification also pins the landed #845 recorder workflow and Rust review
 validator: the gate rejects a protected-main source that lacks server-fetched
 review-comment permission and record-digest binding. #844 ownership alone is
 not sufficient to authorize this deletion.
 
-When it is qualified, fetch `ElevenID/marty-ui` protected `main` in the clean
+For future requalification, fetch `ElevenID/marty-ui` protected `main` in the clean
 UI checkout first: the verifier requires the pinned commit to be an ancestor
 of `origin/main` as well as matching the checkout and artifact hashes.
 Populate SHA-256 values from `git show <commit>:<path>` committed bytes, not
