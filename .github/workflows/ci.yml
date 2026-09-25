@@ -172,6 +172,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           toolchain: 1.97.1
+          # Match rust-toolchain.toml before maturin enters the workspace;
+          # a later rustup component install can conflict with cargo-fmt.
+          components: clippy, rustfmt
 
       - name: Enable compiler cache
         uses: ./marty-credentials/.github/actions/optional-sccache

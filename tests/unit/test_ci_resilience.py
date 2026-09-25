@@ -140,6 +140,16 @@ def test_local_optional_cache_action_is_checked_out_before_every_use() -> None:
     )
 
 
+def test_local_binding_installs_workspace_toolchain_components_before_maturin() -> None:
+    binding = CI.split("  test-local-python-binding:", 1)[1].split("\n  security:", 1)[0]
+    setup = binding.split("- uses: dtolnay/rust-toolchain@", 1)[1].split(
+        "\n      - name: Enable compiler cache", 1
+    )[0]
+    assert "toolchain: 1.97.1" in setup
+    assert "components: clippy, rustfmt" in setup
+    assert binding.index("components: clippy, rustfmt") < binding.index("maturin build")
+
+
 def test_published_python_dependency_resolution_uses_bounded_retry() -> None:
     retry = "scripts/retry-command.sh"
     assert retry in PYTHON_CI
