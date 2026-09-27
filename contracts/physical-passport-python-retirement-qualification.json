@@ -4,6 +4,7 @@
   "source": {
     "repository": "ElevenID/marty-ui",
     "protected_main_commit": null,
+    "artifact_sha256": null,
     "required_artifacts": [
       "contracts/issuance-physical-passport-native.json",
       "contracts/issuance-native-coverage.json",

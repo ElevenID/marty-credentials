@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import ast
+import copy
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from scripts import issuance_surface_contract
@@ -24,6 +27,54 @@ RETIRED_PASSPORT = {
     ("POST", "/v1/passport/applications/{application_id}/submit-personalization"),
     ("POST", "/v1/passport/webhooks/personalization"),
 }
+PASSPORT_SOURCE_ARTIFACTS = {
+    "contracts/issuance-physical-passport-native.json",
+    "contracts/issuance-native-coverage.json",
+    "contracts/issuance-universal-ownership.json",
+    "docker-compose.profile.passport-native-beta.yml",
+}
+
+
+def _is_sha(value: object, length: int) -> bool:
+    return isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is not None
+
+
+def _assert_passport_qualification_shape(candidate: dict) -> None:
+    assert candidate["schema"] == "marty.physical-passport-python-retirement-qualification/v1"
+    assert {
+        (row["method"], row["path"])
+        for row in candidate["authorized_python_route_deletions"]
+    } == RETIRED_PASSPORT
+    assert len(candidate["authorized_python_route_deletions"]) == len(RETIRED_PASSPORT)
+    assert candidate["full_python_service_deletion_authorized"] is False
+    source = candidate["source"]
+    assert source["repository"] == "ElevenID/marty-ui"
+    assert set(source["required_artifacts"]) == PASSPORT_SOURCE_ARTIFACTS
+    assert len(source["required_artifacts"]) == len(PASSPORT_SOURCE_ARTIFACTS)
+
+    if candidate["state"] == "blocked_pending_beta_acceptance":
+        assert source["protected_main_commit"] is None
+        assert source["artifact_sha256"] is None
+        assert candidate["beta_acceptance_receipt"] is None
+    else:
+        assert candidate["state"] == "qualified"
+        commit = source["protected_main_commit"]
+        assert _is_sha(commit, 40)
+        hashes = source["artifact_sha256"]
+        assert isinstance(hashes, dict) and set(hashes) == PASSPORT_SOURCE_ARTIFACTS
+        assert all(_is_sha(digest, 64) for digest in hashes.values())
+        receipt = candidate["beta_acceptance_receipt"]
+        assert isinstance(receipt, dict)
+        assert receipt["release_source_commit"] == commit
+        assert isinstance(receipt["release_tag"], str) and receipt["release_tag"].strip()
+        assert isinstance(receipt["beta_deployment_run_id"], int)
+        assert receipt["beta_deployment_run_id"] > 0
+        assert isinstance(receipt["evidence_artifact"], str)
+        assert receipt["evidence_artifact"].strip()
+        assert _is_sha(receipt["evidence_sha256"], 64)
+        assert isinstance(receipt["accepted_at_utc"], str)
+        accepted_at = datetime.fromisoformat(receipt["accepted_at_utc"].replace("Z", "+00:00"))
+        assert accepted_at.utcoffset().total_seconds() == 0
 
 
 def _class_methods(relative: str, class_name: str) -> set[str]:
@@ -88,11 +139,25 @@ def test_passport_retirement_keeps_the_frozen_oracle_and_acceptance_gate() -> No
         )
     )
     assert {(row["method"], row["path"]) for row in oracle["operations"]} == RETIRED_PASSPORT
-    assert {
-        (row["method"], row["path"])
-        for row in candidate["authorized_python_route_deletions"]
-    } == RETIRED_PASSPORT
-    assert candidate["state"] == "blocked_pending_beta_acceptance"
-    assert candidate["source"]["protected_main_commit"] is None
-    assert candidate["beta_acceptance_receipt"] is None
-    assert candidate["full_python_service_deletion_authorized"] is False
+    _assert_passport_qualification_shape(candidate)
+
+
+def test_passport_retirement_accepts_a_complete_qualified_record_shape() -> None:
+    candidate = json.loads(
+        (ROOT / "contracts/physical-passport-python-retirement-qualification.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    qualified = copy.deepcopy(candidate)
+    qualified["state"] = "qualified"
+    qualified["source"]["protected_main_commit"] = "a" * 40
+    qualified["source"]["artifact_sha256"] = dict.fromkeys(PASSPORT_SOURCE_ARTIFACTS, "b" * 64)
+    qualified["beta_acceptance_receipt"] = {
+        "release_tag": "test-only-shape",
+        "release_source_commit": "a" * 40,
+        "beta_deployment_run_id": 1,
+        "evidence_artifact": "test-only-shape.json",
+        "evidence_sha256": "c" * 64,
+        "accepted_at_utc": "2026-09-26T00:00:00Z",
+    }
+    _assert_passport_qualification_shape(qualified)
