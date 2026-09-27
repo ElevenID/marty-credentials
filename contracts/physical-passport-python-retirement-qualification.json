@@ -1,0 +1,34 @@
+{
+  "schema": "marty.physical-passport-python-retirement-qualification/v1",
+  "state": "blocked_pending_beta_acceptance",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "protected_main_commit": null,
+    "required_artifacts": [
+      "contracts/issuance-physical-passport-native.json",
+      "contracts/issuance-native-coverage.json",
+      "contracts/issuance-universal-ownership.json",
+      "docker-compose.profile.passport-native-beta.yml"
+    ]
+  },
+  "required_acceptance": [
+    "managed KMS CSCA and DSC profiles, issued chain, and signed SOD verified in beta",
+    "Gateway and Flow select the Rust owner for all nine routes",
+    "packaged image and signed bureau callback pass beta acceptance",
+    "legacy jobs and artifacts pass drain and format checks",
+    "rollback and production isolation are verified"
+  ],
+  "beta_acceptance_receipt": null,
+  "authorized_python_route_deletions": [
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "full_python_service_deletion_authorized": false
+}

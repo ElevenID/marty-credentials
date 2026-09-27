@@ -22,7 +22,7 @@ def test_frozen_issuance_surface_matches_python_parity_oracle() -> None:
 
 
 def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface() -> None:
-    # Baseline: reviewed Rust cutovers through retention. Only dynamic-lookup
+    # Baseline: reviewed Rust cutovers through passport. Only dynamic-lookup
     # source-line metadata is excluded; source paths, ordering and every retained
     # HTTP, RPC, configuration, runtime and migration field remain in the digest.
     # check_contract above still requires exact current source-line metadata.
@@ -31,7 +31,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "ef949692315022316b2832d228f1c270ca1bae159b03a2c077b397c4c059d94c"
+        "7efe12e123a08ea6a8923a13d3d262d859ab8e96a5bebfbfd0f5e4faa0470873"
     )
 
 
@@ -39,9 +39,9 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
     contract = surface.build_contract()
 
     assert contract["schema"] == "marty.issuance-runtime-surface/v1"
-    # The delivery-status compatibility checkpoint added /ready; the two
-    # retention routes follow the 13 Rust-owned OID4VCI and Canvas removals.
-    assert contract["http"]["route_count"] == 95
+    # The delivery-status compatibility checkpoint added /ready; the nine
+    # passport routes follow the retention, OID4VCI and Canvas removals.
+    assert contract["http"]["route_count"] == 86
     assert contract["grpc"]["method_count"] == 12
     assert {mode["name"] for mode in contract["runtime"]["modes"]} == {
         "api",
@@ -61,10 +61,7 @@ def test_contract_retains_critical_protocol_and_lifecycle_operations() -> None:
     assert ("POST", "/v1/issuance/token") in routes
     assert ("POST", "/v1/issuance/credential") in routes
     assert ("POST", "/v1/issued-credentials/{credential_id}/revoke") in routes
-    assert (
-        "POST",
-        "/v1/passport/applications/{application_id}/submit-personalization",
-    ) in routes
+    assert not any(path.startswith("/v1/passport/") for _, path in routes)
     assert (
         "POST",
         "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
