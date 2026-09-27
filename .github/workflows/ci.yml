@@ -641,6 +641,21 @@ jobs:
         working-directory: marty-credentials
         run: python -m scripts.check_issuance_retention_python_retirement --marty-ui ../marty-ui
 
+  passport-retirement-provenance:
+    name: Passport Python Retirement Provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - name: Refuse Python deletion until passport acceptance is verifiable
+        working-directory: marty-credentials
+        run: python -m scripts.check_physical_passport_python_retirement
+
   test-wasm:
     name: WASM Tests
     runs-on: ubuntu-latest

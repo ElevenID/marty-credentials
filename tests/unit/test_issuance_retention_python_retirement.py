@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts import check_physical_passport_python_retirement as passport_gate
 from scripts import issuance_surface_contract
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -156,9 +157,13 @@ def test_passport_retirement_keeps_the_frozen_oracle_and_acceptance_gate() -> No
     )
     assert {(row["method"], row["path"]) for row in oracle["operations"]} == RETIRED_PASSPORT
     _assert_passport_qualification_shape(candidate)
+    with pytest.raises(passport_gate.prior_gate.QualificationError, match="blocked"):
+        passport_gate.verify(
+            ROOT / "contracts/physical-passport-python-retirement-qualification.json"
+        )
 
 
-def test_passport_retirement_accepts_a_complete_qualified_record_shape() -> None:
+def test_passport_retirement_rejects_fabricated_qualified_record(tmp_path: Path) -> None:
     candidate = json.loads(
         (ROOT / "contracts/physical-passport-python-retirement-qualification.json").read_text(
             encoding="utf-8"
@@ -187,3 +192,7 @@ def test_passport_retirement_accepts_a_complete_qualified_record_shape() -> None
         "accepted_at_utc": "2026-09-26T00:00:00Z",
     }
     _assert_passport_qualification_shape(qualified)
+    candidate_path = tmp_path / "qualification.json"
+    candidate_path.write_text(json.dumps(qualified), encoding="utf-8")
+    with pytest.raises(passport_gate.prior_gate.QualificationError, match="executable verifier"):
+        passport_gate.verify(candidate_path)

@@ -38,3 +38,12 @@ issuance URL, and Kubernetes has no passport selector. Record the protected
 consumer cutover commit and its evidence separately from the beta release
 commit; they may differ. Keep production deployment unchanged until separately
 authorized.
+
+The dedicated Passport Python Retirement Provenance CI job intentionally fails
+while this candidate is blocked. It also rejects a syntactically complete
+`qualified` record: the current release pipeline has no physical-passport
+acceptance report producer or verifier, so receipt names and SHA-shaped strings
+cannot authorize deletion. Before promoting this PR, add an executable
+acceptance producer and verifier for the beta and all three supported
+consumers, bind their reports to the protected source and signed release, and
+make that CI job pass on the exact retirement head.
