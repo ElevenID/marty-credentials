@@ -668,6 +668,19 @@ jobs:
       - name: Fetch live protected UI main
         working-directory: marty-ui
         run: git fetch --no-tags origin main:refs/remotes/origin/main
+      - name: Pin qualified passport source commit
+        working-directory: marty-credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_commit="$(python -m scripts.check_physical_passport_python_retirement --print-checkout-commit)"
+          if [[ -n "$source_commit" ]]; then
+            git -C ../marty-ui merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
+            git -C ../marty-ui checkout --detach "$source_commit"
+          fi
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
       - name: Refuse Python deletion until passport acceptance is verifiable
         working-directory: marty-credentials
         run: python -m scripts.check_physical_passport_python_retirement --marty-ui ../marty-ui

@@ -37,6 +37,26 @@ artifacts satisfy the drain gates, and rollback plus production isolation are
 verified. The beta bureau is synthetic; it does not prove physical booklet
 production or qualify a future external bureau provider.
 
+The beta report must also include `physical_bureau_batch`: a live two-job or
+larger physical-provider batch exchange with an accepted HTTP result, queued
+batch status, unique source and provider job ID hashes, and an observable
+one-to-one response mapping. The verifier runs the exact frozen Rust batch
+adapter test from the protected source checkout and requires its shuffled
+response oracle to pass; the live provider need not shuffle. The report
+records request, response, and provider
+receipt digests without publishing raw IDs or document data. Its evidence must
+name the protected source commit, signed stack manifest, and exact released
+services image. The future protected producer must inspect raw provider IDs
+privately and reject `BETA-SIM-` IDs before hashing them. This source-bound
+report shape is only one prerequisite; it does not authenticate a physical
+provider receipt or prove a manufactured booklet. The final unconditional
+retirement block stays until those independent proofs are machine-verifiable
+and reviewed.
+An accepted beta report must name physical provider mode and exactly the
+gateway, Flow, native issuance, signing keys, supported callback signer, and
+provider ingress services from the signed services image. The simulator
+callback signer and beta bureau services cannot appear in that report.
+
 The beta-only overlay does not qualify the default, self-host, or Kubernetes
 consumers. Before deleting the Python route owner, each supported composition
 must route and authenticate all nine operations to Rust, select managed signing

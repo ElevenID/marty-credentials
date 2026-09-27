@@ -39,6 +39,7 @@ REQUIRED_BETA_PROBES = {
     "nine_route_gateway_flow",
     "packaged_image",
     "physical_bureau_submission",
+    "physical_bureau_batch",
     "signed_bureau_callback",
     "legacy_drain",
     "rollback",
@@ -51,8 +52,8 @@ EXPECTED_BETA_SERVICES = {
     "flow",
     "issuance-native",
     "signing-keys",
-    "passport-callback-signer",
-    "passport-beta-bureau",
+    "passport-callback-signer-supported",
+    "passport-provider-ingress",
 }
 REQUIRED_SUPPORTED_PROBES = {
     "nine_route_gateway_flow",
@@ -111,7 +112,12 @@ def _protected_source(source: dict, marty_ui: Path) -> str:
     prior_gate._require(isinstance(commit, str) and COMMIT.fullmatch(commit) is not None,
                         "Passport source commit is not immutable")
     prior_gate._require(prior_gate._git_head(marty_ui) == commit, "UI checkout is not pinned")
-    prior_gate._require(prior_gate._git_is_clean(marty_ui), "UI checkout has tracked changes")
+    clean = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all", "--ignored"],
+        cwd=marty_ui, check=False, capture_output=True, text=True,
+    )
+    prior_gate._require(clean.returncode == 0 and not clean.stdout.strip(),
+                        "Qualified UI source checkout has local or ignored files")
     prior_gate._require(prior_gate._git_is_from_protected_main(marty_ui, commit),
                         "Passport source is not on live protected UI main")
     hashes = source.get("artifact_sha256")
@@ -123,6 +129,23 @@ def _protected_source(source: dict, marty_ui: Path) -> str:
         actual = hashlib.sha256(prior_gate._git_blob(marty_ui, commit, relative)).hexdigest()
         prior_gate._require(actual == expected, f"Passport artifact hash mismatch: {relative}")
     return commit
+
+
+def _frozen_batch_parity(marty_ui: Path) -> None:
+    """Run the shuffled-response Rust oracle from the qualified source checkout."""
+    checkout = marty_ui.resolve()
+    try:
+        result = subprocess.run(
+            ["cargo", "test", "--locked", "--manifest-path", str(checkout / "rust/Cargo.toml"),
+             "-p", "marty-issuance-service", "--lib",
+             "passport_bureau::tests::batch_submission_preserves_python_envelope_and_input_order",
+             "--", "--exact"],
+            cwd=checkout, capture_output=True, text=True, check=False, timeout=3600,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise prior_gate.QualificationError("Frozen Rust batch parity could not run") from exc
+    prior_gate._require(result.returncode == 0 and re.search(r"\b1 passed; 0 failed;", result.stdout) is not None,
+                        "Frozen Rust batch parity did not pass exactly one test")
 
 
 def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
@@ -138,6 +161,7 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
                         "Beta report origin mismatch")
     deployment = report.get("deployment")
     prior_gate._require(isinstance(deployment, dict)
+                        and deployment.get("provider_mode") == "physical"
                         and all(isinstance(deployment.get(name), str)
                                 and SHA256.fullmatch(deployment[name]) is not None
                                 for name in ("local_deployment_manifest_sha256",
@@ -154,6 +178,47 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         prior_gate._require(isinstance(probe, dict) and probe.get("verified") is True
                             and probe.get("evidence") is not None,
                             f"Beta passport probe did not pass: {name}")
+    batch = probes["physical_bureau_batch"]["evidence"]
+    images = release.get("oci_digests")
+    services = images.get("ghcr.io/elevenid/marty-ui-oss/services") if isinstance(images, dict) else None
+    prior_gate._require(
+        isinstance(batch, dict)
+        and batch.get("provider_kind") == "physical"
+        and batch.get("simulator_ids_absent") is True
+        and batch.get("source_commit") == commit
+        and batch.get("stack_manifest_sha256") == stack_sha256
+        and isinstance(services, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", services) is not None
+        and batch.get("services_oci_reference")
+        == f"ghcr.io/elevenid/marty-ui-oss/services@{services}"
+        and isinstance(batch.get("request_sha256"), str)
+        and SHA256.fullmatch(batch["request_sha256"]) is not None
+        and isinstance(batch.get("response_sha256"), str)
+        and SHA256.fullmatch(batch["response_sha256"]) is not None
+        and isinstance(batch.get("provider_receipt_sha256"), str)
+        and SHA256.fullmatch(batch["provider_receipt_sha256"]) is not None,
+        "Physical batch provider evidence is not bound to the signed beta source",
+    )
+    submitted = batch.get("submitted_job_sha256")
+    returned = batch.get("returned_jobs")
+    prior_gate._require(
+        isinstance(submitted, list) and len(submitted) >= 2
+        and all(isinstance(job, str) and SHA256.fullmatch(job) is not None for job in submitted)
+        and len(set(submitted)) == len(submitted)
+        and isinstance(returned, list) and len(returned) == len(submitted)
+        and batch.get("http_status") in (200, 201, 202)
+        and batch.get("batch_status") == "QUEUED"
+        and all(isinstance(job, dict)
+                and isinstance(job.get("source_job_sha256"), str)
+                and SHA256.fullmatch(job["source_job_sha256"]) is not None
+                and isinstance(job.get("bureau_job_sha256"), str)
+                and SHA256.fullmatch(job["bureau_job_sha256"]) is not None
+                and job.get("status") in {"QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED", "DELIVERED"}
+                for job in returned)
+        and {job["source_job_sha256"] for job in returned} == set(submitted)
+        and len({job["bureau_job_sha256"] for job in returned}) == len(returned),
+        "Physical batch provider exchange or job mapping is incomplete",
+    )
 
 
 def _supported_report(report: dict, commit: str, services_reference: str) -> None:
@@ -293,6 +358,25 @@ def _all_image_references(manifest: dict) -> dict[str, str]:
     return references
 
 
+def _checkout_commit(contract_path: Path) -> str | None:
+    """Select only a syntactically valid source pin; verify() proves its ancestry."""
+    contract = prior_gate._json(contract_path)
+    prior_gate._require(
+        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v1",
+        "Unknown passport retirement qualification schema",
+    )
+    if contract.get("state") == "blocked_pending_beta_acceptance":
+        return None
+    prior_gate._require(contract.get("state") == "qualified", "Unknown passport qualification state")
+    source = contract.get("source")
+    prior_gate._require(isinstance(source, dict)
+                        and source.get("repository") == "ElevenID/marty-ui"
+                        and isinstance(source.get("protected_main_commit"), str)
+                        and COMMIT.fullmatch(source["protected_main_commit"]) is not None,
+                        "Qualified passport checkout commit is invalid")
+    return source["protected_main_commit"]
+
+
 def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
     contract = prior_gate._json(contract_path)
     prior_gate._require(
@@ -358,9 +442,12 @@ def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
         _verified_run(beta_run, commit, ".github/workflows/passport-beta-acceptance.yml")
         beta_report = _run_artifact(beta_run, beta.get("evidence_artifact"),
                                     beta.get("evidence_sha256"), root / "beta")
-        _beta_report(beta_report, commit, stack_digest)
-        prior_gate._require(beta_report.get("release", {}).get("oci_digests") == expected_images,
+        beta_release = beta_report.get("release")
+        prior_gate._require(isinstance(beta_release, dict)
+                            and beta_release.get("oci_digests") == expected_images,
                             "Beta report image digests differ from signed release")
+        _beta_report(beta_report, commit, stack_digest)
+        _frozen_batch_parity(marty_ui)
         prior_gate._require(beta_report.get("deployment", {}).get("release_version")
                             == beta["release_tag"][1:],
                             "Beta deployment version differs from signed release")
@@ -392,8 +479,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--marty-ui", type=Path)
+    parser.add_argument("--print-checkout-commit", action="store_true",
+                        help="Print a validated qualified source pin for the CI checkout")
     args = parser.parse_args()
     try:
+        if args.print_checkout_commit:
+            commit = _checkout_commit(args.contract)
+            if commit is not None:
+                print(commit)
+            return 0
         verify(args.contract, args.marty_ui)
     except prior_gate.QualificationError as error:
         parser.exit(1, f"{error}\n")
