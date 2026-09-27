@@ -65,8 +65,11 @@ acceptance. In the current source, Gateway, Flow, and native issuance default
 passport routing off outside beta; self-host Flow also lacks a distinct native
 issuance URL, and Kubernetes has no passport selector. Record the protected
 consumer cutover commit and its evidence separately from the beta release
-commit; they may differ. Keep production deployment unchanged until separately
-authorized.
+commit. The current qualification verifier requires both receipts to name the
+same protected source commit. If a later consumer cutover uses a different
+commit, extend and review its protected ancestry, report, and signed image
+lineage checks before qualification. Keep production deployment unchanged until
+separately authorized.
 
 The dedicated Passport Python Retirement Provenance CI job intentionally fails
 while this candidate is blocked. It also rejects a syntactically complete
