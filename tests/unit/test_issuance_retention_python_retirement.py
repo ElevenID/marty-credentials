@@ -194,5 +194,5 @@ def test_passport_retirement_rejects_fabricated_qualified_record(tmp_path: Path)
     _assert_passport_qualification_shape(qualified)
     candidate_path = tmp_path / "qualification.json"
     candidate_path.write_text(json.dumps(qualified), encoding="utf-8")
-    with pytest.raises(passport_gate.prior_gate.QualificationError, match="executable verifier"):
+    with pytest.raises(passport_gate.prior_gate.QualificationError, match="source checkout"):
         passport_gate.verify(candidate_path)

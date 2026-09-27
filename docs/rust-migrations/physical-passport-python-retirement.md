@@ -22,6 +22,15 @@ that the four source artifact hashes match committed bytes on protected main,
 and that both evidence artifacts match their receipt SHA-256 digests. The
 shape test accepts both the current blocked record and a complete qualified
 record; it does not itself verify remote Git ancestry or runtime evidence.
+The required `Passport Python Retirement Provenance` CI job runs
+`scripts.check_physical_passport_python_retirement`. It is intentionally red
+while this PR is draft. A future qualified record must pass live protected-main
+ancestry, committed source hashes, the signed stack manifest and its official
+CD signer, exact successful beta and supported-consumer workflow artifacts, and
+their release, image, route, callback and rollback lineage. It still refuses a
+`qualified` record until independent physical booklet/provider proof and its
+maintainer review have a verifiable source; a successful callback or a report
+field marked `verified` does not prove physical personalization.
 Confirm all nine Gateway and Flow routes select Rust, the KMS CSCA/DSC chain and SOD
 validate, the packaged image and signed bureau callback pass, legacy jobs and
 artifacts satisfy the drain gates, and rollback plus production isolation are
