@@ -9,6 +9,8 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from scripts import issuance_surface_contract
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,6 +35,7 @@ PASSPORT_SOURCE_ARTIFACTS = {
     "contracts/issuance-universal-ownership.json",
     "docker-compose.profile.passport-native-beta.yml",
 }
+PASSPORT_CONSUMER_SURFACES = {"base", "selfhost", "kubernetes"}
 
 
 def _is_sha(value: object, length: int) -> bool:
@@ -56,6 +59,7 @@ def _assert_passport_qualification_shape(candidate: dict) -> None:
         assert source["protected_main_commit"] is None
         assert source["artifact_sha256"] is None
         assert candidate["beta_acceptance_receipt"] is None
+        assert candidate["supported_consumer_cutover_receipt"] is None
     else:
         assert candidate["state"] == "qualified"
         commit = source["protected_main_commit"]
@@ -75,6 +79,18 @@ def _assert_passport_qualification_shape(candidate: dict) -> None:
         assert isinstance(receipt["accepted_at_utc"], str)
         accepted_at = datetime.fromisoformat(receipt["accepted_at_utc"].replace("Z", "+00:00"))
         assert accepted_at.utcoffset().total_seconds() == 0
+        cutover = candidate["supported_consumer_cutover_receipt"]
+        assert isinstance(cutover, dict)
+        assert cutover["repository"] == "ElevenID/marty-ui"
+        assert _is_sha(cutover["protected_main_commit"], 40)
+        assert set(cutover["accepted_surfaces"]) == PASSPORT_CONSUMER_SURFACES
+        assert len(cutover["accepted_surfaces"]) == len(PASSPORT_CONSUMER_SURFACES)
+        assert isinstance(cutover["evidence_artifact"], str)
+        assert cutover["evidence_artifact"].strip()
+        assert _is_sha(cutover["evidence_sha256"], 64)
+        assert isinstance(cutover["accepted_at_utc"], str)
+        cutover_at = datetime.fromisoformat(cutover["accepted_at_utc"].replace("Z", "+00:00"))
+        assert cutover_at.utcoffset().total_seconds() == 0
 
 
 def _class_methods(relative: str, class_name: str) -> set[str]:
@@ -158,6 +174,16 @@ def test_passport_retirement_accepts_a_complete_qualified_record_shape() -> None
         "beta_deployment_run_id": 1,
         "evidence_artifact": "test-only-shape.json",
         "evidence_sha256": "c" * 64,
+        "accepted_at_utc": "2026-09-26T00:00:00Z",
+    }
+    with pytest.raises(AssertionError):
+        _assert_passport_qualification_shape(qualified)
+    qualified["supported_consumer_cutover_receipt"] = {
+        "repository": "ElevenID/marty-ui",
+        "protected_main_commit": "d" * 40,
+        "accepted_surfaces": ["base", "selfhost", "kubernetes"],
+        "evidence_artifact": "test-only-consumer-cutover.json",
+        "evidence_sha256": "e" * 64,
         "accepted_at_utc": "2026-09-26T00:00:00Z",
     }
     _assert_passport_qualification_shape(qualified)

@@ -17,9 +17,11 @@
     "Gateway and Flow select the Rust owner for all nine routes",
     "packaged image and signed bureau callback pass beta acceptance",
     "legacy jobs and artifacts pass drain and format checks",
-    "rollback and production isolation are verified"
+    "rollback and production isolation are verified",
+    "base, self-host, and Kubernetes consumers select and authenticate to the Rust owner for all nine routes, with supported provider and rollback acceptance"
   ],
   "beta_acceptance_receipt": null,
+  "supported_consumer_cutover_receipt": null,
   "authorized_python_route_deletions": [
     {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
     {"method": "GET", "path": "/v1/passport/capabilities"},

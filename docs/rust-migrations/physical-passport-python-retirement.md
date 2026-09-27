@@ -16,14 +16,25 @@ The earlier OID4VCI/Canvas and retention qualification records remain historical
 evidence and are not rewritten as passport authorization.
 
 Before making this PR ready for review, record the protected `marty-ui` source
-commit and live beta receipt in
+commit, live beta receipt, and supported-consumer cutover receipt in
 `contracts/physical-passport-python-retirement-qualification.json`. Check
 that the four source artifact hashes match committed bytes on protected main,
-and that the beta evidence artifact matches the receipt SHA-256 digest. The
+and that both evidence artifacts match their receipt SHA-256 digests. The
 shape test accepts both the current blocked record and a complete qualified
-record; it does not itself verify remote Git ancestry or beta evidence.
+record; it does not itself verify remote Git ancestry or runtime evidence.
 Confirm all nine Gateway and Flow routes select Rust, the KMS CSCA/DSC chain and SOD
 validate, the packaged image and signed bureau callback pass, legacy jobs and
 artifacts satisfy the drain gates, and rollback plus production isolation are
 verified. The beta bureau is synthetic; it does not prove physical booklet
 production or qualify a future external bureau provider.
+
+The beta-only overlay does not qualify the default, self-host, or Kubernetes
+consumers. Before deleting the Python route owner, each supported composition
+must route and authenticate all nine operations to Rust, select managed signing
+and a supported bureau/callback provider, and pass runtime and rollback
+acceptance. In the current source, Gateway, Flow, and native issuance default
+passport routing off outside beta; self-host Flow also lacks a distinct native
+issuance URL, and Kubernetes has no passport selector. Record the protected
+consumer cutover commit and its evidence separately from the beta release
+commit; they may differ. Keep production deployment unchanged until separately
+authorized.
