@@ -703,7 +703,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, canvas-worker-consumer-ranges, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, retention-retirement-provenance, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, canvas-worker-consumer-ranges, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, retention-retirement-provenance, passport-retirement-provenance, test-wasm]
     runs-on: ubuntu-latest
     permissions:
       actions: read

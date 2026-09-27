@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts import check_physical_passport_python_retirement as gate
 
@@ -319,3 +320,16 @@ def test_protected_source_rejects_fabricated_hashes(
     monkeypatch.setattr(gate.prior_gate, "_git_blob", lambda *args: b"real committed source")
     with pytest.raises(gate.prior_gate.QualificationError, match="hash mismatch"):
         gate._protected_source(source, tmp_path)
+
+
+def test_required_ci_gate_includes_passport_retirement_provenance() -> None:
+    workflow = yaml.safe_load((gate.ROOT / ".github/workflows/ci.yml").read_text(
+        encoding="utf-8"
+    ))
+    jobs = workflow["jobs"]
+    assert "passport-retirement-provenance" in jobs
+    gate_job = jobs["ci-gate"]
+    assert "passport-retirement-provenance" in gate_job["needs"]
+    assert gate_job["if"] == "always()"
+    assert gate_job["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
+    assert 'test "$result" = success' in gate_job["steps"][0]["run"]
