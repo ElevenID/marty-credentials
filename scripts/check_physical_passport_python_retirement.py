@@ -47,6 +47,21 @@ REQUIRED_BETA_PROBES = {
     "physical_claim_boundary",
 }
 EXPECTED_SURFACES = {"base", "selfhost", "kubernetes"}
+EXPECTED_SUPPORTED_SERVICES = {
+    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "passport-beta-bureau",
+}
+EXPECTED_SUPPORTED_FLAGS = {
+    "gateway": {"PASSPORT_NATIVE_GATEWAY_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"},
+    "flow": {"PASSPORT_NATIVE_FLOW_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED"},
+    "issuance-native": {
+        "PASSPORT_NATIVE_HTTP_ENABLED", "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    },
+    "passport-callback-signer": {"PASSPORT_CALLBACK_SIGNER_ENABLED"},
+    "passport-beta-bureau": {"PASSPORT_BETA_BUREAU_ENABLED"},
+}
 EXPECTED_BETA_SERVICES = {
     "gateway",
     "flow",
@@ -282,6 +297,21 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
                             and item.get("runtime_accepted") is True
                             and item.get("rollback_accepted") is True,
                             f"Supported consumer runtime/rollback incomplete: {name}")
+        runtime = item.get("runtime_images")
+        prior_gate._require(isinstance(runtime, dict)
+                            and set(runtime) == EXPECTED_SUPPORTED_SERVICES,
+                            f"Supported consumer runtime service set is incomplete: {name}")
+        for service, observed in runtime.items():
+            prior_gate._require(
+                isinstance(observed, dict)
+                and observed.get("oci_reference") == services_reference
+                and all(isinstance(observed.get(key), str) and observed[key]
+                        for key in ("container_id", "image_id"))
+                and isinstance(observed.get("selectors"), dict)
+                and set(observed["selectors"]) == EXPECTED_SUPPORTED_FLAGS[service]
+                and all(value is True for value in observed["selectors"].values()),
+                f"Supported consumer released runtime is incomplete: {name}/{service}",
+            )
         probes = item.get("probes")
         prior_gate._require(isinstance(probes, dict)
                             and set(probes) >= REQUIRED_SUPPORTED_PROBES,
@@ -315,14 +345,44 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
         image = probes["released_image"]["evidence"]
         prior_gate._require(image.get("oci_reference") == services_reference
                             and image.get("source_commit") == commit
-                            and isinstance(image.get("container_id"), str)
-                            and bool(image["container_id"]),
+                            and image.get("container_id")
+                            == runtime["gateway"]["container_id"],
                             f"Supported consumer released image evidence is incomplete: {name}")
         rollback = probes["rollback"]["evidence"]
-        prior_gate._require(rollback.get("before_owner") == "rust"
-                            and rollback.get("after_owner") == "python"
+        phases = rollback.get("phases")
+        prior_gate._require(isinstance(phases, dict)
+                            and set(phases) == {"rust_before", "python_rollback",
+                                                "rust_restored"}
                             and rollback.get("nine_routes_restored") is True,
-                            f"Supported consumer rollback evidence is incomplete: {name}")
+                            f"Supported consumer rollback phases are incomplete: {name}")
+        for phase_name, owner in (("rust_before", "rust"),
+                                  ("python_rollback", "python"),
+                                  ("rust_restored", "rust")):
+            phase = phases[phase_name]
+            prior_gate._require(
+                isinstance(phase, dict)
+                and phase.get("gateway_owner") == owner
+                and phase.get("flow_owner") == owner
+                and prior_gate._route_keys(
+                    phase.get("routes"), f"{name} {phase_name} passport routes"
+                ) == EXPECTED_DELETIONS
+                and phase.get("unauthenticated_status") in (401, 403)
+                and all(isinstance(phase.get(key), str) and phase[key]
+                        for key in ("gateway_container_id", "flow_container_id")),
+                f"Supported consumer rollback phase is incomplete: {name}/{phase_name}",
+            )
+        for service in ("gateway", "flow"):
+            identities = [phases[phase][f"{service}_container_id"] for phase in
+                          ("rust_before", "python_rollback", "rust_restored")]
+            prior_gate._require(len(set(identities)) == 3,
+                                f"Supported consumer rollback did not replace {service}: {name}")
+        prior_gate._require(
+            all(phases["rust_restored"][f"{service}_container_id"]
+                == runtime[service]["container_id"] for service in ("gateway", "flow"))
+            and phases["rust_restored"].get("managed_signer") == signer
+            and phases["rust_restored"].get("signed_bureau_callback") == callback,
+            f"Supported consumer restored Rust runtime differs from final probe: {name}",
+        )
 
 
 def _signed_stack_manifest(tag: str, commit: str, expected_digest: str, output: Path) -> dict:

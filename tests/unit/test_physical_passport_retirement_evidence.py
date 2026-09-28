@@ -26,34 +26,56 @@ SERVICES_REFERENCE = (
 
 
 def supported_surface() -> dict:
+    routes = [{"method": method, "path": path}
+              for method, path in sorted(gate.EXPECTED_DELETIONS)]
+    signer = {"mode": "managed_kms", "chain_verified": True}
+    callback = {"provider_kind": "simulator", "signature_verified": True,
+                "organization_bound": True, "physical_claim": "not_claimed"}
+
+    def phase(owner: str, suffix: str) -> dict:
+        return {"gateway_owner": owner, "flow_owner": owner,
+                "gateway_container_id": f"gateway-{suffix}",
+                "flow_container_id": f"flow-{suffix}",
+                "routes": routes, "unauthenticated_status": 401}
+
+    restored = phase("rust", "restored")
+    restored["managed_signer"] = signer
+    restored["signed_bureau_callback"] = callback
     return {
         "runtime_accepted": True,
         "rollback_accepted": True,
+        "runtime_images": {
+            service: {
+                "container_id": "gateway-restored" if service == "gateway"
+                else "flow-restored" if service == "flow"
+                else f"{service}-restored",
+                "image_id": "sha256:" + "d" * 64,
+                "oci_reference": SERVICES_REFERENCE,
+                "selectors": dict.fromkeys(gate.EXPECTED_SUPPORTED_FLAGS[service], True),
+            }
+            for service in gate.EXPECTED_SUPPORTED_SERVICES
+        },
         "probes": {
             "nine_route_gateway_flow": {
                 "verified": True,
                 "evidence": {
-                    "routes": [{"method": method, "path": path}
-                               for method, path in sorted(gate.EXPECTED_DELETIONS)],
+                    "routes": routes,
                     "gateway_owner": "rust",
                     "flow_owner": "rust",
                     "unauthenticated_status": 401,
                 },
             },
-            "managed_signer": {"verified": True, "evidence": {
-                "mode": "managed_kms", "chain_verified": True,
-            }},
-            "signed_bureau_callback": {"verified": True, "evidence": {
-                "provider_kind": "simulator", "signature_verified": True,
-                "organization_bound": True, "physical_claim": "not_claimed",
-            }},
+            "managed_signer": {"verified": True, "evidence": signer},
+            "signed_bureau_callback": {"verified": True, "evidence": callback},
             "released_image": {"verified": True, "evidence": {
                 "oci_reference": SERVICES_REFERENCE,
                 "source_commit": COMMIT,
-                "container_id": "container-one",
+                "container_id": "gateway-restored",
             }},
             "rollback": {"verified": True, "evidence": {
-                "before_owner": "rust", "after_owner": "python",
+                "phases": {"rust_before": phase("rust", "before"),
+                           "python_rollback": phase("python", "python"),
+                           "rust_restored": restored},
                 "nine_routes_restored": True,
             }},
         },
@@ -241,6 +263,32 @@ def test_supported_report_requires_each_runtime_and_rollback() -> None:
         changed["surfaces"][name]["probes"]["signed_bureau_callback"]["verified"] = False
         with pytest.raises(gate.prior_gate.QualificationError):
             gate._supported_report(changed, COMMIT, SERVICES_REFERENCE)
+
+
+@pytest.mark.parametrize("change", [
+    lambda phase, surface: phase["phases"].pop("rust_restored"),
+    lambda phase, surface: phase["phases"]["rust_restored"].update(
+        gateway_owner="python"),
+    lambda phase, surface: phase["phases"]["rust_restored"].update(
+        flow_container_id=phase["phases"]["python_rollback"]["flow_container_id"]),
+    lambda phase, surface: phase["phases"]["rust_restored"]["routes"].pop(),
+    lambda phase, surface: phase["phases"]["rust_restored"].update(
+        managed_signer={"mode": "self_signed", "chain_verified": False}),
+    lambda phase, surface: phase["phases"]["rust_restored"].update(
+        signed_bureau_callback={"signature_verified": False}),
+    lambda phase, surface: surface["probes"]["released_image"]["evidence"].update(
+        container_id="gateway-before"),
+    lambda phase, surface: surface["runtime_images"]["flow"].update(
+        container_id="flow-before"),
+    lambda phase, surface: surface["runtime_images"]["flow"].update(
+        oci_reference="ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "9" * 64),
+])
+def test_supported_report_rejects_incomplete_rust_restoration(change) -> None:
+    report = supported_report()
+    surface = report["surfaces"]["base"]
+    change(surface["probes"]["rollback"]["evidence"], surface)
+    with pytest.raises(gate.prior_gate.QualificationError):
+        gate._supported_report(report, COMMIT, SERVICES_REFERENCE)
 
 
 def test_run_identity_rejects_wrong_source_or_failed_workflow(monkeypatch) -> None:
