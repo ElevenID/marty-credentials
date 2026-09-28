@@ -15,6 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
@@ -873,17 +874,34 @@ _ISSUANCE_API_KEY = os.environ.get("ISSUANCE_API_KEY", "")
 _api_key_header = Header(None, alias="X-API-Key")
 
 
+def _configured_management_api_key() -> str:
+    key_file = os.environ.get("ISSUANCE_API_KEY_FILE", "").strip()
+    if key_file and _ISSUANCE_API_KEY:
+        raise HTTPException(status_code=503, detail="ISSUANCE_API_KEY configuration is ambiguous")
+    if key_file:
+        try:
+            key = Path(key_file).read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError) as exc:
+            raise HTTPException(
+                status_code=503, detail="ISSUANCE_API_KEY_FILE is unavailable"
+            ) from exc
+    else:
+        key = _ISSUANCE_API_KEY
+    if not key:
+        raise HTTPException(status_code=503, detail="ISSUANCE_API_KEY not configured on server")
+    return key
+
+
 async def _verify_management_api_key(
     x_api_key: str | None = _api_key_header,
 ) -> str:
     """Verify X-API-Key header for management endpoints."""
     import hmac as _hmac
 
-    if not _ISSUANCE_API_KEY:
-        raise HTTPException(status_code=503, detail="ISSUANCE_API_KEY not configured on server")
+    configured_key = _configured_management_api_key()
     if not x_api_key:
         raise HTTPException(status_code=401, detail="X-API-Key header is missing")
-    if not _hmac.compare_digest(x_api_key, _ISSUANCE_API_KEY):
+    if not _hmac.compare_digest(x_api_key, configured_key):
         raise HTTPException(status_code=401, detail="Invalid API Key")
     return x_api_key
 
@@ -4139,8 +4157,6 @@ async def get_transaction(
         revoked_at=tx.revoked_at.isoformat() if tx.revoked_at else None,
         revocation_reason=tx.revocation_reason,
     )
-
-
 
 
 @issuance_router.get(

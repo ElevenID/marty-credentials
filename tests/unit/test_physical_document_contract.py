@@ -9,8 +9,11 @@ from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from issuance.infrastructure.api import routes as management_routes
 from pydantic import ValidationError
+from sqlalchemy.exc import MultipleResultsFound
 
 from services.issuance.infrastructure.adapters.emrtd_signer_client import signer_capabilities
 from services.issuance.infrastructure.adapters.personalization_bureau_client import ProductionStatus
@@ -25,7 +28,8 @@ REFERENCE = (
     Path(__file__).resolve().parents[2] / "contracts/physical-passport-python-route-reference.json"
 )
 DELTA = (
-    Path(__file__).resolve().parents[2] / "contracts/physical-passport-python-route-reference-v2.json"
+    Path(__file__).resolve().parents[2]
+    / "contracts/physical-passport-python-route-reference-v2.json"
 )
 
 
@@ -98,6 +102,7 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
 
 def test_passport_reference_keeps_durable_and_tenant_gates_explicit() -> None:
     reference = _reference()
+    delta = json.loads(DELTA.read_text(encoding="utf-8"))
     durable = reference["durable_repository_reference"]
     assert durable["oracle"] == "tests/test_physical_passport_repository_postgres.py"
     assert "PostgreSQL" in durable["database"]
@@ -122,6 +127,26 @@ def test_passport_reference_keeps_durable_and_tenant_gates_explicit() -> None:
     assert "no route-level API-key" in boundary["router"]
     assert "X-API-Key" in boundary["flow_consumer"]
     assert "before native cutover or Python deletion" in boundary["unresolved_gate"]
+    public_routes = [
+        route
+        for route in routes.physical_document_router.routes
+        if route.path != "/v1/passport/webhooks/personalization"
+    ]
+    assert len(public_routes) == 8
+    assert all(
+        any(
+            dependency.call is routes._passport_management_organization
+            for dependency in route.dependant.dependencies
+        )
+        for route in public_routes
+    )
+    assert delta["rollback_tenant_guard"] == {
+        "public_routes": 8,
+        "service_authentication": "X-API-Key",
+        "trusted_scope": "X-Organization-ID",
+        "job_predicate": ["application_id", "organization_id"],
+        "webhook_authentication": "signed callback",
+    }
 
 
 def test_passport_request_response_and_bureau_status_reference_is_closed() -> None:
@@ -166,6 +191,66 @@ def test_passport_request_response_and_bureau_status_reference_is_closed() -> No
     ]
 
 
+def test_passport_management_routes_require_service_key_and_trusted_organization(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(management_routes, "_ISSUANCE_API_KEY", "synthetic-management-key")
+    app = FastAPI()
+    app.include_router(routes.physical_document_router)
+    client = TestClient(app)
+    path = "/v1/passport/capabilities"
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers={"X-API-Key": "wrong-key"}).status_code == 401
+    assert client.get(path, headers={"X-API-Key": "synthetic-management-key"}).status_code == 403
+    assert (
+        client.get(
+            path,
+            headers={"X-API-Key": "synthetic-management-key", "X-Organization-ID": "org-1"},
+        ).status_code
+        == 200
+    )
+
+    payload = {
+        "organization_id": "org-2",
+        "flow_execution_id": "flow-1",
+        "application_template_id": "template-1",
+        "credential_template_id": "credential-1",
+        "delivery_destination_profile_id": "bureau-1",
+        "country_code": "USA",
+        "applicant": {},
+        "mrz": {},
+        "data_groups": {"DG1": "AQ==", "DG2": "Ag=="},
+    }
+    assert (
+        client.post(
+            "/v1/passport/applications",
+            json=payload,
+            headers={"X-API-Key": "synthetic-management-key", "X-Organization-ID": "org-1"},
+        ).status_code
+        == 403
+    )
+    key_file = tmp_path / "issuance-api-key"
+    key_file.write_text("disposable-file-management-key\n", encoding="ascii")
+    monkeypatch.setattr(management_routes, "_ISSUANCE_API_KEY", "")
+    monkeypatch.setenv("ISSUANCE_API_KEY_FILE", str(key_file))
+    assert (
+        client.get(
+            path,
+            headers={"X-API-Key": "disposable-file-management-key", "X-Organization-ID": "org-1"},
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(management_routes, "_ISSUANCE_API_KEY", "ambiguous-inline-key")
+    assert (
+        client.get(
+            path,
+            headers={"X-API-Key": "disposable-file-management-key", "X-Organization-ID": "org-1"},
+        ).status_code
+        == 503
+    )
+
+
 def test_passport_request_validation_reference_rejects_invalid_fields() -> None:
     reference = _reference()["request_models"]["application"]
     payload = {
@@ -184,9 +269,12 @@ def test_passport_request_validation_reference_rejects_invalid_fields() -> None:
             document_type
         )
     assert PassportApplicationRequest(**payload).issuer_did is None
-    assert PassportApplicationRequest(
-        **payload, issuer_did="did:web:issuer.example:orgs:org-1"
-    ).issuer_did == "did:web:issuer.example:orgs:org-1"
+    assert (
+        PassportApplicationRequest(
+            **payload, issuer_did="did:web:issuer.example:orgs:org-1"
+        ).issuer_did
+        == "did:web:issuer.example:orgs:org-1"
+    )
     for invalid in [
         {"issuer_did": "issuer.example"},
         {"issuer_did": " did:web:issuer.example"},
@@ -252,7 +340,7 @@ async def test_passport_capability_blockers_preserve_order_and_fail_closed(
         lambda: {"configured": False, "mode": "UNAVAILABLE", "blockers": ["Signer unavailable"]},
     )
     monkeypatch.setattr(routes, "is_bureau_configured", lambda: False)
-    blocked = await routes.get_physical_document_capabilities()
+    blocked = await routes.get_physical_document_capabilities("org-1")
     assert blocked == {
         "supported": False,
         "signer": {"configured": False, "mode": "UNAVAILABLE", "blockers": ["Signer unavailable"]},
@@ -271,7 +359,7 @@ async def test_passport_capability_blockers_preserve_order_and_fail_closed(
         lambda: {"configured": True, "mode": "EXTERNAL", "blockers": []},
     )
     monkeypatch.setattr(routes, "is_bureau_configured", lambda: True)
-    ready = await routes.get_physical_document_capabilities()
+    ready = await routes.get_physical_document_capabilities("org-1")
     assert ready["supported"] is True
     assert ready["bureau_configured"] is True
     assert ready["encrypted_artifact_store"] is True
@@ -290,7 +378,7 @@ async def test_passport_capabilities_reject_invalid_artifact_key(
         lambda: {"configured": True, "mode": "EXTERNAL", "blockers": []},
     )
     monkeypatch.setattr(routes, "is_bureau_configured", lambda: True)
-    result = await routes.get_physical_document_capabilities()
+    result = await routes.get_physical_document_capabilities("org-1")
     assert result["supported"] is False
     assert result["encrypted_artifact_store"] is False
     assert result["blockers"] == [
@@ -335,7 +423,7 @@ async def test_passport_create_encrypts_artifact_and_returns_only_safe_fields(
         mrz={"line_1": "SYNTHETIC1", "line_2": "SYNTHETIC2"},
         data_groups={"DG1": "ZzE=", "DG2": "ZzI="},
     )
-    response = await routes.create_passport_application(payload)
+    response = await routes.create_passport_application(payload, "org-1")
     assert commits == [True]
     assert response["status"] == _reference()["operations"][1]["outcome"]
     assert response["secure_artifact_reference"] == f"physical-artifact://{inserted['id']}"
@@ -363,12 +451,14 @@ async def test_passport_route_lifecycle_preserves_effects_and_scrubs_artifact(
     key = Fernet.generate_key()
     monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", key.decode())
 
-    async def get_job(application_id):
+    async def get_job(application_id, organization_id):
         assert application_id == "application-1"
+        assert organization_id == "org-1"
         return dict(row)
 
-    async def update_job(application_id, **values):
+    async def update_job(application_id, organization_id, **values):
         assert application_id == "application-1"
+        assert organization_id == "org-1"
         updates.append(dict(values))
         row.update(values)
         return dict(row)
@@ -398,15 +488,15 @@ async def test_passport_route_lifecycle_preserves_effects_and_scrubs_artifact(
     monkeypatch.setattr(routes, "poll_job_status", poll)
 
     reference = _reference()["operations"]
-    assert (await routes.generate_passport_data_groups("application-1"))["status"] == reference[2][
-        "outcome"
-    ]
-    sod = await routes.generate_passport_sod("application-1")
+    assert (await routes.generate_passport_data_groups("application-1", "org-1"))[
+        "status"
+    ] == reference[2]["outcome"]
+    sod = await routes.generate_passport_sod("application-1", "org-1")
     assert sod["status"] == reference[3]["outcome"]
     assert sod["sod_sha256"] == hashlib.sha256(b"SOD").hexdigest()
     assert len(signing) == 1 and signing[0]["data_groups"] == {1: "ZzE=", 2: "ZzI="}
 
-    submitted = await routes.submit_passport_personalization("application-1")
+    submitted = await routes.submit_passport_personalization("application-1", "org-1")
     assert submitted["status"] == reference[4]["outcome"]
     assert len(signing) == 2 and len(submissions) == 1
     assert submissions[0].mrz_line_1 == "SYNTHETIC1"
@@ -414,14 +504,14 @@ async def test_passport_route_lifecycle_preserves_effects_and_scrubs_artifact(
     assert updates[-1]["bureau_job_id"] == "bureau-job-1"
     assert isinstance(updates[-1]["submitted_at"], datetime)
 
-    production = await routes.get_passport_production_status("application-1")
+    production = await routes.get_passport_production_status("application-1", "org-1")
     assert production["status"] == reference[5]["outcome"]
     assert production["tracking_number"] == "track-2"
     assert polls == ["bureau-job-1"]
 
     with pytest.raises(HTTPException) as early_quality:
         await routes.record_passport_quality_result(
-            "application-1", routes.QualityResultRequest(passed=True)
+            "application-1", routes.QualityResultRequest(passed=True), "org-1"
         )
     assert early_quality.value.status_code == 409
     assert (
@@ -431,13 +521,13 @@ async def test_passport_route_lifecycle_preserves_effects_and_scrubs_artifact(
 
     row["status"] = "QUALITY_CHECK"
     quality = await routes.record_passport_quality_result(
-        "application-1", routes.QualityResultRequest(passed=True), x_user_id="reviewer-1"
+        "application-1", routes.QualityResultRequest(passed=True), "org-1", x_user_id="reviewer-1"
     )
     assert quality["status"] == reference[6]["outcome"]
     assert quality["quality_result"]["checked_by"] == "reviewer-1"
     assert quality["quality_result"]["failure_codes"] == []
 
-    activated = await routes.activate_passport("application-1")
+    activated = await routes.activate_passport("application-1", "org-1")
     assert activated["status"] == reference[7]["outcome"]
     assert isinstance(activated["completed_at"], datetime)
     assert Fernet(key).decrypt(row["secure_artifact_ciphertext"].encode()) == b"{}"
@@ -452,7 +542,7 @@ async def test_passport_activation_denial_does_not_update_row(
     row["status"] = "READY_FOR_ACTIVATION"
     updates = []
 
-    async def get_job(_application_id):
+    async def get_job(_application_id, _organization_id):
         return row
 
     async def update_job(*_args, **values):
@@ -462,7 +552,7 @@ async def test_passport_activation_denial_does_not_update_row(
     monkeypatch.setattr(routes, "_get_job", get_job)
     monkeypatch.setattr(routes, "_update_job", update_job)
     with pytest.raises(HTTPException) as denied:
-        await routes.activate_passport("application-1")
+        await routes.activate_passport("application-1", "org-1")
     assert denied.value.status_code == 409
     assert (
         denied.value.detail
@@ -479,7 +569,7 @@ async def test_passport_invalid_groups_and_signer_failure_are_effect_free(
     updates = []
     bureau_calls = []
 
-    async def get_job(_application_id):
+    async def get_job(_application_id, _organization_id):
         return row
 
     async def update_job(*_args, **values):
@@ -500,7 +590,7 @@ async def test_passport_invalid_groups_and_signer_failure_are_effect_free(
     monkeypatch.setattr(routes, "sign_emrtd", failed_sign)
     monkeypatch.setattr(routes, "submit_personalization_job", bureau_call)
     with pytest.raises(HTTPException) as missing_group:
-        await routes.generate_passport_data_groups("application-1")
+        await routes.generate_passport_data_groups("application-1", "org-1")
     assert missing_group.value.status_code == 422
     assert updates == []
 
@@ -510,7 +600,7 @@ async def test_passport_invalid_groups_and_signer_failure_are_effect_free(
         lambda _row: {"mrz": {}, "data_groups": {"DG1": "ZzE=", "DG2": "ZzI="}},
     )
     with pytest.raises(HTTPException) as unavailable:
-        await routes.submit_passport_personalization("application-1")
+        await routes.submit_passport_personalization("application-1", "org-1")
     assert unavailable.value.status_code == 503
     assert updates == [] and bureau_calls == []
 
@@ -524,10 +614,10 @@ async def test_passport_failed_quality_and_terminal_status_skip_bureau_poll(
     updates = []
     polls = []
 
-    async def get_job(_application_id):
+    async def get_job(_application_id, _organization_id):
         return dict(row)
 
-    async def update_job(_application_id, **values):
+    async def update_job(_application_id, _organization_id, **values):
         updates.append(values)
         row.update(values)
         return dict(row)
@@ -542,12 +632,13 @@ async def test_passport_failed_quality_and_terminal_status_skip_bureau_poll(
     failed = await routes.record_passport_quality_result(
         "application-1",
         routes.QualityResultRequest(passed=False, failure_codes=["IMAGE_BLUR"]),
+        "org-1",
         x_user_id="reviewer-1",
     )
     assert failed["status"] == "FAILED"
     assert failed["quality_result"]["failure_codes"] == ["IMAGE_BLUR"]
     assert failed["error_code"] == "QUALITY_CHECK_FAILED"
-    terminal = await routes.get_passport_production_status("application-1")
+    terminal = await routes.get_passport_production_status("application-1", "org-1")
     assert terminal["status"] == "FAILED"
     assert polls == [] and len(updates) == 1
 
@@ -561,14 +652,21 @@ async def test_passport_webhook_rejects_untrusted_and_unknown_events_before_upda
     lookups = []
     verified = []
     result_application_id = None
+    ambiguous = False
 
     class Request:
         async def body(self):
             return body
 
     class Result:
-        def scalar_one_or_none(self):
-            return result_application_id
+        def one_or_none(self):
+            if ambiguous:
+                raise MultipleResultsFound("duplicate bureau job")
+            return (
+                SimpleNamespace(application_id=result_application_id, organization_id="org-1")
+                if result_application_id
+                else None
+            )
 
     class Session:
         async def __aenter__(self):
@@ -585,8 +683,8 @@ async def test_passport_webhook_rejects_untrusted_and_unknown_events_before_upda
         verified.append((raw, signature))
         return signature == "valid-signature"
 
-    async def update_job(application_id, **values):
-        updates.append((application_id, values))
+    async def update_job(application_id, organization_id, **values):
+        updates.append((application_id, organization_id, values))
         return _job()
 
     monkeypatch.setattr(routes, "verify_webhook_signature", verify)
@@ -616,15 +714,23 @@ async def test_passport_webhook_rejects_untrusted_and_unknown_events_before_upda
     assert len(lookups) == 1 and updates == []
 
     result_application_id = "application-1"
+    ambiguous = True
+    with pytest.raises(HTTPException) as duplicate:
+        await routes.personalization_webhook(Request(), "valid-signature")
+    assert duplicate.value.status_code == 409
+    assert updates == []
+    ambiguous = False
     assert await routes.personalization_webhook(Request(), "valid-signature") == {"accepted": True}
     assert verified == [
         (body, "wrong-signature"),
+        (body, "valid-signature"),
         (body, "valid-signature"),
         (body, "valid-signature"),
     ]
     assert updates == [
         (
             "application-1",
+            "org-1",
             {
                 "status": "FAILED",
                 "tracking_number": "track-3",

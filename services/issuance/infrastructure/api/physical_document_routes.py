@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import uuid
@@ -11,7 +12,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from issuance.infrastructure.adapters.emrtd_signer_client import (
     require_managed_issuer_identity,
     sign_emrtd,
@@ -26,13 +27,29 @@ from issuance.infrastructure.adapters.personalization_bureau_client import (
     submit_personalization_job,
     verify_webhook_signature,
 )
+from issuance.infrastructure.api.routes import (
+    _trusted_organization_id,
+    _verify_management_api_key,
+)
 from issuance.infrastructure.models import physical_document_jobs_table
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
+from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 physical_document_router = APIRouter(prefix="/v1/passport", tags=["physical-documents"])
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+
+
+async def _passport_management_organization(
+    request: Request,
+    _management_key: Annotated[str, Depends(_verify_management_api_key)],
+) -> str:
+    """Accept only the organization that the authenticated Gateway supplied."""
+    return _trusted_organization_id(request)
+
+
+PassportOrganization = Annotated[str, Depends(_passport_management_organization)]
 
 
 def configure_physical_document_store(factory: async_sessionmaker[AsyncSession] | None) -> None:
@@ -126,11 +143,12 @@ def _safe_response(row: Any) -> dict[str, Any]:
     }
 
 
-async def _get_job(application_id: str) -> dict[str, Any]:
+async def _get_job(application_id: str, organization_id: str) -> dict[str, Any]:
     async with _factory()() as session:
         result = await session.execute(
             select(physical_document_jobs_table).where(
-                physical_document_jobs_table.c.application_id == application_id
+                physical_document_jobs_table.c.application_id == application_id,
+                physical_document_jobs_table.c.organization_id == organization_id,
             )
         )
         row = result.mappings().first()
@@ -139,12 +157,15 @@ async def _get_job(application_id: str) -> dict[str, Any]:
         return dict(row)
 
 
-async def _update_job(application_id: str, **values: Any) -> dict[str, Any]:
+async def _update_job(application_id: str, organization_id: str, **values: Any) -> dict[str, Any]:
     values["updated_at"] = datetime.now(UTC)
     async with _factory()() as session:
         result = await session.execute(
             physical_document_jobs_table.update()
-            .where(physical_document_jobs_table.c.application_id == application_id)
+            .where(
+                physical_document_jobs_table.c.application_id == application_id,
+                physical_document_jobs_table.c.organization_id == organization_id,
+            )
             .values(**values)
             .returning(physical_document_jobs_table)
         )
@@ -194,7 +215,9 @@ def _production_status(status: ProductionStatus) -> str:
 
 
 @physical_document_router.get("/capabilities")
-async def get_physical_document_capabilities() -> dict[str, Any]:
+async def get_physical_document_capabilities(
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
     signing = signer_capabilities()
     blockers = list(signing["blockers"])
     artifact_key_present = bool(os.environ.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "").strip())
@@ -222,7 +245,12 @@ async def get_physical_document_capabilities() -> dict[str, Any]:
 
 
 @physical_document_router.post("/applications", status_code=201)
-async def create_passport_application(payload: PassportApplicationRequest) -> dict[str, Any]:
+async def create_passport_application(
+    payload: PassportApplicationRequest,
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
+    if not hmac.compare_digest(payload.organization_id, trusted_organization_id):
+        raise HTTPException(status_code=403, detail="Passport organization is not authorized")
     if payload.issuer_did is not None:
         await require_managed_issuer_identity(payload.organization_id, payload.issuer_did)
     job_id = str(uuid.uuid4())
@@ -272,8 +300,11 @@ async def create_passport_application(payload: PassportApplicationRequest) -> di
 
 
 @physical_document_router.post("/applications/{application_id}/generate-sod")
-async def generate_passport_sod(application_id: str) -> dict[str, Any]:
-    row = await _get_job(application_id)
+async def generate_passport_sod(
+    application_id: str,
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
+    row = await _get_job(application_id, trusted_organization_id)
     await _require_current_issuer_profile(row)
     artifact = _decrypt_artifact(row)
     signed = await sign_emrtd(
@@ -283,26 +314,34 @@ async def generate_passport_sod(application_id: str) -> dict[str, Any]:
         data_groups=_numbered_data_groups(artifact),
     )
     sod_hash = hashlib.sha256(base64.b64decode(signed["sod_der_base64"], validate=True)).hexdigest()
-    updated = await _update_job(application_id, status="SOD_SIGNED", sod_sha256=sod_hash)
+    updated = await _update_job(
+        application_id, trusted_organization_id, status="SOD_SIGNED", sod_sha256=sod_hash
+    )
     return {**_safe_response(updated), "sod_sha256": sod_hash}
 
 
 @physical_document_router.post("/applications/{application_id}/generate-data-groups")
-async def generate_passport_data_groups(application_id: str) -> dict[str, Any]:
-    row = await _get_job(application_id)
+async def generate_passport_data_groups(
+    application_id: str,
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
+    row = await _get_job(application_id, trusted_organization_id)
     artifact = _decrypt_artifact(row)
     data_groups = _numbered_data_groups(artifact)
     if not {1, 2}.issubset(data_groups):
         raise HTTPException(
             status_code=422, detail="DG1 and DG2 are required for physical document issuance"
         )
-    updated = await _update_job(application_id, status="DATA_GENERATED")
+    updated = await _update_job(application_id, trusted_organization_id, status="DATA_GENERATED")
     return _safe_response(updated)
 
 
 @physical_document_router.post("/applications/{application_id}/submit-personalization")
-async def submit_passport_personalization(application_id: str) -> dict[str, Any]:
-    row = await _get_job(application_id)
+async def submit_passport_personalization(
+    application_id: str,
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
+    row = await _get_job(application_id, trusted_organization_id)
     await _require_current_issuer_profile(row)
     artifact = _decrypt_artifact(row)
     signed = await sign_emrtd(
@@ -326,6 +365,7 @@ async def submit_passport_personalization(application_id: str) -> dict[str, Any]
     )
     updated = await _update_job(
         application_id,
+        trusted_organization_id,
         status=_production_status(job.status),
         bureau_job_id=job.bureau_job_id,
         tracking_number=job.tracking_number,
@@ -337,13 +377,17 @@ async def submit_passport_personalization(application_id: str) -> dict[str, Any]
 
 
 @physical_document_router.get("/applications/{application_id}/production-status")
-async def get_passport_production_status(application_id: str) -> dict[str, Any]:
-    row = await _get_job(application_id)
+async def get_passport_production_status(
+    application_id: str,
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
+    row = await _get_job(application_id, trusted_organization_id)
     if row["bureau_job_id"] and row["status"] not in {"ACTIVE", "FAILED", "CANCELLED"}:
         bureau = await poll_job_status(row["bureau_job_id"])
         status = ProductionStatus(bureau["status"])
         row = await _update_job(
             application_id,
+            trusted_organization_id,
             status=_production_status(status),
             tracking_number=bureau.get("tracking_number") or row["tracking_number"],
             error_message=bureau.get("error_message"),
@@ -355,9 +399,10 @@ async def get_passport_production_status(application_id: str) -> dict[str, Any]:
 async def record_passport_quality_result(
     application_id: str,
     payload: QualityResultRequest,
+    trusted_organization_id: PassportOrganization,
     x_user_id: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
-    row = await _get_job(application_id)
+    row = await _get_job(application_id, trusted_organization_id)
     if row["status"] not in {"QUALITY_CHECK", "READY_FOR_ACTIVATION"}:
         raise HTTPException(
             status_code=409, detail="Document is not ready for quality verification"
@@ -370,6 +415,7 @@ async def record_passport_quality_result(
     }
     updated = await _update_job(
         application_id,
+        trusted_organization_id,
         status="READY_FOR_ACTIVATION" if payload.passed else "FAILED",
         quality_result=quality_result,
         error_code=None if payload.passed else "QUALITY_CHECK_FAILED",
@@ -378,14 +424,18 @@ async def record_passport_quality_result(
 
 
 @physical_document_router.post("/applications/{application_id}/activate")
-async def activate_passport(application_id: str) -> dict[str, Any]:
-    row = await _get_job(application_id)
+async def activate_passport(
+    application_id: str,
+    trusted_organization_id: PassportOrganization,
+) -> dict[str, Any]:
+    row = await _get_job(application_id, trusted_organization_id)
     if row["status"] != "READY_FOR_ACTIVATION" or not (row["quality_result"] or {}).get("passed"):
         raise HTTPException(
             status_code=409, detail="A passing quality result is required before activation"
         )
     updated = await _update_job(
         application_id,
+        trusted_organization_id,
         status="ACTIVE",
         completed_at=datetime.now(UTC),
         secure_artifact_ciphertext=_fernet().encrypt(b"{}").decode("ascii"),
@@ -405,15 +455,22 @@ async def personalization_webhook(
     bureau_job_id, status, metadata = parse_webhook_event(payload)
     async with _factory()() as session:
         result = await session.execute(
-            select(physical_document_jobs_table.c.application_id).where(
-                physical_document_jobs_table.c.bureau_job_id == bureau_job_id
-            )
+            select(
+                physical_document_jobs_table.c.application_id,
+                physical_document_jobs_table.c.organization_id,
+            ).where(physical_document_jobs_table.c.bureau_job_id == bureau_job_id)
         )
-        application_id = result.scalar_one_or_none()
-    if not application_id:
+        try:
+            job = result.one_or_none()
+        except MultipleResultsFound as exc:
+            raise HTTPException(
+                status_code=409, detail="Physical document callback job is ambiguous"
+            ) from exc
+    if not job:
         raise HTTPException(status_code=404, detail="Physical document job not found")
     await _update_job(
-        application_id,
+        job.application_id,
+        job.organization_id,
         status=_production_status(status),
         tracking_number=metadata.get("tracking_number"),
         error_message=metadata.get("error_message"),

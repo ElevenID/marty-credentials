@@ -2,8 +2,8 @@
 
 The configured server must be loopback. This test creates and drops only its
 freshly generated database; it never accepts a deployment database as a target.
-Provider transport, webhook signature policy, and tenant authorization remain
-separate gates before a Rust port or Python deletion.
+Provider transport, webhook signature policy, and Gateway tenant authorization
+remain separate gates before a Rust port or Python deletion.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             mrz={"line_1": "SYNTHETIC1", "line_2": "SYNTHETIC2"},
             data_groups={"DG1": "ZzE=", "DG2": "ZzI="},
         )
-        created = await routes.create_passport_application(payload)
+        created = await routes.create_passport_application(payload, payload.organization_id)
         application_id = created["application_id"]
         assert created["status"] == "DRAFT"
         assert "secure_artifact_ciphertext" not in created
@@ -166,7 +166,19 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             "data_groups": payload.data_groups,
         }
 
-        grouped = await routes.generate_passport_data_groups(application_id)
+        for operation in (
+            lambda: routes._get_job(application_id, "org-foreign"),
+            lambda: routes._update_job(application_id, "org-foreign", status="ACTIVE"),
+            lambda: routes.generate_passport_data_groups(application_id, "org-foreign"),
+            lambda: routes.get_passport_production_status(application_id, "org-foreign"),
+        ):
+            with pytest.raises(HTTPException) as foreign:
+                await operation()
+            assert foreign.value.status_code == 404
+
+        grouped = await routes.generate_passport_data_groups(
+            application_id, payload.organization_id
+        )
         assert grouped["status"] == "DATA_GENERATED"
 
         async def sign(**values):
@@ -179,12 +191,15 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             return {"sod_der_base64": "U09E", "dsc_cert_pem": "synthetic-cert"}
 
         monkeypatch.setattr(routes, "sign_emrtd", sign)
-        signed = await routes.generate_passport_sod(application_id)
+        signed = await routes.generate_passport_sod(application_id, payload.organization_id)
         assert signed["status"] == "SOD_SIGNED"
         assert signed["sod_sha256"] == hashlib.sha256(b"SOD").hexdigest()
 
         await routes._update_job(
-            application_id, status="SUBMITTED", bureau_job_id="bureau-reference"
+            application_id,
+            payload.organization_id,
+            status="SUBMITTED",
+            bureau_job_id="bureau-reference",
         )
         webhook = {
             "bureau_job_id": "bureau-reference",
@@ -201,22 +216,52 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
         with pytest.raises(HTTPException) as rejected:
             await routes.personalization_webhook(WebhookRequest(), "invalid-signature")
         assert rejected.value.status_code == 401
-        assert (await routes._get_job(application_id))["status"] == "SUBMITTED"
+        assert (await routes._get_job(application_id, payload.organization_id))[
+            "status"
+        ] == "SUBMITTED"
         signature = hmac.new(b"synthetic-webhook-secret", body, hashlib.sha256).hexdigest()
+        duplicate = dict(row)
+        duplicate.update(
+            id=str(uuid4()),
+            organization_id="org-foreign",
+            application_id=str(uuid4()),
+            bureau_job_id="bureau-reference",
+            status="SUBMITTED",
+        )
+        async with factory() as session:
+            await session.execute(physical_document_jobs_table.insert().values(**duplicate))
+            await session.commit()
+        with pytest.raises(HTTPException) as ambiguous:
+            await routes.personalization_webhook(WebhookRequest(), signature)
+        assert ambiguous.value.status_code == 409
+        assert (await routes._get_job(application_id, payload.organization_id))[
+            "status"
+        ] == "SUBMITTED"
+        assert (await routes._get_job(duplicate["application_id"], "org-foreign"))[
+            "status"
+        ] == "SUBMITTED"
+        async with factory() as session:
+            await session.execute(
+                physical_document_jobs_table.delete().where(
+                    physical_document_jobs_table.c.id == duplicate["id"]
+                )
+            )
+            await session.commit()
         assert await routes.personalization_webhook(WebhookRequest(), signature) == {
             "accepted": True
         }
-        after_webhook = await routes._get_job(application_id)
+        after_webhook = await routes._get_job(application_id, payload.organization_id)
         assert after_webhook["status"] == "READY_FOR_ACTIVATION"
         assert after_webhook["tracking_number"] == "TRACK-42"
 
         quality = await routes.record_passport_quality_result(
             application_id,
             routes.QualityResultRequest(passed=True),
+            payload.organization_id,
             x_user_id="synthetic-reviewer",
         )
         assert quality["status"] == "READY_FOR_ACTIVATION"
-        activated = await routes.activate_passport(application_id)
+        activated = await routes.activate_passport(application_id, payload.organization_id)
         assert activated["status"] == "ACTIVE"
         assert "secure_artifact_ciphertext" not in activated
 

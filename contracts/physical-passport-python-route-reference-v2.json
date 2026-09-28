@@ -2,13 +2,20 @@
   "schema": "elevenid.physical-passport-python-route-reference/v2",
   "base": "contracts/physical-passport-python-route-reference.json",
   "base_sha256": "e8f80aa0330251f125a519f8238cd1ab3c6058f3b968a9435440a8dc7f5379db",
-  "scope": "Intentional optional issuer_did extension for KMS-compatible rollback. The v1 nine-route behavior and response projection remain frozen.",
+  "scope": "Optional issuer_did and trusted-tenant authorization extensions for KMS-compatible rollback. The v1 nine-route payload and response projection remain frozen.",
   "source_sha256": {
-    "services/issuance/infrastructure/api/physical_document_routes.py": "3e57a6232a49fe14ad59fe4b75e8dfe8f1e08ebe139372aed637b55c23c01686",
+    "services/issuance/infrastructure/api/physical_document_routes.py": "398a0019eed6a11cee36002279ba47c01e0f53ae707252c56efcba5ccff43995",
     "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "7f5e2f0f11a66425af7566761b61f73d165bf8a9c95f943f626bf468449d88b0"
   },
   "optional_create_field": "issuer_did",
   "persisted_column": "issuance_service.physical_document_jobs.issuer_did",
   "signer_forwarding": "include issuer_did only when the job has an explicit DID",
-  "profile_guard": "resolve active organization-bound ICAO DSC profile before create and each signing operation"
+  "profile_guard": "resolve active organization-bound ICAO DSC profile before create and each signing operation",
+  "rollback_tenant_guard": {
+    "public_routes": 8,
+    "service_authentication": "X-API-Key",
+    "trusted_scope": "X-Organization-ID",
+    "job_predicate": ["application_id", "organization_id"],
+    "webhook_authentication": "signed callback"
+  }
 }
