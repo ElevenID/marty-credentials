@@ -469,6 +469,7 @@ physical_document_jobs_table = Table(
     Column("application_id", String, nullable=False, unique=True),
     Column("application_template_id", String, nullable=False),
     Column("credential_template_id", String, nullable=False),
+    Column("issuer_did", Text, nullable=True),
     Column("revocation_profile_id", String, nullable=True),
     Column("delivery_destination_profile_id", String(128), nullable=False),
     Column("document_type", String(3), nullable=False),

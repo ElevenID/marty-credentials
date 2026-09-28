@@ -1,0 +1,10 @@
+{
+  "schema": "elevenid.physical-passport-provider-reference/v2",
+  "base": "contracts/physical-passport-provider-reference.json",
+  "base_sha256": "fc2d68d4d199833ed6cbff0d9f5d57f6bcf58d78639bcc3146147442fd684e8a",
+  "scope": "Intentional issuer DID extension to the frozen v1 signer wire for KMS-compatible passport rollback; existing no-DID callers retain v1 wire behavior.",
+  "python_source_sha256": {
+    "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "7f5e2f0f11a66425af7566761b61f73d165bf8a9c95f943f626bf468449d88b0"
+  },
+  "issuer_did": "did:web:issuer.example:orgs:org-reference"
+}

@@ -24,6 +24,9 @@ from services.issuance.infrastructure.api.physical_document_routes import (
 REFERENCE = (
     Path(__file__).resolve().parents[2] / "contracts/physical-passport-python-route-reference.json"
 )
+DELTA = (
+    Path(__file__).resolve().parents[2] / "contracts/physical-passport-python-route-reference-v2.json"
+)
 
 
 def _reference() -> dict:
@@ -65,6 +68,11 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     assert reference["qualification"] == "route-boundary-only; no native cutover or Python deletion"
     assert len(reference["remaining_oracles"]) == 3
     root = Path(__file__).resolve().parents[2]
+    delta = json.loads(DELTA.read_text(encoding="utf-8"))
+    assert delta["schema"] == "elevenid.physical-passport-python-route-reference/v2"
+    assert delta["base"] == "contracts/physical-passport-python-route-reference.json"
+    assert delta["base_sha256"] == hashlib.sha256(REFERENCE.read_bytes()).hexdigest()
+    assert delta["optional_create_field"] == "issuer_did"
     assert set(reference["sources"]) == {
         "services/issuance/infrastructure/api/physical_document_routes.py",
         "services/issuance/infrastructure/adapters/emrtd_signer_client.py",
@@ -73,7 +81,9 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     for relative_path, digest in reference["sources"].items():
         source = (root / relative_path).read_bytes()
         assert b"\r" not in source.replace(b"\r\n", b"")
-        assert hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest() == digest
+        assert hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest() == delta[
+            "source_sha256"
+        ].get(relative_path, digest)
     actual = {
         (method, route.path)
         for route in routes.physical_document_router.routes
@@ -172,7 +182,13 @@ def test_passport_request_validation_reference_rejects_invalid_fields() -> None:
         assert PassportApplicationRequest(**payload, document_type=document_type).document_type == (
             document_type
         )
+    assert PassportApplicationRequest(**payload).issuer_did is None
+    assert PassportApplicationRequest(
+        **payload, issuer_did="did:web:issuer.example:orgs:org-1"
+    ).issuer_did == "did:web:issuer.example:orgs:org-1"
     for invalid in [
+        {"issuer_did": "issuer.example"},
+        {"issuer_did": " did:web:issuer.example"},
         {"document_type": "TD4"},
         {"country_code": "us"},
         {

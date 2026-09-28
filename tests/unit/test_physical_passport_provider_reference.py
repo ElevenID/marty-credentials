@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from services.issuance.infrastructure.adapters import (
     emrtd_signer_client as signer,
@@ -18,9 +20,17 @@ from services.issuance.infrastructure.adapters import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-REFERENCE = json.loads(
+DELTA = json.loads(
+    (ROOT / "contracts/physical-passport-provider-reference-v2.json").read_text(encoding="utf-8")
+)
+FROZEN_V1 = json.loads(
     (ROOT / "contracts/physical-passport-provider-reference.json").read_text(encoding="utf-8")
 )
+REFERENCE = deepcopy(FROZEN_V1)
+REFERENCE["schema"] = DELTA["schema"]
+REFERENCE["python_source_sha256"].update(DELTA["python_source_sha256"])
+REFERENCE["signer"]["request"]["issuer_did"] = DELTA["issuer_did"]
+REFERENCE["signer"]["http"]["json"]["issuer_did"] = DELTA["issuer_did"]
 
 
 def _client_with(handler, clients: list[httpx.AsyncClient]):
@@ -41,7 +51,10 @@ def _job() -> bureau.PersonalizationJob:
 
 
 def test_provider_reference_pins_reviewed_python_sources() -> None:
-    assert REFERENCE["schema"] == "elevenid.physical-passport-provider-reference/v1"
+    assert REFERENCE["schema"] == "elevenid.physical-passport-provider-reference/v2"
+    assert FROZEN_V1["schema"] == "elevenid.physical-passport-provider-reference/v1"
+    assert DELTA["base"] == "contracts/physical-passport-provider-reference.json"
+    assert DELTA["base_sha256"] == hashlib.sha256((ROOT / DELTA["base"]).read_bytes()).hexdigest()
     assert set(REFERENCE["python_source_sha256"]) == {
         "services/issuance/infrastructure/adapters/emrtd_signer_client.py",
         "services/issuance/infrastructure/adapters/personalization_bureau_client.py",
@@ -61,7 +74,9 @@ def test_signer_mode_is_explicit_and_remote_takes_precedence(
 
 
 @pytest.mark.asyncio
-async def test_remote_signer_request_success_and_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_remote_signer_request_success_and_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     expected = REFERENCE["signer"]["http"]
     observed: list[httpx.Request] = []
     clients: list[httpx.AsyncClient] = []
@@ -87,12 +102,75 @@ async def test_remote_signer_request_success_and_fail_closed(monkeypatch: pytest
     assert json.loads(observed[-1].content) == expected["json"]
     assert clients[-1].timeout.read == expected["timeout_seconds"]
 
+    legacy_args = {key: value for key, value in args.items() if key != "issuer_did"}
+    assert await signer.sign_emrtd(**legacy_args) == REFERENCE["signer"]["success"]
+    assert json.loads(observed[-1].content) == FROZEN_V1["signer"]["http"]["json"]
+
     response["body"] = {"sod_der_base64": "U09E"}
     with pytest.raises(RuntimeError, match=REFERENCE["signer"]["incomplete_error"]):
         await signer.sign_emrtd(**args)
     response["status"] = 503
     with pytest.raises(httpx.HTTPStatusError):
         await signer.sign_emrtd(**args)
+
+
+@pytest.mark.asyncio
+async def test_managed_issuer_did_is_bound_to_active_organization_profile(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    key_file = tmp_path / "signing_keys_internal_api_key"
+    key_file.write_text("k" * 32, encoding="ascii")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://signing-keys:8017/internal")
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY_FILE", str(key_file))
+    did = "did:web:issuer.example:orgs:org-reference"
+    observed: list[httpx.Request] = []
+    resolved = {
+        "organization_id": "org-reference",
+        "issuer_did": did,
+        "key_purpose": "x509_doc_signer",
+        "issuer_profile": {"credential_format": "ICAO_EMRTD"},
+    }
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json=resolved)
+
+    original = httpx.AsyncClient
+
+    def client(*, timeout: float, follow_redirects: bool) -> httpx.AsyncClient:
+        return original(
+            transport=httpx.MockTransport(handle),
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+        )
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    await signer.require_managed_issuer_identity("org-reference", did)
+    assert observed[-1].method == "POST"
+    assert observed[-1].url.path == "/internal/compat/resolve-issuer-did"
+    assert observed[-1].url.query == b""
+    assert json.loads(observed[-1].content) == {
+        "organization_id": "org-reference",
+        "issuer_did": did,
+        "credential_format": "ICAO_EMRTD",
+        "key_purpose": "x509_doc_signer",
+        "algorithm": "",
+    }
+    assert observed[-1].headers["x-api-key"] == "k" * 32
+    resolved["organization_id"] = "foreign-organization"
+    with pytest.raises(HTTPException) as foreign:
+        await signer.require_managed_issuer_identity("org-reference", did)
+    assert foreign.value.status_code == 422
+    resolved["organization_id"] = "org-reference"
+    resolved["issuer_did"] = "did:web:foreign.example"
+    with pytest.raises(HTTPException) as wrong_did:
+        await signer.require_managed_issuer_identity("org-reference", did)
+    assert wrong_did.value.status_code == 422
+    monkeypatch.delenv("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+    with pytest.raises(HTTPException) as unavailable:
+        await signer.require_managed_issuer_identity("org-reference", did)
+    assert unavailable.value.status_code == 503
 
 
 @pytest.mark.asyncio

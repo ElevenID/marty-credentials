@@ -110,11 +110,18 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
         routes.configure_physical_document_store(factory)
+
+        async def require_issuer(organization_id: str, issuer_did: str) -> None:
+            assert organization_id == "org-passport-reference"
+            assert issuer_did == "did:web:issuer.example:orgs:org-passport-reference"
+
+        monkeypatch.setattr(routes, "require_managed_issuer_identity", require_issuer)
         payload = routes.PassportApplicationRequest(
             organization_id="org-passport-reference",
             flow_execution_id="flow-reference",
             application_template_id="application-template-reference",
             credential_template_id="credential-template-reference",
+            issuer_did="did:web:issuer.example:orgs:org-passport-reference",
             delivery_destination_profile_id="bureau-reference",
             country_code="USA",
             applicant={"name": "Synthetic Applicant"},
@@ -148,6 +155,7 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
                 .one()
             )
         assert row["organization_id"] == "org-passport-reference"
+        assert row["issuer_did"] == payload.issuer_did
         assert row["revocation_profile_id"] is None
         assert row["status"] == "DRAFT"
         assert row["secure_artifact_reference"] == f"physical-artifact://{row['id']}"
@@ -165,6 +173,7 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             assert values == {
                 "country_code": "USA",
                 "organization": "org-passport-reference",
+                "issuer_did": payload.issuer_did,
                 "data_groups": {1: "ZzE=", 2: "ZzI="},
             }
             return {"sod_der_base64": "U09E", "dsc_cert_pem": "synthetic-cert"}
@@ -193,9 +202,7 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             await routes.personalization_webhook(WebhookRequest(), "invalid-signature")
         assert rejected.value.status_code == 401
         assert (await routes._get_job(application_id))["status"] == "SUBMITTED"
-        signature = hmac.new(
-            b"synthetic-webhook-secret", body, hashlib.sha256
-        ).hexdigest()
+        signature = hmac.new(b"synthetic-webhook-secret", body, hashlib.sha256).hexdigest()
         assert await routes.personalization_webhook(WebhookRequest(), signature) == {
             "accepted": True
         }

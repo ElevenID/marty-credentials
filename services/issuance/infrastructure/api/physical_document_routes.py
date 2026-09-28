@@ -12,7 +12,11 @@ from typing import Annotated, Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Header, HTTPException, Request
-from issuance.infrastructure.adapters.emrtd_signer_client import sign_emrtd, signer_capabilities
+from issuance.infrastructure.adapters.emrtd_signer_client import (
+    require_managed_issuer_identity,
+    sign_emrtd,
+    signer_capabilities,
+)
 from issuance.infrastructure.adapters.personalization_bureau_client import (
     PersonalizationJob,
     ProductionStatus,
@@ -64,12 +68,20 @@ class PassportApplicationRequest(BaseModel):
     flow_execution_id: str
     application_template_id: str
     credential_template_id: str
+    issuer_did: str | None = Field(default=None, max_length=2048)
     delivery_destination_profile_id: str = Field(max_length=128)
     document_type: Literal["TD1", "TD2", "TD3"] = "TD3"
     country_code: str = Field(pattern=r"^[A-Z]{3}$")
     applicant: dict[str, Any]
     mrz: dict[str, str]
     data_groups: dict[str, str]
+
+    @field_validator("issuer_did")
+    @classmethod
+    def validate_issuer_did(cls, value: str | None) -> str | None:
+        if value is not None and (not value.startswith("did:") or value != value.strip()):
+            raise ValueError("issuer_did must be a DID")
+        return value
 
     @field_validator("data_groups")
     @classmethod
@@ -157,6 +169,17 @@ def _numbered_data_groups(artifact: dict[str, Any]) -> dict[int, str]:
     return {int(name[2:]): content for name, content in artifact["data_groups"].items()}
 
 
+def _issuer_signing_kwargs(row: dict[str, Any]) -> dict[str, str]:
+    issuer_did = row.get("issuer_did")
+    return {"issuer_did": issuer_did} if issuer_did else {}
+
+
+async def _require_current_issuer_profile(row: dict[str, Any]) -> None:
+    issuer_did = row.get("issuer_did")
+    if issuer_did:
+        await require_managed_issuer_identity(row["organization_id"], issuer_did)
+
+
 def _production_status(status: ProductionStatus) -> str:
     return {
         ProductionStatus.QUEUED: "SUBMITTED",
@@ -200,6 +223,8 @@ async def get_physical_document_capabilities() -> dict[str, Any]:
 
 @physical_document_router.post("/applications", status_code=201)
 async def create_passport_application(payload: PassportApplicationRequest) -> dict[str, Any]:
+    if payload.issuer_did is not None:
+        await require_managed_issuer_identity(payload.organization_id, payload.issuer_did)
     job_id = str(uuid.uuid4())
     application_id = str(uuid.uuid4())
     now = datetime.now(UTC)
@@ -218,6 +243,7 @@ async def create_passport_application(payload: PassportApplicationRequest) -> di
         "application_id": application_id,
         "application_template_id": payload.application_template_id,
         "credential_template_id": payload.credential_template_id,
+        "issuer_did": payload.issuer_did,
         "delivery_destination_profile_id": payload.delivery_destination_profile_id,
         "document_type": payload.document_type,
         "country_code": payload.country_code,
@@ -248,10 +274,12 @@ async def create_passport_application(payload: PassportApplicationRequest) -> di
 @physical_document_router.post("/applications/{application_id}/generate-sod")
 async def generate_passport_sod(application_id: str) -> dict[str, Any]:
     row = await _get_job(application_id)
+    await _require_current_issuer_profile(row)
     artifact = _decrypt_artifact(row)
     signed = await sign_emrtd(
         country_code=row["country_code"],
         organization=row["organization_id"],
+        **_issuer_signing_kwargs(row),
         data_groups=_numbered_data_groups(artifact),
     )
     sod_hash = hashlib.sha256(base64.b64decode(signed["sod_der_base64"], validate=True)).hexdigest()
@@ -275,10 +303,12 @@ async def generate_passport_data_groups(application_id: str) -> dict[str, Any]:
 @physical_document_router.post("/applications/{application_id}/submit-personalization")
 async def submit_passport_personalization(application_id: str) -> dict[str, Any]:
     row = await _get_job(application_id)
+    await _require_current_issuer_profile(row)
     artifact = _decrypt_artifact(row)
     signed = await sign_emrtd(
         country_code=row["country_code"],
         organization=row["organization_id"],
+        **_issuer_signing_kwargs(row),
         data_groups=_numbered_data_groups(artifact),
     )
     job = await submit_personalization_job(
