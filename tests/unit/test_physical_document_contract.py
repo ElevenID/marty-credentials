@@ -11,7 +11,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from issuance.infrastructure.api import routes as management_routes
+from issuance.infrastructure.api import management_auth
 from pydantic import ValidationError
 from sqlalchemy.exc import MultipleResultsFound
 
@@ -89,6 +89,11 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
         assert hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest() == delta[
             "source_sha256"
         ].get(relative_path, digest)
+    auth_source = (root / "services/issuance/infrastructure/api/management_auth.py").read_bytes()
+    assert (
+        hashlib.sha256(auth_source.replace(b"\r\n", b"\n")).hexdigest()
+        == delta["source_sha256"]["services/issuance/infrastructure/api/management_auth.py"]
+    )
     actual = {
         (method, route.path)
         for route in routes.physical_document_router.routes
@@ -195,7 +200,7 @@ def test_passport_management_routes_require_service_key_and_trusted_organization
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setattr(management_routes, "_ISSUANCE_API_KEY", "synthetic-management-key")
+    monkeypatch.setattr(management_auth, "_ISSUANCE_API_KEY", "synthetic-management-key")
     app = FastAPI()
     app.include_router(routes.physical_document_router)
     client = TestClient(app)
@@ -232,7 +237,7 @@ def test_passport_management_routes_require_service_key_and_trusted_organization
     )
     key_file = tmp_path / "issuance-api-key"
     key_file.write_text("disposable-file-management-key\n", encoding="ascii")
-    monkeypatch.setattr(management_routes, "_ISSUANCE_API_KEY", "")
+    monkeypatch.setattr(management_auth, "_ISSUANCE_API_KEY", "")
     monkeypatch.setenv("ISSUANCE_API_KEY_FILE", str(key_file))
     assert (
         client.get(
@@ -241,7 +246,7 @@ def test_passport_management_routes_require_service_key_and_trusted_organization
         ).status_code
         == 200
     )
-    monkeypatch.setattr(management_routes, "_ISSUANCE_API_KEY", "ambiguous-inline-key")
+    monkeypatch.setattr(management_auth, "_ISSUANCE_API_KEY", "ambiguous-inline-key")
     assert (
         client.get(
             path,

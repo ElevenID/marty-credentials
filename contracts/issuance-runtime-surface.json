@@ -380,7 +380,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 1081,
+        "line": 1034,
         "method": "GET",
         "operation": "get_application_template_owner",
         "path": "/internal/v1/resource-owners/application-templates/{template_id}",
@@ -388,7 +388,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 1045,
+        "line": 998,
         "method": "GET",
         "operation": "get_issuance_transaction_owner",
         "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
@@ -396,7 +396,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 1063,
+        "line": 1016,
         "method": "GET",
         "operation": "get_issued_credential_owner",
         "path": "/internal/v1/resource-owners/issued-credentials/{credential_id}",
@@ -836,7 +836,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 2808,
+        "line": 2761,
         "method": "POST",
         "operation": "issue_credential",
         "path": "/v1/issuance/credential",
@@ -844,7 +844,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4422,
+        "line": 4375,
         "method": "POST",
         "operation": "reinstate_credential",
         "path": "/v1/issuance/credentials/{credential_id}/reinstate",
@@ -852,7 +852,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4330,
+        "line": 4283,
         "method": "POST",
         "operation": "revoke_credential",
         "path": "/v1/issuance/credentials/{credential_id}/revoke",
@@ -860,7 +860,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4477,
+        "line": 4430,
         "method": "GET",
         "operation": "get_credential_status",
         "path": "/v1/issuance/credentials/{credential_id}/status",
@@ -868,7 +868,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4370,
+        "line": 4323,
         "method": "POST",
         "operation": "suspend_credential",
         "path": "/v1/issuance/credentials/{credential_id}/suspend",
@@ -876,7 +876,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4025,
+        "line": 3978,
         "method": "POST",
         "operation": "didcomm_deliver",
         "path": "/v1/issuance/didcomm/deliver",
@@ -884,7 +884,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 2036,
+        "line": 1989,
         "method": "POST",
         "operation": "initiate_issuance",
         "path": "/v1/issuance/initiate",
@@ -892,7 +892,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 2776,
+        "line": 2729,
         "method": "POST",
         "operation": "nonce_endpoint",
         "path": "/v1/issuance/nonce",
@@ -900,7 +900,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4074,
+        "line": 4027,
         "method": "GET",
         "operation": "get_credential_offer",
         "path": "/v1/issuance/offers/{tx_id}",
@@ -908,7 +908,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 2504,
+        "line": 2457,
         "method": "POST",
         "operation": "exchange_token",
         "path": "/v1/issuance/token",
@@ -916,7 +916,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4099,
+        "line": 4052,
         "method": "GET",
         "operation": "list_transactions",
         "path": "/v1/issuance/transactions",
@@ -924,7 +924,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4127,
+        "line": 4080,
         "method": "GET",
         "operation": "get_transaction",
         "path": "/v1/issuance/transactions/{tx_id}",
@@ -932,7 +932,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4162,
+        "line": 4115,
         "method": "GET",
         "operation": "get_transaction_revocation_status",
         "path": "/v1/issuance/transactions/{tx_id}/revocation-status",
@@ -940,7 +940,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4506,
+        "line": 4459,
         "method": "GET",
         "operation": "list_issued_credentials",
         "path": "/v1/issued-credentials",
@@ -948,7 +948,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4526,
+        "line": 4479,
         "method": "GET",
         "operation": "get_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}",
@@ -956,7 +956,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4609,
+        "line": 4562,
         "method": "POST",
         "operation": "reinstate_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/reinstate",
@@ -964,7 +964,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4640,
+        "line": 4593,
         "method": "POST",
         "operation": "renew_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/renew",
@@ -972,7 +972,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4547,
+        "line": 4500,
         "method": "POST",
         "operation": "revoke_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/revoke",
@@ -980,7 +980,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 4578,
+        "line": 4531,
         "method": "POST",
         "operation": "suspend_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/suspend",

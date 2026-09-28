@@ -15,7 +15,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Literal, TypeVar
 from urllib.parse import quote, urlparse
 
@@ -104,6 +103,10 @@ from issuance.infrastructure.adapters.delivery_records import (
     canvas_deployment_profile_delivery_metadata,
     normalize_delivery_mode,
     record_post_issuance_deliveries,
+)
+from issuance.infrastructure.api.management_auth import (
+    _trusted_organization_id,
+    _verify_management_api_key,
 )
 from issuance.infrastructure.api.signing_context import (
     resolve_remote_issuer_context,
@@ -865,56 +868,6 @@ async def _enforce_token_rate_limit(request: Request) -> None:
 # The repository stores only nonce digests and atomically consumes them across
 # workers and replicas, including during a rolling deployment.
 _NONCE_POOL_TTL_SECONDS = 300
-
-
-# ---------------------------------------------------------------------------
-# API key authentication for management endpoints
-# ---------------------------------------------------------------------------
-_ISSUANCE_API_KEY = os.environ.get("ISSUANCE_API_KEY", "")
-_api_key_header = Header(None, alias="X-API-Key")
-
-
-def _configured_management_api_key() -> str:
-    key_file = os.environ.get("ISSUANCE_API_KEY_FILE", "").strip()
-    if key_file and _ISSUANCE_API_KEY:
-        raise HTTPException(status_code=503, detail="ISSUANCE_API_KEY configuration is ambiguous")
-    if key_file:
-        try:
-            key = Path(key_file).read_text(encoding="ascii").strip()
-        except (OSError, UnicodeError) as exc:
-            raise HTTPException(
-                status_code=503, detail="ISSUANCE_API_KEY_FILE is unavailable"
-            ) from exc
-    else:
-        key = _ISSUANCE_API_KEY
-    if not key:
-        raise HTTPException(status_code=503, detail="ISSUANCE_API_KEY not configured on server")
-    return key
-
-
-async def _verify_management_api_key(
-    x_api_key: str | None = _api_key_header,
-) -> str:
-    """Verify X-API-Key header for management endpoints."""
-    import hmac as _hmac
-
-    configured_key = _configured_management_api_key()
-    if not x_api_key:
-        raise HTTPException(status_code=401, detail="X-API-Key header is missing")
-    if not _hmac.compare_digest(x_api_key, configured_key):
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-    return x_api_key
-
-
-def _trusted_organization_id(http_request: Request) -> str:
-    """Return the gateway-authenticated organization for management calls."""
-    organization_id = str(http_request.headers.get("X-Organization-ID") or "").strip()
-    if not organization_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Trusted organization context is required",
-        )
-    return organization_id
 
 
 def _require_trusted_organization(

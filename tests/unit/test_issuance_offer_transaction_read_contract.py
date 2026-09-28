@@ -56,13 +56,13 @@ class ContractRepository:
 
 def client(monkeypatch) -> tuple[TestClient, ContractRepository]:
     from issuance import main
-    from issuance.infrastructure.api import routes
+    from issuance.infrastructure.api import management_auth, routes
 
     inputs = CONTRACT["inputs"]
     repository = ContractRepository(inputs["transactions"])
     monkeypatch.setattr(main, "_repo", repository)
     monkeypatch.setattr(routes, "ISSUER_BASE_URL", inputs["issuer_base_url"])
-    monkeypatch.setattr(routes, "_ISSUANCE_API_KEY", inputs["management_api_key"])
+    monkeypatch.setattr(management_auth, "_ISSUANCE_API_KEY", inputs["management_api_key"])
     monkeypatch.setenv("TOKEN_HMAC_KEY", "test-only-not-a-secret")
     return TestClient(main.create_app()), repository
 

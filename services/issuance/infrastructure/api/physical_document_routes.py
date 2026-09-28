@@ -27,7 +27,7 @@ from issuance.infrastructure.adapters.personalization_bureau_client import (
     submit_personalization_job,
     verify_webhook_signature,
 )
-from issuance.infrastructure.api.routes import (
+from issuance.infrastructure.api.management_auth import (
     _trusted_organization_id,
     _verify_management_api_key,
 )

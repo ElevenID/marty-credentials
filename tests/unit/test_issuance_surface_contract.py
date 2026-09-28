@@ -31,7 +31,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "fde2b22f00c60f74da3f2e2840ada8ba40154562a0373f7245eec43d289aa411"
+        "b2ca54d74075623eeeeb75f5515420d22bdc2e7240178515a71efb2aa8b51c9e"
     )
 
 

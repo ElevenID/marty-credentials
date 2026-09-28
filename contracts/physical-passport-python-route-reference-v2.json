@@ -4,7 +4,8 @@
   "base_sha256": "e8f80aa0330251f125a519f8238cd1ab3c6058f3b968a9435440a8dc7f5379db",
   "scope": "Optional issuer_did and trusted-tenant authorization extensions for KMS-compatible rollback. The v1 nine-route payload and response projection remain frozen.",
   "source_sha256": {
-    "services/issuance/infrastructure/api/physical_document_routes.py": "398a0019eed6a11cee36002279ba47c01e0f53ae707252c56efcba5ccff43995",
+    "services/issuance/infrastructure/api/physical_document_routes.py": "428890711b57d7b6cc0d9bdb7aa1e87faae5e6b9f89cff599ed4f5708e035e60",
+    "services/issuance/infrastructure/api/management_auth.py": "d2ff38f8435000bd27c41b78aff7c93028997cf9a5c2c30ffb6db3ff02ac0bc3",
     "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "7f5e2f0f11a66425af7566761b61f73d165bf8a9c95f943f626bf468449d88b0"
   },
   "optional_create_field": "issuer_did",
