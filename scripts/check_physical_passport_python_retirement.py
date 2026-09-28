@@ -1,4 +1,4 @@
-"""Fail closed until physical-passport Rust runtime acceptance is verifiable."""
+"""Fail closed until Rust passport route compatibility is verifiable."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ REQUIRED_BETA_PROBES = {
     "legacy_drain",
     "rollback",
     "production_isolation",
-    "physical_booklet_verified",
+    "physical_claim_boundary",
 }
 EXPECTED_SURFACES = {"base", "selfhost", "kubernetes"}
 EXPECTED_BETA_SERVICES = {
@@ -52,13 +52,13 @@ EXPECTED_BETA_SERVICES = {
     "flow",
     "issuance-native",
     "signing-keys",
-    "passport-callback-signer-supported",
-    "passport-provider-ingress",
+    "passport-callback-signer",
+    "passport-beta-bureau",
 }
 REQUIRED_SUPPORTED_PROBES = {
     "nine_route_gateway_flow",
     "managed_signer",
-    "physical_bureau_callback",
+    "signed_bureau_callback",
     "released_image",
     "rollback",
 }
@@ -159,9 +159,11 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
                         "Beta report release lineage mismatch")
     prior_gate._require(report.get("beta_origin") == "https://beta.elevenidllc.com",
                         "Beta report origin mismatch")
+    prior_gate._require(report.get("physical_claim") == "not_claimed",
+                        "Beta compatibility report must not claim a physical booklet")
     deployment = report.get("deployment")
     prior_gate._require(isinstance(deployment, dict)
-                        and deployment.get("provider_mode") == "physical"
+                        and deployment.get("provider_mode") == "simulator"
                         and all(isinstance(deployment.get(name), str)
                                 and SHA256.fullmatch(deployment[name]) is not None
                                 for name in ("local_deployment_manifest_sha256",
@@ -178,28 +180,35 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         prior_gate._require(isinstance(probe, dict) and probe.get("verified") is True
                             and probe.get("evidence") is not None,
                             f"Beta passport probe did not pass: {name}")
+    boundary = probes["physical_claim_boundary"]["evidence"]
+    prior_gate._require(isinstance(boundary, dict)
+                        and boundary.get("physical_claim") == "not_claimed"
+                        and boundary.get("booklet_verified") is False,
+                        "Simulator acceptance must not claim a physical booklet")
     batch = probes["physical_bureau_batch"]["evidence"]
     images = release.get("oci_digests")
     services = images.get("ghcr.io/elevenid/marty-ui-oss/services") if isinstance(images, dict) else None
     prior_gate._require(
         isinstance(batch, dict)
-        and batch.get("provider_kind") == "physical"
-        and batch.get("simulator_ids_absent") is True
+        and batch.get("provider_kind") == "simulator"
+        and batch.get("simulator_marker_verified") is True
+        and batch.get("physical_claim") == "not_claimed"
+        and batch.get("commitment_scheme") == "HMAC-SHA256"
         and batch.get("source_commit") == commit
         and batch.get("stack_manifest_sha256") == stack_sha256
         and isinstance(services, str)
         and re.fullmatch(r"sha256:[0-9a-f]{64}", services) is not None
         and batch.get("services_oci_reference")
         == f"ghcr.io/elevenid/marty-ui-oss/services@{services}"
-        and isinstance(batch.get("request_sha256"), str)
-        and SHA256.fullmatch(batch["request_sha256"]) is not None
-        and isinstance(batch.get("response_sha256"), str)
-        and SHA256.fullmatch(batch["response_sha256"]) is not None
-        and isinstance(batch.get("provider_receipt_sha256"), str)
-        and SHA256.fullmatch(batch["provider_receipt_sha256"]) is not None,
-        "Physical batch provider evidence is not bound to the signed beta source",
+        and isinstance(batch.get("request_commitment"), str)
+        and SHA256.fullmatch(batch["request_commitment"]) is not None
+        and isinstance(batch.get("response_commitment"), str)
+        and SHA256.fullmatch(batch["response_commitment"]) is not None
+        and isinstance(batch.get("callback_receipt_sha256"), str)
+        and SHA256.fullmatch(batch["callback_receipt_sha256"]) is not None,
+        "Simulator batch compatibility evidence is not bound to the signed beta source",
     )
-    submitted = batch.get("submitted_job_sha256")
+    submitted = batch.get("submitted_job_commitments")
     returned = batch.get("returned_jobs")
     prior_gate._require(
         isinstance(submitted, list) and len(submitted) >= 2
@@ -209,22 +218,23 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         and batch.get("http_status") in (200, 201, 202)
         and batch.get("batch_status") == "QUEUED"
         and all(isinstance(job, dict)
-                and isinstance(job.get("source_job_sha256"), str)
-                and SHA256.fullmatch(job["source_job_sha256"]) is not None
-                and isinstance(job.get("bureau_job_sha256"), str)
-                and SHA256.fullmatch(job["bureau_job_sha256"]) is not None
+                and isinstance(job.get("source_job_commitment"), str)
+                and SHA256.fullmatch(job["source_job_commitment"]) is not None
+                and isinstance(job.get("bureau_job_commitment"), str)
+                and SHA256.fullmatch(job["bureau_job_commitment"]) is not None
                 and job.get("status") in {"QUEUED", "PRINTING", "ENCODING", "QUALITY_CHECK", "SHIPPED", "DELIVERED"}
                 for job in returned)
-        and {job["source_job_sha256"] for job in returned} == set(submitted)
-        and len({job["bureau_job_sha256"] for job in returned}) == len(returned),
-        "Physical batch provider exchange or job mapping is incomplete",
+        and {job["source_job_commitment"] for job in returned} == set(submitted)
+        and len({job["bureau_job_commitment"] for job in returned}) == len(returned),
+        "Simulator batch exchange or job mapping is incomplete",
     )
 
 
 def _supported_report(report: dict, commit: str, services_reference: str) -> None:
     prior_gate._require(report.get("schema") == "marty.passport-supported-consumer-acceptance/v1"
                         and report.get("status") == "accepted"
-                        and report.get("source_commit") == commit,
+                        and report.get("source_commit") == commit
+                        and report.get("physical_claim") == "not_claimed",
                         "Supported consumer report lineage mismatch")
     surfaces = report.get("surfaces")
     prior_gate._require(isinstance(surfaces, dict) and set(surfaces) == EXPECTED_SURFACES,
@@ -259,11 +269,12 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
         prior_gate._require(signer.get("mode") == "managed_kms"
                             and signer.get("chain_verified") is True,
                             f"Supported consumer managed signer evidence is incomplete: {name}")
-        callback = probes["physical_bureau_callback"]["evidence"]
-        prior_gate._require(callback.get("provider_kind") == "physical"
+        callback = probes["signed_bureau_callback"]["evidence"]
+        prior_gate._require(callback.get("provider_kind") == "simulator"
                             and callback.get("signature_verified") is True
-                            and callback.get("organization_bound") is True,
-                            f"Supported consumer physical callback evidence is incomplete: {name}")
+                            and callback.get("organization_bound") is True
+                            and callback.get("physical_claim") == "not_claimed",
+                            f"Supported consumer callback compatibility evidence is incomplete: {name}")
         image = probes["released_image"]["evidence"]
         prior_gate._require(image.get("oci_reference") == services_reference
                             and image.get("source_commit") == commit
@@ -362,7 +373,7 @@ def _checkout_commit(contract_path: Path) -> str | None:
     """Select only a syntactically valid source pin; verify() proves its ancestry."""
     contract = prior_gate._json(contract_path)
     prior_gate._require(
-        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v1",
+        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v2",
         "Unknown passport retirement qualification schema",
     )
     if contract.get("state") == "blocked_pending_beta_acceptance":
@@ -380,7 +391,7 @@ def _checkout_commit(contract_path: Path) -> str | None:
 def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
     contract = prior_gate._json(contract_path)
     prior_gate._require(
-        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v1",
+        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v2",
         "Unknown passport retirement qualification schema",
     )
     prior_gate._require(
@@ -469,10 +480,6 @@ def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
         prior_gate._require(supported_report.get("stack_manifest_sha256") == stack_digest
                             and supported_report.get("oci_digests") == expected_images,
                             "Supported consumer image lineage differs from beta release")
-    raise prior_gate.QualificationError(
-        "Physical booklet provider evidence and independent maintainer review are not yet "
-        "machine-verifiable; passport Python retirement remains blocked"
-    )
 
 
 def main() -> int:

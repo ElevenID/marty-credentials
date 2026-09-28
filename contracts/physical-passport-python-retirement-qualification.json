@@ -1,5 +1,5 @@
 {
-  "schema": "marty.physical-passport-python-retirement-qualification/v1",
+  "schema": "marty.physical-passport-python-retirement-qualification/v2",
   "state": "blocked_pending_beta_acceptance",
   "source": {
     "repository": "ElevenID/marty-ui",
@@ -15,10 +15,10 @@
   "required_acceptance": [
     "managed KMS CSCA and DSC profiles, issued chain, and signed SOD verified in beta",
     "Gateway and Flow select the Rust owner for all nine routes",
-    "packaged image and signed bureau callback pass beta acceptance",
+    "packaged image, simulator batch, and signed bureau callback pass beta route-compatibility acceptance with physical_claim=not_claimed",
     "legacy jobs and artifacts pass drain and format checks",
     "rollback and production isolation are verified",
-    "base, self-host, and Kubernetes consumers select and authenticate to the Rust owner for all nine routes, with supported provider and rollback acceptance"
+    "base, self-host, and Kubernetes consumers select and authenticate to the Rust owner for all nine routes, with managed signing, simulator callback compatibility, and rollback acceptance"
   ],
   "beta_acceptance_receipt": null,
   "supported_consumer_cutover_receipt": null,

@@ -44,7 +44,7 @@ def _is_sha(value: object, length: int) -> bool:
 
 
 def _assert_passport_qualification_shape(candidate: dict) -> None:
-    assert candidate["schema"] == "marty.physical-passport-python-retirement-qualification/v1"
+    assert candidate["schema"] == "marty.physical-passport-python-retirement-qualification/v2"
     assert {
         (row["method"], row["path"])
         for row in candidate["authorized_python_route_deletions"]

@@ -1,4 +1,4 @@
-"""Reject plausible but unbound physical-passport retirement evidence."""
+"""Reject unbound Rust route compatibility and invented physical claims."""
 
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ def supported_surface() -> dict:
             "managed_signer": {"verified": True, "evidence": {
                 "mode": "managed_kms", "chain_verified": True,
             }},
-            "physical_bureau_callback": {"verified": True, "evidence": {
-                "provider_kind": "physical", "signature_verified": True,
-                "organization_bound": True,
+            "signed_bureau_callback": {"verified": True, "evidence": {
+                "provider_kind": "simulator", "signature_verified": True,
+                "organization_bound": True, "physical_claim": "not_claimed",
             }},
             "released_image": {"verified": True, "evidence": {
                 "oci_reference": SERVICES_REFERENCE,
@@ -64,6 +64,7 @@ def beta_report() -> dict:
     return {
         "schema": "marty.passport-beta-acceptance/v1",
         "status": "accepted",
+        "physical_claim": "not_claimed",
         "release": {
             "source_commit": COMMIT,
             "stack_manifest_sha256": STACK_DIGEST,
@@ -72,7 +73,7 @@ def beta_report() -> dict:
         },
         "beta_origin": "https://beta.elevenidllc.com",
         "deployment": {
-            "provider_mode": "physical",
+            "provider_mode": "simulator",
             "local_deployment_manifest_sha256": "f" * 64,
             "source_manifest_sha256": "1" * 64,
         },
@@ -83,21 +84,26 @@ def beta_report() -> dict:
         "probes": {
             **{name: {"verified": True, "evidence": {"source": "test"}}
                for name in gate.REQUIRED_BETA_PROBES},
+            "physical_claim_boundary": {"verified": True, "evidence": {
+                "physical_claim": "not_claimed", "booklet_verified": False,
+            }},
             "physical_bureau_batch": {"verified": True, "evidence": {
-                "provider_kind": "physical",
-                "simulator_ids_absent": True,
+                "provider_kind": "simulator",
+                "simulator_marker_verified": True,
+                "physical_claim": "not_claimed",
+                "commitment_scheme": "HMAC-SHA256",
                 "source_commit": COMMIT,
                 "stack_manifest_sha256": STACK_DIGEST,
                 "services_oci_reference": SERVICES_REFERENCE,
-                "request_sha256": "4" * 64,
-                "response_sha256": "5" * 64,
-                "provider_receipt_sha256": "3" * 64,
+                "request_commitment": "4" * 64,
+                "response_commitment": "5" * 64,
+                "callback_receipt_sha256": "3" * 64,
                 "http_status": 202,
                 "batch_status": "QUEUED",
-                "submitted_job_sha256": ["6" * 64, "7" * 64],
+                "submitted_job_commitments": ["6" * 64, "7" * 64],
                 "returned_jobs": [
-                    {"source_job_sha256": "7" * 64, "bureau_job_sha256": "8" * 64, "status": "PRINTING"},
-                    {"source_job_sha256": "6" * 64, "bureau_job_sha256": "9" * 64, "status": "QUEUED"},
+                    {"source_job_commitment": "7" * 64, "bureau_job_commitment": "8" * 64, "status": "PRINTING"},
+                    {"source_job_commitment": "6" * 64, "bureau_job_commitment": "9" * 64, "status": "QUEUED"},
                 ],
             }},
         },
@@ -111,25 +117,28 @@ def beta_report() -> dict:
         lambda report: report["release"].update(source_commit="9" * 40),
         lambda report: report["release"].update(stack_manifest_sha256="9" * 64),
         lambda report: report.update(beta_origin="https://production.elevenidllc.com"),
+        lambda report: report.update(physical_claim="booklet_verified"),
         lambda report: report["deployment"].pop("source_manifest_sha256"),
-        lambda report: report["runtime_images"].pop("passport-provider-ingress"),
-        lambda report: report["runtime_images"].update({"passport-beta-bureau": {"image_id": "sha256:" + "2" * 64}}),
-        lambda report: report["deployment"].update(provider_mode="simulator"),
-        lambda report: report["probes"].pop("physical_booklet_verified"),
-        lambda report: report["probes"]["physical_booklet_verified"].update(verified=False),
+        lambda report: report["runtime_images"].pop("passport-beta-bureau"),
+        lambda report: report["runtime_images"].update({"passport-provider-ingress": {"image_id": "sha256:" + "2" * 64}}),
+        lambda report: report["deployment"].update(provider_mode="physical"),
+        lambda report: report["probes"].pop("physical_claim_boundary"),
+        lambda report: report["probes"]["physical_claim_boundary"]["evidence"].update(booklet_verified=True),
         lambda report: report["probes"]["signed_bureau_callback"].update(verified="true"),
         lambda report: report["probes"].pop("physical_bureau_batch"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(provider_kind="simulator"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(simulator_ids_absent="true"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(provider_kind="physical"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(simulator_marker_verified="true"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(physical_claim="booklet_verified"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(commitment_scheme="SHA256"),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(source_commit="9" * 40),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(services_oci_reference="unbound"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(request_sha256="unbound"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(provider_receipt_sha256="not-a-digest"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(submitted_job_sha256=["6" * 64]),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(request_commitment="unbound"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(callback_receipt_sha256="not-a-digest"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(submitted_job_commitments=["6" * 64]),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(http_status=503),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(batch_status="FAILED"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(bureau_job_sha256="invalid"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(source_job_sha256="6" * 64),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(bureau_job_commitment="invalid"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(source_job_commitment="6" * 64),
     ],
 )
 def test_beta_report_requires_exact_lineage_and_probes(mutate) -> None:
@@ -187,6 +196,7 @@ def test_supported_report_requires_each_runtime_and_rollback() -> None:
     report = {
         "schema": "marty.passport-supported-consumer-acceptance/v1",
         "status": "accepted",
+        "physical_claim": "not_claimed",
         "source_commit": COMMIT,
         "surfaces": {name: supported_surface() for name in gate.EXPECTED_SURFACES},
     }
@@ -197,7 +207,7 @@ def test_supported_report_requires_each_runtime_and_rollback() -> None:
         with pytest.raises(gate.prior_gate.QualificationError):
             gate._supported_report(changed, COMMIT, SERVICES_REFERENCE)
         changed = copy.deepcopy(report)
-        changed["surfaces"][name]["probes"]["physical_bureau_callback"]["verified"] = False
+        changed["surfaces"][name]["probes"]["signed_bureau_callback"]["verified"] = False
         with pytest.raises(gate.prior_gate.QualificationError):
             gate._supported_report(changed, COMMIT, SERVICES_REFERENCE)
 
@@ -287,7 +297,7 @@ def test_signed_stack_manifest_binds_release_and_source(tmp_path: Path, monkeypa
 
 def qualified_record() -> dict:
     return {
-        "schema": "marty.physical-passport-python-retirement-qualification/v1",
+        "schema": "marty.physical-passport-python-retirement-qualification/v2",
         "state": "qualified",
         "source": {
             "repository": "ElevenID/marty-ui",
@@ -322,6 +332,7 @@ def supported_report() -> dict:
     return {
         "schema": "marty.passport-supported-consumer-acceptance/v1",
         "status": "accepted",
+        "physical_claim": "not_claimed",
         "source_commit": COMMIT,
         "stack_manifest_sha256": STACK_DIGEST,
         "oci_digests": IMAGE_DIGESTS,
@@ -329,7 +340,7 @@ def supported_report() -> dict:
     }
 
 
-def test_qualified_path_remains_closed_after_provenance_checks(
+def test_qualified_path_requires_complete_provenance_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = qualified_record()
@@ -369,7 +380,9 @@ def test_qualified_path_remains_closed_after_provenance_checks(
         with pytest.raises(gate.prior_gate.QualificationError, match=expected):
             gate.verify(path, tmp_path)
 
-    check(record, "Physical booklet provider evidence")
+    path = tmp_path / "qualified.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    gate.verify(path, tmp_path)
     changed = copy.deepcopy(record)
     changed["beta_acceptance_receipt"]["release_source_commit"] = "9" * 40
     check(changed, "Beta release source")
