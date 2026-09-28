@@ -1,7 +1,7 @@
 {
   "schema": "elevenid.physical-passport-python-route-reference/v2",
   "base": "contracts/physical-passport-python-route-reference.json",
-  "base_sha256": "1bd98855cf4c7cf54f4afe09b61ce4204aa878e6c9cc7ad713dc99383e25ecd8",
+  "base_sha256": "e8f80aa0330251f125a519f8238cd1ab3c6058f3b968a9435440a8dc7f5379db",
   "scope": "Intentional optional issuer_did extension for KMS-compatible rollback. The v1 nine-route behavior and response projection remain frozen.",
   "source_sha256": {
     "services/issuance/infrastructure/api/physical_document_routes.py": "3e57a6232a49fe14ad59fe4b75e8dfe8f1e08ebe139372aed637b55c23c01686",

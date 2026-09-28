@@ -71,7 +71,8 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     delta = json.loads(DELTA.read_text(encoding="utf-8"))
     assert delta["schema"] == "elevenid.physical-passport-python-route-reference/v2"
     assert delta["base"] == "contracts/physical-passport-python-route-reference.json"
-    assert delta["base_sha256"] == hashlib.sha256(REFERENCE.read_bytes()).hexdigest()
+    base_source = REFERENCE.read_bytes().replace(b"\r\n", b"\n")
+    assert delta["base_sha256"] == hashlib.sha256(base_source).hexdigest()
     assert delta["optional_create_field"] == "issuer_did"
     assert set(reference["sources"]) == {
         "services/issuance/infrastructure/api/physical_document_routes.py",

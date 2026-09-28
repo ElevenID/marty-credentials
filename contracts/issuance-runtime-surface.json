@@ -70,7 +70,7 @@
         "source": "services/issuance/infrastructure/security/encryption.py"
       }
     ],
-    "environment_variable_count": 83,
+    "environment_variable_count": 84,
     "environment_variables": [
       "APP_ENV",
       "CANVAS_ADMIN_API_TOKEN",
@@ -146,6 +146,7 @@
       "REVOCATION_PROFILE_SERVICE_URL",
       "RP_GRPC_TARGET",
       "SIGNING_KEYS_INTERNAL_API_KEY",
+      "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
       "SIGNING_KEYS_INTERNAL_URL",
       "TOKEN_RATE_LIMIT",
       "TOKEN_RATE_WINDOW",
@@ -986,7 +987,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 201,
+        "line": 224,
         "method": "POST",
         "operation": "create_passport_application",
         "path": "/v1/passport/applications",
@@ -994,7 +995,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 350,
+        "line": 380,
         "method": "POST",
         "operation": "activate_passport",
         "path": "/v1/passport/applications/{application_id}/activate",
@@ -1002,7 +1003,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 262,
+        "line": 290,
         "method": "POST",
         "operation": "generate_passport_data_groups",
         "path": "/v1/passport/applications/{application_id}/generate-data-groups",
@@ -1010,7 +1011,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 248,
+        "line": 274,
         "method": "POST",
         "operation": "generate_passport_sod",
         "path": "/v1/passport/applications/{application_id}/generate-sod",
@@ -1018,7 +1019,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 309,
+        "line": 339,
         "method": "GET",
         "operation": "get_passport_production_status",
         "path": "/v1/passport/applications/{application_id}/production-status",
@@ -1026,7 +1027,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 324,
+        "line": 354,
         "method": "POST",
         "operation": "record_passport_quality_result",
         "path": "/v1/passport/applications/{application_id}/quality-verify",
@@ -1034,7 +1035,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 275,
+        "line": 303,
         "method": "POST",
         "operation": "submit_passport_personalization",
         "path": "/v1/passport/applications/{application_id}/submit-personalization",
@@ -1042,7 +1043,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 173,
+        "line": 196,
         "method": "GET",
         "operation": "get_physical_document_capabilities",
         "path": "/v1/passport/capabilities",
@@ -1050,7 +1051,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 366,
+        "line": 396,
         "method": "POST",
         "operation": "personalization_webhook",
         "path": "/v1/passport/webhooks/personalization",
@@ -1061,9 +1062,9 @@
   },
   "migrations": {
     "heads": [
-      "issuance_event_owner"
+      "physical_document_issuer_did"
     ],
-    "revision_count": 48,
+    "revision_count": 49,
     "revisions": [
       {
         "down_revisions": [],
@@ -1447,6 +1448,14 @@
         "line": 10,
         "revision": "issuance_event_owner",
         "source": "services/issuance/infrastructure/migrations/versions/20260924_0100_add_issuance_event_owner.py"
+      },
+      {
+        "down_revisions": [
+          "issuance_event_owner"
+        ],
+        "line": 9,
+        "revision": "physical_document_issuer_did",
+        "source": "services/issuance/infrastructure/migrations/versions/20260928_0100_add_physical_document_issuer_did.py"
       }
     ],
     "roots": [

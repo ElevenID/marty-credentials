@@ -54,7 +54,8 @@ def test_provider_reference_pins_reviewed_python_sources() -> None:
     assert REFERENCE["schema"] == "elevenid.physical-passport-provider-reference/v2"
     assert FROZEN_V1["schema"] == "elevenid.physical-passport-provider-reference/v1"
     assert DELTA["base"] == "contracts/physical-passport-provider-reference.json"
-    assert DELTA["base_sha256"] == hashlib.sha256((ROOT / DELTA["base"]).read_bytes()).hexdigest()
+    base_source = (ROOT / DELTA["base"]).read_bytes().replace(b"\r\n", b"\n")
+    assert DELTA["base_sha256"] == hashlib.sha256(base_source).hexdigest()
     assert set(REFERENCE["python_source_sha256"]) == {
         "services/issuance/infrastructure/adapters/emrtd_signer_client.py",
         "services/issuance/infrastructure/adapters/personalization_bureau_client.py",
