@@ -37,6 +37,14 @@ artifacts satisfy the drain gates, and rollback plus production isolation are
 verified. The beta bureau is synthetic; it does not prove physical booklet
 production or qualify a future external bureau provider.
 
+The accepted beta report must include `recorded_demo` for the same source
+commit, signed stack manifest, deployment manifests, and beta origin. Its
+reviewed ElevenID LLC YouTube video must show the simulator flow and disclose
+`physical_claim=not_claimed` and `booklet_verified=false`. The recording follows
+the protected preliminary flow receipt; it does not require a previously
+accepted beta report. The final retirement verifier rejects any provider
+ingress runtime in a simulator report.
+
 The beta report must include `physical_bureau_batch` as a **simulator route
 compatibility** probe: at least two jobs, an accepted HTTP result, queued batch
 status, distinct source and bureau job commitments, and an observable one-to-one
@@ -76,12 +84,9 @@ lineage checks before qualification. Keep production deployment unchanged until
 separately authorized.
 
 The dedicated Passport Python Retirement Provenance CI job intentionally fails
-while this candidate is blocked. It also rejects a syntactically complete
-`qualified` record: the current release pipeline has no physical-passport
-acceptance report producer or verifier, so receipt names and SHA-shaped strings
-cannot authorize deletion. Before promoting this PR, add an executable
-acceptance producer and verifier for the beta and all three supported
-consumers, bind their reports to the protected source and signed release, and
-make that CI job pass on the exact retirement head. The executable verifier now
-has an achievable qualified path for software route compatibility, but the
-qualification contract remains blocked and contains no invented receipt.
+while this candidate is blocked. The beta collector and partial probe runner
+exist, but the full signed callback, rollback, supported-consumer, and recorded
+demo producers remain incomplete. Before promoting this PR, complete those
+protected producers, bind their reports to the signed release, and make the CI
+job pass on the exact retirement head. The qualification contract remains
+blocked and contains no invented receipt.

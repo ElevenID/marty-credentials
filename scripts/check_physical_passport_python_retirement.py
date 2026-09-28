@@ -45,6 +45,7 @@ REQUIRED_BETA_PROBES = {
     "rollback",
     "production_isolation",
     "physical_claim_boundary",
+    "recorded_demo",
 }
 EXPECTED_SURFACES = {"base", "selfhost", "kubernetes"}
 EXPECTED_SUPPORTED_SERVICES = {
@@ -184,6 +185,8 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
                                 for name in ("local_deployment_manifest_sha256",
                                              "source_manifest_sha256")),
                         "Beta deployment manifest provenance is missing")
+    prior_gate._require("provider_ingress_runtime_image" not in report,
+                        "Simulator acceptance includes a provider ingress runtime")
     prior_gate._require(isinstance(report.get("runtime_images"), dict)
                         and set(report["runtime_images"]) == EXPECTED_BETA_SERVICES,
                         "Beta runtime service image set is incomplete")
@@ -200,6 +203,27 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
                         and boundary.get("physical_claim") == "not_claimed"
                         and boundary.get("booklet_verified") is False,
                         "Simulator acceptance must not claim a physical booklet")
+    demo = probes["recorded_demo"]["evidence"]
+    prior_gate._require(
+        isinstance(demo, dict)
+        and isinstance(demo.get("youtube_video_id"), str)
+        and re.fullmatch(r"[A-Za-z0-9_-]{11}", demo["youtube_video_id"]) is not None
+        and demo.get("youtube_url")
+        == f"https://www.youtube.com/watch?v={demo['youtube_video_id']}"
+        and demo.get("channel_id") == "UCjUbog1b4zEdck5pV78EgCw"
+        and demo.get("source_commit") == commit
+        and demo.get("stack_manifest_sha256") == stack_sha256
+        and demo.get("local_deployment_manifest_sha256")
+        == deployment["local_deployment_manifest_sha256"]
+        and demo.get("source_manifest_sha256")
+        == deployment["source_manifest_sha256"]
+        and demo.get("beta_origin") == report["beta_origin"]
+        and demo.get("physical_claim") == "not_claimed"
+        and demo.get("privacy_review_verified") is True
+        and demo.get("beta_flow_review_verified") is True
+        and demo.get("youtube_publication_verified") is True,
+        "Recorded beta demo is not reviewed, published, and bound to the signed deployment",
+    )
     batch = probes["physical_bureau_batch"]["evidence"]
     images = release.get("oci_digests")
     services = images.get("ghcr.io/elevenid/marty-ui-oss/services") if isinstance(images, dict) else None
