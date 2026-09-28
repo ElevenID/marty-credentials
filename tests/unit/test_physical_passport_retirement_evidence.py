@@ -61,7 +61,7 @@ def supported_surface() -> dict:
 
 
 def beta_report() -> dict:
-    return {
+    report = {
         "schema": "marty.passport-beta-acceptance/v1",
         "status": "accepted",
         "physical_claim": "not_claimed",
@@ -78,7 +78,8 @@ def beta_report() -> dict:
             "source_manifest_sha256": "1" * 64,
         },
         "runtime_images": {
-            name: {"image_id": "sha256:" + "2" * 64}
+            name: {"image_id": "sha256:" + "2" * 64,
+                   "container_id": "container-one"}
             for name in gate.EXPECTED_BETA_SERVICES
         },
         "probes": {
@@ -98,6 +99,9 @@ def beta_report() -> dict:
                 "request_commitment": "4" * 64,
                 "response_commitment": "5" * 64,
                 "callback_receipt_sha256": "3" * 64,
+                "callback_receipts_sha256": ["3" * 64, "a" * 64],
+                "native_binding_verified": True,
+                "native_completed_jobs": 2,
                 "http_status": 202,
                 "batch_status": "QUEUED",
                 "submitted_job_commitments": ["6" * 64, "7" * 64],
@@ -108,6 +112,22 @@ def beta_report() -> dict:
             }},
         },
     }
+    batch = report["probes"]["physical_bureau_batch"]["evidence"]
+    report["probes"]["packaged_image"]["evidence"] = {
+        "source_commit": COMMIT,
+        "stack_manifest_sha256": STACK_DIGEST,
+        "services_oci_reference": SERVICES_REFERENCE,
+        "runtime_container_id": "container-one",
+    }
+    report["probes"]["physical_bureau_submission"]["evidence"] = {
+        "provider_kind": "simulator", "physical_claim": "not_claimed",
+        **{name: copy.deepcopy(batch[name]) for name in (
+            "source_commit", "stack_manifest_sha256", "services_oci_reference",
+            "http_status", "batch_status", "request_commitment",
+            "response_commitment", "submitted_job_commitments", "returned_jobs",
+        )},
+    }
+    return report
 
 
 @pytest.mark.parametrize(
@@ -137,8 +157,19 @@ def beta_report() -> dict:
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(submitted_job_commitments=["6" * 64]),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(http_status=503),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(batch_status="FAILED"),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(native_binding_verified=False),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(native_completed_jobs=1),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(callback_receipts_sha256=[]),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(callback_receipts_sha256=["3" * 64, "3" * 64]),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(callback_receipts_sha256=["a" * 64, "3" * 64]),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(bureau_job_commitment="invalid"),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(source_job_commitment="6" * 64),
+        lambda report: report["probes"]["packaged_image"]["evidence"].update(source_commit="9" * 40),
+        lambda report: report["probes"]["packaged_image"]["evidence"].update(services_oci_reference="unbound"),
+        lambda report: report["probes"]["packaged_image"]["evidence"].update(runtime_container_id="other"),
+        lambda report: report["probes"]["physical_bureau_submission"]["evidence"].update(provider_kind="physical"),
+        lambda report: report["probes"]["physical_bureau_submission"]["evidence"].update(request_commitment="9" * 64),
+        lambda report: report["probes"]["physical_bureau_submission"]["evidence"].update(returned_jobs=[]),
     ],
 )
 def test_beta_report_requires_exact_lineage_and_probes(mutate) -> None:

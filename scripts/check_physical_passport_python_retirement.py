@@ -210,6 +210,7 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
     )
     submitted = batch.get("submitted_job_commitments")
     returned = batch.get("returned_jobs")
+    receipts = batch.get("callback_receipts_sha256")
     prior_gate._require(
         isinstance(submitted, list) and len(submitted) >= 2
         and all(isinstance(job, str) and SHA256.fullmatch(job) is not None for job in submitted)
@@ -227,6 +228,42 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         and {job["source_job_commitment"] for job in returned} == set(submitted)
         and len({job["bureau_job_commitment"] for job in returned}) == len(returned),
         "Simulator batch exchange or job mapping is incomplete",
+    )
+    prior_gate._require(
+        batch.get("native_binding_verified") is True
+        and batch.get("native_completed_jobs") == len(submitted)
+        and isinstance(receipts, list)
+        and len(receipts) == len(submitted)
+        and all(isinstance(receipt, str) and SHA256.fullmatch(receipt) is not None
+                for receipt in receipts)
+        and len(set(receipts)) == len(receipts)
+        and receipts[0] == batch["callback_receipt_sha256"],
+        "Simulator jobs and signed callback receipts did not complete on native issuance",
+    )
+    packaged = probes["packaged_image"]["evidence"]
+    runtime_bureau = report["runtime_images"]["passport-beta-bureau"]
+    prior_gate._require(
+        isinstance(packaged, dict)
+        and packaged.get("source_commit") == commit
+        and packaged.get("stack_manifest_sha256") == stack_sha256
+        and packaged.get("services_oci_reference") == batch["services_oci_reference"]
+        and isinstance(runtime_bureau, dict)
+        and isinstance(runtime_bureau.get("container_id"), str)
+        and bool(runtime_bureau["container_id"])
+        and packaged.get("runtime_container_id") == runtime_bureau["container_id"],
+        "Packaged simulator image is not bound to the signed live beta runtime",
+    )
+    submission = probes["physical_bureau_submission"]["evidence"]
+    prior_gate._require(
+        isinstance(submission, dict)
+        and submission.get("provider_kind") == "simulator"
+        and submission.get("physical_claim") == "not_claimed"
+        and all(submission.get(name) == batch.get(name) for name in (
+            "source_commit", "stack_manifest_sha256", "services_oci_reference",
+            "http_status", "batch_status", "request_commitment",
+            "response_commitment", "submitted_job_commitments", "returned_jobs",
+        )),
+        "Simulator submission differs from the verified signed-release batch",
     )
 
 
