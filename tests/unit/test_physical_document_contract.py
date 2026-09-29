@@ -841,6 +841,7 @@ async def test_passport_webhook_rejects_untrusted_and_unknown_events_before_upda
             "application-1",
             "org-1",
             {
+                "unbound_provider": True,
                 "status": "FAILED",
                 "tracking_number": "track-3",
                 "error_message": "synthetic failure",

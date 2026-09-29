@@ -168,15 +168,22 @@ async def _get_job(application_id: str, organization_id: str) -> dict[str, Any]:
         return dict(row)
 
 
-async def _update_job(application_id: str, organization_id: str, **values: Any) -> dict[str, Any]:
+async def _update_job(
+    application_id: str, organization_id: str, *,
+    unbound_provider: bool = False, **values: Any,
+) -> dict[str, Any]:
     values["updated_at"] = datetime.now(UTC)
     async with _factory()() as session:
-        result = await session.execute(
-            physical_document_jobs_table.update()
-            .where(
-                physical_document_jobs_table.c.application_id == application_id,
-                physical_document_jobs_table.c.organization_id == organization_id,
+        statement = physical_document_jobs_table.update().where(
+            physical_document_jobs_table.c.application_id == application_id,
+            physical_document_jobs_table.c.organization_id == organization_id,
+        )
+        if unbound_provider:
+            statement = statement.where(
+                physical_document_jobs_table.c.bureau_provider_profile_id.is_(None)
             )
+        result = await session.execute(
+            statement
             .values(**values)
             .returning(physical_document_jobs_table)
         )
@@ -485,7 +492,10 @@ async def personalization_webhook(
             select(
                 physical_document_jobs_table.c.application_id,
                 physical_document_jobs_table.c.organization_id,
-            ).where(physical_document_jobs_table.c.bureau_job_id == bureau_job_id)
+            ).where(
+                physical_document_jobs_table.c.bureau_job_id == bureau_job_id,
+                physical_document_jobs_table.c.bureau_provider_profile_id.is_(None),
+            )
         )
         try:
             job = result.one_or_none()
@@ -498,6 +508,7 @@ async def personalization_webhook(
     await _update_job(
         job.application_id,
         job.organization_id,
+        unbound_provider=True,
         status=_production_status(status),
         tracking_number=metadata.get("tracking_number"),
         error_message=metadata.get("error_message"),

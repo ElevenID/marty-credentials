@@ -123,6 +123,20 @@ async def test_remote_signer_request_success_and_fail_closed(
 
 
 @pytest.mark.asyncio
+async def test_managed_issuer_did_cannot_use_self_signed_test_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ICAO_DOCUMENT_SIGNER_URL", raising=False)
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "true")
+    with pytest.raises(RuntimeError, match="profile-backed document signer"):
+        await signer.sign_emrtd(
+            country_code="USA", organization="org-reference",
+            issuer_did="did:web:issuer.example:orgs:org-reference",
+            data_groups={1: "ZzE="},
+        )
+
+
+@pytest.mark.asyncio
 async def test_managed_issuer_did_is_bound_to_active_organization_profile(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

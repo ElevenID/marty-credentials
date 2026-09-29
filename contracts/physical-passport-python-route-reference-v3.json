@@ -2,9 +2,10 @@
   "schema": "elevenid.physical-passport-python-route-reference/v3",
   "base": "contracts/physical-passport-python-route-reference-v2.json",
   "base_sha256": "ca71f4d903338ee41d28c79a0e9a9b10eee7e2199ab621f8bbe732024c82f618",
-  "scope": "File-backed artifact encryption, TD1/TD2 bureau continuity, and the shared provider callback binding for isolated Python rollback; the v1 nine-route payload and response projection remain frozen.",
+  "scope": "File-backed artifact encryption, TD1/TD2 bureau continuity, and the shared provider callback binding for isolated Python rollback. Only unbound legacy jobs accept the old HMAC callback; the v1 nine-route payload and response projection remain frozen.",
   "source_sha256": {
-    "services/issuance/infrastructure/api/physical_document_routes.py": "08ab42172b48fbf97f1961dd1f172ce066bac29ee13bbe763935753d482c8650",
+    "services/issuance/infrastructure/api/physical_document_routes.py": "72987d54019adfbd56e81acc5af126dc0039073782231d6f394322f4f84b71ed",
+    "services/issuance/infrastructure/adapters/emrtd_signer_client.py": "144597a8dd8ce32aa366a45ebbb3196e418d8ef200ee32f69c2174a5cc5d1d47",
     "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "d535e0c48f7d6dc2497c863cd9a8ae93217e25c702e98b4291a9772b02405c30"
   },
   "artifact_key_file_environment": "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",

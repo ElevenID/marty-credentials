@@ -232,12 +232,23 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             "status"
         ] == "SUBMITTED"
         signature = hmac.new(b"synthetic-webhook-secret", body, hashlib.sha256).hexdigest()
+        with pytest.raises(HTTPException) as bound:
+            await routes.personalization_webhook(WebhookRequest(), signature)
+        assert bound.value.status_code == 404
+        assert (await routes._get_job(application_id, payload.organization_id))[
+            "status"
+        ] == "SUBMITTED"
+        await routes._update_job(
+            application_id, payload.organization_id,
+            bureau_provider_profile_id=None,
+        )
         duplicate = dict(row)
         duplicate.update(
             id=str(uuid4()),
             organization_id="org-foreign",
             application_id=str(uuid4()),
             bureau_job_id="bureau-reference",
+            bureau_provider_profile_id=None,
             status="SUBMITTED",
         )
         async with factory() as session:

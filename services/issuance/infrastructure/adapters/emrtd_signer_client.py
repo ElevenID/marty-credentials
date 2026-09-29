@@ -86,6 +86,8 @@ async def sign_emrtd(
         raise RuntimeError(capabilities["blockers"][0])
 
     signer_url = os.environ.get("ICAO_DOCUMENT_SIGNER_URL", "").strip()
+    if issuer_did is not None and not signer_url:
+        raise RuntimeError("Managed issuer DID requires a profile-backed document signer")
     if signer_url:
         import httpx
 
