@@ -33,6 +33,7 @@ EXPECTED_ARTIFACTS = {
     "contracts/issuance-universal-ownership.json",
     "contracts/passport-rust-only-retirement-behavior.json",
     "contracts/passport-beta-cutover-drain-behavior.json",
+    "contracts/passport-beta-scoped-write-fence-behavior.json",
     "docker-compose.passport-supported-disposable.yml",
 }
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -92,6 +93,42 @@ def _utc_time(value: object) -> datetime:
     prior_gate._require(parsed.utcoffset() == UTC.utcoffset(parsed),
                         "Drain timestamp is not UTC")
     return parsed
+
+
+def _direct_fence_probe(probe: object, database_uid: str, fence_epoch: int,
+                        watermark: int, writer_role: str) -> tuple[datetime, str]:
+    """Require an attested, database-bound rejection for every guarded surface."""
+    prior_gate._require(
+        isinstance(probe, dict)
+        and probe.get("method") == "postgresql_transaction_rollback"
+        and probe.get("database_uid") == database_uid
+        and probe.get("session_user") == writer_role
+        and probe.get("current_user") == writer_role
+        and type(probe.get("fence_epoch")) is int
+        and probe["fence_epoch"] == fence_epoch
+        and type(probe.get("observation_watermark")) is int
+        and probe["observation_watermark"] == watermark
+        and isinstance(probe.get("rejections"), dict)
+        and set(probe["rejections"]) == {
+            "physical_document_jobs", "physical_flow_definitions",
+            "physical_flow_instances"}
+        and all(
+            isinstance(probe["rejections"][surface], dict)
+            and probe["rejections"][surface].get("valid_without_fence") is True
+            and probe["rejections"][surface].get("sqlstate") == "55000"
+            and probe["rejections"][surface].get("message") == message
+            for surface, message in {
+                "physical_document_jobs": "beta passport job writes are fenced",
+                "physical_flow_definitions":
+                    "beta physical-document Flow definition writes are fenced",
+                "physical_flow_instances": "beta physical-document Flow writes are fenced",
+            }.items()
+        )
+        and isinstance(probe.get("receipt_sha256"), str)
+        and SHA256.fullmatch(probe["receipt_sha256"]) is not None,
+        "Direct beta passport database write probe is incomplete",
+    )
+    return _utc_time(probe.get("observed_at_utc")), probe["receipt_sha256"]
 
 
 def _managed_signer(evidence: dict, runtime: dict, organization_id: str) -> None:
@@ -559,7 +596,7 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
     legacy_source = drain.get("legacy_source")
     prior_gate._require(
         drain.get("source_commit") == commit
-        and drain.get("python_writers_stopped") is True
+        and drain.get("python_passport_writes_fenced") is True
         and isinstance(legacy_source, dict)
         and legacy_source.get("environment") == "beta"
         and isinstance(legacy_source.get("beta_cluster_uid"), str)
@@ -574,14 +611,17 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
         and isinstance(legacy_source.get("writer_deployment_uid"), str)
         and bool(legacy_source["writer_deployment_uid"])
         and legacy_source.get("writer_owner") == "python"
+        and legacy_source.get("writer_database_role") == "marty"
         and isinstance(legacy_source.get("writer_image_digest"), str)
         and re.fullmatch(r"sha256:[0-9a-f]{64}", legacy_source["writer_image_digest"]) is not None
-        and legacy_source.get("writer_running_at_drain") is False
-        and type(legacy_source.get("writer_generation_at_stop")) is int
-        and legacy_source.get("writer_generation_at_drain") == legacy_source["writer_generation_at_stop"]
-        and type(legacy_source.get("writer_stop_watermark")) is int
+        and isinstance(legacy_source.get("writer_container_id"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", legacy_source["writer_container_id"]) is not None
+        and legacy_source.get("writer_running_at_drain") is True
+        and type(legacy_source.get("writer_generation_at_fence")) is int
+        and legacy_source.get("writer_generation_at_drain") == legacy_source["writer_generation_at_fence"]
+        and type(legacy_source.get("fence_watermark")) is int
         and type(legacy_source.get("drain_watermark")) is int
-        and legacy_source["drain_watermark"] > legacy_source["writer_stop_watermark"]
+        and legacy_source["drain_watermark"] > legacy_source["fence_watermark"]
         and isinstance(legacy_source.get("drain_snapshot_attestation_sha256"), str)
         and SHA256.fullmatch(legacy_source["drain_snapshot_attestation_sha256"]) is not None
         and legacy_source.get("database_uid") == drain.get("count_source_database_uid")
@@ -595,14 +635,34 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
         and drain.get("active_passport_flow_count") == 0,
         "Legacy jobs, artifacts, or Flows have not drained",
     )
-    prior_gate._require(_utc_time(legacy_source.get("writer_stopped_at_utc"))
-                        < _utc_time(legacy_source.get("drain_checked_at_utc")),
-                        "Legacy drain did not follow the Python writer stop")
+    fence = drain.get("passport_write_fence")
+    prior_gate._require(
+        isinstance(fence, dict)
+        and fence.get("scope") == "physical_document_jobs_and_physical_flows"
+        and fence.get("enabled") is True
+        and fence.get("database_uid") == legacy_source["database_uid"]
+        and fence.get("writer_deployment_uid") == legacy_source["writer_deployment_uid"]
+        and fence.get("writer_container_id") == legacy_source["writer_container_id"]
+        and fence.get("writer_generation") == legacy_source["writer_generation_at_drain"]
+        and type(fence.get("fence_epoch")) is int and fence["fence_epoch"] > 0
+        and isinstance(fence.get("verification_sha256"), str)
+        and SHA256.fullmatch(fence["verification_sha256"]) is not None
+        and fence.get("unrelated_issuance_continues") is True,
+        "Scoped beta passport write fence is incomplete",
+    )
+    probe_checked, _ = _direct_fence_probe(
+        fence.get("direct_database_probe"), legacy_source["database_uid"],
+        fence["fence_epoch"], legacy_source["drain_watermark"],
+        legacy_source["writer_database_role"],
+    )
+    prior_gate._require(_utc_time(legacy_source.get("fence_enabled_at_utc"))
+                        < probe_checked <= _utc_time(legacy_source.get("drain_checked_at_utc")),
+                        "Legacy drain did not follow the passport write fence")
     isolation = probes["production_isolation"]["evidence"]
     prior_gate._require(
         isolation.get("production_unchanged") is True
         and isolation.get("other_beta_resources_unchanged") is True
-        and isolation.get("authorized_writer_stop_uid")
+        and isolation.get("authorized_passport_fence_uid")
         == legacy_source["writer_deployment_uid"]
         and isolation.get("disposable_resource_identity_verified") is True,
         "Disposable acceptance changed production or unauthorized beta resources",
@@ -863,6 +923,7 @@ def _cutover_report(report: dict, commit: str, deletion_head: str,
     source = report.get("legacy_source")
     counts = report.get("counts")
     fence = report.get("write_fence")
+    prior_fence = drain.get("passport_write_fence")
     prior_gate._require(
         isinstance(source, dict)
         and source.get("environment") == "beta"
@@ -872,8 +933,10 @@ def _cutover_report(report: dict, commit: str, deletion_head: str,
         == legacy["beta_inventory_attestation_sha256"]
         and source.get("writer_deployment_uid") == legacy["writer_deployment_uid"]
         and source.get("writer_image_digest") == legacy["writer_image_digest"]
+        and source.get("writer_database_role") == legacy["writer_database_role"]
         and source.get("writer_generation") == legacy["writer_generation_at_drain"]
-        and source.get("writer_running") is False
+        and source.get("writer_container_id") == legacy["writer_container_id"]
+        and source.get("writer_running") is True
         and type(source.get("final_watermark")) is int
         and source["final_watermark"] > legacy["drain_watermark"]
         and isinstance(source.get("final_snapshot_attestation_sha256"), str)
@@ -885,22 +948,46 @@ def _cutover_report(report: dict, commit: str, deletion_head: str,
         and all(type(counts.get(field)) is int and counts[field] == 0
                 for field in ("nonterminal_job_count", "legacy_or_unknown_artifact_count",
                               "unreadable_artifact_count", "active_passport_flow_count"))
-        and isinstance(fence, dict)
+        and isinstance(fence, dict) and isinstance(prior_fence, dict)
+        and isinstance(prior_fence.get("verification_sha256"), str)
+        and SHA256.fullmatch(prior_fence["verification_sha256"]) is not None
+        and type(prior_fence.get("fence_epoch")) is int
+        and prior_fence["fence_epoch"] > 0
         and fence.get("enabled") is True
         and fence.get("database_uid") == source["database_uid"]
         and fence.get("writer_deployment_uid") == source["writer_deployment_uid"]
         and fence.get("writer_generation") == source["writer_generation"]
+        and fence.get("writer_container_id") == source["writer_container_id"]
+        and fence.get("scope") == "physical_document_jobs_and_physical_flows"
+        and fence.get("verification_sha256")
+        == prior_fence.get("verification_sha256")
+        and fence.get("unrelated_issuance_continues") is True
         and type(fence.get("fence_epoch")) is int
-        and fence["fence_epoch"] > 0
+        and fence["fence_epoch"] == prior_fence.get("fence_epoch")
         and report.get("production_unchanged") is True
         and report.get("other_beta_resources_unchanged") is True
-        and report.get("authorized_writer_stop_uid") == source["writer_deployment_uid"]
+        and report.get("authorized_passport_fence_uid") == source["writer_deployment_uid"]
         and report.get("authorized_fence_epoch") == fence["fence_epoch"],
         "Final beta-source drain or durable Python write fence is incomplete",
     )
     checked = _utc_time(report.get("checked_at_utc"))
+    prior_probe_checked, prior_probe_digest = _direct_fence_probe(
+        prior_fence.get("direct_database_probe"), legacy["database_uid"],
+        prior_fence["fence_epoch"], legacy["drain_watermark"],
+        legacy["writer_database_role"],
+    )
+    probe_checked, probe_digest = _direct_fence_probe(
+        fence.get("direct_database_probe"), source["database_uid"],
+        fence["fence_epoch"], source["final_watermark"],
+        source["writer_database_role"],
+    )
     prior_gate._require(checked > _utc_time(legacy["drain_checked_at_utc"]),
                         "Final cutover drain predates the protected acceptance drain")
+    prior_gate._require(
+        prior_probe_checked < probe_checked <= checked
+        and probe_digest != prior_probe_digest,
+        "Final direct database fence probe is stale",
+    )
     prior_gate._require(drain.get("count_source_database_uid") == source["database_uid"],
                         "Final cutover counts are from another database")
     return checked
@@ -1127,11 +1214,11 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
         )
         supported_accepted = _utc_time(supported_report["accepted_at_utc"])
         predeletion_accepted = _utc_time(predeletion_report["accepted_at_utc"])
-        writer_stopped = _utc_time(legacy["writer_stopped_at_utc"])
+        fence_enabled = _utc_time(legacy["fence_enabled_at_utc"])
         drain_checked = _utc_time(legacy["drain_checked_at_utc"])
         prior_gate._require(
             supported_started <= supported_accepted <= supported_completed
-            < predeletion_started <= writer_stopped < drain_checked
+            < predeletion_started <= fence_enabled < drain_checked
             <= predeletion_accepted <= predeletion_completed,
             "Beta-source drain predates supported Rust acceptance",
         )

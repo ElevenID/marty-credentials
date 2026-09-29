@@ -12,6 +12,7 @@
       "contracts/issuance-universal-ownership.json",
       "contracts/passport-rust-only-retirement-behavior.json",
       "contracts/passport-beta-cutover-drain-behavior.json",
+      "contracts/passport-beta-scoped-write-fence-behavior.json",
       "docker-compose.passport-supported-disposable.yml"
     ]
   },
@@ -19,10 +20,10 @@
     "managed KMS CSCA and DSC profiles, issued chain, and signed SOD verified in protected disposable acceptance",
     "Gateway and Flow select the Rust owner for all nine routes",
     "packaged image, simulator batch, and signed bureau callback pass protected disposable route-compatibility acceptance with physical_claim=not_claimed",
-    "the real beta legacy database and Python writer deployment are identified; the writer stops and source-bound jobs, artifacts, and active passport Flows pass drain and format checks",
-    "a protected final cutover workflow attests the exact deletion head, rechecks the same beta source and writer generation at a later watermark, and maintains a durable write fence",
+    "the real beta legacy database and running shared Python issuance container are identified; an enforced scoped fence blocks passport job and physical Flow writes while unrelated issuance continues and source-bound jobs, artifacts, and active passport Flows pass drain and format checks",
+    "a protected final cutover workflow attests the exact deletion head, rechecks the same beta source, running Python container, fence epoch and writer generation at a later watermark, and maintains the durable write fence",
     "Rust restart and KMS-backed job resume are verified with bound before and after native runtime identities and no Python owner phase",
-    "distinct base, self-host, and protected Kubernetes resource identities and runtime/probe ownership are verified; production is unchanged and beta changes only by the identified Python writer stop and write fence",
+    "distinct base, self-host, and protected Kubernetes resource identities and runtime/probe ownership are verified; production is unchanged and beta changes only by the identified scoped passport write fence",
     "base, self-host, and Kubernetes consumers select and authenticate to Rust for all nine routes with managed signing and simulator callback compatibility"
   ],
   "predeletion_acceptance_receipt": null,

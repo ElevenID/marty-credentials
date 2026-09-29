@@ -205,7 +205,7 @@ def predeletion_report() -> dict:
                 "physical_claim": "not_claimed",
             }},
             "legacy_drain": {"verified": True, "evidence": {
-                "source_commit": COMMIT, "python_writers_stopped": True,
+                "source_commit": COMMIT, "python_passport_writes_fenced": True,
                 "count_source_database_uid": "beta-legacy-db-uid",
                 "legacy_source": {
                     "environment": "beta", "database_uid": "beta-legacy-db-uid",
@@ -215,12 +215,39 @@ def predeletion_report() -> dict:
                     "beta_inventory_attestation_sha256": "c" * 64,
                     "writer_deployment_uid": "beta-python-writer-uid",
                     "writer_owner": "python", "writer_image_digest": "sha256:" + "a" * 64,
-                    "writer_running_at_drain": False,
-                    "writer_generation_at_stop": 3, "writer_generation_at_drain": 3,
-                    "writer_stop_watermark": 100, "drain_watermark": 101,
+                    "writer_database_role": "marty",
+                    "writer_container_id": "a" * 64,
+                    "writer_running_at_drain": True,
+                    "writer_generation_at_fence": 3, "writer_generation_at_drain": 3,
+                    "fence_watermark": 100, "drain_watermark": 101,
                     "drain_snapshot_attestation_sha256": "d" * 64,
-                    "writer_stopped_at_utc": "2026-09-26T00:12:00Z",
+                    "fence_enabled_at_utc": "2026-09-26T00:12:00Z",
                     "drain_checked_at_utc": "2026-09-26T00:14:00Z",
+                },
+                "passport_write_fence": {
+                    "scope": "physical_document_jobs_and_physical_flows",
+                    "enabled": True, "database_uid": "beta-legacy-db-uid",
+                    "writer_deployment_uid": "beta-python-writer-uid",
+                    "writer_container_id": "a" * 64,
+                    "writer_generation": 3, "fence_epoch": 4,
+                    "verification_sha256": "f" * 64,
+                    "direct_database_probe": {
+                        "method": "postgresql_transaction_rollback",
+                        "database_uid": "beta-legacy-db-uid", "fence_epoch": 4,
+                        "session_user": "marty", "current_user": "marty",
+                        "observation_watermark": 101,
+                        "observed_at_utc": "2026-09-26T00:13:00Z",
+                        "receipt_sha256": "1" * 64,
+                        "rejections": {
+                            "physical_document_jobs": {"valid_without_fence": True,
+                                "sqlstate": "55000", "message": "beta passport job writes are fenced"},
+                            "physical_flow_definitions": {"valid_without_fence": True,
+                                "sqlstate": "55000", "message": "beta physical-document Flow definition writes are fenced"},
+                            "physical_flow_instances": {"valid_without_fence": True,
+                                "sqlstate": "55000", "message": "beta physical-document Flow writes are fenced"},
+                        },
+                    },
+                    "unrelated_issuance_continues": True,
                 },
                 "nonterminal_job_count": 0, "unreadable_artifact_count": 0,
                 "legacy_or_unknown_artifact_count": 0,
@@ -228,7 +255,7 @@ def predeletion_report() -> dict:
             }},
             "production_isolation": {"verified": True, "evidence": {
                 "production_unchanged": True, "other_beta_resources_unchanged": True,
-                "authorized_writer_stop_uid": "beta-python-writer-uid",
+                "authorized_passport_fence_uid": "beta-python-writer-uid",
                 "disposable_resource_identity_verified": True,
             }},
             "physical_claim_boundary": {"verified": True, "evidence": {
@@ -325,10 +352,10 @@ def predeletion_report() -> dict:
         lambda report: report["probes"]["legacy_drain"]["evidence"].update(legacy_or_unknown_artifact_count=1),
         lambda report: report["probes"]["legacy_drain"]["evidence"].update(nonterminal_job_count=False),
         lambda report: report["probes"]["legacy_drain"]["evidence"].update(active_passport_flow_count=1),
-        lambda report: report["probes"]["legacy_drain"]["evidence"].update(python_writers_stopped=False),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(python_passport_writes_fenced=False),
         lambda report: report["probes"]["production_isolation"]["evidence"].update(production_unchanged=False),
         lambda report: report["probes"]["production_isolation"]["evidence"].update(
-            authorized_writer_stop_uid="other-writer"),
+            authorized_passport_fence_uid="other-writer"),
         lambda report: report["probes"]["production_isolation"]["evidence"].update(
             other_beta_resources_unchanged=False),
         lambda report: report["probes"]["signed_bureau_callback"].update(verified="true"),
@@ -396,11 +423,25 @@ def test_predeletion_report_requires_exact_lineage_and_probes(mutate) -> None:
     lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
         writer_generation_at_drain=4),
     lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
-        writer_running_at_drain=True),
+        writer_container_id="b" * 64),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        writer_running_at_drain=False),
     lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
         drain_watermark=99),
     lambda r: r["probes"]["legacy_drain"]["evidence"].update(
         count_source_database_uid="other"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["passport_write_fence"].update(
+        scope="passport_routes_only"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["passport_write_fence"].update(
+        enabled=False),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["passport_write_fence"].update(
+        direct_database_probe={"method": "gateway_api"}),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["passport_write_fence"]["direct_database_probe"].update(
+        current_user="postgres"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["passport_write_fence"]["direct_database_probe"]["rejections"]["physical_flow_instances"].update(
+        sqlstate="23514"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["passport_write_fence"].update(
+        unrelated_issuance_continues=False),
     lambda r: r["runtime_images"]["gateway"].update(owner_uid="other"),
     lambda r: r["probes"]["nine_route_gateway_flow"]["evidence"].update(
         owner_uid="other"),
@@ -683,7 +724,7 @@ def final_cutover_report() -> dict:
         "checked_at_utc": "2026-09-26T00:25:00Z",
         "production_unchanged": True,
         "other_beta_resources_unchanged": True,
-        "authorized_writer_stop_uid": "beta-python-writer-uid",
+        "authorized_passport_fence_uid": "beta-python-writer-uid",
         "authorized_fence_epoch": 4,
         "legacy_source": {
             "environment": "beta", "database_uid": "beta-legacy-db-uid",
@@ -691,7 +732,9 @@ def final_cutover_report() -> dict:
             "beta_inventory_attestation_sha256": "c" * 64,
             "writer_deployment_uid": "beta-python-writer-uid",
             "writer_image_digest": "sha256:" + "a" * 64,
-            "writer_generation": 3, "writer_running": False,
+            "writer_database_role": "marty",
+            "writer_generation": 3, "writer_container_id": "a" * 64,
+            "writer_running": True,
             "final_watermark": 102,
             "final_snapshot_attestation_sha256": "e" * 64,
         },
@@ -703,7 +746,27 @@ def final_cutover_report() -> dict:
         "write_fence": {
             "enabled": True, "database_uid": "beta-legacy-db-uid",
             "writer_deployment_uid": "beta-python-writer-uid",
-            "writer_generation": 3, "fence_epoch": 4,
+            "writer_generation": 3, "writer_container_id": "a" * 64,
+            "fence_epoch": 4,
+            "scope": "physical_document_jobs_and_physical_flows",
+            "verification_sha256": "f" * 64,
+            "direct_database_probe": {
+                "method": "postgresql_transaction_rollback",
+                "database_uid": "beta-legacy-db-uid", "fence_epoch": 4,
+                "session_user": "marty", "current_user": "marty",
+                "observation_watermark": 102,
+                "observed_at_utc": "2026-09-26T00:24:00Z",
+                "receipt_sha256": "2" * 64,
+                "rejections": {
+                    "physical_document_jobs": {"valid_without_fence": True,
+                        "sqlstate": "55000", "message": "beta passport job writes are fenced"},
+                    "physical_flow_definitions": {"valid_without_fence": True,
+                        "sqlstate": "55000", "message": "beta physical-document Flow definition writes are fenced"},
+                    "physical_flow_instances": {"valid_without_fence": True,
+                        "sqlstate": "55000", "message": "beta physical-document Flow writes are fenced"},
+                },
+            },
+            "unrelated_issuance_continues": True,
         },
     }
 
@@ -713,7 +776,8 @@ def final_cutover_report() -> dict:
     lambda r: r.update(predeletion_acceptance_run_id=999),
     lambda r: r["legacy_source"].update(database_uid="disposable-db-uid"),
     lambda r: r["legacy_source"].update(writer_generation=4),
-    lambda r: r["legacy_source"].update(writer_running=True),
+    lambda r: r["legacy_source"].update(writer_container_id="b" * 64),
+    lambda r: r["legacy_source"].update(writer_running=False),
     lambda r: r["legacy_source"].update(final_watermark=99),
     lambda r: r["legacy_source"].update(final_watermark=101),
     lambda r: r["legacy_source"].update(final_watermark=101,
@@ -722,7 +786,25 @@ def final_cutover_report() -> dict:
     lambda r: r["counts"].update(nonterminal_job_count=1),
     lambda r: r["write_fence"].update(enabled=False),
     lambda r: r["write_fence"].update(writer_generation=4),
-    lambda r: r.update(authorized_writer_stop_uid="other-writer"),
+    lambda r: r["write_fence"].update(writer_container_id="b" * 64),
+    lambda r: r["write_fence"].update(scope="passport_routes_only"),
+    lambda r: r["write_fence"].update(fence_epoch=5),
+    lambda r: r["write_fence"].update(verification_sha256="b" * 64),
+    lambda r: r["write_fence"]["direct_database_probe"].update(
+        session_user="postgres"),
+    lambda r: r["write_fence"]["direct_database_probe"]["rejections"]["physical_document_jobs"].update(
+        valid_without_fence=False),
+    lambda r: r["write_fence"]["direct_database_probe"]["rejections"]["physical_flow_definitions"].update(
+        message="violates check constraint"),
+    lambda r: r["write_fence"]["direct_database_probe"].update(
+        method="gateway_api"),
+    lambda r: r["write_fence"]["direct_database_probe"].update(
+        observation_watermark=101),
+    lambda r: r["write_fence"]["direct_database_probe"].update(
+        observed_at_utc="2026-09-26T00:13:00Z"),
+    lambda r: r["write_fence"]["direct_database_probe"].update(
+        receipt_sha256="1" * 64),
+    lambda r: r.update(authorized_passport_fence_uid="other-writer"),
     lambda r: r.update(other_beta_resources_unchanged=False),
     lambda r: r.update(checked_at_utc="2026-09-26T00:13:00Z"),
 ])

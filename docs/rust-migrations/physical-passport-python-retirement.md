@@ -45,16 +45,24 @@ image. The acceptance key stays private. `physical_claim=not_claimed` and
 `booklet_verified=false` prevent a synthetic callback from claiming physical
 personalization or a booklet. No external provider is involved.
 
-Stop the identified Python passport writer in the real beta deployment. Query
-its identified legacy database after the writer stops; bind the zero
+Install and verify the scoped passport write fence in the real beta deployment
+while the shared Python issuance container remains running. The fence must
+reject passport job and physical Flow writes, including direct database writes,
+while unrelated issuance continues. Query its identified legacy database after
+the fence is enabled; bind the zero
 nonterminal-job, legacy or unknown artifact, unreadable artifact, and active
 passport-Flow counts to that database. Record the beta cluster, writer
-deployment, writer generation, strictly increasing observation sequence
-watermarks for stop and drain, and UTC times. A
-fresh disposable database cannot satisfy this gate. The report must also prove
+deployment, exact running container, writer generation, fence epoch and
+verification digest, strictly increasing observation sequence watermarks for
+fence and drain, and UTC times. A protected producer must attempt writes to the
+job, Flow definition, and Flow
+instance surfaces in rollback-only database transactions and attest each
+rejection at the drain observation watermark. Each probe uses the running
+Python container's `marty` database role, a valid candidate write, and the
+fence's exact SQLSTATE and error message. A fresh disposable database cannot
+satisfy this gate. The report must also prove
 exact disposable resource identity, unchanged production resources, and a beta
-inventory change limited to stopping the identified Python writer. The final
-cutover may additionally establish its bound write fence; other beta resources
+inventory change limited to the identified scoped fence. Other beta resources
 must remain unchanged.
 Each base, self-host, and Kubernetes consumer must have a distinct owner UID and
 Compose project or protected Kubernetes namespace and cluster identity. Bind
@@ -69,10 +77,14 @@ this gate.
 After supported Rust acceptance and its initial beta-source drain, run the
 protected final deletion-cutover workflow on the exact `marty-credentials` PR
 head. It must re-inspect the same beta database and Python writer deployment,
-verify the writer generation has not advanced, recheck the zero counts at a
-strictly later observation sequence watermark with a distinct snapshot digest,
-and establish a durable write fence. The verifier requires
-that attested report and checks its exact deletion head and ordered run times.
+verify the exact Python container is still running, its generation and fence
+epoch have not advanced, recheck the zero counts at a strictly later
+observation sequence watermark with a distinct snapshot digest, and verify the
+durable write fence still rejects passport writes. The verifier requires
+fresh direct database rejection probes at the final watermark, with a new
+receipt digest and later probe time, while the fence identity and epoch remain
+the same. It checks the attested report's exact deletion head and ordered run
+times.
 The PR CI job passes `github.event.pull_request.head.sha` explicitly because
 Actions checks out a synthetic merge commit. It verifies the event's PR number,
 same-repository head and main base, then checks that the live #305 head still
