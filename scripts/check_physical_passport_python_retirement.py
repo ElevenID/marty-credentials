@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts import check_issuance_python_retirement as prior_gate
@@ -29,11 +31,13 @@ EXPECTED_ARTIFACTS = {
     "contracts/issuance-physical-passport-native.json",
     "contracts/issuance-native-coverage.json",
     "contracts/issuance-universal-ownership.json",
-    "docker-compose.profile.passport-native-beta.yml",
+    "contracts/passport-rust-only-retirement-behavior.json",
+    "contracts/passport-beta-cutover-drain-behavior.json",
+    "docker-compose.passport-supported-disposable.yml",
 }
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
-REQUIRED_BETA_PROBES = {
+REQUIRED_PREDELETION_PROBES = {
     "managed_csca_dsc_chain",
     "sod_signature",
     "nine_route_gateway_flow",
@@ -42,14 +46,12 @@ REQUIRED_BETA_PROBES = {
     "physical_bureau_batch",
     "signed_bureau_callback",
     "legacy_drain",
-    "rollback",
     "production_isolation",
     "physical_claim_boundary",
-    "recorded_demo",
 }
 EXPECTED_SURFACES = {"base", "selfhost", "kubernetes"}
 EXPECTED_SUPPORTED_SERVICES = {
-    "gateway", "flow", "issuance-native", "passport-callback-signer",
+    "gateway", "flow", "issuance-native", "signing-keys", "passport-callback-signer",
     "passport-beta-bureau",
 }
 EXPECTED_SUPPORTED_FLAGS = {
@@ -60,10 +62,11 @@ EXPECTED_SUPPORTED_FLAGS = {
         "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
         "PASSPORT_KMS_CALLBACKS_ENABLED",
     },
+    "signing-keys": set(),
     "passport-callback-signer": {"PASSPORT_CALLBACK_SIGNER_ENABLED"},
     "passport-beta-bureau": {"PASSPORT_BETA_BUREAU_ENABLED"},
 }
-EXPECTED_BETA_SERVICES = {
+EXPECTED_PREDELETION_SERVICES = {
     "gateway",
     "flow",
     "issuance-native",
@@ -76,8 +79,102 @@ REQUIRED_SUPPORTED_PROBES = {
     "managed_signer",
     "signed_bureau_callback",
     "released_image",
-    "rollback",
+    "rust_restart_resume",
 }
+
+
+def _utc_time(value: object) -> datetime:
+    prior_gate._require(isinstance(value, str), "Drain timestamp is missing")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise prior_gate.QualificationError("Drain timestamp is invalid") from exc
+    prior_gate._require(parsed.utcoffset() == UTC.utcoffset(parsed),
+                        "Drain timestamp is not UTC")
+    return parsed
+
+
+def _managed_signer(evidence: dict, runtime: dict, organization_id: str) -> None:
+    csca, dsc = evidence.get("csca"), evidence.get("dsc")
+    prior_gate._require(
+        evidence.get("mode") == "managed_kms"
+        and evidence.get("issuer_profile_type") == "ICAO_EMRTD"
+        and isinstance(evidence.get("issuer_profile_id"), str)
+        and bool(evidence["issuer_profile_id"])
+        and evidence.get("issuer_profile_status") == "active"
+        and evidence.get("organization_id") == organization_id
+        and evidence.get("chain_verified") is True
+        and evidence.get("private_key_exported") is False
+        and evidence.get("signing_keys_container_id") == runtime["signing-keys"]["container_id"]
+        and evidence.get("services_oci_reference") == runtime["signing-keys"]["oci_reference"]
+        and isinstance(csca, dict) and isinstance(dsc, dict)
+        and all(cert.get("status") == "active"
+                and cert.get("organization_id") == organization_id
+                and cert.get("issuer_profile_id") == evidence["issuer_profile_id"]
+                and isinstance(cert.get("certificate_sha256"), str)
+                and SHA256.fullmatch(cert["certificate_sha256"]) is not None
+                and isinstance(cert.get("kms_key_ref"), str)
+                and bool(cert["kms_key_ref"])
+                for cert in (csca, dsc))
+        and csca["certificate_sha256"] != dsc["certificate_sha256"]
+        and csca["kms_key_ref"] != dsc["kms_key_ref"],
+        "Organization-bound active managed CSCA/DSC signer evidence is incomplete",
+    )
+
+
+def _sod_against_signer(sod: dict, signer: dict) -> None:
+    prior_gate._require(
+        isinstance(sod, dict)
+        and sod.get("signature_verified") is True
+        and sod.get("chain_verified") is True
+        and sod.get("organization_id") == signer["organization_id"]
+        and sod.get("issuer_profile_id") == signer["issuer_profile_id"]
+        and sod.get("csca_certificate_sha256") == signer["csca"]["certificate_sha256"]
+        and sod.get("dsc_certificate_sha256") == signer["dsc"]["certificate_sha256"],
+        "SOD was not verified against the active managed issuer certificates",
+    )
+
+
+def _surface_identity(identity: dict, name: str, commit: str) -> str:
+    prior_gate._require(isinstance(identity, dict), f"{name} resource identity missing")
+    uid = identity.get("owner_uid")
+    labels = identity.get("owner_labels")
+    prior_gate._require(
+        isinstance(uid, str) and bool(uid)
+        and labels == {"source_commit": commit, "surface": name, "owner_uid": uid}
+        and identity.get("production_resources_excluded") is True,
+        f"{name} protected owner identity is incomplete",
+    )
+    if name == "kubernetes":
+        prior_gate._require(
+            identity.get("kind") == "kubernetes"
+            and isinstance(identity.get("namespace"), str) and bool(identity["namespace"])
+            and isinstance(identity.get("cluster_uid"), str) and bool(identity["cluster_uid"])
+            and isinstance(identity.get("production_cluster_uid"), str)
+            and bool(identity["production_cluster_uid"])
+            and identity["cluster_uid"] != identity["production_cluster_uid"]
+            and isinstance(identity.get("cluster_identity_attestation_sha256"), str)
+            and SHA256.fullmatch(identity["cluster_identity_attestation_sha256"]) is not None,
+            "Kubernetes namespace or protected cluster identity is incomplete",
+        )
+        return identity["namespace"]
+    prior_gate._require(
+        identity.get("kind") == "compose"
+        and isinstance(identity.get("project_id"), str)
+        and bool(identity["project_id"]),
+        f"{name} Compose project identity is incomplete",
+    )
+    return identity["project_id"]
+
+
+def _bound_to_surface(evidence: dict, identity: dict, target: str) -> bool:
+    return (
+        evidence.get("owner_uid") == identity["owner_uid"]
+        and evidence.get("owner_labels") == identity["owner_labels"]
+        and evidence.get("target") == target
+        and (identity["kind"] != "kubernetes"
+             or evidence.get("cluster_uid") == identity["cluster_uid"])
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -90,7 +187,7 @@ def _command(*args: str) -> str:
     return result.stdout
 
 
-def _verified_run(run_id: int, source_commit: str, workflow: str) -> None:
+def _verified_run(run_id: int, source_commit: str, workflow: str) -> tuple[datetime, datetime]:
     prior_gate._require(isinstance(run_id, int) and run_id > 0, "Acceptance run ID is invalid")
     run = json.loads(_command("gh", "api", f"repos/ElevenID/marty-ui/actions/runs/{run_id}"))
     prior_gate._require(
@@ -103,6 +200,10 @@ def _verified_run(run_id: int, source_commit: str, workflow: str) -> None:
         and run.get("head_repository", {}).get("full_name") == "ElevenID/marty-ui",
         "Acceptance artifact is not from a successful protected UI workflow run",
     )
+    started = _utc_time(run.get("created_at"))
+    completed = _utc_time(run.get("updated_at"))
+    prior_gate._require(started < completed, "Protected workflow completion time is invalid")
+    return started, completed
 
 
 def _run_artifact(run_id: int, artifact_name: str, digest: str, output: Path) -> dict:
@@ -121,6 +222,226 @@ def _run_artifact(run_id: int, artifact_name: str, digest: str, output: Path) ->
     prior_gate._require(artifact.stat().st_size <= 1024 * 1024, "Acceptance artifact is oversized")
     prior_gate._require(_sha256(artifact) == digest, "Acceptance artifact SHA-256 mismatch")
     return prior_gate._json(artifact)
+
+
+def _final_cutover_report(commit: str, deletion_head: str, output: Path) -> tuple[dict, datetime, datetime]:
+    """Find the attested final drain produced for this exact deletion commit."""
+    listing = json.loads(_command(
+        "gh", "api",
+        "repos/ElevenID/marty-ui/actions/workflows/passport-python-deletion-cutover.yml/runs"
+        "?branch=main&status=success&per_page=100",
+    ))
+    runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+    prior_gate._require(isinstance(runs, list), "Protected final cutover runs are unavailable")
+    candidates = [run for run in runs if isinstance(run, dict)
+                  and run.get("head_sha") == commit and run.get("head_branch") == "main"
+                  and run.get("status") == "completed" and run.get("conclusion") == "success"]
+    prior_gate._require(bool(candidates), "Final protected deletion cutover run is missing")
+    candidates.sort(key=lambda run: str(run.get("updated_at", "")), reverse=True)
+    for run in candidates:
+        run_id = run.get("id")
+        try:
+            started, completed = _verified_run(
+                run_id, commit, ".github/workflows/passport-python-deletion-cutover.yml",
+            )
+            name = f"passport-python-deletion-cutover-{run_id}"
+            destination = output / str(run_id)
+            destination.mkdir(parents=True, exist_ok=False)
+            _command("gh", "run", "download", str(run_id), "--repo", "ElevenID/marty-ui",
+                     "--name", name, "--dir", str(destination))
+            artifact = destination / f"{name}.json"
+            prior_gate._require(artifact.is_file() and artifact.stat().st_size <= 1024 * 1024,
+                                "Final cutover artifact is missing or oversized")
+            _command("gh", "attestation", "verify", str(artifact),
+                     "--repo", "ElevenID/marty-ui",
+                     "--signer-workflow",
+                     "ElevenID/marty-ui/.github/workflows/passport-python-deletion-cutover.yml",
+                     "--source-digest", commit, "--source-ref", "refs/heads/main")
+            report = prior_gate._json(artifact)
+            if isinstance(report, dict) and report.get("deletion_head") == deletion_head:
+                return report, started, completed
+        except prior_gate.QualificationError:
+            continue
+    raise prior_gate.QualificationError("No attested final cutover report names this deletion head")
+
+
+def _retirement_pr_head(number: object) -> str:
+    prior_gate._require(type(number) is int and number > 0,
+                        "Retirement pull request number is missing")
+    pr = json.loads(_command("gh", "api", f"repos/ElevenID/marty-credentials/pulls/{number}"))
+    head = pr.get("head") if isinstance(pr, dict) else None
+    base = pr.get("base") if isinstance(pr, dict) else None
+    sha = head.get("sha") if isinstance(head, dict) else None
+    head_repo = head.get("repo") if isinstance(head, dict) else None
+    base_repo = base.get("repo") if isinstance(base, dict) else None
+    prior_gate._require(
+        isinstance(pr, dict) and pr.get("number") == number
+        and isinstance(head, dict) and isinstance(base, dict)
+        and isinstance(head_repo, dict)
+        and head_repo.get("full_name") == "ElevenID/marty-credentials"
+        and isinstance(base_repo, dict)
+        and base_repo.get("full_name") == "ElevenID/marty-credentials"
+        and base.get("ref") == "main"
+        and isinstance(sha, str) and COMMIT.fullmatch(sha) is not None,
+        "Retirement pull request head is not an exact same-repository main-base commit",
+    )
+    return sha
+
+
+def _pull_request_lineage(number: int, deletion_head: str) -> None:
+    """Reject a stale or unrelated PR event even if it names an attested head."""
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") == "pull_request"
+                        and isinstance(event_path, str) and bool(event_path),
+                        "Exact deletion-head qualification requires the pull-request event")
+    event = prior_gate._json(Path(event_path))
+    repository = event.get("repository") if isinstance(event, dict) else None
+    pull = event.get("pull_request") if isinstance(event, dict) else None
+    head = pull.get("head") if isinstance(pull, dict) else None
+    base = pull.get("base") if isinstance(pull, dict) else None
+    head_repo = head.get("repo") if isinstance(head, dict) else None
+    base_repo = base.get("repo") if isinstance(base, dict) else None
+    prior_gate._require(
+        isinstance(event, dict) and event.get("number") == number
+        and isinstance(repository, dict)
+        and repository.get("full_name") == "ElevenID/marty-credentials"
+        and isinstance(pull, dict) and pull.get("number") == number
+        and isinstance(head, dict) and head.get("sha") == deletion_head
+        and isinstance(head_repo, dict)
+        and head_repo.get("full_name") == "ElevenID/marty-credentials"
+        and isinstance(base, dict) and base.get("ref") == "main"
+        and isinstance(base_repo, dict)
+        and base_repo.get("full_name") == "ElevenID/marty-credentials",
+        "Pull-request event does not name #305's exact same-repository main-base head",
+    )
+    prior_gate._require(_retirement_pr_head(number) == deletion_head,
+                        "Pull-request deletion head is stale relative to the live PR")
+
+
+def _post_pr_lineage(number: int, deletion_head: str) -> None:
+    """Bind the running queue/main commit to the exact qualified deletion PR."""
+    event_name = os.environ.get("GITHUB_EVENT_NAME")
+    event_path = os.environ.get("GITHUB_EVENT_PATH")
+    running_sha = os.environ.get("GITHUB_SHA")
+    prior_gate._require(event_name in {"merge_group", "push"}
+                        and isinstance(event_path, str) and bool(event_path)
+                        and isinstance(running_sha, str) and COMMIT.fullmatch(running_sha) is not None,
+                        "Post-PR GitHub event provenance is missing")
+    event = prior_gate._json(Path(event_path))
+    repository = event.get("repository") if isinstance(event, dict) else None
+    prior_gate._require(isinstance(repository, dict)
+                        and repository.get("full_name")
+                        == "ElevenID/marty-credentials",
+                        "Post-PR event names another repository")
+    checkout_head = _command("git", "-C", str(Path(__file__).resolve().parents[1]),
+                             "rev-parse", "HEAD").strip()
+    prior_gate._require(checkout_head == running_sha,
+                        "Running checkout differs from the GitHub event commit")
+    if event_name == "merge_group":
+        group = event.get("merge_group")
+        prior_gate._require(isinstance(group, dict)
+                            and group.get("head_sha") == running_sha
+                            and group.get("base_ref") == "refs/heads/main"
+                            and isinstance(group.get("head_ref"), str)
+                            and group["head_ref"].startswith(
+                                "refs/heads/gh-readonly-queue/main/"),
+                            "Running merge group is not a main queue commit")
+        query = ("query { repository(owner: \"ElevenID\", name: \"marty-credentials\") "
+                 f"{{ pullRequest(number: {number}) {{ headRefOid mergeQueueEntry "
+                 "{ headCommit { oid } pullRequest { number headRefOid } } } } }")
+        response = json.loads(_command("gh", "api", "graphql", "-f", f"query={query}"))
+        repository = response.get("data", {}).get("repository") if isinstance(response, dict) else None
+        pr = repository.get("pullRequest") if isinstance(repository, dict) else None
+        entry = pr.get("mergeQueueEntry") if isinstance(pr, dict) else None
+        queued_pr = entry.get("pullRequest") if isinstance(entry, dict) else None
+        queued_commit = entry.get("headCommit") if isinstance(entry, dict) else None
+        ancestor = queued_commit.get("oid") if isinstance(queued_commit, dict) else None
+        prior_gate._require(isinstance(pr, dict) and pr.get("headRefOid") == deletion_head
+                            and isinstance(queued_pr, dict)
+                            and queued_pr.get("number") == number
+                            and queued_pr.get("headRefOid") == deletion_head
+                            and isinstance(ancestor, str)
+                            and COMMIT.fullmatch(ancestor) is not None,
+                            "Merge queue entry does not contain the exact deletion PR head")
+    else:
+        prior_gate._require(event.get("ref") == "refs/heads/main"
+                            and event.get("after") == running_sha,
+                            "Running push is not the protected main commit")
+        pr = json.loads(_command(
+            "gh", "api", f"repos/ElevenID/marty-credentials/pulls/{number}",
+        ))
+        ancestor = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
+        head = pr.get("head") if isinstance(pr, dict) else None
+        prior_gate._require(isinstance(pr, dict) and pr.get("number") == number
+                            and pr.get("merged") is True
+                            and isinstance(head, dict) and head.get("sha") == deletion_head
+                            and isinstance(ancestor, str)
+                            and COMMIT.fullmatch(ancestor) is not None,
+                            "Main push is not bound to the merged deletion PR")
+    comparison = json.loads(_command(
+        "gh", "api",
+        f"repos/ElevenID/marty-credentials/compare/{ancestor}...{running_sha}",
+    ))
+    prior_gate._require(isinstance(comparison, dict)
+                        and comparison.get("status") in {"ahead", "identical"},
+                        "Running commit does not contain the deletion PR queue or merge commit")
+
+
+def _successful_pr_gate(number: int, deletion_head: str, cutover_completed: datetime) -> None:
+    listing = json.loads(_command(
+        "gh", "api", "repos/ElevenID/marty-credentials/actions/workflows/ci.yml/runs"
+        f"?event=pull_request&head_sha={deletion_head}&per_page=100",
+    ))
+    runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+    prior_gate._require(isinstance(runs, list), "Deletion PR check runs are unavailable")
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        prs = run.get("pull_requests")
+        if not (run.get("event") == "pull_request"
+                and run.get("head_sha") == deletion_head
+                and run.get("head_branch")
+                and run.get("path") == ".github/workflows/ci.yml"
+                and run.get("status") == "completed"
+                and run.get("conclusion") == "success"
+                and isinstance(prs, list)
+                and any(isinstance(pr, dict) and pr.get("number") == number for pr in prs)):
+            continue
+        run_id = run.get("id")
+        attempt = run.get("run_attempt")
+        suite_id = run.get("check_suite_id")
+        if (type(run_id) is not int or run_id <= 0
+                or type(attempt) is not int or attempt <= 0
+                or type(suite_id) is not int or suite_id <= 0):
+            continue
+        suite = json.loads(_command(
+            "gh", "api", f"repos/ElevenID/marty-credentials/check-suites/{suite_id}",
+        ))
+        app = suite.get("app") if isinstance(suite, dict) else None
+        if not (isinstance(suite, dict)
+                and suite.get("head_sha") == deletion_head
+                and isinstance(app, dict) and app.get("slug") == "github-actions"):
+            continue
+        jobs_data = json.loads(_command(
+            "gh", "api", f"repos/ElevenID/marty-credentials/actions/runs/{run_id}"
+            f"/attempts/{attempt}/jobs"
+            "?per_page=100",
+        ))
+        jobs = jobs_data.get("jobs") if isinstance(jobs_data, dict) else None
+        if not isinstance(jobs, list):
+            continue
+        required = {"Passport Python Retirement Provenance", "CI Gate"}
+        passed = {job.get("name") for job in jobs if isinstance(job, dict)
+                  and job.get("run_id") == run_id
+                  and job.get("head_sha") == deletion_head
+                  and job.get("status") == "completed"
+                  and job.get("conclusion") == "success"
+                  and _utc_time(job.get("started_at")) > cutover_completed}
+        if required <= passed:
+            return
+    raise prior_gate.QualificationError(
+        "Exact deletion PR head lacks a successful post-cutover provenance and CI Gate run"
+    )
 
 
 def _protected_source(source: dict, marty_ui: Path) -> str:
@@ -164,65 +485,127 @@ def _frozen_batch_parity(marty_ui: Path) -> None:
                         "Frozen Rust batch parity did not pass exactly one test")
 
 
-def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
-    prior_gate._require(report.get("schema") == "marty.passport-beta-acceptance/v1"
-                        and report.get("status") == "accepted", "Beta report has not accepted passport")
+def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
+    prior_gate._require(report.get("schema") == "marty.passport-rust-predeletion-acceptance/v1"
+                        and report.get("status") == "accepted",
+                        "Protected disposable report has not accepted passport")
+    _utc_time(report.get("accepted_at_utc"))
     release = report.get("release")
     prior_gate._require(isinstance(release, dict)
                         and release.get("source_commit") == commit
                         and release.get("stack_manifest_sha256") == stack_sha256
                         and release.get("signed_manifest_verified") is True,
-                        "Beta report release lineage mismatch")
-    prior_gate._require(report.get("beta_origin") == "https://beta.elevenidllc.com",
-                        "Beta report origin mismatch")
+                        "Protected disposable report release lineage mismatch")
     prior_gate._require(report.get("physical_claim") == "not_claimed",
-                        "Beta compatibility report must not claim a physical booklet")
+                        "Disposable compatibility report must not claim a physical booklet")
     deployment = report.get("deployment")
     prior_gate._require(isinstance(deployment, dict)
+                        and deployment.get("mode") == "disposable"
                         and deployment.get("provider_mode") == "simulator"
-                        and all(isinstance(deployment.get(name), str)
-                                and SHA256.fullmatch(deployment[name]) is not None
-                                for name in ("local_deployment_manifest_sha256",
-                                             "source_manifest_sha256")),
-                        "Beta deployment manifest provenance is missing")
+                        and deployment.get("resource_identity_verified") is True
+                        and deployment.get("source_commit") == commit,
+                        "Protected disposable resource identity is missing")
+    target = _surface_identity(deployment, "base", commit)
     prior_gate._require("provider_ingress_runtime_image" not in report,
-                        "Simulator acceptance includes a provider ingress runtime")
+                        "Disposable simulator includes a provider ingress runtime")
     prior_gate._require(isinstance(report.get("runtime_images"), dict)
-                        and set(report["runtime_images"]) == EXPECTED_BETA_SERVICES,
-                        "Beta runtime service image set is incomplete")
+                        and set(report["runtime_images"]) == EXPECTED_PREDELETION_SERVICES,
+                        "Disposable runtime service image set is incomplete")
+    for service, runtime in report["runtime_images"].items():
+        prior_gate._require(isinstance(runtime, dict)
+                            and _bound_to_surface(runtime, deployment, target),
+                            f"Disposable runtime owner mismatch: {service}")
     probes = report.get("probes")
-    prior_gate._require(isinstance(probes, dict) and set(probes) >= REQUIRED_BETA_PROBES,
-                        "Beta passport probes are incomplete")
-    for name in REQUIRED_BETA_PROBES:
+    prior_gate._require(isinstance(probes, dict) and set(probes) >= REQUIRED_PREDELETION_PROBES,
+                        "Protected disposable passport probes are incomplete")
+    for name in REQUIRED_PREDELETION_PROBES:
         probe = probes[name]
         prior_gate._require(isinstance(probe, dict) and probe.get("verified") is True
-                            and probe.get("evidence") is not None,
-                            f"Beta passport probe did not pass: {name}")
+                            and isinstance(probe.get("evidence"), dict)
+                            and _bound_to_surface(probe["evidence"], deployment, target),
+                            f"Disposable passport probe did not pass: {name}")
     boundary = probes["physical_claim_boundary"]["evidence"]
     prior_gate._require(isinstance(boundary, dict)
                         and boundary.get("physical_claim") == "not_claimed"
                         and boundary.get("booklet_verified") is False,
                         "Simulator acceptance must not claim a physical booklet")
-    demo = probes["recorded_demo"]["evidence"]
+    route = probes["nine_route_gateway_flow"]["evidence"]
     prior_gate._require(
-        isinstance(demo, dict)
-        and isinstance(demo.get("youtube_video_id"), str)
-        and re.fullmatch(r"[A-Za-z0-9_-]{11}", demo["youtube_video_id"]) is not None
-        and demo.get("youtube_url")
-        == f"https://www.youtube.com/watch?v={demo['youtube_video_id']}"
-        and demo.get("channel_id") == "UCjUbog1b4zEdck5pV78EgCw"
-        and demo.get("source_commit") == commit
-        and demo.get("stack_manifest_sha256") == stack_sha256
-        and demo.get("local_deployment_manifest_sha256")
-        == deployment["local_deployment_manifest_sha256"]
-        and demo.get("source_manifest_sha256")
-        == deployment["source_manifest_sha256"]
-        and demo.get("beta_origin") == report["beta_origin"]
-        and demo.get("physical_claim") == "not_claimed"
-        and demo.get("privacy_review_verified") is True
-        and demo.get("beta_flow_review_verified") is True
-        and demo.get("youtube_publication_verified") is True,
-        "Recorded beta demo is not reviewed, published, and bound to the signed deployment",
+        prior_gate._route_keys(route.get("routes"), "disposable passport routes")
+        == EXPECTED_DELETIONS
+        and route.get("gateway_owner") == "rust"
+        and route.get("flow_owner") == "rust"
+        and route.get("unauthenticated_status") in (401, 403)
+        and route.get("cross_tenant_status") == 404
+        and isinstance(route.get("organization_id"), str)
+        and bool(route["organization_id"]),
+        "Disposable route ownership or tenant isolation is incomplete",
+    )
+    signer = probes["managed_csca_dsc_chain"]["evidence"]
+    sod = probes["sod_signature"]["evidence"]
+    _managed_signer(signer, report["runtime_images"], route["organization_id"])
+    _sod_against_signer(sod, signer)
+    callback = probes["signed_bureau_callback"]["evidence"]
+    prior_gate._require(
+        callback.get("provider_kind") == "simulator"
+        and callback.get("signature_verified") is True
+        and callback.get("organization_bound") is True
+        and callback.get("organization_id") == route["organization_id"]
+        and callback.get("flow_execution_verified") is True
+        and callback.get("physical_claim") == "not_claimed",
+        "Signed simulator callback or Flow execution is incomplete",
+    )
+    drain = probes["legacy_drain"]["evidence"]
+    legacy_source = drain.get("legacy_source")
+    prior_gate._require(
+        drain.get("source_commit") == commit
+        and drain.get("python_writers_stopped") is True
+        and isinstance(legacy_source, dict)
+        and legacy_source.get("environment") == "beta"
+        and isinstance(legacy_source.get("beta_cluster_uid"), str)
+        and bool(legacy_source["beta_cluster_uid"])
+        and legacy_source.get("database_cluster_uid") == legacy_source["beta_cluster_uid"]
+        and legacy_source.get("writer_cluster_uid") == legacy_source["beta_cluster_uid"]
+        and isinstance(legacy_source.get("beta_inventory_attestation_sha256"), str)
+        and SHA256.fullmatch(legacy_source["beta_inventory_attestation_sha256"]) is not None
+        and isinstance(legacy_source.get("database_uid"), str)
+        and bool(legacy_source["database_uid"])
+        and legacy_source["database_uid"] != deployment.get("database_uid")
+        and isinstance(legacy_source.get("writer_deployment_uid"), str)
+        and bool(legacy_source["writer_deployment_uid"])
+        and legacy_source.get("writer_owner") == "python"
+        and isinstance(legacy_source.get("writer_image_digest"), str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", legacy_source["writer_image_digest"]) is not None
+        and legacy_source.get("writer_running_at_drain") is False
+        and type(legacy_source.get("writer_generation_at_stop")) is int
+        and legacy_source.get("writer_generation_at_drain") == legacy_source["writer_generation_at_stop"]
+        and type(legacy_source.get("writer_stop_watermark")) is int
+        and type(legacy_source.get("drain_watermark")) is int
+        and legacy_source["drain_watermark"] > legacy_source["writer_stop_watermark"]
+        and isinstance(legacy_source.get("drain_snapshot_attestation_sha256"), str)
+        and SHA256.fullmatch(legacy_source["drain_snapshot_attestation_sha256"]) is not None
+        and legacy_source.get("database_uid") == drain.get("count_source_database_uid")
+        and type(drain.get("nonterminal_job_count")) is int
+        and drain.get("nonterminal_job_count") == 0
+        and type(drain.get("legacy_or_unknown_artifact_count")) is int
+        and drain.get("legacy_or_unknown_artifact_count") == 0
+        and type(drain.get("unreadable_artifact_count")) is int
+        and drain.get("unreadable_artifact_count") == 0
+        and type(drain.get("active_passport_flow_count")) is int
+        and drain.get("active_passport_flow_count") == 0,
+        "Legacy jobs, artifacts, or Flows have not drained",
+    )
+    prior_gate._require(_utc_time(legacy_source.get("writer_stopped_at_utc"))
+                        < _utc_time(legacy_source.get("drain_checked_at_utc")),
+                        "Legacy drain did not follow the Python writer stop")
+    isolation = probes["production_isolation"]["evidence"]
+    prior_gate._require(
+        isolation.get("production_unchanged") is True
+        and isolation.get("other_beta_resources_unchanged") is True
+        and isolation.get("authorized_writer_stop_uid")
+        == legacy_source["writer_deployment_uid"]
+        and isolation.get("disposable_resource_identity_verified") is True,
+        "Disposable acceptance changed production or unauthorized beta resources",
     )
     batch = probes["physical_bureau_batch"]["evidence"]
     images = release.get("oci_digests")
@@ -232,6 +615,7 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         and batch.get("provider_kind") == "simulator"
         and batch.get("simulator_marker_verified") is True
         and batch.get("physical_claim") == "not_claimed"
+        and batch.get("organization_id") == route["organization_id"]
         and batch.get("commitment_scheme") == "HMAC-SHA256"
         and batch.get("source_commit") == commit
         and batch.get("stack_manifest_sha256") == stack_sha256
@@ -245,7 +629,7 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         and SHA256.fullmatch(batch["response_commitment"]) is not None
         and isinstance(batch.get("callback_receipt_sha256"), str)
         and SHA256.fullmatch(batch["callback_receipt_sha256"]) is not None,
-        "Simulator batch compatibility evidence is not bound to the signed beta source",
+        "Simulator batch compatibility evidence is not bound to the signed protected source",
     )
     submitted = batch.get("submitted_job_commitments")
     returned = batch.get("returned_jobs")
@@ -279,6 +663,33 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         and receipts[0] == batch["callback_receipt_sha256"],
         "Simulator jobs and signed callback receipts did not complete on native issuance",
     )
+    prior_gate._require(
+        callback.get("receipt_sha256") == batch["callback_receipt_sha256"]
+        and callback.get("callback_receipts_sha256") == receipts
+        and callback.get("source_job_commitments") == submitted
+        and callback.get("native_completed_jobs") == batch["native_completed_jobs"]
+        and callback.get("native_container_id")
+        == report["runtime_images"]["issuance-native"]["container_id"],
+        "Signed callback is not bound to the native batch jobs and receipt",
+    )
+    returned_by_source = {job["source_job_commitment"]: job["bureau_job_commitment"]
+                          for job in returned}
+    callback_jobs = callback.get("jobs")
+    prior_gate._require(
+        isinstance(callback_jobs, list) and len(callback_jobs) == len(submitted)
+        and all(
+            isinstance(job, dict)
+            and job.get("source_job_commitment") == source
+            and job.get("bureau_job_commitment") == returned_by_source[source]
+            and job.get("receipt_sha256") == receipts[index]
+            and job.get("native_completed") is True
+            and job.get("organization_id") == route["organization_id"]
+            and job.get("native_container_id")
+            == report["runtime_images"]["issuance-native"]["container_id"]
+            for index, (source, job) in enumerate(zip(submitted, callback_jobs, strict=True))
+        ),
+        "Signed callback jobs are not bound to returned bureau jobs and native completion",
+    )
     packaged = probes["packaged_image"]["evidence"]
     runtime_bureau = report["runtime_images"]["passport-beta-bureau"]
     prior_gate._require(
@@ -290,7 +701,7 @@ def _beta_report(report: dict, commit: str, stack_sha256: str) -> None:
         and isinstance(runtime_bureau.get("container_id"), str)
         and bool(runtime_bureau["container_id"])
         and packaged.get("runtime_container_id") == runtime_bureau["container_id"],
-        "Packaged simulator image is not bound to the signed live beta runtime",
+        "Packaged simulator image is not bound to the signed disposable runtime",
     )
     submission = probes["physical_bureau_submission"]["evidence"]
     prior_gate._require(
@@ -312,15 +723,25 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
                         and report.get("source_commit") == commit
                         and report.get("physical_claim") == "not_claimed",
                         "Supported consumer report lineage mismatch")
+    _utc_time(report.get("accepted_at_utc"))
     surfaces = report.get("surfaces")
     prior_gate._require(isinstance(surfaces, dict) and set(surfaces) == EXPECTED_SURFACES,
                         "Supported consumer surfaces are incomplete")
+    owner_uids: set[str] = set()
+    targets: set[str] = set()
+    container_ids: set[str] = set()
     for name in EXPECTED_SURFACES:
         item = surfaces[name]
         prior_gate._require(isinstance(item, dict)
-                            and item.get("runtime_accepted") is True
-                            and item.get("rollback_accepted") is True,
-                            f"Supported consumer runtime/rollback incomplete: {name}")
+                            and item.get("runtime_accepted") is True,
+                            f"Supported consumer Rust runtime incomplete: {name}")
+        identity = item.get("identity")
+        target = _surface_identity(identity, name, commit)
+        prior_gate._require(identity["owner_uid"] not in owner_uids
+                            and target not in targets,
+                            f"Supported consumer owner identity reused: {name}")
+        owner_uids.add(identity["owner_uid"])
+        targets.add(target)
         runtime = item.get("runtime_images")
         prior_gate._require(isinstance(runtime, dict)
                             and set(runtime) == EXPECTED_SUPPORTED_SERVICES,
@@ -333,9 +754,12 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
                         for key in ("container_id", "image_id"))
                 and isinstance(observed.get("selectors"), dict)
                 and set(observed["selectors"]) == EXPECTED_SUPPORTED_FLAGS[service]
-                and all(value is True for value in observed["selectors"].values()),
+                and all(value is True for value in observed["selectors"].values())
+                and _bound_to_surface(observed, identity, target)
+                and observed["container_id"] not in container_ids,
                 f"Supported consumer released runtime is incomplete: {name}/{service}",
             )
+            container_ids.add(observed["container_id"])
         probes = item.get("probes")
         prior_gate._require(isinstance(probes, dict)
                             and set(probes) >= REQUIRED_SUPPORTED_PROBES,
@@ -345,7 +769,7 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
             prior_gate._require(isinstance(probe, dict)
                                 and probe.get("verified") is True
                                 and isinstance(probe.get("evidence"), dict)
-                                and bool(probe["evidence"]),
+                                and _bound_to_surface(probe["evidence"], identity, target),
                                 f"Supported consumer probe failed: {name}/{probe_name}")
         route_evidence = probes["nine_route_gateway_flow"]["evidence"]
         prior_gate._require(
@@ -353,17 +777,20 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
             == EXPECTED_DELETIONS
             and route_evidence.get("gateway_owner") == "rust"
             and route_evidence.get("flow_owner") == "rust"
-            and route_evidence.get("unauthenticated_status") in (401, 403),
+            and route_evidence.get("unauthenticated_status") in (401, 403)
+            and route_evidence.get("cross_tenant_status") == 404
+            and isinstance(route_evidence.get("organization_id"), str)
+            and bool(route_evidence["organization_id"]),
             f"Supported consumer route/auth evidence is incomplete: {name}",
         )
         signer = probes["managed_signer"]["evidence"]
-        prior_gate._require(signer.get("mode") == "managed_kms"
-                            and signer.get("chain_verified") is True,
-                            f"Supported consumer managed signer evidence is incomplete: {name}")
+        _managed_signer(signer, runtime, route_evidence["organization_id"])
+        _sod_against_signer(signer.get("sod", {}), signer)
         callback = probes["signed_bureau_callback"]["evidence"]
         prior_gate._require(callback.get("provider_kind") == "simulator"
                             and callback.get("signature_verified") is True
                             and callback.get("organization_bound") is True
+                            and callback.get("organization_id") == route_evidence["organization_id"]
                             and callback.get("physical_claim") == "not_claimed",
                             f"Supported consumer callback compatibility evidence is incomplete: {name}")
         image = probes["released_image"]["evidence"]
@@ -372,41 +799,111 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
                             and image.get("container_id")
                             == runtime["gateway"]["container_id"],
                             f"Supported consumer released image evidence is incomplete: {name}")
-        rollback = probes["rollback"]["evidence"]
-        phases = rollback.get("phases")
-        prior_gate._require(isinstance(phases, dict)
-                            and set(phases) == {"rust_before", "python_rollback",
-                                                "rust_restored"}
-                            and rollback.get("nine_routes_restored") is True,
-                            f"Supported consumer rollback phases are incomplete: {name}")
-        for phase_name, owner in (("rust_before", "rust"),
-                                  ("python_rollback", "python"),
-                                  ("rust_restored", "rust")):
-            phase = phases[phase_name]
-            prior_gate._require(
-                isinstance(phase, dict)
-                and phase.get("gateway_owner") == owner
-                and phase.get("flow_owner") == owner
-                and prior_gate._route_keys(
-                    phase.get("routes"), f"{name} {phase_name} passport routes"
-                ) == EXPECTED_DELETIONS
-                and phase.get("unauthenticated_status") in (401, 403)
-                and all(isinstance(phase.get(key), str) and phase[key]
-                        for key in ("gateway_container_id", "flow_container_id")),
-                f"Supported consumer rollback phase is incomplete: {name}/{phase_name}",
-            )
-        for service in ("gateway", "flow"):
-            identities = [phases[phase][f"{service}_container_id"] for phase in
-                          ("rust_before", "python_rollback", "rust_restored")]
-            prior_gate._require(len(set(identities)) == 3,
-                                f"Supported consumer rollback did not replace {service}: {name}")
+        resume = probes["rust_restart_resume"]["evidence"]
+        before, after = resume.get("before"), resume.get("after")
+        prior_runtime = item.get("pre_restart_native_runtime")
         prior_gate._require(
-            all(phases["rust_restored"][f"{service}_container_id"]
-                == runtime[service]["container_id"] for service in ("gateway", "flow"))
-            and phases["rust_restored"].get("managed_signer") == signer
-            and phases["rust_restored"].get("signed_bureau_callback") == callback,
-            f"Supported consumer restored Rust runtime differs from final probe: {name}",
+            isinstance(prior_runtime, dict)
+            and prior_runtime.get("oci_reference") == services_reference
+            and isinstance(prior_runtime.get("container_id"), str)
+            and bool(prior_runtime["container_id"])
+            and isinstance(prior_runtime.get("image_id"), str)
+            and bool(prior_runtime["image_id"])
+            and _bound_to_surface(prior_runtime, identity, target)
+            and prior_runtime["container_id"] not in container_ids
+            and isinstance(prior_runtime.get("inspection_receipt_sha256"), str)
+            and SHA256.fullmatch(prior_runtime["inspection_receipt_sha256"]) is not None
+            and isinstance(before, dict) and isinstance(after, dict)
+            and before.get("owner") == after.get("owner") == "rust"
+            and before.get("issuance_native_container_id") == prior_runtime["container_id"]
+            and after.get("issuance_native_container_id")
+            == runtime["issuance-native"]["container_id"]
+            and before["issuance_native_container_id"]
+            != after["issuance_native_container_id"]
+            and _bound_to_surface(before, identity, target)
+            and _bound_to_surface(after, identity, target)
+            and before.get("oci_reference") == after.get("oci_reference") == services_reference
+            and before.get("image_id") == prior_runtime["image_id"]
+            and after.get("image_id") == runtime["issuance-native"]["image_id"]
+            and isinstance(before.get("job_commitment"), str)
+            and SHA256.fullmatch(before["job_commitment"]) is not None
+            and after.get("job_commitment") == before["job_commitment"]
+            and before.get("organization_id") == after.get("organization_id")
+            == signer["organization_id"]
+            and before.get("issuer_profile_id") == after.get("issuer_profile_id")
+            == signer["issuer_profile_id"]
+            and before.get("status") in {"SOD_SIGNED", "SUBMITTED", "IN_PRODUCTION"}
+            and after.get("status") in {"SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK",
+                                         "READY_FOR_ACTIVATION", "ACTIVE"}
+            and after["status"] != before["status"]
+            and resume.get("job_resumed") is True
+            and resume.get("durable_record_verified") is True
+            and resume.get("kms_signing_continuity_verified") is True
+            and resume.get("gateway_owner") == "rust"
+            and resume.get("flow_owner") == "rust"
+            and resume.get("source_commit") == commit
+            and resume.get("services_oci_reference") == services_reference,
+            f"Supported consumer Rust restart or KMS job resume is incomplete: {name}",
         )
+        container_ids.add(prior_runtime["container_id"])
+
+
+def _cutover_report(report: dict, commit: str, deletion_head: str,
+                    legacy: dict, drain: dict, supported_run: int,
+                    predeletion_run: int) -> datetime:
+    prior_gate._require(
+        report.get("schema") == "marty.passport-python-deletion-cutover/v1"
+        and report.get("status") == "accepted"
+        and report.get("rust_source_commit") == commit
+        and report.get("deletion_head") == deletion_head
+        and report.get("supported_acceptance_run_id") == supported_run
+        and report.get("predeletion_acceptance_run_id") == predeletion_run,
+        "Final cutover is not bound to the exact deletion head and acceptance runs",
+    )
+    source = report.get("legacy_source")
+    counts = report.get("counts")
+    fence = report.get("write_fence")
+    prior_gate._require(
+        isinstance(source, dict)
+        and source.get("environment") == "beta"
+        and source.get("database_uid") == legacy["database_uid"]
+        and source.get("beta_cluster_uid") == legacy["beta_cluster_uid"]
+        and source.get("beta_inventory_attestation_sha256")
+        == legacy["beta_inventory_attestation_sha256"]
+        and source.get("writer_deployment_uid") == legacy["writer_deployment_uid"]
+        and source.get("writer_image_digest") == legacy["writer_image_digest"]
+        and source.get("writer_generation") == legacy["writer_generation_at_drain"]
+        and source.get("writer_running") is False
+        and type(source.get("final_watermark")) is int
+        and source["final_watermark"] > legacy["drain_watermark"]
+        and isinstance(source.get("final_snapshot_attestation_sha256"), str)
+        and SHA256.fullmatch(source["final_snapshot_attestation_sha256"]) is not None
+        and source["final_snapshot_attestation_sha256"]
+        != legacy["drain_snapshot_attestation_sha256"]
+        and isinstance(counts, dict)
+        and counts.get("source_database_uid") == source["database_uid"]
+        and all(type(counts.get(field)) is int and counts[field] == 0
+                for field in ("nonterminal_job_count", "legacy_or_unknown_artifact_count",
+                              "unreadable_artifact_count", "active_passport_flow_count"))
+        and isinstance(fence, dict)
+        and fence.get("enabled") is True
+        and fence.get("database_uid") == source["database_uid"]
+        and fence.get("writer_deployment_uid") == source["writer_deployment_uid"]
+        and fence.get("writer_generation") == source["writer_generation"]
+        and type(fence.get("fence_epoch")) is int
+        and fence["fence_epoch"] > 0
+        and report.get("production_unchanged") is True
+        and report.get("other_beta_resources_unchanged") is True
+        and report.get("authorized_writer_stop_uid") == source["writer_deployment_uid"]
+        and report.get("authorized_fence_epoch") == fence["fence_epoch"],
+        "Final beta-source drain or durable Python write fence is incomplete",
+    )
+    checked = _utc_time(report.get("checked_at_utc"))
+    prior_gate._require(checked > _utc_time(legacy["drain_checked_at_utc"]),
+                        "Final cutover drain predates the protected acceptance drain")
+    prior_gate._require(drain.get("count_source_database_uid") == source["database_uid"],
+                        "Final cutover counts are from another database")
+    return checked
 
 
 def _signed_stack_manifest(tag: str, commit: str, expected_digest: str, output: Path) -> dict:
@@ -494,10 +991,10 @@ def _checkout_commit(contract_path: Path) -> str | None:
     """Select only a syntactically valid source pin; verify() proves its ancestry."""
     contract = prior_gate._json(contract_path)
     prior_gate._require(
-        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v2",
+        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v3",
         "Unknown passport retirement qualification schema",
     )
-    if contract.get("state") == "blocked_pending_beta_acceptance":
+    if contract.get("state") == "blocked_pending_protected_acceptance":
         return None
     prior_gate._require(contract.get("state") == "qualified", "Unknown passport qualification state")
     source = contract.get("source")
@@ -509,10 +1006,11 @@ def _checkout_commit(contract_path: Path) -> str | None:
     return source["protected_main_commit"]
 
 
-def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
+def verify(contract_path: Path, marty_ui: Path | None = None,
+           deletion_head: str | None = None, post_pr_check: bool = False) -> None:
     contract = prior_gate._json(contract_path)
     prior_gate._require(
-        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v2",
+        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v3",
         "Unknown passport retirement qualification schema",
     )
     prior_gate._require(
@@ -524,6 +1022,8 @@ def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
         contract.get("full_python_service_deletion_authorized") is False,
         "Full Python service deletion is not authorized",
     )
+    prior_gate._require(contract.get("retirement_pull_request_number") == 305,
+                        "Retirement pull request identity changed")
     source = contract.get("source")
     prior_gate._require(isinstance(source, dict), "Passport source checkpoint is missing")
     prior_gate._require(source.get("repository") == "ElevenID/marty-ui", "Unexpected source repository")
@@ -535,55 +1035,57 @@ def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
         "Passport source artifact set changed",
     )
 
-    if contract.get("state") == "blocked_pending_beta_acceptance":
+    if contract.get("state") == "blocked_pending_protected_acceptance":
         prior_gate._require(
             source.get("protected_main_commit") is None
             and source.get("artifact_sha256") is None
-            and contract.get("beta_acceptance_receipt") is None
+            and contract.get("predeletion_acceptance_receipt") is None
             and contract.get("supported_consumer_cutover_receipt") is None,
             "Blocked passport qualification invented evidence",
         )
         raise prior_gate.QualificationError(
-            "Passport Python retirement is blocked pending beta and supported-consumer acceptance"
+            "Passport Python retirement is blocked pending protected disposable acceptance"
         )
 
     prior_gate._require(contract.get("state") == "qualified", "Unknown passport qualification state")
     prior_gate._require(marty_ui is not None, "Qualified passport source checkout is required")
     commit = _protected_source(source, marty_ui)
-    beta = contract.get("beta_acceptance_receipt")
+    predeletion = contract.get("predeletion_acceptance_receipt")
     supported = contract.get("supported_consumer_cutover_receipt")
-    prior_gate._require(isinstance(beta, dict) and isinstance(supported, dict),
+    prior_gate._require(isinstance(predeletion, dict) and isinstance(supported, dict),
                         "Both passport acceptance receipts are required")
-    prior_gate._require(beta.get("release_source_commit") == commit,
-                        "Beta release source differs from qualified source")
+    prior_gate._require(predeletion.get("release_source_commit") == commit,
+                        "Predeletion release source differs from qualified source")
     supported_commit = supported.get("protected_main_commit")
     prior_gate._require(supported.get("repository") == "ElevenID/marty-ui"
                         and supported_commit == commit,
                         "Supported consumer source differs from qualified source")
     with tempfile.TemporaryDirectory(prefix="passport-retirement-evidence-") as temporary:
         root = Path(temporary)
-        stack_digest = beta.get("stack_manifest_sha256")
-        manifest = _signed_stack_manifest(beta.get("release_tag"), commit,
+        stack_digest = predeletion.get("stack_manifest_sha256")
+        manifest = _signed_stack_manifest(predeletion.get("release_tag"), commit,
                                           stack_digest, root / "stack")
         expected_images = _image_digests(manifest)
         _all_image_references(manifest)
         services_uri = "ghcr.io/elevenid/marty-ui-oss/services"
         services_digest = expected_images[services_uri]
         services_reference = f"{services_uri}@{services_digest}"
-        beta_run = beta.get("beta_deployment_run_id")
-        _verified_run(beta_run, commit, ".github/workflows/passport-beta-acceptance.yml")
-        beta_report = _run_artifact(beta_run, beta.get("evidence_artifact"),
-                                    beta.get("evidence_sha256"), root / "beta")
-        beta_release = beta_report.get("release")
-        prior_gate._require(isinstance(beta_release, dict)
-                            and beta_release.get("oci_digests") == expected_images,
-                            "Beta report image digests differ from signed release")
-        _beta_report(beta_report, commit, stack_digest)
+        predeletion_run = predeletion.get("acceptance_run_id")
+        predeletion_started, predeletion_completed = _verified_run(
+            predeletion_run, commit,
+            ".github/workflows/passport-rust-predeletion-acceptance.yml",
+        )
+        predeletion_report = _run_artifact(
+            predeletion_run, predeletion.get("evidence_artifact"),
+            predeletion.get("evidence_sha256"), root / "predeletion",
+        )
+        predeletion_release = predeletion_report.get("release")
+        prior_gate._require(isinstance(predeletion_release, dict)
+                            and predeletion_release.get("oci_digests") == expected_images,
+                            "Predeletion report image digests differ from signed release")
+        _predeletion_report(predeletion_report, commit, stack_digest)
         _frozen_batch_parity(marty_ui)
-        prior_gate._require(beta_report.get("deployment", {}).get("release_version")
-                            == beta["release_tag"][1:],
-                            "Beta deployment version differs from signed release")
-        for service, image in beta_report["runtime_images"].items():
+        for service, image in predeletion_report["runtime_images"].items():
             prior_gate._require(isinstance(image, dict)
                                 and image.get("oci_reference") == services_reference
                                 and image.get("oci_digest") == services_digest
@@ -591,22 +1093,78 @@ def verify(contract_path: Path, marty_ui: Path | None = None) -> None:
                                                  str(image.get("image_id", ""))) is not None
                                 and isinstance(image.get("container_id"), str)
                                 and bool(image["container_id"]),
-                                f"Beta runtime image differs from signed release: {service}")
+                                f"Disposable runtime image differs from signed release: {service}")
         supported_run = supported.get("acceptance_run_id")
-        _verified_run(supported_run, commit,
-                      ".github/workflows/passport-supported-consumer-acceptance.yml")
+        supported_started, supported_completed = _verified_run(
+            supported_run, commit,
+            ".github/workflows/passport-supported-consumer-acceptance.yml",
+        )
         supported_report = _run_artifact(supported_run, supported.get("evidence_artifact"),
                                          supported.get("evidence_sha256"), root / "supported")
         _supported_report(supported_report, commit, services_reference)
         prior_gate._require(supported_report.get("stack_manifest_sha256") == stack_digest
                             and supported_report.get("oci_digests") == expected_images,
-                            "Supported consumer image lineage differs from beta release")
+                            "Supported consumer image lineage differs from protected release")
+        drain = predeletion_report["probes"]["legacy_drain"]["evidence"]
+        legacy = drain["legacy_source"]
+        prior_gate._require(
+            supported_report.get("legacy_source_binding") == {
+                "database_uid": legacy["database_uid"],
+                "writer_deployment_uid": legacy["writer_deployment_uid"],
+            }
+            and predeletion_report["deployment"]["owner_uid"]
+            == supported_report["surfaces"]["base"]["identity"]["owner_uid"]
+            and predeletion_report["deployment"]["project_id"]
+            == supported_report["surfaces"]["base"]["identity"]["project_id"]
+            and all(
+                predeletion_report["runtime_images"][service].get("container_id")
+                == supported_report["surfaces"]["base"]["runtime_images"][service].get("container_id")
+                and predeletion_report["runtime_images"][service].get("image_id")
+                == supported_report["surfaces"]["base"]["runtime_images"][service].get("image_id")
+                for service in EXPECTED_PREDELETION_SERVICES
+            ),
+            "Protected drain or base runtime is not bound to the supported consumer",
+        )
+        supported_accepted = _utc_time(supported_report["accepted_at_utc"])
+        predeletion_accepted = _utc_time(predeletion_report["accepted_at_utc"])
+        writer_stopped = _utc_time(legacy["writer_stopped_at_utc"])
+        drain_checked = _utc_time(legacy["drain_checked_at_utc"])
+        prior_gate._require(
+            supported_started <= supported_accepted <= supported_completed
+            < predeletion_started <= writer_stopped < drain_checked
+            <= predeletion_accepted <= predeletion_completed,
+            "Beta-source drain predates supported Rust acceptance",
+        )
+        if post_pr_check:
+            prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") in {"merge_group", "push"},
+                                "Post-PR exact-head check is only valid on merge_group or push")
+            deletion_head = _retirement_pr_head(contract["retirement_pull_request_number"])
+            _post_pr_lineage(contract["retirement_pull_request_number"], deletion_head)
+        else:
+            prior_gate._require(isinstance(deletion_head, str)
+                                and COMMIT.fullmatch(deletion_head) is not None,
+                                "Exact pull-request deletion head is required")
+            _pull_request_lineage(contract["retirement_pull_request_number"], deletion_head)
+        cutover, cutover_started, cutover_completed = _final_cutover_report(
+            commit, deletion_head, root / "cutover",
+        )
+        checked = _cutover_report(cutover, commit, deletion_head, legacy, drain,
+                                  supported_run, predeletion_run)
+        prior_gate._require(predeletion_completed < cutover_started <= checked
+                            <= cutover_completed,
+                            "Final deletion cutover did not follow protected acceptance")
+        if post_pr_check:
+            _successful_pr_gate(contract["retirement_pull_request_number"], deletion_head,
+                                cutover_completed)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--marty-ui", type=Path)
+    parser.add_argument("--deletion-head", help="Exact pull-request head SHA from the event")
+    parser.add_argument("--post-pr-check", action="store_true",
+                        help="Recheck signed parity on merge_group or push after the PR cutover gate")
     parser.add_argument("--print-checkout-commit", action="store_true",
                         help="Print a validated qualified source pin for the CI checkout")
     args = parser.parse_args()
@@ -616,7 +1174,7 @@ def main() -> int:
             if commit is not None:
                 print(commit)
             return 0
-        verify(args.contract, args.marty_ui)
+        verify(args.contract, args.marty_ui, args.deletion_head, args.post_pr_check)
     except prior_gate.QualificationError as error:
         parser.exit(1, f"{error}\n")
     return 0

@@ -5,7 +5,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import subprocess
+from datetime import UTC
 from pathlib import Path
 
 import pytest
@@ -23,32 +25,73 @@ SERVICES_REFERENCE = (
     "ghcr.io/elevenid/marty-ui-oss/services@"
     + IMAGE_DIGESTS["ghcr.io/elevenid/marty-ui-oss/services"]
 )
+ORGANIZATION = "org-marty"
+PROFILE = "passport-managed-profile"
 
 
-def supported_surface() -> dict:
+def identity(name: str) -> dict:
+    uid = f"owner-{name}"
+    result = {
+        "owner_uid": uid,
+        "owner_labels": {"source_commit": COMMIT, "surface": name, "owner_uid": uid},
+        "production_resources_excluded": True,
+    }
+    if name == "kubernetes":
+        result.update(kind="kubernetes", namespace="passport-test-namespace",
+                      cluster_uid="test-cluster-uid", production_cluster_uid="prod-cluster-uid",
+                      cluster_identity_attestation_sha256="b" * 64)
+    else:
+        result.update(kind="compose", project_id=f"passport-disposable-{name}")
+    return result
+
+
+def bound(evidence: dict, owner: dict) -> dict:
+    evidence.update(owner_uid=owner["owner_uid"], owner_labels=owner["owner_labels"],
+                    target=owner.get("project_id", owner.get("namespace")))
+    if owner["kind"] == "kubernetes":
+        evidence["cluster_uid"] = owner["cluster_uid"]
+    return evidence
+
+
+def managed_signer(container_id: str) -> dict:
+    return {
+        "mode": "managed_kms", "chain_verified": True, "private_key_exported": False,
+        "issuer_profile_id": PROFILE, "issuer_profile_type": "ICAO_EMRTD",
+        "issuer_profile_status": "active", "organization_id": ORGANIZATION,
+        "signing_keys_container_id": container_id,
+        "services_oci_reference": SERVICES_REFERENCE,
+        "csca": {"status": "active", "organization_id": ORGANIZATION,
+                 "issuer_profile_id": PROFILE, "certificate_sha256": "1" * 64,
+                 "kms_key_ref": "transit/keys/passport-csca"},
+        "dsc": {"status": "active", "organization_id": ORGANIZATION,
+                "issuer_profile_id": PROFILE, "certificate_sha256": "2" * 64,
+                "kms_key_ref": "transit/keys/passport-dsc"},
+    }
+
+
+def sod_evidence() -> dict:
+    return {"signature_verified": True, "chain_verified": True,
+            "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
+            "csca_certificate_sha256": "1" * 64,
+            "dsc_certificate_sha256": "2" * 64}
+
+
+def supported_surface(name: str) -> dict:
     routes = [{"method": method, "path": path}
               for method, path in sorted(gate.EXPECTED_DELETIONS)]
-    signer = {"mode": "managed_kms", "chain_verified": True}
+    owner = identity(name)
+    signer = managed_signer(f"signing-keys-{name}-after")
+    signer["sod"] = sod_evidence()
     callback = {"provider_kind": "simulator", "signature_verified": True,
-                "organization_bound": True, "physical_claim": "not_claimed"}
+                "organization_bound": True, "organization_id": ORGANIZATION,
+                "physical_claim": "not_claimed"}
 
-    def phase(owner: str, suffix: str) -> dict:
-        return {"gateway_owner": owner, "flow_owner": owner,
-                "gateway_container_id": f"gateway-{suffix}",
-                "flow_container_id": f"flow-{suffix}",
-                "routes": routes, "unauthenticated_status": 401}
-
-    restored = phase("rust", "restored")
-    restored["managed_signer"] = signer
-    restored["signed_bureau_callback"] = callback
-    return {
+    surface = {
         "runtime_accepted": True,
-        "rollback_accepted": True,
+        "identity": owner,
         "runtime_images": {
             service: {
-                "container_id": "gateway-restored" if service == "gateway"
-                else "flow-restored" if service == "flow"
-                else f"{service}-restored",
+                "container_id": f"{service}-{name}-after",
                 "image_id": "sha256:" + "d" * 64,
                 "oci_reference": SERVICES_REFERENCE,
                 "selectors": dict.fromkeys(gate.EXPECTED_SUPPORTED_FLAGS[service], True),
@@ -63,6 +106,8 @@ def supported_surface() -> dict:
                     "gateway_owner": "rust",
                     "flow_owner": "rust",
                     "unauthenticated_status": 401,
+                    "cross_tenant_status": 404,
+                    "organization_id": ORGANIZATION,
                 },
             },
             "managed_signer": {"verified": True, "evidence": signer},
@@ -70,22 +115,51 @@ def supported_surface() -> dict:
             "released_image": {"verified": True, "evidence": {
                 "oci_reference": SERVICES_REFERENCE,
                 "source_commit": COMMIT,
-                "container_id": "gateway-restored",
+                "container_id": f"gateway-{name}-after",
             }},
-            "rollback": {"verified": True, "evidence": {
-                "phases": {"rust_before": phase("rust", "before"),
-                           "python_rollback": phase("python", "python"),
-                           "rust_restored": restored},
-                "nine_routes_restored": True,
+            "rust_restart_resume": {"verified": True, "evidence": {
+                "before": {"owner": "rust", "issuance_native_container_id": f"issuance-native-{name}-before",
+                           "image_id": "sha256:" + "d" * 64,
+                           "oci_reference": SERVICES_REFERENCE,
+                           "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
+                           "job_commitment": "5" * 64, "status": "SOD_SIGNED"},
+                "after": {"owner": "rust", "issuance_native_container_id": f"issuance-native-{name}-after",
+                          "image_id": "sha256:" + "d" * 64,
+                          "oci_reference": SERVICES_REFERENCE,
+                          "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
+                          "job_commitment": "5" * 64, "status": "SUBMITTED"},
+                "job_resumed": True,
+                "durable_record_verified": True,
+                "kms_signing_continuity_verified": True,
+                "gateway_owner": "rust",
+                "flow_owner": "rust",
+                "source_commit": COMMIT,
+                "services_oci_reference": SERVICES_REFERENCE,
             }},
         },
+        "pre_restart_native_runtime": {
+            "container_id": f"issuance-native-{name}-before",
+            "image_id": "sha256:" + "d" * 64,
+            "oci_reference": SERVICES_REFERENCE,
+            "inspection_receipt_sha256": "f" * 64,
+        },
     }
+    for runtime in surface["runtime_images"].values():
+        bound(runtime, owner)
+    bound(surface["pre_restart_native_runtime"], owner)
+    for probe in surface["probes"].values():
+        bound(probe["evidence"], owner)
+    restart = surface["probes"]["rust_restart_resume"]["evidence"]
+    bound(restart["before"], owner)
+    bound(restart["after"], owner)
+    return surface
 
 
-def beta_report() -> dict:
+def predeletion_report() -> dict:
     report = {
-        "schema": "marty.passport-beta-acceptance/v1",
+        "schema": "marty.passport-rust-predeletion-acceptance/v1",
         "status": "accepted",
+        "accepted_at_utc": "2026-09-26T00:15:00Z",
         "physical_claim": "not_claimed",
         "release": {
             "source_commit": COMMIT,
@@ -93,42 +167,79 @@ def beta_report() -> dict:
             "oci_digests": IMAGE_DIGESTS,
             "signed_manifest_verified": True,
         },
-        "beta_origin": "https://beta.elevenidllc.com",
         "deployment": {
+            **identity("base"),
+            "mode": "disposable",
             "provider_mode": "simulator",
-            "local_deployment_manifest_sha256": "f" * 64,
-            "source_manifest_sha256": "1" * 64,
+            "resource_identity_verified": True,
+            "source_commit": COMMIT,
+            "database_uid": "disposable-db-uid",
         },
         "runtime_images": {
-            name: {"image_id": "sha256:" + "2" * 64,
-                   "container_id": "container-one"}
-            for name in gate.EXPECTED_BETA_SERVICES
+            name: {"image_id": "sha256:" + "d" * 64,
+                   "container_id": f"{name}-base-after",
+                   "oci_reference": SERVICES_REFERENCE}
+            for name in gate.EXPECTED_PREDELETION_SERVICES
         },
         "probes": {
             **{name: {"verified": True, "evidence": {"source": "test"}}
-               for name in gate.REQUIRED_BETA_PROBES},
+               for name in gate.REQUIRED_PREDELETION_PROBES},
+            "managed_csca_dsc_chain": {"verified": True, "evidence": {
+                "mode": "managed_kms", "chain_verified": True,
+                "private_key_exported": False,
+            }},
+            "sod_signature": {"verified": True, "evidence": {
+                "signature_verified": True, "chain_verified": True,
+            }},
+            "nine_route_gateway_flow": {"verified": True, "evidence": {
+                "routes": [{"method": method, "path": path}
+                           for method, path in sorted(gate.EXPECTED_DELETIONS)],
+                "gateway_owner": "rust", "flow_owner": "rust",
+                "unauthenticated_status": 401, "cross_tenant_status": 404,
+                "organization_id": ORGANIZATION,
+            }},
+            "signed_bureau_callback": {"verified": True, "evidence": {
+                "provider_kind": "simulator", "signature_verified": True,
+                "organization_bound": True, "flow_execution_verified": True,
+                "organization_id": ORGANIZATION,
+                "physical_claim": "not_claimed",
+            }},
+            "legacy_drain": {"verified": True, "evidence": {
+                "source_commit": COMMIT, "python_writers_stopped": True,
+                "count_source_database_uid": "beta-legacy-db-uid",
+                "legacy_source": {
+                    "environment": "beta", "database_uid": "beta-legacy-db-uid",
+                    "beta_cluster_uid": "beta-cluster-uid",
+                    "database_cluster_uid": "beta-cluster-uid",
+                    "writer_cluster_uid": "beta-cluster-uid",
+                    "beta_inventory_attestation_sha256": "c" * 64,
+                    "writer_deployment_uid": "beta-python-writer-uid",
+                    "writer_owner": "python", "writer_image_digest": "sha256:" + "a" * 64,
+                    "writer_running_at_drain": False,
+                    "writer_generation_at_stop": 3, "writer_generation_at_drain": 3,
+                    "writer_stop_watermark": 100, "drain_watermark": 101,
+                    "drain_snapshot_attestation_sha256": "d" * 64,
+                    "writer_stopped_at_utc": "2026-09-26T00:12:00Z",
+                    "drain_checked_at_utc": "2026-09-26T00:14:00Z",
+                },
+                "nonterminal_job_count": 0, "unreadable_artifact_count": 0,
+                "legacy_or_unknown_artifact_count": 0,
+                "active_passport_flow_count": 0,
+            }},
+            "production_isolation": {"verified": True, "evidence": {
+                "production_unchanged": True, "other_beta_resources_unchanged": True,
+                "authorized_writer_stop_uid": "beta-python-writer-uid",
+                "disposable_resource_identity_verified": True,
+            }},
             "physical_claim_boundary": {"verified": True, "evidence": {
                 "physical_claim": "not_claimed", "booklet_verified": False,
-            }},
-            "recorded_demo": {"verified": True, "evidence": {
-                "youtube_video_id": "abcdefghijk",
-                "youtube_url": "https://www.youtube.com/watch?v=abcdefghijk",
-                "channel_id": "UCjUbog1b4zEdck5pV78EgCw",
-                "source_commit": COMMIT,
-                "stack_manifest_sha256": STACK_DIGEST,
-                "local_deployment_manifest_sha256": "f" * 64,
-                "source_manifest_sha256": "1" * 64,
-                "beta_origin": "https://beta.elevenidllc.com",
-                "physical_claim": "not_claimed",
-                "privacy_review_verified": True,
-                "beta_flow_review_verified": True,
-                "youtube_publication_verified": True,
             }},
             "physical_bureau_batch": {"verified": True, "evidence": {
                 "provider_kind": "simulator",
                 "simulator_marker_verified": True,
                 "physical_claim": "not_claimed",
                 "commitment_scheme": "HMAC-SHA256",
+                "organization_id": ORGANIZATION,
                 "source_commit": COMMIT,
                 "stack_manifest_sha256": STACK_DIGEST,
                 "services_oci_reference": SERVICES_REFERENCE,
@@ -153,7 +264,7 @@ def beta_report() -> dict:
         "source_commit": COMMIT,
         "stack_manifest_sha256": STACK_DIGEST,
         "services_oci_reference": SERVICES_REFERENCE,
-        "runtime_container_id": "container-one",
+        "runtime_container_id": "passport-beta-bureau-base-after",
     }
     report["probes"]["physical_bureau_submission"]["evidence"] = {
         "provider_kind": "simulator", "physical_claim": "not_claimed",
@@ -163,6 +274,30 @@ def beta_report() -> dict:
             "response_commitment", "submitted_job_commitments", "returned_jobs",
         )},
     }
+    report["probes"]["managed_csca_dsc_chain"]["evidence"] = managed_signer(
+        "signing-keys-base-after")
+    report["probes"]["sod_signature"]["evidence"] = sod_evidence()
+    callback = report["probes"]["signed_bureau_callback"]["evidence"]
+    callback.update(receipt_sha256=batch["callback_receipt_sha256"],
+                    callback_receipts_sha256=batch["callback_receipts_sha256"],
+                    source_job_commitments=batch["submitted_job_commitments"],
+                    native_completed_jobs=batch["native_completed_jobs"],
+                    native_container_id="issuance-native-base-after")
+    returned_by_source = {job["source_job_commitment"]: job["bureau_job_commitment"]
+                          for job in batch["returned_jobs"]}
+    callback["jobs"] = [
+        {"source_job_commitment": source,
+         "bureau_job_commitment": returned_by_source[source],
+         "receipt_sha256": batch["callback_receipts_sha256"][index],
+         "native_completed": True, "organization_id": ORGANIZATION,
+         "native_container_id": "issuance-native-base-after"}
+        for index, source in enumerate(batch["submitted_job_commitments"])
+    ]
+    owner = report["deployment"]
+    for runtime in report["runtime_images"].values():
+        bound(runtime, owner)
+    for probe in report["probes"].values():
+        bound(probe["evidence"], owner)
     return report
 
 
@@ -172,28 +307,30 @@ def beta_report() -> dict:
         lambda report: report.update(status="blocked"),
         lambda report: report["release"].update(source_commit="9" * 40),
         lambda report: report["release"].update(stack_manifest_sha256="9" * 64),
-        lambda report: report.update(beta_origin="https://production.elevenidllc.com"),
         lambda report: report.update(physical_claim="booklet_verified"),
-        lambda report: report["deployment"].pop("source_manifest_sha256"),
+        lambda report: report["deployment"].update(mode="beta"),
+        lambda report: report["deployment"].update(resource_identity_verified=False),
         lambda report: report["runtime_images"].pop("passport-beta-bureau"),
         lambda report: report["runtime_images"].update({"passport-provider-ingress": {"image_id": "sha256:" + "2" * 64}}),
         lambda report: report.update(provider_ingress_runtime_image={"image_id": "sha256:" + "2" * 64}),
         lambda report: report["deployment"].update(provider_mode="physical"),
         lambda report: report["probes"].pop("physical_claim_boundary"),
         lambda report: report["probes"]["physical_claim_boundary"]["evidence"].update(booklet_verified=True),
-        lambda report: report["probes"].pop("recorded_demo"),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(youtube_video_id="bad"),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(youtube_url="https://example.com/watch?v=abcdefghijk"),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(channel_id="foreign"),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(source_commit="9" * 40),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(stack_manifest_sha256="9" * 64),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(local_deployment_manifest_sha256="9" * 64),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(source_manifest_sha256="9" * 64),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(beta_origin="https://example.com"),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(physical_claim="booklet_verified"),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(privacy_review_verified=False),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(beta_flow_review_verified=False),
-        lambda report: report["probes"]["recorded_demo"]["evidence"].update(youtube_publication_verified=False),
+        lambda report: report["probes"]["nine_route_gateway_flow"]["evidence"].update(cross_tenant_status=200),
+        lambda report: report["probes"]["managed_csca_dsc_chain"]["evidence"].update(private_key_exported=True),
+        lambda report: report["probes"]["sod_signature"]["evidence"].update(signature_verified=False),
+        lambda report: report["probes"]["signed_bureau_callback"]["evidence"].update(flow_execution_verified=False),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(nonterminal_job_count=1),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(unreadable_artifact_count=1),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(legacy_or_unknown_artifact_count=1),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(nonterminal_job_count=False),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(active_passport_flow_count=1),
+        lambda report: report["probes"]["legacy_drain"]["evidence"].update(python_writers_stopped=False),
+        lambda report: report["probes"]["production_isolation"]["evidence"].update(production_unchanged=False),
+        lambda report: report["probes"]["production_isolation"]["evidence"].update(
+            authorized_writer_stop_uid="other-writer"),
+        lambda report: report["probes"]["production_isolation"]["evidence"].update(
+            other_beta_resources_unchanged=False),
         lambda report: report["probes"]["signed_bureau_callback"].update(verified="true"),
         lambda report: report["probes"].pop("physical_bureau_batch"),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(provider_kind="physical"),
@@ -222,12 +359,58 @@ def beta_report() -> dict:
         lambda report: report["probes"]["physical_bureau_submission"]["evidence"].update(returned_jobs=[]),
     ],
 )
-def test_beta_report_requires_exact_lineage_and_probes(mutate) -> None:
-    report = beta_report()
-    gate._beta_report(report, COMMIT, STACK_DIGEST)
+def test_predeletion_report_requires_exact_lineage_and_probes(mutate) -> None:
+    report = predeletion_report()
+    gate._predeletion_report(report, COMMIT, STACK_DIGEST)
     mutate(report)
     with pytest.raises(gate.prior_gate.QualificationError):
-        gate._beta_report(report, COMMIT, STACK_DIGEST)
+        gate._predeletion_report(report, COMMIT, STACK_DIGEST)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: r["runtime_images"]["signing-keys"].update(container_id="wrong"),
+    lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"].update(
+        issuer_profile_type="other"),
+    lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"]["csca"].update(
+        organization_id="other"),
+    lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"]["dsc"].update(
+        status="inactive"),
+    lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"]["dsc"].update(
+        kms_key_ref="transit/keys/passport-csca"),
+    lambda r: r["probes"]["sod_signature"]["evidence"].update(
+        dsc_certificate_sha256="9" * 64),
+    lambda r: r["probes"]["signed_bureau_callback"]["evidence"].update(
+        receipt_sha256="9" * 64),
+    lambda r: r["probes"]["signed_bureau_callback"]["evidence"].update(
+        source_job_commitments=["9" * 64]),
+    lambda r: r["probes"]["signed_bureau_callback"]["evidence"].update(
+        native_container_id="other"),
+    lambda r: r["probes"]["signed_bureau_callback"]["evidence"]["jobs"][0].update(
+        bureau_job_commitment="f" * 64),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        environment="disposable"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        database_uid="disposable-db-uid"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        writer_cluster_uid="other"),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        writer_generation_at_drain=4),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        writer_running_at_drain=True),
+    lambda r: r["probes"]["legacy_drain"]["evidence"]["legacy_source"].update(
+        drain_watermark=99),
+    lambda r: r["probes"]["legacy_drain"]["evidence"].update(
+        count_source_database_uid="other"),
+    lambda r: r["runtime_images"]["gateway"].update(owner_uid="other"),
+    lambda r: r["probes"]["nine_route_gateway_flow"]["evidence"].update(
+        owner_uid="other"),
+])
+def test_predeletion_rejects_unbound_signer_callback_drain_or_owner(mutate) -> None:
+    report = predeletion_report()
+    gate._predeletion_report(report, COMMIT, STACK_DIGEST)
+    mutate(report)
+    with pytest.raises(gate.prior_gate.QualificationError):
+        gate._predeletion_report(report, COMMIT, STACK_DIGEST)
 
 
 def test_frozen_batch_parity_requires_exact_passing_rust_test(monkeypatch, tmp_path: Path) -> None:
@@ -268,23 +451,24 @@ def test_qualified_checkout_pin_rejects_malformed_or_wrong_repository(tmp_path: 
         path.write_text(json.dumps(altered), encoding="utf-8")
         with pytest.raises(gate.prior_gate.QualificationError):
             gate._checkout_commit(path)
-    record["state"] = "blocked_pending_beta_acceptance"
+    record["state"] = "blocked_pending_protected_acceptance"
     path.write_text(json.dumps(record), encoding="utf-8")
     assert gate._checkout_commit(path) is None
 
 
-def test_supported_report_requires_each_runtime_and_rollback() -> None:
+def test_supported_report_requires_each_rust_runtime() -> None:
     report = {
         "schema": "marty.passport-supported-consumer-acceptance/v1",
         "status": "accepted",
+        "accepted_at_utc": "2026-09-26T00:09:00Z",
         "physical_claim": "not_claimed",
         "source_commit": COMMIT,
-        "surfaces": {name: supported_surface() for name in gate.EXPECTED_SURFACES},
+        "surfaces": {name: supported_surface(name) for name in gate.EXPECTED_SURFACES},
     }
     gate._supported_report(report, COMMIT, SERVICES_REFERENCE)
     for name in gate.EXPECTED_SURFACES:
         changed = copy.deepcopy(report)
-        changed["surfaces"][name]["rollback_accepted"] = False
+        changed["surfaces"][name]["runtime_accepted"] = False
         with pytest.raises(gate.prior_gate.QualificationError):
             gate._supported_report(changed, COMMIT, SERVICES_REFERENCE)
         changed = copy.deepcopy(report)
@@ -294,27 +478,62 @@ def test_supported_report_requires_each_runtime_and_rollback() -> None:
 
 
 @pytest.mark.parametrize("change", [
-    lambda phase, surface: phase["phases"].pop("rust_restored"),
-    lambda phase, surface: phase["phases"]["rust_restored"].update(
-        gateway_owner="python"),
-    lambda phase, surface: phase["phases"]["rust_restored"].update(
-        flow_container_id=phase["phases"]["python_rollback"]["flow_container_id"]),
-    lambda phase, surface: phase["phases"]["rust_restored"]["routes"].pop(),
-    lambda phase, surface: phase["phases"]["rust_restored"].update(
-        managed_signer={"mode": "self_signed", "chain_verified": False}),
-    lambda phase, surface: phase["phases"]["rust_restored"].update(
-        signed_bureau_callback={"signature_verified": False}),
+    lambda resume, surface: resume["before"].update(owner="python"),
+    lambda resume, surface: resume["after"].update(
+        issuance_native_container_id=resume["before"]["issuance_native_container_id"]),
+    lambda resume, surface: resume["after"].update(job_commitment="9" * 64),
+    lambda resume, surface: resume["before"].update(
+        issuance_native_container_id="arbitrary-before"),
+    lambda resume, surface: surface["pre_restart_native_runtime"].update(
+        owner_uid="other"),
+    lambda resume, surface: resume["before"].update(issuer_profile_id="other"),
+    lambda resume, surface: resume["after"].update(target="other-project"),
+    lambda resume, surface: resume.update(job_resumed=False),
+    lambda resume, surface: resume.update(durable_record_verified=False),
+    lambda resume, surface: resume["after"].update(status="SOD_SIGNED"),
+    lambda resume, surface: resume.update(kms_signing_continuity_verified=False),
+    lambda resume, surface: resume.update(flow_owner="python"),
+    lambda resume, surface: resume.update(source_commit="9" * 40),
+    lambda resume, surface: surface["probes"]["nine_route_gateway_flow"]["evidence"].update(cross_tenant_status=200),
     lambda phase, surface: surface["probes"]["released_image"]["evidence"].update(
         container_id="gateway-before"),
-    lambda phase, surface: surface["runtime_images"]["flow"].update(
-        container_id="flow-before"),
-    lambda phase, surface: surface["runtime_images"]["flow"].update(
+    lambda resume, surface: surface["runtime_images"]["issuance-native"].update(
+        container_id="issuance-native-wrong"),
+    lambda resume, surface: surface["runtime_images"]["flow"].update(
         oci_reference="ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "9" * 64),
+    lambda resume, surface: surface["runtime_images"]["signing-keys"].update(
+        container_id="other"),
+    lambda resume, surface: surface["probes"]["managed_signer"]["evidence"].update(
+        issuer_profile_status="inactive"),
+    lambda resume, surface: surface["probes"]["managed_signer"]["evidence"]["sod"].update(
+        csca_certificate_sha256="9" * 64),
 ])
-def test_supported_report_rejects_incomplete_rust_restoration(change) -> None:
+def test_supported_report_rejects_incomplete_rust_restart_resume(change) -> None:
     report = supported_report()
     surface = report["surfaces"]["base"]
-    change(surface["probes"]["rollback"]["evidence"], surface)
+    change(surface["probes"]["rust_restart_resume"]["evidence"], surface)
+    with pytest.raises(gate.prior_gate.QualificationError):
+        gate._supported_report(report, COMMIT, SERVICES_REFERENCE)
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: r["surfaces"]["selfhost"].update(
+        identity=copy.deepcopy(r["surfaces"]["base"]["identity"])),
+    lambda r: r["surfaces"]["selfhost"]["identity"].update(
+        owner_uid=r["surfaces"]["base"]["identity"]["owner_uid"]),
+    lambda r: r["surfaces"]["kubernetes"]["identity"].update(
+        cluster_uid="prod-cluster-uid"),
+    lambda r: r["surfaces"]["kubernetes"]["identity"].update(
+        cluster_identity_attestation_sha256="invalid"),
+    lambda r: r["surfaces"]["kubernetes"]["runtime_images"]["gateway"].update(
+        cluster_uid="other-cluster"),
+    lambda r: r["surfaces"]["kubernetes"]["probes"]["nine_route_gateway_flow"]["evidence"].update(
+        owner_uid="other"),
+])
+def test_supported_surfaces_reject_cloned_or_unprotected_identity(mutate) -> None:
+    report = supported_report()
+    gate._supported_report(report, COMMIT, SERVICES_REFERENCE)
+    mutate(report)
     with pytest.raises(gate.prior_gate.QualificationError):
         gate._supported_report(report, COMMIT, SERVICES_REFERENCE)
 
@@ -325,7 +544,9 @@ def test_run_identity_rejects_wrong_source_or_failed_workflow(monkeypatch) -> No
         "conclusion": "success",
         "head_sha": COMMIT,
         "head_branch": "main",
-        "path": ".github/workflows/passport-beta-acceptance.yml",
+        "path": ".github/workflows/passport-rust-predeletion-acceptance.yml",
+        "created_at": "2026-09-26T00:11:00Z",
+        "updated_at": "2026-09-26T00:16:00Z",
         "repository": {"full_name": "ElevenID/marty-ui"},
         "head_repository": {"full_name": "ElevenID/marty-ui"},
     }
@@ -348,14 +569,14 @@ def test_downloaded_artifact_must_match_receipt_bytes(tmp_path: Path, monkeypatc
 
     def download(*args: str) -> str:
         output = Path(args[-1])
-        (output / "passport-beta-acceptance.json").write_bytes(payload)
+        (output / "passport-rust-predeletion-acceptance.json").write_bytes(payload)
         return ""
 
     monkeypatch.setattr(gate, "_command", download)
-    assert gate._run_artifact(123, "passport-beta-acceptance.json", digest,
+    assert gate._run_artifact(123, "passport-rust-predeletion-acceptance.json", digest,
                               tmp_path / "exact")["schema"] == "test"
     with pytest.raises(gate.prior_gate.QualificationError, match="SHA-256 mismatch"):
-        gate._run_artifact(123, "passport-beta-acceptance.json", "0" * 64,
+        gate._run_artifact(123, "passport-rust-predeletion-acceptance.json", "0" * 64,
                            tmp_path / "wrong")
 
 
@@ -404,8 +625,9 @@ def test_signed_stack_manifest_binds_release_and_source(tmp_path: Path, monkeypa
 
 def qualified_record() -> dict:
     return {
-        "schema": "marty.physical-passport-python-retirement-qualification/v2",
+        "schema": "marty.physical-passport-python-retirement-qualification/v3",
         "state": "qualified",
+        "retirement_pull_request_number": 305,
         "source": {
             "repository": "ElevenID/marty-ui",
             "protected_main_commit": COMMIT,
@@ -417,12 +639,12 @@ def qualified_record() -> dict:
             for method, path in sorted(gate.EXPECTED_DELETIONS)
         ],
         "full_python_service_deletion_authorized": False,
-        "beta_acceptance_receipt": {
+        "predeletion_acceptance_receipt": {
             "release_tag": "v1.2.3",
             "release_source_commit": COMMIT,
             "stack_manifest_sha256": STACK_DIGEST,
-            "beta_deployment_run_id": 123,
-            "evidence_artifact": "passport-beta-acceptance.json",
+            "acceptance_run_id": 123,
+            "evidence_artifact": "passport-rust-predeletion-acceptance.json",
             "evidence_sha256": "3" * 64,
         },
         "supported_consumer_cutover_receipt": {
@@ -441,29 +663,292 @@ def supported_report() -> dict:
         "status": "accepted",
         "physical_claim": "not_claimed",
         "source_commit": COMMIT,
+        "accepted_at_utc": "2026-09-26T00:09:00Z",
+        "legacy_source_binding": {"database_uid": "beta-legacy-db-uid",
+                                  "writer_deployment_uid": "beta-python-writer-uid"},
         "stack_manifest_sha256": STACK_DIGEST,
         "oci_digests": IMAGE_DIGESTS,
-        "surfaces": {name: supported_surface() for name in gate.EXPECTED_SURFACES},
+        "surfaces": {name: supported_surface(name) for name in gate.EXPECTED_SURFACES},
     }
+
+
+def final_cutover_report() -> dict:
+    return {
+        "schema": "marty.passport-python-deletion-cutover/v1",
+        "status": "accepted",
+        "rust_source_commit": COMMIT,
+        "deletion_head": "e" * 40,
+        "supported_acceptance_run_id": 456,
+        "predeletion_acceptance_run_id": 123,
+        "checked_at_utc": "2026-09-26T00:25:00Z",
+        "production_unchanged": True,
+        "other_beta_resources_unchanged": True,
+        "authorized_writer_stop_uid": "beta-python-writer-uid",
+        "authorized_fence_epoch": 4,
+        "legacy_source": {
+            "environment": "beta", "database_uid": "beta-legacy-db-uid",
+            "beta_cluster_uid": "beta-cluster-uid",
+            "beta_inventory_attestation_sha256": "c" * 64,
+            "writer_deployment_uid": "beta-python-writer-uid",
+            "writer_image_digest": "sha256:" + "a" * 64,
+            "writer_generation": 3, "writer_running": False,
+            "final_watermark": 102,
+            "final_snapshot_attestation_sha256": "e" * 64,
+        },
+        "counts": {
+            "source_database_uid": "beta-legacy-db-uid",
+            "nonterminal_job_count": 0, "legacy_or_unknown_artifact_count": 0,
+            "unreadable_artifact_count": 0, "active_passport_flow_count": 0,
+        },
+        "write_fence": {
+            "enabled": True, "database_uid": "beta-legacy-db-uid",
+            "writer_deployment_uid": "beta-python-writer-uid",
+            "writer_generation": 3, "fence_epoch": 4,
+        },
+    }
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: r.update(deletion_head="9" * 40),
+    lambda r: r.update(predeletion_acceptance_run_id=999),
+    lambda r: r["legacy_source"].update(database_uid="disposable-db-uid"),
+    lambda r: r["legacy_source"].update(writer_generation=4),
+    lambda r: r["legacy_source"].update(writer_running=True),
+    lambda r: r["legacy_source"].update(final_watermark=99),
+    lambda r: r["legacy_source"].update(final_watermark=101),
+    lambda r: r["legacy_source"].update(final_watermark=101,
+                                         final_snapshot_attestation_sha256="d" * 64),
+    lambda r: r["counts"].update(source_database_uid="other"),
+    lambda r: r["counts"].update(nonterminal_job_count=1),
+    lambda r: r["write_fence"].update(enabled=False),
+    lambda r: r["write_fence"].update(writer_generation=4),
+    lambda r: r.update(authorized_writer_stop_uid="other-writer"),
+    lambda r: r.update(other_beta_resources_unchanged=False),
+    lambda r: r.update(checked_at_utc="2026-09-26T00:13:00Z"),
+])
+def test_final_cutover_rejects_wrong_head_resumed_writer_or_stale_drain(mutate) -> None:
+    report = final_cutover_report()
+    predeletion = predeletion_report()
+    drain = predeletion["probes"]["legacy_drain"]["evidence"]
+    gate._cutover_report(report, COMMIT, "e" * 40, drain["legacy_source"], drain, 456, 123)
+    mutate(report)
+    with pytest.raises(gate.prior_gate.QualificationError):
+        gate._cutover_report(report, COMMIT, "e" * 40, drain["legacy_source"], drain, 456, 123)
+
+
+def test_final_cutover_fetches_attested_report_for_exact_deletion_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = {"id": 789, "head_sha": COMMIT, "head_branch": "main",
+           "status": "completed", "conclusion": "success", "updated_at": "2026-09-26T00:26:00Z"}
+    attested: list[tuple[str, ...]] = []
+
+    def command(*args: str) -> str:
+        if args[0:2] == ("gh", "api"):
+            return json.dumps({"workflow_runs": [run]})
+        if args[0:3] == ("gh", "run", "download"):
+            target = Path(args[-1]) / "passport-python-deletion-cutover-789.json"
+            target.write_text(json.dumps(final_cutover_report()), encoding="utf-8")
+        if args[0:3] == ("gh", "attestation", "verify"):
+            attested.append(args)
+        return ""
+
+    from datetime import datetime
+
+    monkeypatch.setattr(gate, "_command", command)
+    monkeypatch.setattr(gate, "_verified_run", lambda *args: (
+        datetime(2026, 9, 26, 0, 21, tzinfo=UTC),
+        datetime(2026, 9, 26, 0, 26, tzinfo=UTC)))
+    report, _, _ = gate._final_cutover_report(COMMIT, "e" * 40, tmp_path / "ok")
+    assert report["deletion_head"] == "e" * 40
+    assert attested and "--signer-workflow" in attested[0]
+    with pytest.raises(gate.prior_gate.QualificationError, match="deletion head"):
+        gate._final_cutover_report(COMMIT, "9" * 40, tmp_path / "wrong")
+
+
+def test_post_pr_head_requires_exact_same_repository_pull_request(monkeypatch) -> None:
+    pr = {"number": 305, "head": {"sha": "e" * 40,
+                                   "repo": {"full_name": "ElevenID/marty-credentials"}},
+          "base": {"ref": "main", "repo": {"full_name": "ElevenID/marty-credentials"}}}
+    monkeypatch.setattr(gate, "_command", lambda *args: json.dumps(pr))
+    assert gate._retirement_pr_head(305) == "e" * 40
+    for mutate in (
+        lambda row: row["head"].update(sha="9" * 39),
+        lambda row: row["head"]["repo"].update(full_name="other/fork"),
+        lambda row: row["base"].update(ref="other"),
+        lambda row: row.update(number=306),
+    ):
+        changed = copy.deepcopy(pr)
+        mutate(changed)
+        monkeypatch.setattr(gate, "_command", lambda *args, value=changed: json.dumps(value))
+        with pytest.raises(gate.prior_gate.QualificationError):
+            gate._retirement_pr_head(305)
+
+
+def test_pr_event_requires_exact_live_deletion_head(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    head = "e" * 40
+    repo = {"full_name": "ElevenID/marty-credentials"}
+    event = {"number": 305, "repository": repo,
+             "pull_request": {"number": 305,
+                              "head": {"sha": head, "repo": repo},
+                              "base": {"ref": "main", "repo": repo}}}
+    live = copy.deepcopy(event["pull_request"])
+    path = tmp_path / "pr-event.json"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(path))
+    monkeypatch.setattr(gate, "_command", lambda *args: json.dumps(live))
+    path.write_text(json.dumps(event), encoding="utf-8")
+    gate._pull_request_lineage(305, head)
+    for mutate in (
+        lambda row: row.update(number=306),
+        lambda row: row["pull_request"].update(number=306),
+        lambda row: row["pull_request"]["head"].update(sha="9" * 40),
+        lambda row: row["pull_request"]["head"].update(repo={"full_name": "other/fork"}),
+        lambda row: row["pull_request"]["base"].update(ref="other"),
+    ):
+        changed = copy.deepcopy(event)
+        mutate(changed)
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(gate.prior_gate.QualificationError, match="same-repository"):
+            gate._pull_request_lineage(305, head)
+    path.write_text(json.dumps(event), encoding="utf-8")
+    live["head"]["sha"] = "9" * 40
+    with pytest.raises(gate.prior_gate.QualificationError, match="stale"):
+        gate._pull_request_lineage(305, head)
+
+
+def test_post_pr_lineage_requires_queue_or_merged_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    head = "e" * 40
+    queued = "a" * 40
+    running = "b" * 40
+    event_path = tmp_path / "event.json"
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_SHA", running)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "merge_group")
+    group_event = {"repository": {"full_name": "ElevenID/marty-credentials"},
+                   "merge_group": {"head_sha": running,
+                                   "base_ref": "refs/heads/main",
+                                   "head_ref": "refs/heads/gh-readonly-queue/main/pr-305-test"}}
+    queue = {"data": {"repository": {"pullRequest": {
+        "headRefOid": head, "mergeQueueEntry": {
+            "headCommit": {"oid": queued},
+            "pullRequest": {"number": 305, "headRefOid": head},
+        },
+    }}}}
+    comparison = {"status": "ahead"}
+
+    def command(*args: str) -> str:
+        if args[0] == "git":
+            return running
+        if "graphql" in args:
+            query = args[-1].removeprefix("query=")
+            assert query.count("{") == query.count("}")
+            return json.dumps(queue)
+        if "/compare/" in args[-1]:
+            return json.dumps(comparison)
+        return json.dumps({"number": 305, "merged": True,
+                           "head": {"sha": head}, "merge_commit_sha": queued})
+
+    monkeypatch.setattr(gate, "_command", command)
+    event_path.write_text(json.dumps(group_event), encoding="utf-8")
+    gate._post_pr_lineage(305, head)
+    comparison["status"] = "diverged"
+    with pytest.raises(gate.prior_gate.QualificationError, match="does not contain"):
+        gate._post_pr_lineage(305, head)
+    comparison["status"] = "ahead"
+    monkeypatch.setattr(gate, "_command", lambda *args: "9" * 40 if args[0] == "git" else command(*args))
+    with pytest.raises(gate.prior_gate.QualificationError, match="Running checkout differs"):
+        gate._post_pr_lineage(305, head)
+    monkeypatch.setattr(gate, "_command", command)
+    queue["data"]["repository"]["pullRequest"]["mergeQueueEntry"]["pullRequest"]["headRefOid"] = "9" * 40
+    with pytest.raises(gate.prior_gate.QualificationError, match="exact deletion PR head"):
+        gate._post_pr_lineage(305, head)
+    queue["data"]["repository"]["pullRequest"]["mergeQueueEntry"]["pullRequest"]["headRefOid"] = head
+    group_event["merge_group"]["head_sha"] = "9" * 40
+    event_path.write_text(json.dumps(group_event), encoding="utf-8")
+    with pytest.raises(gate.prior_gate.QualificationError, match="main queue commit"):
+        gate._post_pr_lineage(305, head)
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    event_path.write_text(json.dumps({"repository": group_event["repository"],
+                                      "ref": "refs/heads/main", "after": running}), encoding="utf-8")
+    gate._post_pr_lineage(305, head)
+    comparison["status"] = "diverged"
+    with pytest.raises(gate.prior_gate.QualificationError, match="does not contain"):
+        gate._post_pr_lineage(305, head)
+
+
+def test_post_pr_gate_requires_successful_pr_checks_after_cutover(monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    cutover_completed = datetime(2026, 9, 26, 0, 26, tzinfo=UTC)
+    run = {"id": 999, "run_attempt": 2, "check_suite_id": 888,
+           "event": "pull_request", "head_sha": "e" * 40,
+           "head_branch": "chore/retire-python-passport-after-beta-v1",
+           "path": ".github/workflows/ci.yml", "status": "completed",
+           "conclusion": "success", "created_at": "2026-09-26T00:20:00Z",
+           "pull_requests": [{"number": 305}]}
+    jobs = {"jobs": [{"name": name, "run_id": 999, "head_sha": "e" * 40,
+                      "started_at": "2026-09-26T00:27:00Z",
+                      "status": "completed", "conclusion": "success"}
+                      for name in ("Passport Python Retirement Provenance", "CI Gate")]}
+    suite = {"head_sha": "e" * 40, "app": {"slug": "github-actions"}}
+
+    def install(candidate: dict, job_rows: dict) -> None:
+        def command(*args: str) -> str:
+            if "/jobs" in args[-1]:
+                assert "/attempts/2/jobs" in args[-1]
+                return json.dumps(job_rows)
+            if "/check-suites/" in args[-1]:
+                return json.dumps(suite)
+            return json.dumps({"workflow_runs": [candidate]})
+
+        monkeypatch.setattr(gate, "_command", command)
+
+    install(run, jobs)
+    gate._successful_pr_gate(305, "e" * 40, cutover_completed)
+    assert run["created_at"] < "2026-09-26T00:26:00Z"
+    for field, bad in (("head_sha", "9" * 40), ("conclusion", "failure"),
+                       ("run_attempt", 0),
+                       ("pull_requests", [{"number": 306}])):
+        changed = copy.deepcopy(run)
+        changed[field] = bad
+        install(changed, jobs)
+        with pytest.raises(gate.prior_gate.QualificationError, match="lacks a successful"):
+            gate._successful_pr_gate(305, "e" * 40, cutover_completed)
+    changed_jobs = copy.deepcopy(jobs)
+    changed_jobs["jobs"][0]["conclusion"] = "failure"
+    install(run, changed_jobs)
+    with pytest.raises(gate.prior_gate.QualificationError, match="lacks a successful"):
+        gate._successful_pr_gate(305, "e" * 40, cutover_completed)
+    changed_jobs = copy.deepcopy(jobs)
+    changed_jobs["jobs"][0]["started_at"] = "2026-09-26T00:25:00Z"
+    install(run, changed_jobs)
+    with pytest.raises(gate.prior_gate.QualificationError, match="lacks a successful"):
+        gate._successful_pr_gate(305, "e" * 40, cutover_completed)
+    install(run, jobs)
+    suite["app"]["slug"] = "other-app"
+    with pytest.raises(gate.prior_gate.QualificationError, match="lacks a successful"):
+        gate._successful_pr_gate(305, "e" * 40, cutover_completed)
+    suite["app"]["slug"] = "github-actions"
+    suite["head_sha"] = "9" * 40
+    with pytest.raises(gate.prior_gate.QualificationError, match="lacks a successful"):
+        gate._successful_pr_gate(305, "e" * 40, cutover_completed)
 
 
 def test_qualified_path_requires_complete_provenance_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = qualified_record()
-    beta = beta_report()
-    beta["deployment"]["release_version"] = "1.2.3"
+    predeletion = predeletion_report()
     uri = "ghcr.io/elevenid/marty-ui-oss/services"
     digest = IMAGE_DIGESTS[uri]
-    beta["runtime_images"] = {
-        service: {
-            "container_id": "container-one",
-            "image_id": "sha256:" + "2" * 64,
-            "oci_reference": f"{uri}@{digest}",
-            "oci_digest": digest,
-        }
-        for service in gate.EXPECTED_BETA_SERVICES
-    }
+    for image in predeletion["runtime_images"].values():
+        image.update(oci_reference=f"{uri}@{digest}", oci_digest=digest)
     supported = supported_report()
     manifest = {
         "components": [{
@@ -474,39 +959,104 @@ def test_qualified_path_requires_complete_provenance_checks(
     }
     monkeypatch.setattr(gate, "_protected_source", lambda *args: COMMIT)
     monkeypatch.setattr(gate, "_signed_stack_manifest", lambda *args: manifest)
-    monkeypatch.setattr(gate, "_verified_run", lambda *args: None)
+    from datetime import datetime
+
+    def verified_run(run_id, *args):
+        if run_id == 123:
+            return (datetime(2026, 9, 26, 0, 11, tzinfo=UTC),
+                    datetime(2026, 9, 26, 0, 16, tzinfo=UTC))
+        return (datetime(2026, 9, 26, 0, 0, tzinfo=UTC),
+                datetime(2026, 9, 26, 0, 10, tzinfo=UTC))
+
+    monkeypatch.setattr(gate, "_verified_run", verified_run)
     monkeypatch.setattr(gate, "_frozen_batch_parity", lambda *args: None)
+    monkeypatch.setattr(gate.prior_gate, "_git_head", lambda *args: "e" * 40)
+    monkeypatch.setattr(gate, "_final_cutover_report", lambda *args: (
+        final_cutover_report(),
+        datetime(2026, 9, 26, 0, 21, tzinfo=UTC),
+        datetime(2026, 9, 26, 0, 26, tzinfo=UTC),
+    ))
+    monkeypatch.setattr(gate, "_retirement_pr_head", lambda number: "e" * 40)
+    def pr_lineage(*args):
+        gate.prior_gate._require(
+            os.environ.get("GITHUB_EVENT_NAME") == "pull_request",
+            "Exact deletion head needs a pull-request event",
+        )
+
+    monkeypatch.setattr(gate, "_pull_request_lineage", pr_lineage)
+    lineage_calls: list[tuple] = []
+    monkeypatch.setattr(gate, "_post_pr_lineage", lambda *args: lineage_calls.append(args))
+    pr_gate_calls: list[tuple] = []
+    monkeypatch.setattr(gate, "_successful_pr_gate", lambda *args: pr_gate_calls.append(args))
     monkeypatch.setattr(
         gate, "_run_artifact",
-        lambda run_id, *args: beta if run_id == 123 else supported,
+        lambda run_id, *args: predeletion if run_id == 123 else supported,
     )
 
     def check(candidate: dict, expected: str) -> None:
         path = tmp_path / "candidate.json"
         path.write_text(json.dumps(candidate), encoding="utf-8")
         with pytest.raises(gate.prior_gate.QualificationError, match=expected):
-            gate.verify(path, tmp_path)
+            gate.verify(path, tmp_path, deletion_head="e" * 40)
 
     path = tmp_path / "qualified.json"
     path.write_text(json.dumps(record), encoding="utf-8")
-    gate.verify(path, tmp_path)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    gate.verify(path, tmp_path, deletion_head="e" * 40)
+    with pytest.raises(gate.prior_gate.QualificationError, match="Exact pull-request deletion head"):
+        gate.verify(path, tmp_path)
+    with pytest.raises(gate.prior_gate.QualificationError, match="exact deletion head"):
+        gate.verify(path, tmp_path, deletion_head="9" * 40)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "merge_group")
+    gate.verify(path, tmp_path, post_pr_check=True)
+    assert pr_gate_calls and pr_gate_calls[-1][0:2] == (305, "e" * 40)
+    assert lineage_calls == [(305, "e" * 40)]
+    monkeypatch.setattr(gate, "_retirement_pr_head", lambda number: "9" * 40)
+    with pytest.raises(gate.prior_gate.QualificationError, match="exact deletion head"):
+        gate.verify(path, tmp_path, post_pr_check=True)
+    monkeypatch.setattr(gate, "_retirement_pr_head", lambda number: "e" * 40)
+    with pytest.raises(gate.prior_gate.QualificationError, match="Exact deletion head"):
+        gate.verify(path, tmp_path, deletion_head="e" * 40)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    with pytest.raises(gate.prior_gate.QualificationError, match="only valid"):
+        gate.verify(path, tmp_path, post_pr_check=True)
+    monkeypatch.delenv("GITHUB_EVENT_NAME")
     changed = copy.deepcopy(record)
-    changed["beta_acceptance_receipt"]["release_source_commit"] = "9" * 40
-    check(changed, "Beta release source")
+    changed["predeletion_acceptance_receipt"]["release_source_commit"] = "9" * 40
+    check(changed, "Predeletion release source")
     changed = copy.deepcopy(record)
     changed["supported_consumer_cutover_receipt"]["protected_main_commit"] = "9" * 40
     check(changed, "Supported consumer source")
-    beta["release"]["oci_digests"] = {"wrong": "sha256:" + "9" * 64}
+    predeletion["release"]["oci_digests"] = {"wrong": "sha256:" + "9" * 64}
     check(record, "image digests")
-    beta["release"]["oci_digests"] = IMAGE_DIGESTS
-    beta["runtime_images"]["gateway"]["oci_reference"] = (
+    predeletion["release"]["oci_digests"] = IMAGE_DIGESTS
+    predeletion["runtime_images"]["gateway"]["oci_reference"] = (
         "ghcr.io/elevenid/marty-ui-oss/ui@"
         + IMAGE_DIGESTS["ghcr.io/elevenid/marty-ui-oss/ui"]
     )
-    check(record, "Beta runtime image differs")
-    beta["runtime_images"]["gateway"]["oci_reference"] = SERVICES_REFERENCE
+    check(record, "Disposable runtime image differs")
+    predeletion["runtime_images"]["gateway"]["oci_reference"] = SERVICES_REFERENCE
     supported["surfaces"].pop("kubernetes")
     check(record, "surfaces are incomplete")
+    supported["surfaces"]["kubernetes"] = supported_surface("kubernetes")
+    supported["legacy_source_binding"]["database_uid"] = "fresh-disposable-db"
+    check(record, "not bound to the supported consumer")
+    supported["legacy_source_binding"]["database_uid"] = "beta-legacy-db-uid"
+    supported["accepted_at_utc"] = "2026-09-26T00:13:00Z"
+    check(record, "Beta-source drain predates")
+    supported["accepted_at_utc"] = "2026-09-26T00:09:00Z"
+    predeletion["runtime_images"]["gateway"]["container_id"] = "different-gateway"
+    check(record, "not bound to the supported consumer")
+    predeletion["runtime_images"]["gateway"]["container_id"] = "gateway-base-after"
+    predeletion["deployment"]["owner_uid"] = "different-owner"
+    predeletion["deployment"]["owner_labels"]["owner_uid"] = "different-owner"
+    for runtime in predeletion["runtime_images"].values():
+        runtime["owner_uid"] = "different-owner"
+        runtime["owner_labels"]["owner_uid"] = "different-owner"
+    for probe in predeletion["probes"].values():
+        probe["evidence"]["owner_uid"] = "different-owner"
+        probe["evidence"]["owner_labels"]["owner_uid"] = "different-owner"
+    check(record, "not bound to the supported consumer")
 
 
 def test_protected_source_rejects_fabricated_hashes(
@@ -545,8 +1095,15 @@ def test_required_ci_gate_includes_passport_retirement_provenance() -> None:
     assert gate_job["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
     assert 'test "$result" = success' in gate_job["steps"][0]["run"]
     steps = jobs["passport-retirement-provenance"]["steps"]
+    assert jobs["passport-retirement-provenance"]["env"]["PASSPORT_DELETION_PR_HEAD"] == (
+        "${{ github.event.pull_request.head.sha }}"
+    )
     pin = next(step for step in steps if step.get("name") == "Pin qualified passport source commit")
     assert "--print-checkout-commit" in pin["run"]
     assert 'git -C ../marty-ui merge-base --is-ancestor "$source_commit" refs/remotes/origin/main' in pin["run"]
     assert 'git -C ../marty-ui checkout --detach "$source_commit"' in pin["run"]
     assert any(step.get("with", {}).get("toolchain") == "1.95.0" for step in steps)
+    gate_step = next(step for step in steps if step.get("name")
+                     == "Refuse Python deletion until passport acceptance is verifiable")
+    assert '--deletion-head "$PASSPORT_DELETION_PR_HEAD"' in gate_step["run"]
+    assert "--post-pr-check" in gate_step["run"]

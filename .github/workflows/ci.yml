@@ -647,9 +647,11 @@ jobs:
     permissions:
       actions: read
       attestations: read
+      checks: read
       contents: read
     env:
       GH_TOKEN: ${{ github.token }}
+      PASSPORT_DELETION_PR_HEAD: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -683,7 +685,17 @@ jobs:
           toolchain: 1.95.0
       - name: Refuse Python deletion until passport acceptance is verifiable
         working-directory: marty-credentials
-        run: python -m scripts.check_physical_passport_python_retirement --marty-ui ../marty-ui
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            test -n "$PASSPORT_DELETION_PR_HEAD"
+            python -m scripts.check_physical_passport_python_retirement \
+              --marty-ui ../marty-ui --deletion-head "$PASSPORT_DELETION_PR_HEAD"
+          else
+            python -m scripts.check_physical_passport_python_retirement \
+              --marty-ui ../marty-ui --post-pr-check
+          fi
 
   test-wasm:
     name: WASM Tests

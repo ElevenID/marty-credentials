@@ -1,92 +1,104 @@
-# Physical-passport Python retirement candidate
+﻿# Physical-passport Python retirement candidate
 
-This branch removes the nine legacy FastAPI passport routes and their Python
-signer and bureau adapters. It is a **draft** until the separate Rust owner is
-merged, released, and accepted in beta. The current base and self-host profiles
-still default to the legacy passport owner. Merging this branch before those
-profiles and their consumers are coordinated would remove a working route.
+This draft deletes the nine legacy FastAPI passport routes and their Python
+signer and bureau adapters. It remains blocked until the Rust owner passes
+protected disposable acceptance on the base, self-host, and Kubernetes
+consumers. No beta deployment or YouTube recording is required before deleting
+the superseded Python passport code. Those follow deletion in the single
+aggregate beta release and acceptance soak. Production remains unchanged.
 
-The frozen Python route and provider references remain in `contracts/`.
-Their source hashes and test paths identify the pre-retirement commit; the
-deleted Python test module is recoverable from Git history at that checkpoint.
-`issuance-runtime-surface.json` describes the remaining live Python service
-after this deletion. The `physical_document_jobs` SQLAlchemy model and Alembic
-history remain because Rust owns the same durable table and existing records.
-The earlier OID4VCI/Canvas and retention qualification records remain historical
-evidence and are not rewritten as passport authorization.
+The frozen route and provider references remain in `contracts/`. Their source
+hashes identify the pre-retirement implementation; the deleted Python tests
+remain recoverable from Git history. The `physical_document_jobs` SQLAlchemy
+model and Alembic history remain because Rust uses the same durable table and
+existing records. This PR does not authorize removal of the whole Python
+issuance service, which still serves other routes.
 
-Before making this PR ready for review, record the protected `marty-ui` source
-commit, live beta receipt, and supported-consumer cutover receipt in
-`contracts/physical-passport-python-retirement-qualification.json`. Check
-that the four source artifact hashes match committed bytes on protected main,
-and that both evidence artifacts match their receipt SHA-256 digests. The
-shape test accepts both the current blocked record and a complete qualified
-record; it does not itself verify remote Git ancestry or runtime evidence.
-The required `Passport Python Retirement Provenance` CI job runs
-`scripts.check_physical_passport_python_retirement`. It is intentionally red
-while this PR is draft. A future qualified record must pass live protected-main
-ancestry, committed source hashes, the signed stack manifest and its official
-CD signer, exact successful beta and supported-consumer workflow artifacts, and
-their release, image, route, callback and rollback lineage. A qualified record
-proves software route compatibility and Rust ownership. It must explicitly
-report `physical_claim=not_claimed`; a simulator callback cannot prove physical
-personalization or a booklet.
-Confirm all nine Gateway and Flow routes select Rust, the KMS CSCA/DSC chain and SOD
-validate, the packaged image and signed bureau callback pass, legacy jobs and
-artifacts satisfy the drain gates, and rollback plus production isolation are
-verified. The beta bureau is synthetic; it does not prove physical booklet
-production or qualify a future external bureau provider.
+## Pre-deletion qualification
 
-The accepted beta report must include `recorded_demo` for the same source
-commit, signed stack manifest, deployment manifests, and beta origin. Its
-reviewed ElevenID LLC YouTube video must show the simulator flow and disclose
-`physical_claim=not_claimed` and `booklet_verified=false`. The recording follows
-the protected preliminary flow receipt; it does not require a previously
-accepted beta report. The final retirement verifier rejects any provider
-ingress runtime in a simulator report.
+Record the protected `marty-ui` main commit and its six committed artifact
+hashes in `contracts/physical-passport-python-retirement-qualification.json`.
+Bind that commit to a signed stack manifest and its official CD signer. Supply
+two SHA-256-checked artifacts from successful protected-main workflows: a
+disposable Rust passport acceptance report and a supported-consumer report.
+They must name the same source commit, signed stack manifest, and released
+services image. A third, attested final cutover report is discovered from a
+protected workflow after the exact deletion PR head exists; its run ID cannot
+be stored in the qualification JSON without changing that head. The named
+pre-deletion and final cutover producers still need implementation, and the
+qualification record has no invented receipt.
 
-The beta report must include `physical_bureau_batch` as a **simulator route
-compatibility** probe: at least two jobs, an accepted HTTP result, queued batch
-status, distinct source and bureau job commitments, and an observable one-to-one
-mapping. The protected producer must derive the published job, request, and
-response commitments with HMAC-SHA256 using a private acceptance key, then
-privately verify the `BETA-SIM-` marker and publish
-`physical_claim=not_claimed`. The verifier runs the frozen Rust shuffled-response
-batch adapter test from the protected source checkout. The report binds keyed
-request and response commitments plus the signed callback receipt digest to the protected source commit,
-stack manifest, and released services image without publishing raw IDs or
-document data. This evidence preserves the nine-route software behavior; it
-does not qualify a future physical provider.
-The producer must generate one random 256-bit commitment key per acceptance
-run, keep it out of uploaded artifacts, and reuse it across the submitted and
-returned job mapping. HMAC inputs are domain-separated as
-`passport-retirement/v2:<field>\0` followed by the exact UTF-8 job ID or exact
-HTTP request/response body bytes. It must inspect the later simulator tracking
-result for `BETA-SIM-`; the batch submission may return UUID bureau job IDs.
-`callback_receipt_sha256` hashes the exact protected signed callback receipt,
-including its signature, rather than a status value.
-An accepted beta report must name simulator mode and exactly the gateway, Flow,
-native issuance, signing keys, beta callback signer, and beta bureau services
-from the signed services image.
+The protected disposable report must prove all nine Gateway and Flow routes
+have one Rust owner, including unauthorized and cross-tenant rejection. It
+must verify an active, organization-bound ICAO_EMRTD issuer profile, distinct
+KMS-backed CSCA and DSC keys and certificates, and the SOD signature against
+those exact certificates. Signing Keys must be part of the signed runtime image
+set. It must verify packaged runtime images, Marty simulator submission and
+two-job batch mapping,
+signed callback and Flow execution. The callback must name the batch's exact
+job commitments and signed receipt digests, and the native container that
+completed them. The batch report uses HMAC-SHA256
+commitments for request, response, source jobs, bureau jobs, and signed
+callback receipts. Each callback record must pair its source and returned
+bureau job commitments with the exact receipt and native completion, bound to the protected commit, signed stack, and services
+image. The acceptance key stays private. `physical_claim=not_claimed` and
+`booklet_verified=false` prevent a synthetic callback from claiming physical
+personalization or a booklet. No external provider is involved.
 
-The beta-only overlay does not qualify the default, self-host, or Kubernetes
-consumers. Before deleting the Python route owner, each supported composition
-must route and authenticate all nine operations to Rust, select managed signing,
-exercise a signed simulator callback without a physical claim, and pass runtime and rollback
-acceptance. In the current source, Gateway, Flow, and native issuance default
-passport routing off outside beta; self-host Flow also lacks a distinct native
-issuance URL, and Kubernetes has no passport selector. Record the protected
-consumer cutover commit and its evidence separately from the beta release
-commit. The current qualification verifier requires both receipts to name the
-same protected source commit. If a later consumer cutover uses a different
-commit, extend and review its protected ancestry, report, and signed image
-lineage checks before qualification. Keep production deployment unchanged until
-separately authorized.
+Stop the identified Python passport writer in the real beta deployment. Query
+its identified legacy database after the writer stops; bind the zero
+nonterminal-job, legacy or unknown artifact, unreadable artifact, and active
+passport-Flow counts to that database. Record the beta cluster, writer
+deployment, writer generation, strictly increasing observation sequence
+watermarks for stop and drain, and UTC times. A
+fresh disposable database cannot satisfy this gate. The report must also prove
+exact disposable resource identity, unchanged production resources, and a beta
+inventory change limited to stopping the identified Python writer. The final
+cutover may additionally establish its bound write fence; other beta resources
+must remain unchanged.
+Each base, self-host, and Kubernetes consumer must have a distinct owner UID and
+Compose project or protected Kubernetes namespace and cluster identity. Bind
+its runtime containers and probes to that owner. Each consumer must
+select and authenticate all nine routes to Rust, verify managed signing and
+the signed simulator callback, then restart Rust issuance and resume the same
+KMS-backed durable job. Bind the before and after native container identities,
+signed image, owner labels, organization, issuer profile, and job commitment to
+the producer's observed runtime records. A Python owner phase is not part of
+this gate.
 
-The dedicated Passport Python Retirement Provenance CI job intentionally fails
-while this candidate is blocked. The beta collector and partial probe runner
-exist, but the full signed callback, rollback, supported-consumer, and recorded
-demo producers remain incomplete. Before promoting this PR, complete those
-protected producers, bind their reports to the signed release, and make the CI
-job pass on the exact retirement head. The qualification contract remains
-blocked and contains no invented receipt.
+After supported Rust acceptance and its initial beta-source drain, run the
+protected final deletion-cutover workflow on the exact `marty-credentials` PR
+head. It must re-inspect the same beta database and Python writer deployment,
+verify the writer generation has not advanced, recheck the zero counts at a
+strictly later observation sequence watermark with a distinct snapshot digest,
+and establish a durable write fence. The verifier requires
+that attested report and checks its exact deletion head and ordered run times.
+The PR CI job passes `github.event.pull_request.head.sha` explicitly because
+Actions checks out a synthetic merge commit. It verifies the event's PR number,
+same-repository head and main base, then checks that the live #305 head still
+equals that event head. Merge-group checks resolve #305's
+exact head and its live merge-queue entry, then require that entry's head commit
+to be an ancestor of the running group SHA. Post-merge push checks require #305
+to be merged and its merge commit to be an ancestor of the running main SHA;
+this also covers squash merges. Both paths recheck the final cutover attestation
+for that exact PR head and require a successful post-cutover PR provenance and
+CI Gate jobs from the same workflow attempt on the same head, in the expected
+GitHub Actions check suite. Both jobs must have started after the final cutover;
+the original run creation time can precede it when CI is rerun. They
+also repeat the source, route, and signed-evidence checks; their synthetic or
+merged commit never substitutes for the PR head.
+There is no short wall-clock expiry: CI and review can take hours while the
+fence prevents new Python passport writes. Any new deletion commit or lost
+fence requires another protected final cutover run before merge.
+
+`scripts.check_physical_passport_python_retirement` verifies protected-main
+ancestry, committed bytes, signed release and image lineage, exact workflow
+identity, report SHA-256 digests, route and evidence semantics, and the frozen
+Rust shuffled-response batch test. It also verifies the attested final cutover
+artifact from the protected main workflow. The required Passport Python Retirement
+Provenance CI job intentionally fails while the qualification record is
+blocked. After protected evidence exists, qualify the record, resolve maintainer
+findings, run the final cutover on the exact deletion head, pass CI, and merge before
+the official aggregate beta deployment. The beta passport recording and
+YouTube publication are checked by the later beta acceptance work, not by this
+pre-deletion verifier.

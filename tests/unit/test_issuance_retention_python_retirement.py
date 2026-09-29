@@ -34,7 +34,9 @@ PASSPORT_SOURCE_ARTIFACTS = {
     "contracts/issuance-physical-passport-native.json",
     "contracts/issuance-native-coverage.json",
     "contracts/issuance-universal-ownership.json",
-    "docker-compose.profile.passport-native-beta.yml",
+    "contracts/passport-rust-only-retirement-behavior.json",
+    "contracts/passport-beta-cutover-drain-behavior.json",
+    "docker-compose.passport-supported-disposable.yml",
 }
 PASSPORT_CONSUMER_SURFACES = {"base", "selfhost", "kubernetes"}
 
@@ -44,22 +46,23 @@ def _is_sha(value: object, length: int) -> bool:
 
 
 def _assert_passport_qualification_shape(candidate: dict) -> None:
-    assert candidate["schema"] == "marty.physical-passport-python-retirement-qualification/v2"
+    assert candidate["schema"] == "marty.physical-passport-python-retirement-qualification/v3"
     assert {
         (row["method"], row["path"])
         for row in candidate["authorized_python_route_deletions"]
     } == RETIRED_PASSPORT
     assert len(candidate["authorized_python_route_deletions"]) == len(RETIRED_PASSPORT)
     assert candidate["full_python_service_deletion_authorized"] is False
+    assert candidate["retirement_pull_request_number"] == 305
     source = candidate["source"]
     assert source["repository"] == "ElevenID/marty-ui"
     assert set(source["required_artifacts"]) == PASSPORT_SOURCE_ARTIFACTS
     assert len(source["required_artifacts"]) == len(PASSPORT_SOURCE_ARTIFACTS)
 
-    if candidate["state"] == "blocked_pending_beta_acceptance":
+    if candidate["state"] == "blocked_pending_protected_acceptance":
         assert source["protected_main_commit"] is None
         assert source["artifact_sha256"] is None
-        assert candidate["beta_acceptance_receipt"] is None
+        assert candidate["predeletion_acceptance_receipt"] is None
         assert candidate["supported_consumer_cutover_receipt"] is None
     else:
         assert candidate["state"] == "qualified"
@@ -68,12 +71,12 @@ def _assert_passport_qualification_shape(candidate: dict) -> None:
         hashes = source["artifact_sha256"]
         assert isinstance(hashes, dict) and set(hashes) == PASSPORT_SOURCE_ARTIFACTS
         assert all(_is_sha(digest, 64) for digest in hashes.values())
-        receipt = candidate["beta_acceptance_receipt"]
+        receipt = candidate["predeletion_acceptance_receipt"]
         assert isinstance(receipt, dict)
         assert receipt["release_source_commit"] == commit
         assert isinstance(receipt["release_tag"], str) and receipt["release_tag"].strip()
-        assert isinstance(receipt["beta_deployment_run_id"], int)
-        assert receipt["beta_deployment_run_id"] > 0
+        assert isinstance(receipt["acceptance_run_id"], int)
+        assert receipt["acceptance_run_id"] > 0
         assert isinstance(receipt["evidence_artifact"], str)
         assert receipt["evidence_artifact"].strip()
         assert _is_sha(receipt["evidence_sha256"], 64)
@@ -173,10 +176,10 @@ def test_passport_retirement_rejects_fabricated_qualified_record(tmp_path: Path)
     qualified["state"] = "qualified"
     qualified["source"]["protected_main_commit"] = "a" * 40
     qualified["source"]["artifact_sha256"] = dict.fromkeys(PASSPORT_SOURCE_ARTIFACTS, "b" * 64)
-    qualified["beta_acceptance_receipt"] = {
+    qualified["predeletion_acceptance_receipt"] = {
         "release_tag": "test-only-shape",
         "release_source_commit": "a" * 40,
-        "beta_deployment_run_id": 1,
+        "acceptance_run_id": 1,
         "evidence_artifact": "test-only-shape.json",
         "evidence_sha256": "c" * 64,
         "accepted_at_utc": "2026-09-26T00:00:00Z",
