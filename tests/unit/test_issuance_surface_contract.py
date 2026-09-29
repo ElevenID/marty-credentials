@@ -22,7 +22,8 @@ def test_frozen_issuance_surface_matches_python_parity_oracle() -> None:
 
 
 def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface() -> None:
-    # Baseline: reviewed Rust cutovers through retention. Only dynamic-lookup
+    # Baseline: reviewed Rust cutovers through retention and the Python
+    # provider callback binding. Only dynamic-lookup
     # source-line metadata is excluded; source paths, ordering and every retained
     # HTTP, RPC, configuration, runtime and migration field remain in the digest.
     # check_contract above still requires exact current source-line metadata.
@@ -31,7 +32,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "b2ca54d74075623eeeeb75f5515420d22bdc2e7240178515a71efb2aa8b51c9e"
+        "86755187d700945727761af79bbe9731a5ec621e3afbd9c80f20c04c61f5545a"
     )
 
 
@@ -47,8 +48,8 @@ def test_contract_covers_every_current_runtime_boundary() -> None:
         "api",
         "canvas-sync-worker",
     }
-    assert contract["migrations"]["revision_count"] == 49
-    assert contract["migrations"]["heads"] == ["physical_document_issuer_did"]
+    assert contract["migrations"]["revision_count"] == 50
+    assert contract["migrations"]["heads"] == ["physical_document_bureau_binding"]
 
 
 def test_contract_retains_critical_protocol_and_lifecycle_operations() -> None:

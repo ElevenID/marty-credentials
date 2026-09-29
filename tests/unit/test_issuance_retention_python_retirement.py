@@ -44,7 +44,7 @@ def test_only_the_two_retention_routes_are_retired() -> None:
     assert RETIRED.isdisjoint(routes)
     assert routes >= RETAINED_PASSPORT
     assert surface["http"]["route_count"] == 95
-    assert surface["migrations"]["heads"] == ["physical_document_issuer_did"]
+    assert surface["migrations"]["heads"] == ["physical_document_bureau_binding"]
 
 
 def test_retention_only_repository_methods_are_removed_but_shared_helpers_survive() -> None:

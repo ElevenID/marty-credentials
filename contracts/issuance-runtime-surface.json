@@ -70,7 +70,7 @@
         "source": "services/issuance/infrastructure/security/encryption.py"
       }
     ],
-    "environment_variable_count": 85,
+    "environment_variable_count": 88,
     "environment_variables": [
       "APP_ENV",
       "CANVAS_ADMIN_API_TOKEN",
@@ -991,7 +991,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 247,
+        "line": 268,
         "method": "POST",
         "operation": "create_passport_application",
         "path": "/v1/passport/applications",
@@ -999,7 +999,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 426,
+        "line": 453,
         "method": "POST",
         "operation": "activate_passport",
         "path": "/v1/passport/applications/{application_id}/activate",
@@ -1007,7 +1007,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 323,
+        "line": 344,
         "method": "POST",
         "operation": "generate_passport_data_groups",
         "path": "/v1/passport/applications/{application_id}/generate-data-groups",
@@ -1015,7 +1015,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 302,
+        "line": 323,
         "method": "POST",
         "operation": "generate_passport_sod",
         "path": "/v1/passport/applications/{application_id}/generate-sod",
@@ -1023,7 +1023,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 379,
+        "line": 405,
         "method": "GET",
         "operation": "get_passport_production_status",
         "path": "/v1/passport/applications/{application_id}/production-status",
@@ -1031,7 +1031,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 398,
+        "line": 425,
         "method": "POST",
         "operation": "record_passport_quality_result",
         "path": "/v1/passport/applications/{application_id}/quality-verify",
@@ -1039,7 +1039,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 339,
+        "line": 360,
         "method": "POST",
         "operation": "submit_passport_personalization",
         "path": "/v1/passport/applications/{application_id}/submit-personalization",
@@ -1047,7 +1047,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 217,
+        "line": 235,
         "method": "GET",
         "operation": "get_physical_document_capabilities",
         "path": "/v1/passport/capabilities",
@@ -1055,7 +1055,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 446,
+        "line": 473,
         "method": "POST",
         "operation": "personalization_webhook",
         "path": "/v1/passport/webhooks/personalization",
@@ -1066,9 +1066,9 @@
   },
   "migrations": {
     "heads": [
-      "physical_document_issuer_did"
+      "physical_document_bureau_binding"
     ],
-    "revision_count": 49,
+    "revision_count": 50,
     "revisions": [
       {
         "down_revisions": [],
@@ -1460,6 +1460,14 @@
         "line": 9,
         "revision": "physical_document_issuer_did",
         "source": "services/issuance/infrastructure/migrations/versions/20260928_0100_add_physical_document_issuer_did.py"
+      },
+      {
+        "down_revisions": [
+          "physical_document_issuer_did"
+        ],
+        "line": 9,
+        "revision": "physical_document_bureau_binding",
+        "source": "services/issuance/infrastructure/migrations/versions/20260928_0200_add_physical_document_bureau_provider_binding.py"
       }
     ],
     "roots": [
