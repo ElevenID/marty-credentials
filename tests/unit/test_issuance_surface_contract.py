@@ -23,7 +23,8 @@ def test_frozen_issuance_surface_matches_python_parity_oracle() -> None:
 
 def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface() -> None:
     # Baseline: reviewed Rust cutovers through retention and the Python
-    # provider callback binding. Only dynamic-lookup
+    # provider callback binding and restricted legacy webhook ownership.
+    # Only dynamic-lookup
     # source-line metadata is excluded; source paths, ordering and every retained
     # HTTP, RPC, configuration, runtime and migration field remain in the digest.
     # check_contract above still requires exact current source-line metadata.
@@ -32,7 +33,7 @@ def test_rust_owned_application_surfaces_preserve_the_remaining_semantic_surface
         del lookup["line"]
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     assert hashlib.sha256(encoded).hexdigest() == (
-        "86755187d700945727761af79bbe9731a5ec621e3afbd9c80f20c04c61f5545a"
+        "dfbbfff334802c2f8fd5485fa96292cf9a80dfb34392b86d837fa324d9520015"
     )
 
 

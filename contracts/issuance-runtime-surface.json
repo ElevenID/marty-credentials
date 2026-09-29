@@ -991,7 +991,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 268,
+        "line": 275,
         "method": "POST",
         "operation": "create_passport_application",
         "path": "/v1/passport/applications",
@@ -999,7 +999,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 453,
+        "line": 460,
         "method": "POST",
         "operation": "activate_passport",
         "path": "/v1/passport/applications/{application_id}/activate",
@@ -1007,7 +1007,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 344,
+        "line": 351,
         "method": "POST",
         "operation": "generate_passport_data_groups",
         "path": "/v1/passport/applications/{application_id}/generate-data-groups",
@@ -1015,7 +1015,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 323,
+        "line": 330,
         "method": "POST",
         "operation": "generate_passport_sod",
         "path": "/v1/passport/applications/{application_id}/generate-sod",
@@ -1023,7 +1023,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 405,
+        "line": 412,
         "method": "GET",
         "operation": "get_passport_production_status",
         "path": "/v1/passport/applications/{application_id}/production-status",
@@ -1031,7 +1031,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 425,
+        "line": 432,
         "method": "POST",
         "operation": "record_passport_quality_result",
         "path": "/v1/passport/applications/{application_id}/quality-verify",
@@ -1039,7 +1039,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 360,
+        "line": 367,
         "method": "POST",
         "operation": "submit_passport_personalization",
         "path": "/v1/passport/applications/{application_id}/submit-personalization",
@@ -1047,7 +1047,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 235,
+        "line": 242,
         "method": "GET",
         "operation": "get_physical_document_capabilities",
         "path": "/v1/passport/capabilities",
@@ -1055,7 +1055,7 @@
         "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       },
       {
-        "line": 473,
+        "line": 480,
         "method": "POST",
         "operation": "personalization_webhook",
         "path": "/v1/passport/webhooks/personalization",
