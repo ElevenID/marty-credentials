@@ -29,6 +29,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,22 @@ logger = logging.getLogger(__name__)
 BUREAU_URL = os.environ.get("PERSONALIZATION_BUREAU_URL", "")
 BUREAU_API_KEY = os.environ.get("PERSONALIZATION_BUREAU_API_KEY", "")
 BUREAU_WEBHOOK_SECRET = os.environ.get("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "")
+
+
+def _bureau_api_key() -> str:
+    key_file = os.environ.get("PERSONALIZATION_BUREAU_API_KEY_FILE", "").strip()
+    if key_file and BUREAU_API_KEY:
+        raise RuntimeError("Conflicting personalization bureau API key inputs")
+    if key_file:
+        try:
+            key = Path(key_file).read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeError("Personalization bureau API key file is unavailable") from exc
+    else:
+        key = BUREAU_API_KEY
+    if not key:
+        raise RuntimeError("Personalization bureau API key is required")
+    return key
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +78,7 @@ class PersonalizationJob:
     application_id: str = ""
     organization_id: str = ""
     country_code: str = ""
+    document_type: str = "TD3"
 
     # Payload sent to the bureau
     data_groups: dict[int, str] = field(default_factory=dict)  # DG number → base64 content
@@ -97,7 +115,13 @@ class PersonalizationBatch:
 
 def is_bureau_configured() -> bool:
     """Check if an external personalization bureau is configured."""
-    return bool(BUREAU_URL)
+    if not BUREAU_URL:
+        return False
+    try:
+        _bureau_api_key()
+    except RuntimeError:
+        return False
+    return True
 
 
 async def submit_personalization_job(job: PersonalizationJob) -> PersonalizationJob:
@@ -121,7 +145,7 @@ async def submit_personalization_job(job: PersonalizationJob) -> Personalization
         "application_id": job.application_id,
         "organization_id": job.organization_id,
         "country_code": job.country_code,
-        "document_type": "TD3",
+        "document_type": job.document_type,
         "data_groups": {
             f"DG{num}": content
             for num, content in sorted(job.data_groups.items())
@@ -139,7 +163,7 @@ async def submit_personalization_job(job: PersonalizationJob) -> Personalization
             f"{BUREAU_URL}/v1/personalization/jobs",
             json=payload,
             headers={
-                "Authorization": f"Bearer {BUREAU_API_KEY}",
+                "Authorization": f"Bearer {_bureau_api_key()}",
                 "Content-Type": "application/json",
             },
         )
@@ -194,7 +218,7 @@ async def submit_personalization_batch(batch: PersonalizationBatch) -> Personali
                 "jobs": jobs_payload,
             },
             headers={
-                "Authorization": f"Bearer {BUREAU_API_KEY}",
+                "Authorization": f"Bearer {_bureau_api_key()}",
                 "Content-Type": "application/json",
             },
         )
@@ -224,7 +248,7 @@ async def poll_job_status(bureau_job_id: str) -> dict[str, Any]:
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(
             f"{BUREAU_URL}/v1/personalization/jobs/{bureau_job_id}",
-            headers={"Authorization": f"Bearer {BUREAU_API_KEY}"},
+            headers={"Authorization": f"Bearer {_bureau_api_key()}"},
         )
         resp.raise_for_status()
         return resp.json()

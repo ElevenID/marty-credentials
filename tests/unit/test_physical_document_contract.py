@@ -31,6 +31,10 @@ DELTA = (
     Path(__file__).resolve().parents[2]
     / "contracts/physical-passport-python-route-reference-v2.json"
 )
+ROLLBACK_DELTA = (
+    Path(__file__).resolve().parents[2]
+    / "contracts/physical-passport-python-route-reference-v3.json"
+)
 
 
 def _reference() -> dict:
@@ -78,6 +82,11 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     base_source = REFERENCE.read_bytes().replace(b"\r\n", b"\n")
     assert delta["base_sha256"] == hashlib.sha256(base_source).hexdigest()
     assert delta["optional_create_field"] == "issuer_did"
+    rollback = json.loads(ROLLBACK_DELTA.read_text(encoding="utf-8"))
+    assert rollback["base"] == "contracts/physical-passport-python-route-reference-v2.json"
+    assert rollback["base_sha256"] == hashlib.sha256(
+        DELTA.read_bytes().replace(b"\r\n", b"\n")
+    ).hexdigest()
     assert set(reference["sources"]) == {
         "services/issuance/infrastructure/api/physical_document_routes.py",
         "services/issuance/infrastructure/adapters/emrtd_signer_client.py",
@@ -86,9 +95,9 @@ def test_passport_reference_pins_exact_source_and_all_routes() -> None:
     for relative_path, digest in reference["sources"].items():
         source = (root / relative_path).read_bytes()
         assert b"\r" not in source.replace(b"\r\n", b"")
-        assert hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest() == delta[
+        assert hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest() == rollback[
             "source_sha256"
-        ].get(relative_path, digest)
+        ].get(relative_path, delta["source_sha256"].get(relative_path, digest))
     auth_source = (root / "services/issuance/infrastructure/api/management_auth.py").read_bytes()
     assert (
         hashlib.sha256(auth_source.replace(b"\r\n", b"\n")).hexdigest()
@@ -334,6 +343,28 @@ def test_passport_store_key_and_decrypt_errors_match_frozen_public_details(
     )
 
 
+def test_passport_artifact_key_file_is_supported_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    key = Fernet.generate_key()
+    key_file = tmp_path / "artifact-key"
+    key_file.write_bytes(key + b"\n")
+    monkeypatch.delenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", raising=False)
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", str(key_file))
+    assert routes._fernet().decrypt(routes._fernet().encrypt(b"artifact")) == b"artifact"
+
+    monkeypatch.setenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY", key.decode("ascii"))
+    with pytest.raises(HTTPException) as conflicting:
+        routes._fernet()
+    assert conflicting.value.status_code == 503
+    monkeypatch.delenv("PHYSICAL_DOCUMENT_ARTIFACT_KEY")
+
+    key_file.unlink()
+    with pytest.raises(HTTPException) as unreadable:
+        routes._fernet()
+    assert unreadable.value.status_code == 503
+
+
 @pytest.mark.asyncio
 async def test_passport_capability_blockers_preserve_order_and_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
@@ -440,11 +471,13 @@ async def test_passport_create_encrypts_artifact_and_returns_only_safe_fields(
     assert not {"secure_artifact_ciphertext", "applicant", "mrz", "data_groups"} & response.keys()
 
 
+@pytest.mark.parametrize("document_type", ["TD1", "TD2", "TD3"])
 @pytest.mark.asyncio
 async def test_passport_route_lifecycle_preserves_effects_and_scrubs_artifact(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, document_type: str,
 ) -> None:
     row = _job()
+    row["document_type"] = document_type
     updates = []
     signing = []
     submissions = []
@@ -505,8 +538,10 @@ async def test_passport_route_lifecycle_preserves_effects_and_scrubs_artifact(
     assert submitted["status"] == reference[4]["outcome"]
     assert len(signing) == 2 and len(submissions) == 1
     assert submissions[0].mrz_line_1 == "SYNTHETIC1"
+    assert submissions[0].document_type == document_type
     assert submissions[0].data_groups == {1: "ZzE=", 2: "ZzI="}
     assert updates[-1]["bureau_job_id"] == "bureau-job-1"
+    assert updates[-1]["bureau_provider_profile_id"] is None
     assert isinstance(updates[-1]["submitted_at"], datetime)
 
     production = await routes.get_passport_production_status("application-1", "org-1")
@@ -608,6 +643,75 @@ async def test_passport_invalid_groups_and_signer_failure_are_effect_free(
         await routes.submit_passport_personalization("application-1", "org-1")
     assert unavailable.value.status_code == 503
     assert updates == [] and bureau_calls == []
+
+
+@pytest.mark.parametrize("bureau_job_id", [None, "bureau-job-1"])
+@pytest.mark.asyncio
+async def test_bureau_submission_binds_only_accepted_job(
+    monkeypatch: pytest.MonkeyPatch, bureau_job_id: str | None,
+) -> None:
+    row = _job()
+    updates: list[dict] = []
+    monkeypatch.setenv("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID", "passport-beta-bureau")
+
+    async def get_job(*_args):
+        return row
+
+    async def update_job(*_args, **values):
+        updates.append(values)
+        return row | values
+
+    async def sign(**_values):
+        return {"sod_der_base64": "U09E", "dsc_cert_pem": "synthetic-cert"}
+
+    async def submit(_job):
+        return SimpleNamespace(
+            status=ProductionStatus.FAILED if bureau_job_id is None else ProductionStatus.QUEUED,
+            bureau_job_id=bureau_job_id,
+            tracking_number=None,
+            error_message="Bureau returned HTTP 503" if bureau_job_id is None else None,
+        )
+
+    monkeypatch.setattr(routes, "_get_job", get_job)
+    monkeypatch.setattr(routes, "_update_job", update_job)
+    monkeypatch.setattr(
+        routes, "_decrypt_artifact",
+        lambda _row: {"mrz": {"line_1": "SYNTHETIC1", "line_2": "SYNTHETIC2"},
+                      "data_groups": {"DG1": "ZzE=", "DG2": "ZzI="}},
+    )
+    monkeypatch.setattr(routes, "sign_emrtd", sign)
+    monkeypatch.setattr(routes, "submit_personalization_job", submit)
+
+    result = await routes.submit_passport_personalization("application-1", "org-1")
+    assert result["status"] == ("FAILED" if bureau_job_id is None else "SUBMITTED")
+    assert updates[0]["bureau_job_id"] == bureau_job_id
+    assert updates[0]["bureau_provider_profile_id"] == (
+        "passport-beta-bureau" if bureau_job_id else None
+    )
+
+
+@pytest.mark.asyncio
+async def test_signed_callback_owned_job_never_polls_and_overwrites_native_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = _job() | {
+        "bureau_job_id": "bureau-job-1",
+        "bureau_provider_profile_id": "passport-beta-bureau",
+        "status": "READY_FOR_ACTIVATION",
+    }
+
+    async def get_job(*_args):
+        return row
+
+    async def forbidden(*_args):
+        raise AssertionError("signed callback owns this job's status")
+
+    monkeypatch.setattr(routes, "_get_job", get_job)
+    monkeypatch.setattr(routes, "poll_job_status", forbidden)
+    monkeypatch.setattr(routes, "_update_job", forbidden)
+
+    response = await routes.get_passport_production_status("application-1", "org-1")
+    assert response["status"] == "READY_FOR_ACTIVATION"
 
 
 @pytest.mark.asyncio

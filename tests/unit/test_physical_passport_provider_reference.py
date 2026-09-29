@@ -23,12 +23,15 @@ ROOT = Path(__file__).resolve().parents[2]
 DELTA = json.loads(
     (ROOT / "contracts/physical-passport-provider-reference-v2.json").read_text(encoding="utf-8")
 )
+ROLLBACK_DELTA_PATH = ROOT / "contracts/physical-passport-provider-reference-v3.json"
+ROLLBACK_DELTA = json.loads(ROLLBACK_DELTA_PATH.read_text(encoding="utf-8"))
 FROZEN_V1 = json.loads(
     (ROOT / "contracts/physical-passport-provider-reference.json").read_text(encoding="utf-8")
 )
 REFERENCE = deepcopy(FROZEN_V1)
 REFERENCE["schema"] = DELTA["schema"]
 REFERENCE["python_source_sha256"].update(DELTA["python_source_sha256"])
+REFERENCE["python_source_sha256"].update(ROLLBACK_DELTA["python_source_sha256"])
 REFERENCE["signer"]["request"]["issuer_did"] = DELTA["issuer_did"]
 REFERENCE["signer"]["http"]["json"]["issuer_did"] = DELTA["issuer_did"]
 
@@ -56,6 +59,10 @@ def test_provider_reference_pins_reviewed_python_sources() -> None:
     assert DELTA["base"] == "contracts/physical-passport-provider-reference.json"
     base_source = (ROOT / DELTA["base"]).read_bytes().replace(b"\r\n", b"\n")
     assert DELTA["base_sha256"] == hashlib.sha256(base_source).hexdigest()
+    assert ROLLBACK_DELTA["base"] == "contracts/physical-passport-provider-reference-v2.json"
+    assert ROLLBACK_DELTA["base_sha256"] == hashlib.sha256(
+        (ROOT / ROLLBACK_DELTA["base"]).read_bytes().replace(b"\r\n", b"\n")
+    ).hexdigest()
     assert set(REFERENCE["python_source_sha256"]) == {
         "services/issuance/infrastructure/adapters/emrtd_signer_client.py",
         "services/issuance/infrastructure/adapters/personalization_bureau_client.py",
@@ -205,6 +212,12 @@ async def test_bureau_submit_and_poll_preserve_wire_contract(
     assert submitted.status.value == expected["accepted"]["job_status"]
     assert submitted.tracking_number == expected["accepted"]["response"]["tracking_number"]
 
+    for document_type in ("TD1", "TD2"):
+        job = _job()
+        job.document_type = document_type
+        await bureau.submit_personalization_job(job)
+        assert json.loads(observed[-1].content)["document_type"] == document_type
+
     response["status"] = expected["rejected"]["http_status"]
     response["body"] = {"error": "synthetic-private-applicant"}
     rejected = await bureau.submit_personalization_job(_job())
@@ -266,6 +279,29 @@ async def test_bureau_batch_preserves_envelope_and_out_of_order_job_mapping(
     response["body"] = {"error": "synthetic-only"}
     failed = await bureau.submit_personalization_batch(batch)
     assert failed.status.value == wire["failure_status"]
+
+
+def test_bureau_api_key_file_is_supported_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    key_file = tmp_path / "bureau-key"
+    key_file.write_text("synthetic-bureau-key\n", encoding="ascii")
+    monkeypatch.setattr(bureau, "BUREAU_API_KEY", "")
+    monkeypatch.setenv("PERSONALIZATION_BUREAU_API_KEY_FILE", str(key_file))
+    monkeypatch.setattr(bureau, "BUREAU_URL", "https://synthetic-bureau.invalid")
+    assert bureau._bureau_api_key() == "synthetic-bureau-key"
+    assert bureau.is_bureau_configured()
+
+    monkeypatch.setattr(bureau, "BUREAU_API_KEY", "conflicting-key")
+    with pytest.raises(RuntimeError, match="Conflicting"):
+        bureau._bureau_api_key()
+    assert not bureau.is_bureau_configured()
+    monkeypatch.setattr(bureau, "BUREAU_API_KEY", "")
+
+    key_file.unlink()
+    with pytest.raises(RuntimeError, match="unavailable"):
+        bureau._bureau_api_key()
+    assert not bureau.is_bureau_configured()
 
 
 def test_bureau_webhook_verification_and_event_projection(monkeypatch: pytest.MonkeyPatch) -> None:

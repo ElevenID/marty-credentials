@@ -478,6 +478,7 @@ physical_document_jobs_table = Table(
     Column("secure_artifact_reference", String(512), nullable=False),
     Column("sod_sha256", String(64), nullable=True),
     Column("bureau_job_id", String(255), nullable=True),
+    Column("bureau_provider_profile_id", String(128), nullable=True),
     Column("tracking_number", String(255), nullable=True),
     Column("status", String(40), nullable=False, default="DRAFT"),
     Column("quality_result", JSON, nullable=True),

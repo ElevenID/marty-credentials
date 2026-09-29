@@ -1,0 +1,14 @@
+{
+  "schema": "elevenid.physical-passport-python-route-reference/v3",
+  "base": "contracts/physical-passport-python-route-reference-v2.json",
+  "base_sha256": "ca71f4d903338ee41d28c79a0e9a9b10eee7e2199ab621f8bbe732024c82f618",
+  "scope": "File-backed artifact encryption, TD1/TD2 bureau continuity, and the shared provider callback binding for isolated Python rollback; the v1 nine-route payload and response projection remain frozen.",
+  "source_sha256": {
+    "services/issuance/infrastructure/api/physical_document_routes.py": "08ab42172b48fbf97f1961dd1f172ce066bac29ee13bbe763935753d482c8650",
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "d535e0c48f7d6dc2497c863cd9a8ae93217e25c702e98b4291a9772b02405c30"
+  },
+  "artifact_key_file_environment": "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+  "key_source_policy": "Reject simultaneous inline and file-backed keys; reject absent, unreadable, and invalid keys.",
+  "document_type_continuity": "Pass each stored TD1, TD2, or TD3 document type to the bureau; TD3 remains the default for existing callers.",
+  "provider_callback_binding": "Persist the configured bureau provider profile ID with the bureau job ID so native signed callback ingress can resolve the Python job by that pair. Bound jobs read the persisted callback status without a competing Python poll; unbound legacy jobs keep their frozen poll behavior."
+}

@@ -1,0 +1,12 @@
+{
+  "schema": "elevenid.physical-passport-provider-reference/v3",
+  "base": "contracts/physical-passport-provider-reference-v2.json",
+  "base_sha256": "fdec2f1b058ddc299baf0aa0007fb6890a1e795cc32ac30df00f59e9c0daccbd",
+  "scope": "File-backed bureau service token and TD1/TD2 submission continuity for isolated Python rollback; TD3 callers retain the frozen v1 wire.",
+  "python_source_sha256": {
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py": "d535e0c48f7d6dc2497c863cd9a8ae93217e25c702e98b4291a9772b02405c30"
+  },
+  "bureau_key_file_environment": "PERSONALIZATION_BUREAU_API_KEY_FILE",
+  "key_source_policy": "Reject simultaneous inline and file-backed keys; reject absent and unreadable keys. Readiness requires a usable key.",
+  "document_type_continuity": "Send the job's TD1, TD2, or TD3 type; default remains TD3 for existing callers."
+}

@@ -9,6 +9,7 @@ import json
 import os
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -64,7 +65,17 @@ def _factory() -> async_sessionmaker[AsyncSession]:
 
 
 def _fernet() -> Fernet:
+    key_file = os.environ.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", "").strip()
     key = os.environ.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "").strip()
+    if key_file and key:
+        raise HTTPException(status_code=503, detail="PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid")
+    if key_file:
+        try:
+            key = Path(key_file).read_text(encoding="ascii").strip()
+        except (OSError, UnicodeError) as exc:
+            raise HTTPException(
+                status_code=503, detail="PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid"
+            ) from exc
     if not key:
         raise HTTPException(
             status_code=503,
@@ -190,6 +201,13 @@ def _numbered_data_groups(artifact: dict[str, Any]) -> dict[int, str]:
     return {int(name[2:]): content for name, content in artifact["data_groups"].items()}
 
 
+def _bureau_provider_profile_id() -> str | None:
+    value = os.environ.get("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID", "")
+    if value and (value != value.strip() or len(value) > 128):
+        raise HTTPException(status_code=503, detail="Bureau provider profile is invalid")
+    return value or None
+
+
 def _issuer_signing_kwargs(row: dict[str, Any]) -> dict[str, str]:
     issuer_did = row.get("issuer_did")
     return {"issuer_did": issuer_did} if issuer_did else {}
@@ -220,7 +238,10 @@ async def get_physical_document_capabilities(
 ) -> dict[str, Any]:
     signing = signer_capabilities()
     blockers = list(signing["blockers"])
-    artifact_key_present = bool(os.environ.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "").strip())
+    artifact_key_present = bool(
+        os.environ.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "").strip()
+        or os.environ.get("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", "").strip()
+    )
     try:
         _fernet()
     except HTTPException:
@@ -341,6 +362,7 @@ async def submit_passport_personalization(
     application_id: str,
     trusted_organization_id: PassportOrganization,
 ) -> dict[str, Any]:
+    bureau_provider_profile_id = _bureau_provider_profile_id()
     row = await _get_job(application_id, trusted_organization_id)
     await _require_current_issuer_profile(row)
     artifact = _decrypt_artifact(row)
@@ -356,6 +378,7 @@ async def submit_passport_personalization(
             application_id=row["application_id"],
             organization_id=row["organization_id"],
             country_code=row["country_code"],
+            document_type=row["document_type"],
             data_groups=_numbered_data_groups(artifact),
             sod_der_base64=signed["sod_der_base64"],
             dsc_cert_pem=signed["dsc_cert_pem"],
@@ -368,6 +391,9 @@ async def submit_passport_personalization(
         trusted_organization_id,
         status=_production_status(job.status),
         bureau_job_id=job.bureau_job_id,
+        bureau_provider_profile_id=(
+            bureau_provider_profile_id if job.bureau_job_id else None
+        ),
         tracking_number=job.tracking_number,
         error_code="BUREAU_SUBMISSION_FAILED" if job.status == ProductionStatus.FAILED else None,
         error_message=job.error_message,
@@ -382,7 +408,8 @@ async def get_passport_production_status(
     trusted_organization_id: PassportOrganization,
 ) -> dict[str, Any]:
     row = await _get_job(application_id, trusted_organization_id)
-    if row["bureau_job_id"] and row["status"] not in {"ACTIVE", "FAILED", "CANCELLED"}:
+    if (row["bureau_job_id"] and not row.get("bureau_provider_profile_id")
+            and row["status"] not in {"ACTIVE", "FAILED", "CANCELLED"}):
         bureau = await poll_job_status(row["bureau_job_id"])
         status = ProductionStatus(bureau["status"])
         row = await _update_job(

@@ -150,7 +150,17 @@ class TestBureauConfiguration:
             "services.issuance.infrastructure.adapters.personalization_bureau_client.BUREAU_URL",
             "https://bureau.example.com",
         )
+        monkeypatch.setattr(
+            "services.issuance.infrastructure.adapters.personalization_bureau_client.BUREAU_API_KEY",
+            "synthetic-key",
+        )
         assert is_bureau_configured() is True
+
+        monkeypatch.setattr(
+            "services.issuance.infrastructure.adapters.personalization_bureau_client.BUREAU_API_KEY",
+            "",
+        )
+        assert is_bureau_configured() is False
 
 
 # ---------------------------------------------------------------------------

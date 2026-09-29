@@ -200,7 +200,19 @@ async def _exercise(database_url, key: bytes, monkeypatch: pytest.MonkeyPatch) -
             payload.organization_id,
             status="SUBMITTED",
             bureau_job_id="bureau-reference",
+            bureau_provider_profile_id="passport-beta-bureau",
         )
+        async with factory() as session:
+            bound_tenants = (
+                await session.execute(
+                    select(physical_document_jobs_table.c.organization_id).where(
+                        physical_document_jobs_table.c.bureau_provider_profile_id
+                        == "passport-beta-bureau",
+                        physical_document_jobs_table.c.bureau_job_id == "bureau-reference",
+                    )
+                )
+            ).scalars().all()
+        assert bound_tenants == [payload.organization_id]
         webhook = {
             "bureau_job_id": "bureau-reference",
             "status": "SHIPPED",
