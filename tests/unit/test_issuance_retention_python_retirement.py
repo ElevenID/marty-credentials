@@ -36,6 +36,7 @@ PASSPORT_SOURCE_ARTIFACTS = {
     "contracts/issuance-universal-ownership.json",
     "contracts/passport-rust-only-retirement-behavior.json",
     "contracts/passport-beta-cutover-drain-behavior.json",
+    "contracts/passport-beta-scoped-write-fence-behavior.json",
     "docker-compose.passport-supported-disposable.yml",
 }
 PASSPORT_CONSUMER_SURFACES = {"base", "selfhost", "kubernetes"}
