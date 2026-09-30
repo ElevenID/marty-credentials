@@ -45,6 +45,7 @@ REQUIRED_PREDELETION_PROBES = {
     "packaged_image",
     "physical_bureau_submission",
     "physical_bureau_batch",
+    "simulator_material_receipt",
     "signed_bureau_callback",
     "rust_restart_resume",
     "legacy_drain",
@@ -137,25 +138,22 @@ def _managed_signer(evidence: dict, runtime: dict, organization_id: str) -> None
     prior_gate._require(
         evidence.get("mode") == "managed_kms"
         and evidence.get("issuer_profile_type") == "ICAO_EMRTD"
-        and isinstance(evidence.get("issuer_profile_id"), str)
-        and bool(evidence["issuer_profile_id"])
-        and evidence.get("issuer_profile_status") == "active"
         and evidence.get("organization_id") == organization_id
         and evidence.get("chain_verified") is True
+        and evidence.get("managed_kms_custody_verified") is True
         and evidence.get("private_key_exported") is False
         and evidence.get("signing_keys_container_id") == runtime["signing-keys"]["container_id"]
         and evidence.get("services_oci_reference") == runtime["signing-keys"]["oci_reference"]
         and isinstance(csca, dict) and isinstance(dsc, dict)
         and all(cert.get("status") == "active"
                 and cert.get("organization_id") == organization_id
-                and cert.get("issuer_profile_id") == evidence["issuer_profile_id"]
+                and isinstance(cert.get("issuer_profile_commitment"), str)
+                and SHA256.fullmatch(cert["issuer_profile_commitment"]) is not None
                 and isinstance(cert.get("certificate_sha256"), str)
                 and SHA256.fullmatch(cert["certificate_sha256"]) is not None
-                and isinstance(cert.get("kms_key_ref"), str)
-                and bool(cert["kms_key_ref"])
                 for cert in (csca, dsc))
         and csca["certificate_sha256"] != dsc["certificate_sha256"]
-        and csca["kms_key_ref"] != dsc["kms_key_ref"],
+        and csca["issuer_profile_commitment"] != dsc["issuer_profile_commitment"],
         "Organization-bound active managed CSCA/DSC signer evidence is incomplete",
     )
 
@@ -165,17 +163,22 @@ def _sod_against_signer(sod: dict, signer: dict) -> None:
         isinstance(sod, dict)
         and sod.get("signature_verified") is True
         and sod.get("chain_verified") is True
+        and sod.get("native_generate_sod_verified") is True
         and sod.get("organization_id") == signer["organization_id"]
-        and sod.get("issuer_profile_id") == signer["issuer_profile_id"]
+        and sod.get("dsc_issuer_profile_commitment") == signer["dsc"]["issuer_profile_commitment"]
         and sod.get("csca_certificate_sha256") == signer["csca"]["certificate_sha256"]
-        and sod.get("dsc_certificate_sha256") == signer["dsc"]["certificate_sha256"],
+        and sod.get("dsc_certificate_sha256") == signer["dsc"]["certificate_sha256"]
+        and isinstance(sod.get("sod_sha256"), str)
+        and SHA256.fullmatch(sod["sod_sha256"]) is not None
+        and isinstance(sod.get("source_job_commitment"), str)
+        and SHA256.fullmatch(sod["source_job_commitment"]) is not None,
         "SOD was not verified against the active managed issuer certificates",
     )
 
 
 def _restart_resume_evidence(
     resume: dict, prior_runtime: dict, runtime: dict, identity: dict,
-    target: str, signer: dict, commit: str, services_reference: str,
+    target: str, signer: dict, sod: dict, commit: str, services_reference: str,
 ) -> None:
     """Require one KMS-backed Rust job to survive a real native restart."""
     before, after = resume.get("before"), resume.get("after")
@@ -207,8 +210,10 @@ def _restart_resume_evidence(
         and after.get("job_commitment") == before["job_commitment"]
         and before.get("organization_id") == after.get("organization_id")
         == signer["organization_id"]
-        and before.get("issuer_profile_id") == after.get("issuer_profile_id")
-        == signer["issuer_profile_id"]
+        and before.get("dsc_issuer_profile_commitment")
+        == after.get("dsc_issuer_profile_commitment")
+        == signer["dsc"]["issuer_profile_commitment"]
+        and before["job_commitment"] == sod["source_job_commitment"]
         and before.get("status") in {"SOD_SIGNED", "SUBMITTED", "IN_PRODUCTION"}
         and after.get("status") in {"SUBMITTED", "IN_PRODUCTION", "QUALITY_CHECK",
                                     "READY_FOR_ACTIVATION", "ACTIVE"}
@@ -663,7 +668,7 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
     _restart_resume_evidence(
         probes["rust_restart_resume"]["evidence"],
         report.get("pre_restart_native_runtime"), report["runtime_images"],
-        deployment, target, signer, commit, services_reference,
+        deployment, target, signer, sod, commit, services_reference,
     )
     callback = probes["signed_bureau_callback"]["evidence"]
     prior_gate._require(
@@ -781,6 +786,7 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
         isinstance(submitted, list) and len(submitted) >= 2
         and all(isinstance(job, str) and SHA256.fullmatch(job) is not None for job in submitted)
         and len(set(submitted)) == len(submitted)
+        and submitted[0] == sod["source_job_commitment"]
         and isinstance(returned, list) and len(returned) == len(submitted)
         and batch.get("http_status") in (200, 201, 202)
         and batch.get("batch_status") == "QUEUED"
@@ -832,6 +838,20 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
             for index, (source, job) in enumerate(zip(submitted, callback_jobs, strict=True))
         ),
         "Signed callback jobs are not bound to returned bureau jobs and native completion",
+    )
+    material = probes["simulator_material_receipt"]["evidence"]
+    prior_gate._require(
+        material.get("tenant_and_job_binding") is True
+        and material.get("first_accepted_sod_der_matches_native") is True
+        and material.get("first_accepted_dsc_der_matches_selected_chain") is True
+        and material.get("first_accepted_dsc_pem_wire_matches_selected_chain") is True
+        and material.get("source_job_id_commitment") == sod["source_job_commitment"]
+        and material.get("bureau_job_id_commitment")
+        == returned_by_source[sod["source_job_commitment"]]
+        and material.get("sod_sha256") == sod["sod_sha256"]
+        and material.get("dsc_certificate_sha256")
+        == signer["dsc"]["certificate_sha256"],
+        "First accepted simulator material differs from the selected managed SOD",
     )
     packaged = probes["packaged_image"]["evidence"]
     runtime_bureau = report["runtime_images"]["passport-beta-bureau"]
@@ -946,7 +966,7 @@ def _supported_report(report: dict, commit: str, services_reference: str) -> Non
         prior_runtime = item.get("pre_restart_native_runtime")
         _restart_resume_evidence(
             resume, prior_runtime, runtime, identity, target,
-            signer, commit, services_reference,
+            signer, signer["sod"], commit, services_reference,
         )
         container_ids.add(prior_runtime["container_id"])
 

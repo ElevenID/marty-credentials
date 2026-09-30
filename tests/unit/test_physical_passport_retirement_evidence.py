@@ -26,7 +26,9 @@ SERVICES_REFERENCE = (
     + IMAGE_DIGESTS["ghcr.io/elevenid/marty-ui-oss/services"]
 )
 ORGANIZATION = "org-marty"
-PROFILE = "passport-managed-profile"
+CSCA_PROFILE_COMMITMENT = "7" * 64
+DSC_PROFILE_COMMITMENT = "8" * 64
+SOURCE_JOB_COMMITMENT = "5" * 64
 
 
 def identity(name: str, *, run: str = "") -> dict:
@@ -55,25 +57,29 @@ def bound(evidence: dict, owner: dict) -> dict:
 
 def managed_signer(container_id: str) -> dict:
     return {
-        "mode": "managed_kms", "chain_verified": True, "private_key_exported": False,
-        "issuer_profile_id": PROFILE, "issuer_profile_type": "ICAO_EMRTD",
-        "issuer_profile_status": "active", "organization_id": ORGANIZATION,
+        "mode": "managed_kms", "chain_verified": True,
+        "managed_kms_custody_verified": True, "private_key_exported": False,
+        "issuer_profile_type": "ICAO_EMRTD", "organization_id": ORGANIZATION,
         "signing_keys_container_id": container_id,
         "services_oci_reference": SERVICES_REFERENCE,
         "csca": {"status": "active", "organization_id": ORGANIZATION,
-                 "issuer_profile_id": PROFILE, "certificate_sha256": "1" * 64,
-                 "kms_key_ref": "transit/keys/passport-csca"},
+                 "issuer_profile_commitment": CSCA_PROFILE_COMMITMENT,
+                 "certificate_sha256": "1" * 64},
         "dsc": {"status": "active", "organization_id": ORGANIZATION,
-                "issuer_profile_id": PROFILE, "certificate_sha256": "2" * 64,
-                "kms_key_ref": "transit/keys/passport-dsc"},
+                "issuer_profile_commitment": DSC_PROFILE_COMMITMENT,
+                "certificate_sha256": "2" * 64},
     }
 
 
 def sod_evidence() -> dict:
     return {"signature_verified": True, "chain_verified": True,
-            "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
+            "native_generate_sod_verified": True,
+            "organization_id": ORGANIZATION,
+            "dsc_issuer_profile_commitment": DSC_PROFILE_COMMITMENT,
             "csca_certificate_sha256": "1" * 64,
-            "dsc_certificate_sha256": "2" * 64}
+            "dsc_certificate_sha256": "2" * 64,
+            "sod_sha256": "4" * 64,
+            "source_job_commitment": SOURCE_JOB_COMMITMENT}
 
 
 def supported_surface(name: str) -> dict:
@@ -121,13 +127,15 @@ def supported_surface(name: str) -> dict:
                 "before": {"owner": "rust", "issuance_native_container_id": f"issuance-native-{name}-before",
                            "image_id": "sha256:" + "d" * 64,
                            "oci_reference": SERVICES_REFERENCE,
-                           "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
-                           "job_commitment": "5" * 64, "status": "SOD_SIGNED"},
+                           "organization_id": ORGANIZATION,
+                           "dsc_issuer_profile_commitment": DSC_PROFILE_COMMITMENT,
+                           "job_commitment": SOURCE_JOB_COMMITMENT, "status": "SOD_SIGNED"},
                 "after": {"owner": "rust", "issuance_native_container_id": f"issuance-native-{name}-after",
                           "image_id": "sha256:" + "d" * 64,
                           "oci_reference": SERVICES_REFERENCE,
-                          "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
-                          "job_commitment": "5" * 64, "status": "SUBMITTED"},
+                          "organization_id": ORGANIZATION,
+                          "dsc_issuer_profile_commitment": DSC_PROFILE_COMMITMENT,
+                          "job_commitment": SOURCE_JOB_COMMITMENT, "status": "SUBMITTED"},
                 "job_resumed": True,
                 "durable_record_verified": True,
                 "kms_signing_continuity_verified": True,
@@ -287,15 +295,26 @@ def predeletion_report(*, run: str = "") -> dict:
                 "native_completed_jobs": 2,
                 "http_status": 202,
                 "batch_status": "QUEUED",
-                "submitted_job_commitments": ["6" * 64, "7" * 64],
+                "submitted_job_commitments": [SOURCE_JOB_COMMITMENT, "6" * 64],
                 "returned_jobs": [
-                    {"source_job_commitment": "7" * 64, "bureau_job_commitment": "8" * 64, "status": "PRINTING"},
-                    {"source_job_commitment": "6" * 64, "bureau_job_commitment": "9" * 64, "status": "QUEUED"},
+                    {"source_job_commitment": "6" * 64, "bureau_job_commitment": "8" * 64, "status": "PRINTING"},
+                    {"source_job_commitment": SOURCE_JOB_COMMITMENT,
+                     "bureau_job_commitment": "9" * 64, "status": "QUEUED"},
                 ],
             }},
         },
     }
     batch = report["probes"]["physical_bureau_batch"]["evidence"]
+    report["probes"]["simulator_material_receipt"]["evidence"] = {
+        "source_job_id_commitment": SOURCE_JOB_COMMITMENT,
+        "bureau_job_id_commitment": "9" * 64,
+        "sod_sha256": "4" * 64,
+        "dsc_certificate_sha256": "2" * 64,
+        "tenant_and_job_binding": True,
+        "first_accepted_sod_der_matches_native": True,
+        "first_accepted_dsc_der_matches_selected_chain": True,
+        "first_accepted_dsc_pem_wire_matches_selected_chain": True,
+    }
     report["probes"]["packaged_image"]["evidence"] = {
         "source_commit": COMMIT,
         "stack_manifest_sha256": STACK_DIGEST,
@@ -319,16 +338,18 @@ def predeletion_report(*, run: str = "") -> dict:
                 f"issuance-native-{runtime_suffix}-before",
             "image_id": "sha256:" + "d" * 64,
             "oci_reference": SERVICES_REFERENCE,
-            "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
-            "job_commitment": "5" * 64, "status": "SOD_SIGNED",
+            "organization_id": ORGANIZATION,
+            "dsc_issuer_profile_commitment": DSC_PROFILE_COMMITMENT,
+            "job_commitment": SOURCE_JOB_COMMITMENT, "status": "SOD_SIGNED",
         },
         "after": {
             "owner": "rust", "issuance_native_container_id":
                 f"issuance-native-{runtime_suffix}-after",
             "image_id": "sha256:" + "d" * 64,
             "oci_reference": SERVICES_REFERENCE,
-            "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
-            "job_commitment": "5" * 64, "status": "SUBMITTED",
+            "organization_id": ORGANIZATION,
+            "dsc_issuer_profile_commitment": DSC_PROFILE_COMMITMENT,
+            "job_commitment": SOURCE_JOB_COMMITMENT, "status": "SUBMITTED",
         },
         "job_resumed": True, "durable_record_verified": True,
         "kms_signing_continuity_verified": True,
@@ -396,7 +417,7 @@ def predeletion_report(*, run: str = "") -> dict:
         lambda report: report["probes"]["rust_restart_resume"]["evidence"]["after"].update(
             job_commitment="9" * 64),
         lambda report: report["probes"]["rust_restart_resume"]["evidence"]["after"].update(
-            issuer_profile_id="other-profile"),
+            dsc_issuer_profile_commitment="9" * 64),
         lambda report: report["probes"]["rust_restart_resume"]["evidence"]["before"].update(
             owner="python"),
         lambda report: report["probes"]["signed_bureau_callback"]["evidence"].update(flow_execution_verified=False),
@@ -412,6 +433,14 @@ def predeletion_report(*, run: str = "") -> dict:
         lambda report: report["probes"]["production_isolation"]["evidence"].update(
             other_beta_resources_unchanged=False),
         lambda report: report["probes"]["signed_bureau_callback"].update(verified="true"),
+        lambda report: report["probes"]["simulator_material_receipt"]["evidence"].update(
+            first_accepted_sod_der_matches_native=False),
+        lambda report: report["probes"]["simulator_material_receipt"]["evidence"].update(
+            sod_sha256="9" * 64),
+        lambda report: report["probes"]["simulator_material_receipt"]["evidence"].update(
+            dsc_certificate_sha256="9" * 64),
+        lambda report: report["probes"]["simulator_material_receipt"]["evidence"].update(
+            bureau_job_id_commitment="8" * 64),
         lambda report: report["probes"].pop("physical_bureau_batch"),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(provider_kind="physical"),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(simulator_marker_verified="true"),
@@ -430,7 +459,7 @@ def predeletion_report(*, run: str = "") -> dict:
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(callback_receipts_sha256=["3" * 64, "3" * 64]),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"].update(callback_receipts_sha256=["a" * 64, "3" * 64]),
         lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(bureau_job_commitment="invalid"),
-        lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(source_job_commitment="6" * 64),
+        lambda report: report["probes"]["physical_bureau_batch"]["evidence"]["returned_jobs"][0].update(source_job_commitment="9" * 64),
         lambda report: report["probes"]["packaged_image"]["evidence"].update(source_commit="9" * 40),
         lambda report: report["probes"]["packaged_image"]["evidence"].update(services_oci_reference="unbound"),
         lambda report: report["probes"]["packaged_image"]["evidence"].update(runtime_container_id="other"),
@@ -447,6 +476,17 @@ def test_predeletion_report_requires_exact_lineage_and_probes(mutate) -> None:
         gate._predeletion_report(report, COMMIT, STACK_DIGEST)
 
 
+def test_predeletion_sod_and_restart_must_use_selected_batch_job() -> None:
+    report = predeletion_report()
+    changed_job = "e" * 64
+    report["probes"]["sod_signature"]["evidence"]["source_job_commitment"] = changed_job
+    resume = report["probes"]["rust_restart_resume"]["evidence"]
+    resume["before"]["job_commitment"] = changed_job
+    resume["after"]["job_commitment"] = changed_job
+    with pytest.raises(gate.prior_gate.QualificationError):
+        gate._predeletion_report(report, COMMIT, STACK_DIGEST)
+
+
 @pytest.mark.parametrize("mutate", [
     lambda r: r["runtime_images"]["signing-keys"].update(container_id="wrong"),
     lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"].update(
@@ -456,7 +496,7 @@ def test_predeletion_report_requires_exact_lineage_and_probes(mutate) -> None:
     lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"]["dsc"].update(
         status="inactive"),
     lambda r: r["probes"]["managed_csca_dsc_chain"]["evidence"]["dsc"].update(
-        kms_key_ref="transit/keys/passport-csca"),
+        issuer_profile_commitment=CSCA_PROFILE_COMMITMENT),
     lambda r: r["probes"]["sod_signature"]["evidence"].update(
         dsc_certificate_sha256="9" * 64),
     lambda r: r["probes"]["signed_bureau_callback"]["evidence"].update(
@@ -580,7 +620,8 @@ def test_supported_report_requires_each_rust_runtime() -> None:
         issuance_native_container_id="arbitrary-before"),
     lambda resume, surface: surface["pre_restart_native_runtime"].update(
         owner_uid="other"),
-    lambda resume, surface: resume["before"].update(issuer_profile_id="other"),
+    lambda resume, surface: resume["before"].update(
+        dsc_issuer_profile_commitment="9" * 64),
     lambda resume, surface: resume["after"].update(target="other-project"),
     lambda resume, surface: resume.update(job_resumed=False),
     lambda resume, surface: resume.update(durable_record_verified=False),
@@ -598,7 +639,7 @@ def test_supported_report_requires_each_rust_runtime() -> None:
     lambda resume, surface: surface["runtime_images"]["signing-keys"].update(
         container_id="other"),
     lambda resume, surface: surface["probes"]["managed_signer"]["evidence"].update(
-        issuer_profile_status="inactive"),
+        managed_kms_custody_verified=False),
     lambda resume, surface: surface["probes"]["managed_signer"]["evidence"]["sod"].update(
         csca_certificate_sha256="9" * 64),
 ])
