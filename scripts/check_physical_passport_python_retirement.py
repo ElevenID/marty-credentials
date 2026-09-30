@@ -548,10 +548,29 @@ def _predeletion_report(report: dict, commit: str, stack_sha256: str) -> None:
     prior_gate._require(isinstance(report.get("runtime_images"), dict)
                         and set(report["runtime_images"]) == EXPECTED_PREDELETION_SERVICES,
                         "Disposable runtime service image set is incomplete")
+    images = release.get("oci_digests")
+    services_digest = (images.get("ghcr.io/elevenid/marty-ui-oss/services")
+                       if isinstance(images, dict) else None)
+    prior_gate._require(isinstance(services_digest, str)
+                        and re.fullmatch(r"sha256:[0-9a-f]{64}", services_digest) is not None,
+                        "Disposable signed services image digest is missing")
+    services_reference = f"ghcr.io/elevenid/marty-ui-oss/services@{services_digest}"
+    runtime_ids: set[str] = set()
     for service, runtime in report["runtime_images"].items():
         prior_gate._require(isinstance(runtime, dict)
-                            and _bound_to_surface(runtime, deployment, target),
-                            f"Disposable runtime owner mismatch: {service}")
+                            and _bound_to_surface(runtime, deployment, target)
+                            and runtime.get("oci_reference") == services_reference
+                            and runtime.get("oci_digest") == services_digest
+                            and isinstance(runtime.get("image_id"), str)
+                            and re.fullmatch(r"sha256:[0-9a-f]{64}", runtime["image_id"]) is not None
+                            and isinstance(runtime.get("container_id"), str)
+                            and bool(runtime["container_id"])
+                            and runtime["container_id"] not in runtime_ids
+                            and isinstance(runtime.get("selectors"), dict)
+                            and set(runtime["selectors"]) == EXPECTED_SUPPORTED_FLAGS[service]
+                            and all(value is True for value in runtime["selectors"].values()),
+                            f"Disposable released Rust runtime is incomplete: {service}")
+        runtime_ids.add(runtime["container_id"])
     probes = report.get("probes")
     prior_gate._require(isinstance(probes, dict) and set(probes) >= REQUIRED_PREDELETION_PROBES,
                         "Protected disposable passport probes are incomplete")
@@ -1194,23 +1213,39 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
                             "Supported consumer image lineage differs from protected release")
         drain = predeletion_report["probes"]["legacy_drain"]["evidence"]
         legacy = drain["legacy_source"]
+        supported_container_ids = {
+            image["container_id"]
+            for surface in supported_report["surfaces"].values()
+            for image in surface["runtime_images"].values()
+        } | {
+            surface["pre_restart_native_runtime"]["container_id"]
+            for surface in supported_report["surfaces"].values()
+        }
+        supported_owner_uids = {
+            surface["identity"]["owner_uid"]
+            for surface in supported_report["surfaces"].values()
+        }
+        supported_targets = {
+            surface["identity"].get("project_id", surface["identity"].get("namespace"))
+            for surface in supported_report["surfaces"].values()
+        }
         prior_gate._require(
             supported_report.get("legacy_source_binding") == {
                 "database_uid": legacy["database_uid"],
                 "writer_deployment_uid": legacy["writer_deployment_uid"],
             }
             and predeletion_report["deployment"]["owner_uid"]
-            == supported_report["surfaces"]["base"]["identity"]["owner_uid"]
+            not in supported_owner_uids
             and predeletion_report["deployment"]["project_id"]
-            == supported_report["surfaces"]["base"]["identity"]["project_id"]
+            not in supported_targets
             and all(
                 predeletion_report["runtime_images"][service].get("container_id")
-                == supported_report["surfaces"]["base"]["runtime_images"][service].get("container_id")
+                not in supported_container_ids
                 and predeletion_report["runtime_images"][service].get("image_id")
                 == supported_report["surfaces"]["base"]["runtime_images"][service].get("image_id")
                 for service in EXPECTED_PREDELETION_SERVICES
             ),
-            "Protected drain or base runtime is not bound to the supported consumer",
+            "Protected drain or independent Rust runtime is not bound to the supported consumer",
         )
         supported_accepted = _utc_time(supported_report["accepted_at_utc"])
         predeletion_accepted = _utc_time(predeletion_report["accepted_at_utc"])

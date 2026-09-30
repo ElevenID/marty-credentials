@@ -74,6 +74,14 @@ signed image, owner labels, organization, issuer profile, and job commitment to
 the producer's observed runtime records. A Python owner phase is not part of
 this gate.
 
+The supported-consumer and pre-deletion reports come from separate ordered
+protected runs. Each must independently inspect all six Rust service selectors,
+the released image and container identity, and owner-bound behavior. Their base
+Compose projects, owner UIDs, and container IDs must be distinct; the image IDs,
+signed release commit, manifest, and OCI digests must agree. Both reports bind
+to the same identified beta database and Python writer. This permits bounded
+teardown after each disposable run while retaining independent parity proof.
+
 After supported Rust acceptance and its initial beta-source drain, run the
 protected final deletion-cutover workflow on the exact `marty-credentials` PR
 head. It must re-inspect the same beta database and Python writer deployment,

@@ -29,8 +29,8 @@ ORGANIZATION = "org-marty"
 PROFILE = "passport-managed-profile"
 
 
-def identity(name: str) -> dict:
-    uid = f"owner-{name}"
+def identity(name: str, *, run: str = "") -> dict:
+    uid = f"owner-{name}{run}"
     result = {
         "owner_uid": uid,
         "owner_labels": {"source_commit": COMMIT, "surface": name, "owner_uid": uid},
@@ -41,7 +41,7 @@ def identity(name: str) -> dict:
                       cluster_uid="test-cluster-uid", production_cluster_uid="prod-cluster-uid",
                       cluster_identity_attestation_sha256="b" * 64)
     else:
-        result.update(kind="compose", project_id=f"passport-disposable-{name}")
+        result.update(kind="compose", project_id=f"passport-disposable-{name}{run}")
     return result
 
 
@@ -155,7 +155,8 @@ def supported_surface(name: str) -> dict:
     return surface
 
 
-def predeletion_report() -> dict:
+def predeletion_report(*, run: str = "") -> dict:
+    runtime_suffix = f"base{run}"
     report = {
         "schema": "marty.passport-rust-predeletion-acceptance/v1",
         "status": "accepted",
@@ -168,7 +169,7 @@ def predeletion_report() -> dict:
             "signed_manifest_verified": True,
         },
         "deployment": {
-            **identity("base"),
+            **identity("base", run=run),
             "mode": "disposable",
             "provider_mode": "simulator",
             "resource_identity_verified": True,
@@ -177,8 +178,10 @@ def predeletion_report() -> dict:
         },
         "runtime_images": {
             name: {"image_id": "sha256:" + "d" * 64,
-                   "container_id": f"{name}-base-after",
-                   "oci_reference": SERVICES_REFERENCE}
+                   "container_id": f"{name}-{runtime_suffix}-after",
+                   "oci_reference": SERVICES_REFERENCE,
+                   "oci_digest": IMAGE_DIGESTS["ghcr.io/elevenid/marty-ui-oss/services"],
+                   "selectors": dict.fromkeys(gate.EXPECTED_SUPPORTED_FLAGS[name], True)}
             for name in gate.EXPECTED_PREDELETION_SERVICES
         },
         "probes": {
@@ -291,7 +294,7 @@ def predeletion_report() -> dict:
         "source_commit": COMMIT,
         "stack_manifest_sha256": STACK_DIGEST,
         "services_oci_reference": SERVICES_REFERENCE,
-        "runtime_container_id": "passport-beta-bureau-base-after",
+        "runtime_container_id": f"passport-beta-bureau-{runtime_suffix}-after",
     }
     report["probes"]["physical_bureau_submission"]["evidence"] = {
         "provider_kind": "simulator", "physical_claim": "not_claimed",
@@ -302,14 +305,14 @@ def predeletion_report() -> dict:
         )},
     }
     report["probes"]["managed_csca_dsc_chain"]["evidence"] = managed_signer(
-        "signing-keys-base-after")
+        f"signing-keys-{runtime_suffix}-after")
     report["probes"]["sod_signature"]["evidence"] = sod_evidence()
     callback = report["probes"]["signed_bureau_callback"]["evidence"]
     callback.update(receipt_sha256=batch["callback_receipt_sha256"],
                     callback_receipts_sha256=batch["callback_receipts_sha256"],
                     source_job_commitments=batch["submitted_job_commitments"],
                     native_completed_jobs=batch["native_completed_jobs"],
-                    native_container_id="issuance-native-base-after")
+                    native_container_id=f"issuance-native-{runtime_suffix}-after")
     returned_by_source = {job["source_job_commitment"]: job["bureau_job_commitment"]
                           for job in batch["returned_jobs"]}
     callback["jobs"] = [
@@ -317,7 +320,7 @@ def predeletion_report() -> dict:
          "bureau_job_commitment": returned_by_source[source],
          "receipt_sha256": batch["callback_receipts_sha256"][index],
          "native_completed": True, "organization_id": ORGANIZATION,
-         "native_container_id": "issuance-native-base-after"}
+         "native_container_id": f"issuance-native-{runtime_suffix}-after"}
         for index, source in enumerate(batch["submitted_job_commitments"])
     ]
     owner = report["deployment"]
@@ -338,6 +341,13 @@ def predeletion_report() -> dict:
         lambda report: report["deployment"].update(mode="beta"),
         lambda report: report["deployment"].update(resource_identity_verified=False),
         lambda report: report["runtime_images"].pop("passport-beta-bureau"),
+        lambda report: report["runtime_images"]["issuance-native"]["selectors"].update(
+            PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED=False),
+        lambda report: report["runtime_images"]["signing-keys"].update(
+            selectors={"PASSPORT_NATIVE_GATEWAY_ENABLED": True}),
+        lambda report: report["runtime_images"]["signing-keys"].update(
+            container_id=report["runtime_images"]["gateway"]["container_id"]),
+        lambda report: report["runtime_images"]["gateway"].update(oci_digest="sha256:" + "9" * 64),
         lambda report: report["runtime_images"].update({"passport-provider-ingress": {"image_id": "sha256:" + "2" * 64}}),
         lambda report: report.update(provider_ingress_runtime_image={"image_id": "sha256:" + "2" * 64}),
         lambda report: report["deployment"].update(provider_mode="physical"),
@@ -1026,7 +1036,7 @@ def test_qualified_path_requires_complete_provenance_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     record = qualified_record()
-    predeletion = predeletion_report()
+    predeletion = predeletion_report(run="-predeletion")
     uri = "ghcr.io/elevenid/marty-ui-oss/services"
     digest = IMAGE_DIGESTS[uri]
     for image in predeletion["runtime_images"].values():
@@ -1116,7 +1126,7 @@ def test_qualified_path_requires_complete_provenance_checks(
         "ghcr.io/elevenid/marty-ui-oss/ui@"
         + IMAGE_DIGESTS["ghcr.io/elevenid/marty-ui-oss/ui"]
     )
-    check(record, "Disposable runtime image differs")
+    check(record, "Disposable released Rust runtime")
     predeletion["runtime_images"]["gateway"]["oci_reference"] = SERVICES_REFERENCE
     supported["surfaces"].pop("kubernetes")
     check(record, "surfaces are incomplete")
@@ -1127,17 +1137,31 @@ def test_qualified_path_requires_complete_provenance_checks(
     supported["accepted_at_utc"] = "2026-09-26T00:13:00Z"
     check(record, "Beta-source drain predates")
     supported["accepted_at_utc"] = "2026-09-26T00:09:00Z"
-    predeletion["runtime_images"]["gateway"]["container_id"] = "different-gateway"
+    predeletion["runtime_images"]["flow"]["container_id"] = "flow-base-after"
     check(record, "not bound to the supported consumer")
-    predeletion["runtime_images"]["gateway"]["container_id"] = "gateway-base-after"
-    predeletion["deployment"]["owner_uid"] = "different-owner"
-    predeletion["deployment"]["owner_labels"]["owner_uid"] = "different-owner"
-    for runtime in predeletion["runtime_images"].values():
-        runtime["owner_uid"] = "different-owner"
-        runtime["owner_labels"]["owner_uid"] = "different-owner"
-    for probe in predeletion["probes"].values():
-        probe["evidence"]["owner_uid"] = "different-owner"
-        probe["evidence"]["owner_labels"]["owner_uid"] = "different-owner"
+    predeletion["runtime_images"]["flow"]["container_id"] = "gateway-base-after"
+    check(record, "not bound to the supported consumer")
+    predeletion["runtime_images"]["flow"]["container_id"] = "issuance-native-kubernetes-before"
+    check(record, "not bound to the supported consumer")
+    predeletion["runtime_images"]["flow"]["container_id"] = "flow-base-predeletion-after"
+    def rebind_predeletion(owner_uid: str, project_id: str) -> None:
+        predeletion["deployment"]["owner_uid"] = owner_uid
+        predeletion["deployment"]["owner_labels"]["owner_uid"] = owner_uid
+        predeletion["deployment"]["project_id"] = project_id
+        for runtime in predeletion["runtime_images"].values():
+            runtime["owner_uid"] = owner_uid
+            runtime["owner_labels"]["owner_uid"] = owner_uid
+            runtime["target"] = project_id
+        for probe in predeletion["probes"].values():
+            probe["evidence"]["owner_uid"] = owner_uid
+            probe["evidence"]["owner_labels"]["owner_uid"] = owner_uid
+            probe["evidence"]["target"] = project_id
+
+    rebind_predeletion("owner-selfhost", "passport-disposable-base-predeletion")
+    check(record, "not bound to the supported consumer")
+    rebind_predeletion("owner-base-predeletion", "passport-disposable-selfhost")
+    check(record, "not bound to the supported consumer")
+    rebind_predeletion("owner-base", "passport-disposable-base")
     check(record, "not bound to the supported consumer")
 
 
