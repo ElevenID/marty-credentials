@@ -1,9 +1,9 @@
 ﻿# Physical-passport Python retirement candidate
 
 This draft deletes the nine legacy FastAPI passport routes and their Python
-signer and bureau adapters. It remains blocked until the Rust owner passes
-protected disposable acceptance on the base, self-host, and Kubernetes
-consumers. No beta deployment or YouTube recording is required before deleting
+signer and bureau adapters. It remains blocked until the Rust owner passes one
+protected disposable KMS acceptance run on the signed six-service runtime.
+No beta deployment or YouTube recording is required before deleting
 the superseded Python passport code. Those follow deletion in the single
 aggregate beta release and acceptance soak. Production remains unchanged.
 
@@ -16,17 +16,17 @@ issuance service, which still serves other routes.
 
 ## Pre-deletion qualification
 
-Record the protected `marty-ui` main commit and its six committed artifact
+Record the protected `marty-ui` main commit and its seven committed artifact
 hashes in `contracts/physical-passport-python-retirement-qualification.json`.
 Bind that commit to a signed stack manifest and its official CD signer. Supply
-two SHA-256-checked artifacts from successful protected-main workflows: a
-disposable Rust passport acceptance report and a supported-consumer report.
-They must name the same source commit, signed stack manifest, and released
-services image. A third, attested final cutover report is discovered from a
+the SHA-256-checked disposable Rust passport acceptance artifact from a
+successful protected-main workflow. It must name the same source commit,
+signed stack manifest, and released services image. An attested final cutover
+report is discovered from a
 protected workflow after the exact deletion PR head exists; its run ID cannot
 be stored in the qualification JSON without changing that head. The named
-pre-deletion and final cutover producers still need implementation, and the
-qualification record has no invented receipt.
+pre-deletion acceptance producer still needs implementation; the final cutover
+producer exists, and the qualification record has no invented receipt.
 
 The protected disposable report must prove all nine Gateway and Flow routes
 have one Rust owner, including unauthorized and cross-tenant rejection. It
@@ -64,25 +64,18 @@ satisfy this gate. The report must also prove
 exact disposable resource identity, unchanged production resources, and a beta
 inventory change limited to the identified scoped fence. Other beta resources
 must remain unchanged.
-Each base, self-host, and Kubernetes consumer must have a distinct owner UID and
-Compose project or protected Kubernetes namespace and cluster identity. Bind
-its runtime containers and probes to that owner. Each consumer must
-select and authenticate all nine routes to Rust, verify managed signing and
-the signed simulator callback, then restart Rust issuance and resume the same
-KMS-backed durable job. Bind the before and after native container identities,
-signed image, owner labels, organization, issuer profile, and job commitment to
-the producer's observed runtime records. A Python owner phase is not part of
-this gate.
+The protected disposable run must bind all six Rust service selectors, released
+images, route and callback probes to one owned resource identity. It must
+restart Rust issuance and resume the same KMS-backed durable job. Bind the
+before and after native container identities, signed image, owner labels,
+organization, issuer profile, and job commitment to inspected runtime records.
+A Python owner phase is not part of this gate. The optional base, self-host,
+and Kubernetes live fixture is deferred to #944; the frozen Rust batch parity
+test and protected disposable run are required here.
 
-The supported-consumer and pre-deletion reports come from separate ordered
-protected runs. Each must independently inspect all six Rust service selectors,
-the released image and container identity, and owner-bound behavior. Their base
-Compose projects, owner UIDs, and container IDs must be distinct; the image IDs,
-signed release commit, manifest, and OCI digests must agree. Both reports bind
-to the same identified beta database and Python writer. This permits bounded
-teardown after each disposable run while retaining independent parity proof.
-
-After supported Rust acceptance and its initial beta-source drain, run the
+The fence installation and drain observation complete before the protected
+pre-deletion acceptance run consumes their attested evidence. After that run,
+run the
 protected final deletion-cutover workflow on the exact `marty-credentials` PR
 head. It must re-inspect the same beta database and Python writer deployment,
 verify the exact Python container is still running, its generation and fence

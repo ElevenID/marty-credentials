@@ -23,8 +23,8 @@
     "the real beta legacy database and running shared Python issuance container are identified; an enforced scoped fence blocks passport job and physical Flow writes while unrelated issuance continues and source-bound jobs, artifacts, and active passport Flows pass drain and format checks",
     "a protected final cutover workflow attests the exact deletion head, rechecks the same beta source, running Python container, fence epoch and writer generation at a later watermark, and maintains the durable write fence",
     "Rust restart and KMS-backed job resume are verified with bound before and after native runtime identities and no Python owner phase",
-    "distinct base, self-host, and protected Kubernetes resource identities and runtime/probe ownership are verified; production is unchanged and beta changes only by the identified scoped passport write fence",
-    "base, self-host, and Kubernetes consumers select and authenticate to Rust for all nine routes with managed signing and simulator callback compatibility"
+    "the protected disposable run binds six released Rust services, restart/resume, managed signing, nine-route authentication, and simulator callback to one resource identity; production is unchanged and beta changes only by the identified scoped passport write fence",
+    "the frozen Rust batch parity unit test passes; the later three-surface live fixture remains optional work in #944"
   ],
   "predeletion_acceptance_receipt": null,
   "supported_consumer_cutover_receipt": null,

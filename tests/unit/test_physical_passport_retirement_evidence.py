@@ -184,6 +184,12 @@ def predeletion_report(*, run: str = "") -> dict:
                    "selectors": dict.fromkeys(gate.EXPECTED_SUPPORTED_FLAGS[name], True)}
             for name in gate.EXPECTED_PREDELETION_SERVICES
         },
+        "pre_restart_native_runtime": {
+            "container_id": f"issuance-native-{runtime_suffix}-before",
+            "image_id": "sha256:" + "d" * 64,
+            "oci_reference": SERVICES_REFERENCE,
+            "inspection_receipt_sha256": "f" * 64,
+        },
         "probes": {
             **{name: {"verified": True, "evidence": {"source": "test"}}
                for name in gate.REQUIRED_PREDELETION_PROBES},
@@ -307,6 +313,28 @@ def predeletion_report(*, run: str = "") -> dict:
     report["probes"]["managed_csca_dsc_chain"]["evidence"] = managed_signer(
         f"signing-keys-{runtime_suffix}-after")
     report["probes"]["sod_signature"]["evidence"] = sod_evidence()
+    report["probes"]["rust_restart_resume"]["evidence"] = {
+        "before": {
+            "owner": "rust", "issuance_native_container_id":
+                f"issuance-native-{runtime_suffix}-before",
+            "image_id": "sha256:" + "d" * 64,
+            "oci_reference": SERVICES_REFERENCE,
+            "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
+            "job_commitment": "5" * 64, "status": "SOD_SIGNED",
+        },
+        "after": {
+            "owner": "rust", "issuance_native_container_id":
+                f"issuance-native-{runtime_suffix}-after",
+            "image_id": "sha256:" + "d" * 64,
+            "oci_reference": SERVICES_REFERENCE,
+            "organization_id": ORGANIZATION, "issuer_profile_id": PROFILE,
+            "job_commitment": "5" * 64, "status": "SUBMITTED",
+        },
+        "job_resumed": True, "durable_record_verified": True,
+        "kms_signing_continuity_verified": True,
+        "gateway_owner": "rust", "flow_owner": "rust",
+        "source_commit": COMMIT, "services_oci_reference": SERVICES_REFERENCE,
+    }
     callback = report["probes"]["signed_bureau_callback"]["evidence"]
     callback.update(receipt_sha256=batch["callback_receipt_sha256"],
                     callback_receipts_sha256=batch["callback_receipts_sha256"],
@@ -326,8 +354,12 @@ def predeletion_report(*, run: str = "") -> dict:
     owner = report["deployment"]
     for runtime in report["runtime_images"].values():
         bound(runtime, owner)
+    bound(report["pre_restart_native_runtime"], owner)
     for probe in report["probes"].values():
         bound(probe["evidence"], owner)
+    resume = report["probes"]["rust_restart_resume"]["evidence"]
+    bound(resume["before"], owner)
+    bound(resume["after"], owner)
     return report
 
 
@@ -356,6 +388,17 @@ def predeletion_report(*, run: str = "") -> dict:
         lambda report: report["probes"]["nine_route_gateway_flow"]["evidence"].update(cross_tenant_status=200),
         lambda report: report["probes"]["managed_csca_dsc_chain"]["evidence"].update(private_key_exported=True),
         lambda report: report["probes"]["sod_signature"]["evidence"].update(signature_verified=False),
+        lambda report: report["probes"].pop("rust_restart_resume"),
+        lambda report: report["pre_restart_native_runtime"].update(
+            container_id=report["runtime_images"]["issuance-native"]["container_id"]),
+        lambda report: report["probes"]["rust_restart_resume"]["evidence"].update(
+            kms_signing_continuity_verified=False),
+        lambda report: report["probes"]["rust_restart_resume"]["evidence"]["after"].update(
+            job_commitment="9" * 64),
+        lambda report: report["probes"]["rust_restart_resume"]["evidence"]["after"].update(
+            issuer_profile_id="other-profile"),
+        lambda report: report["probes"]["rust_restart_resume"]["evidence"]["before"].update(
+            owner="python"),
         lambda report: report["probes"]["signed_bureau_callback"]["evidence"].update(flow_execution_verified=False),
         lambda report: report["probes"]["legacy_drain"]["evidence"].update(nonterminal_job_count=1),
         lambda report: report["probes"]["legacy_drain"]["evidence"].update(unreadable_artifact_count=1),
@@ -617,18 +660,49 @@ def test_run_identity_rejects_wrong_source_or_failed_workflow(monkeypatch) -> No
 def test_downloaded_artifact_must_match_receipt_bytes(tmp_path: Path, monkeypatch) -> None:
     payload = b'{"schema":"test"}\n'
     digest = hashlib.sha256(payload).hexdigest()
+    calls = []
 
     def download(*args: str) -> str:
-        output = Path(args[-1])
-        (output / "passport-rust-predeletion-acceptance.json").write_bytes(payload)
+        calls.append(args)
+        if args[:3] == ("gh", "run", "download"):
+            output = Path(args[-1])
+            (output / "passport-rust-predeletion-acceptance.json").write_bytes(payload)
         return ""
 
     monkeypatch.setattr(gate, "_command", download)
     assert gate._run_artifact(123, "passport-rust-predeletion-acceptance.json", digest,
-                              tmp_path / "exact")["schema"] == "test"
+                              tmp_path / "exact", COMMIT,
+                              ".github/workflows/passport-rust-predeletion-acceptance.yml")[
+                                  "schema"] == "test"
+    assert calls[-1] == (
+        "gh", "attestation", "verify",
+        str(tmp_path / "exact" / "passport-rust-predeletion-acceptance.json"),
+        "--repo", "ElevenID/marty-ui", "--signer-workflow",
+        "ElevenID/marty-ui/.github/workflows/passport-rust-predeletion-acceptance.yml",
+        "--source-digest", COMMIT, "--source-ref", "refs/heads/main",
+    )
     with pytest.raises(gate.prior_gate.QualificationError, match="SHA-256 mismatch"):
         gate._run_artifact(123, "passport-rust-predeletion-acceptance.json", "0" * 64,
-                           tmp_path / "wrong")
+                           tmp_path / "wrong", COMMIT,
+                           ".github/workflows/passport-rust-predeletion-acceptance.yml")
+
+
+def test_attested_artifact_swap_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    payload = b'{"schema":"test"}\n'
+    digest = hashlib.sha256(payload).hexdigest()
+
+    def command(*args: str) -> str:
+        if args[:3] == ("gh", "run", "download"):
+            (Path(args[-1]) / "passport-rust-predeletion-acceptance.json").write_bytes(payload)
+        elif args[:3] == ("gh", "attestation", "verify"):
+            Path(args[3]).write_bytes(b'{"schema":"swapped"}\n')
+        return ""
+
+    monkeypatch.setattr(gate, "_command", command)
+    with pytest.raises(gate.prior_gate.QualificationError, match="changed during attestation"):
+        gate._run_artifact(123, "passport-rust-predeletion-acceptance.json", digest,
+                           tmp_path / "swap", COMMIT,
+                           ".github/workflows/passport-rust-predeletion-acceptance.yml")
 
 
 def test_signed_stack_manifest_binds_release_and_source(tmp_path: Path, monkeypatch) -> None:
@@ -698,13 +772,7 @@ def qualified_record() -> dict:
             "evidence_artifact": "passport-rust-predeletion-acceptance.json",
             "evidence_sha256": "3" * 64,
         },
-        "supported_consumer_cutover_receipt": {
-            "repository": "ElevenID/marty-ui",
-            "protected_main_commit": COMMIT,
-            "acceptance_run_id": 456,
-            "evidence_artifact": "passport-supported-acceptance.json",
-            "evidence_sha256": "4" * 64,
-        },
+        "supported_consumer_cutover_receipt": None,
     }
 
 
@@ -729,7 +797,6 @@ def final_cutover_report() -> dict:
         "status": "accepted",
         "rust_source_commit": COMMIT,
         "deletion_head": "e" * 40,
-        "supported_acceptance_run_id": 456,
         "predeletion_acceptance_run_id": 123,
         "checked_at_utc": "2026-09-26T00:25:00Z",
         "production_unchanged": True,
@@ -784,6 +851,7 @@ def final_cutover_report() -> dict:
 @pytest.mark.parametrize("mutate", [
     lambda r: r.update(deletion_head="9" * 40),
     lambda r: r.update(predeletion_acceptance_run_id=999),
+    lambda r: r.update(supported_acceptance_run_id=456),
     lambda r: r["legacy_source"].update(database_uid="disposable-db-uid"),
     lambda r: r["legacy_source"].update(writer_generation=4),
     lambda r: r["legacy_source"].update(writer_container_id="b" * 64),
@@ -822,10 +890,10 @@ def test_final_cutover_rejects_wrong_head_resumed_writer_or_stale_drain(mutate) 
     report = final_cutover_report()
     predeletion = predeletion_report()
     drain = predeletion["probes"]["legacy_drain"]["evidence"]
-    gate._cutover_report(report, COMMIT, "e" * 40, drain["legacy_source"], drain, 456, 123)
+    gate._cutover_report(report, COMMIT, "e" * 40, drain["legacy_source"], drain, 123)
     mutate(report)
     with pytest.raises(gate.prior_gate.QualificationError):
-        gate._cutover_report(report, COMMIT, "e" * 40, drain["legacy_source"], drain, 456, 123)
+        gate._cutover_report(report, COMMIT, "e" * 40, drain["legacy_source"], drain, 123)
 
 
 def test_final_cutover_fetches_attested_report_for_exact_deletion_head(
@@ -1041,7 +1109,6 @@ def test_qualified_path_requires_complete_provenance_checks(
     digest = IMAGE_DIGESTS[uri]
     for image in predeletion["runtime_images"].values():
         image.update(oci_reference=f"{uri}@{digest}", oci_digest=digest)
-    supported = supported_report()
     manifest = {
         "components": [{
             "name": "marty-ui",
@@ -1055,7 +1122,7 @@ def test_qualified_path_requires_complete_provenance_checks(
 
     def verified_run(run_id, *args):
         if run_id == 123:
-            return (datetime(2026, 9, 26, 0, 11, tzinfo=UTC),
+            return (datetime(2026, 9, 26, 0, 14, 30, tzinfo=UTC),
                     datetime(2026, 9, 26, 0, 16, tzinfo=UTC))
         return (datetime(2026, 9, 26, 0, 0, tzinfo=UTC),
                 datetime(2026, 9, 26, 0, 10, tzinfo=UTC))
@@ -1082,7 +1149,7 @@ def test_qualified_path_requires_complete_provenance_checks(
     monkeypatch.setattr(gate, "_successful_pr_gate", lambda *args: pr_gate_calls.append(args))
     monkeypatch.setattr(
         gate, "_run_artifact",
-        lambda run_id, *args: predeletion if run_id == 123 else supported,
+        lambda run_id, *args: predeletion,
     )
 
     def check(candidate: dict, expected: str) -> None:
@@ -1117,8 +1184,8 @@ def test_qualified_path_requires_complete_provenance_checks(
     changed["predeletion_acceptance_receipt"]["release_source_commit"] = "9" * 40
     check(changed, "Predeletion release source")
     changed = copy.deepcopy(record)
-    changed["supported_consumer_cutover_receipt"]["protected_main_commit"] = "9" * 40
-    check(changed, "Supported consumer source")
+    changed["supported_consumer_cutover_receipt"] = {"fabricated": True}
+    check(changed, "Protected KMS passport acceptance receipt")
     predeletion["release"]["oci_digests"] = {"wrong": "sha256:" + "9" * 64}
     check(record, "image digests")
     predeletion["release"]["oci_digests"] = IMAGE_DIGESTS
@@ -1128,41 +1195,6 @@ def test_qualified_path_requires_complete_provenance_checks(
     )
     check(record, "Disposable released Rust runtime")
     predeletion["runtime_images"]["gateway"]["oci_reference"] = SERVICES_REFERENCE
-    supported["surfaces"].pop("kubernetes")
-    check(record, "surfaces are incomplete")
-    supported["surfaces"]["kubernetes"] = supported_surface("kubernetes")
-    supported["legacy_source_binding"]["database_uid"] = "fresh-disposable-db"
-    check(record, "not bound to the supported consumer")
-    supported["legacy_source_binding"]["database_uid"] = "beta-legacy-db-uid"
-    supported["accepted_at_utc"] = "2026-09-26T00:13:00Z"
-    check(record, "Beta-source drain predates")
-    supported["accepted_at_utc"] = "2026-09-26T00:09:00Z"
-    predeletion["runtime_images"]["flow"]["container_id"] = "flow-base-after"
-    check(record, "not bound to the supported consumer")
-    predeletion["runtime_images"]["flow"]["container_id"] = "gateway-base-after"
-    check(record, "not bound to the supported consumer")
-    predeletion["runtime_images"]["flow"]["container_id"] = "issuance-native-kubernetes-before"
-    check(record, "not bound to the supported consumer")
-    predeletion["runtime_images"]["flow"]["container_id"] = "flow-base-predeletion-after"
-    def rebind_predeletion(owner_uid: str, project_id: str) -> None:
-        predeletion["deployment"]["owner_uid"] = owner_uid
-        predeletion["deployment"]["owner_labels"]["owner_uid"] = owner_uid
-        predeletion["deployment"]["project_id"] = project_id
-        for runtime in predeletion["runtime_images"].values():
-            runtime["owner_uid"] = owner_uid
-            runtime["owner_labels"]["owner_uid"] = owner_uid
-            runtime["target"] = project_id
-        for probe in predeletion["probes"].values():
-            probe["evidence"]["owner_uid"] = owner_uid
-            probe["evidence"]["owner_labels"]["owner_uid"] = owner_uid
-            probe["evidence"]["target"] = project_id
-
-    rebind_predeletion("owner-selfhost", "passport-disposable-base-predeletion")
-    check(record, "not bound to the supported consumer")
-    rebind_predeletion("owner-base-predeletion", "passport-disposable-selfhost")
-    check(record, "not bound to the supported consumer")
-    rebind_predeletion("owner-base", "passport-disposable-base")
-    check(record, "not bound to the supported consumer")
 
 
 def test_protected_source_rejects_fabricated_hashes(
