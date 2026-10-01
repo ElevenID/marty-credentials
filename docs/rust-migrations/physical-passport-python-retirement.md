@@ -25,7 +25,8 @@ signed stack manifest, and released services image. An attested final cutover
 report is discovered from a
 protected workflow after the exact deletion PR head exists; its run ID cannot
 be stored in the qualification JSON without changing that head. The named
-pre-deletion acceptance producer still needs implementation; the final cutover
+pre-deletion acceptance producer is implemented in `marty-ui` PR #1011 and
+still awaits protected-main merge and runtime evidence. The final cutover
 producer exists, and the qualification record has no invented receipt.
 
 The protected disposable report must prove all nine Gateway and Flow routes
