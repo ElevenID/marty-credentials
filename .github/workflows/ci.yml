@@ -652,6 +652,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PASSPORT_DELETION_PR_HEAD: ${{ github.event.pull_request.head.sha }}
+      PASSPORT_EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -688,7 +689,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == pull_request && "$PASSPORT_EVENT_PR_NUMBER" == 305 ]]; then
             test -n "$PASSPORT_DELETION_PR_HEAD"
             python -m scripts.check_physical_passport_python_retirement \
               --marty-ui ../marty-ui --deletion-head "$PASSPORT_DELETION_PR_HEAD"

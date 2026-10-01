@@ -420,11 +420,12 @@ def _pull_request_lineage(number: int, deletion_head: str) -> None:
 
 
 def _post_pr_lineage(number: int, deletion_head: str) -> None:
-    """Bind the running queue/main commit to the exact qualified deletion PR."""
+    """Bind later PRs and queue/main commits to the merged deletion PR."""
     event_name = os.environ.get("GITHUB_EVENT_NAME")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
     running_sha = os.environ.get("GITHUB_SHA")
-    prior_gate._require(event_name in {"merge_group", "push"}
+    prior_gate._require(event_name in
+                        {"pull_request", "merge_group", "push", "workflow_dispatch"}
                         and isinstance(event_path, str) and bool(event_path)
                         and isinstance(running_sha, str) and COMMIT.fullmatch(running_sha) is not None,
                         "Post-PR GitHub event provenance is missing")
@@ -438,6 +439,19 @@ def _post_pr_lineage(number: int, deletion_head: str) -> None:
                              "rev-parse", "HEAD").strip()
     prior_gate._require(checkout_head == running_sha,
                         "Running checkout differs from the GitHub event commit")
+    pr = json.loads(_command(
+        "gh", "api", f"repos/ElevenID/marty-credentials/pulls/{number}",
+    ))
+    head = pr.get("head") if isinstance(pr, dict) else None
+    prior_gate._require(isinstance(pr, dict) and pr.get("number") == number
+                        and isinstance(head, dict) and head.get("sha") == deletion_head,
+                        "Live retirement pull request differs from the attested deletion head")
+    merged = pr.get("merged") is True
+    merge_commit = pr.get("merge_commit_sha")
+    if merged:
+        prior_gate._require(isinstance(merge_commit, str)
+                            and COMMIT.fullmatch(merge_commit) is not None,
+                            "Merged retirement commit is unavailable")
     if event_name == "merge_group":
         group = event.get("merge_group")
         prior_gate._require(isinstance(group, dict)
@@ -447,45 +461,69 @@ def _post_pr_lineage(number: int, deletion_head: str) -> None:
                             and group["head_ref"].startswith(
                                 "refs/heads/gh-readonly-queue/main/"),
                             "Running merge group is not a main queue commit")
-        query = ("query { repository(owner: \"ElevenID\", name: \"marty-credentials\") "
-                 f"{{ pullRequest(number: {number}) {{ headRefOid mergeQueueEntry "
-                 "{ headCommit { oid } pullRequest { number headRefOid } } } } }")
-        response = json.loads(_command("gh", "api", "graphql", "-f", f"query={query}"))
-        repository = response.get("data", {}).get("repository") if isinstance(response, dict) else None
-        pr = repository.get("pullRequest") if isinstance(repository, dict) else None
-        entry = pr.get("mergeQueueEntry") if isinstance(pr, dict) else None
-        queued_pr = entry.get("pullRequest") if isinstance(entry, dict) else None
-        queued_commit = entry.get("headCommit") if isinstance(entry, dict) else None
-        ancestor = queued_commit.get("oid") if isinstance(queued_commit, dict) else None
-        prior_gate._require(isinstance(pr, dict) and pr.get("headRefOid") == deletion_head
-                            and isinstance(queued_pr, dict)
-                            and queued_pr.get("number") == number
-                            and queued_pr.get("headRefOid") == deletion_head
-                            and isinstance(ancestor, str)
-                            and COMMIT.fullmatch(ancestor) is not None,
-                            "Merge queue entry does not contain the exact deletion PR head")
+        if merged:
+            base_sha = group.get("base_sha")
+            prior_gate._require(isinstance(base_sha, str)
+                                and COMMIT.fullmatch(base_sha) is not None,
+                                "Later merge group has no main base commit")
+            ancestor = merge_commit
+            running_target = base_sha
+        else:
+            query = ("query { repository(owner: \"ElevenID\", name: \"marty-credentials\") "
+                     f"{{ pullRequest(number: {number}) {{ headRefOid mergeQueueEntry "
+                     "{ headCommit { oid } pullRequest { number headRefOid } } } } }")
+            response = json.loads(_command("gh", "api", "graphql", "-f", f"query={query}"))
+            repository = response.get("data", {}).get("repository") if isinstance(response, dict) else None
+            queued = repository.get("pullRequest") if isinstance(repository, dict) else None
+            entry = queued.get("mergeQueueEntry") if isinstance(queued, dict) else None
+            queued_pr = entry.get("pullRequest") if isinstance(entry, dict) else None
+            queued_commit = entry.get("headCommit") if isinstance(entry, dict) else None
+            ancestor = queued_commit.get("oid") if isinstance(queued_commit, dict) else None
+            prior_gate._require(isinstance(queued, dict)
+                                and queued.get("headRefOid") == deletion_head
+                                and isinstance(queued_pr, dict)
+                                and queued_pr.get("number") == number
+                                and queued_pr.get("headRefOid") == deletion_head
+                                and isinstance(ancestor, str)
+                                and COMMIT.fullmatch(ancestor) is not None,
+                                "Merge queue entry does not contain the exact deletion PR head")
+            running_target = running_sha
+    elif event_name == "pull_request":
+        pull = event.get("pull_request")
+        base = pull.get("base") if isinstance(pull, dict) else None
+        base_repo = base.get("repo") if isinstance(base, dict) else None
+        base_sha = base.get("sha") if isinstance(base, dict) else None
+        prior_gate._require(merged and isinstance(pull, dict)
+                            and type(event.get("number")) is int
+                            and event["number"] == pull.get("number")
+                            and event["number"] != number
+                            and isinstance(base, dict) and base.get("ref") == "main"
+                            and isinstance(base_repo, dict)
+                            and base_repo.get("full_name") == "ElevenID/marty-credentials"
+                            and isinstance(base_sha, str)
+                            and COMMIT.fullmatch(base_sha) is not None,
+                            "Later pull request is not based on main after retirement")
+        ancestor = merge_commit
+        running_target = base_sha
     else:
-        prior_gate._require(event.get("ref") == "refs/heads/main"
-                            and event.get("after") == running_sha,
-                            "Running push is not the protected main commit")
-        pr = json.loads(_command(
-            "gh", "api", f"repos/ElevenID/marty-credentials/pulls/{number}",
-        ))
-        ancestor = pr.get("merge_commit_sha") if isinstance(pr, dict) else None
-        head = pr.get("head") if isinstance(pr, dict) else None
-        prior_gate._require(isinstance(pr, dict) and pr.get("number") == number
-                            and pr.get("merged") is True
-                            and isinstance(head, dict) and head.get("sha") == deletion_head
-                            and isinstance(ancestor, str)
-                            and COMMIT.fullmatch(ancestor) is not None,
-                            "Main push is not bound to the merged deletion PR")
+        if event_name == "push":
+            prior_gate._require(event.get("ref") == "refs/heads/main"
+                                and event.get("after") == running_sha,
+                                "Running push is not the protected main commit")
+        else:
+            prior_gate._require(os.environ.get("GITHUB_REF") == "refs/heads/main",
+                                "Manual CI is not running on protected main")
+        prior_gate._require(merged,
+                            "Main run is not bound to the merged deletion PR")
+        ancestor = merge_commit
+        running_target = running_sha
     comparison = json.loads(_command(
         "gh", "api",
-        f"repos/ElevenID/marty-credentials/compare/{ancestor}...{running_sha}",
+        f"repos/ElevenID/marty-credentials/compare/{ancestor}...{running_target}",
     ))
     prior_gate._require(isinstance(comparison, dict)
                         and comparison.get("status") in {"ahead", "identical"},
-                        "Running commit does not contain the deletion PR queue or merge commit")
+                        "Running main base does not contain the deletion PR queue or merge commit")
 
 
 def _successful_pr_gate(number: int, deletion_head: str, cutover_completed: datetime) -> None:
@@ -1251,8 +1289,9 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
             "Beta-source drain is outside protected Rust acceptance",
         )
         if post_pr_check:
-            prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") in {"merge_group", "push"},
-                                "Post-PR exact-head check is only valid on merge_group or push")
+            prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") in
+                                {"pull_request", "merge_group", "push", "workflow_dispatch"},
+                                "Post-PR exact-head check requires a GitHub code event")
             deletion_head = _retirement_pr_head(contract["retirement_pull_request_number"])
             _post_pr_lineage(contract["retirement_pull_request_number"], deletion_head)
         else:
@@ -1279,7 +1318,7 @@ def main() -> int:
     parser.add_argument("--marty-ui", type=Path)
     parser.add_argument("--deletion-head", help="Exact pull-request head SHA from the event")
     parser.add_argument("--post-pr-check", action="store_true",
-                        help="Recheck signed parity on merge_group or push after the PR cutover gate")
+                        help="Recheck signed parity on later PR, merge_group, or main run")
     parser.add_argument("--print-checkout-commit", action="store_true",
                         help="Print a validated qualified source pin for the CI checkout")
     args = parser.parse_args()

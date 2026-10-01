@@ -1041,6 +1041,8 @@ def test_post_pr_lineage_requires_queue_or_merged_commit(
         },
     }}}}
     comparison = {"status": "ahead"}
+    retirement_pr = {"number": 305, "merged": False,
+                     "head": {"sha": head}, "merge_commit_sha": queued}
 
     def command(*args: str) -> str:
         if args[0] == "git":
@@ -1051,8 +1053,7 @@ def test_post_pr_lineage_requires_queue_or_merged_commit(
             return json.dumps(queue)
         if "/compare/" in args[-1]:
             return json.dumps(comparison)
-        return json.dumps({"number": 305, "merged": True,
-                           "head": {"sha": head}, "merge_commit_sha": queued})
+        return json.dumps(retirement_pr)
 
     monkeypatch.setattr(gate, "_command", command)
     event_path.write_text(json.dumps(group_event), encoding="utf-8")
@@ -1075,11 +1076,88 @@ def test_post_pr_lineage_requires_queue_or_merged_commit(
         gate._post_pr_lineage(305, head)
 
     monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    retirement_pr["merged"] = True
     event_path.write_text(json.dumps({"repository": group_event["repository"],
                                       "ref": "refs/heads/main", "after": running}), encoding="utf-8")
     gate._post_pr_lineage(305, head)
     comparison["status"] = "diverged"
     with pytest.raises(gate.prior_gate.QualificationError, match="does not contain"):
+        gate._post_pr_lineage(305, head)
+    comparison["status"] = "ahead"
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    event_path.write_text(json.dumps({"repository": group_event["repository"]}),
+                          encoding="utf-8")
+    gate._post_pr_lineage(305, head)
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/other")
+    with pytest.raises(gate.prior_gate.QualificationError, match="protected main"):
+        gate._post_pr_lineage(305, head)
+
+
+def test_post_pr_lineage_accepts_later_pr_and_queue_only_after_merged_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    head = "e" * 40
+    merged = "a" * 40
+    base_sha = "c" * 40
+    running = "b" * 40
+    repo = {"full_name": "ElevenID/marty-credentials"}
+    retirement_pr = {"number": 305, "merged": True,
+                     "head": {"sha": head}, "merge_commit_sha": merged}
+    comparison = {"status": "ahead"}
+    calls = []
+
+    def command(*args: str) -> str:
+        calls.append(args)
+        if args[0] == "git":
+            return running
+        if "/compare/" in args[-1]:
+            return json.dumps(comparison)
+        if args[-1].endswith("/pulls/305"):
+            return json.dumps(retirement_pr)
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr(gate, "_command", command)
+    event_path = tmp_path / "event.json"
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
+    monkeypatch.setenv("GITHUB_SHA", running)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    event = {"number": 306, "repository": repo,
+             "pull_request": {"number": 306,
+                              "head": {"sha": "f" * 40,
+                                       "repo": {"full_name": "other/fork"}},
+                              "base": {"sha": base_sha, "ref": "main", "repo": repo}}}
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    gate._post_pr_lineage(305, head)
+    assert any(args[-1].endswith(f"/compare/{merged}...{base_sha}") for args in calls)
+
+    retirement_pr["merged"] = False
+    with pytest.raises(gate.prior_gate.QualificationError, match="after retirement"):
+        gate._post_pr_lineage(305, head)
+    retirement_pr["merged"] = True
+    comparison["status"] = "diverged"
+    with pytest.raises(gate.prior_gate.QualificationError, match="does not contain"):
+        gate._post_pr_lineage(305, head)
+    comparison["status"] = "ahead"
+    event["pull_request"]["base"]["ref"] = "other"
+    event_path.write_text(json.dumps(event), encoding="utf-8")
+    with pytest.raises(gate.prior_gate.QualificationError, match="based on main"):
+        gate._post_pr_lineage(305, head)
+
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "merge_group")
+    group = {"repository": repo, "merge_group": {
+        "head_sha": running, "base_sha": base_sha,
+        "base_ref": "refs/heads/main",
+        "head_ref": "refs/heads/gh-readonly-queue/main/pr-306-test",
+    }}
+    event_path.write_text(json.dumps(group), encoding="utf-8")
+    calls.clear()
+    gate._post_pr_lineage(305, head)
+    assert any(args[-1].endswith(f"/compare/{merged}...{base_sha}") for args in calls)
+    assert not any("graphql" in args for args in calls)
+    group["merge_group"].pop("base_sha")
+    event_path.write_text(json.dumps(group), encoding="utf-8")
+    with pytest.raises(gate.prior_gate.QualificationError, match="main base commit"):
         gate._post_pr_lineage(305, head)
 
 
@@ -1218,8 +1296,8 @@ def test_qualified_path_requires_complete_provenance_checks(
     with pytest.raises(gate.prior_gate.QualificationError, match="Exact deletion head"):
         gate.verify(path, tmp_path, deletion_head="e" * 40)
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
-    with pytest.raises(gate.prior_gate.QualificationError, match="only valid"):
-        gate.verify(path, tmp_path, post_pr_check=True)
+    gate.verify(path, tmp_path, post_pr_check=True)
+    assert lineage_calls[-1] == (305, "e" * 40)
     monkeypatch.delenv("GITHUB_EVENT_NAME")
     changed = copy.deepcopy(record)
     changed["predeletion_acceptance_receipt"]["release_source_commit"] = "9" * 40
