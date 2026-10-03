@@ -70,7 +70,7 @@
         "source": "services/issuance/infrastructure/security/encryption.py"
       }
     ],
-    "environment_variable_count": 83,
+    "environment_variable_count": 76,
     "environment_variables": [
       "APP_ENV",
       "CANVAS_ADMIN_API_TOKEN",
@@ -122,8 +122,6 @@
       "GRPC_SERVICE_TOKEN",
       "GRPC_SERVICE_TOKEN_FILE",
       "GRPC_TLS_CA_CERT",
-      "ICAO_DOCUMENT_SIGNER_API_KEY",
-      "ICAO_DOCUMENT_SIGNER_URL",
       "INTEGRATION_SECRET_MASTER_KEY_ENV",
       "ISSUANCE_API_KEY",
       "ISSUANCE_APPROVAL_POLICY_CACHE_SECONDS",
@@ -137,11 +135,6 @@
       "LOG_LEVEL",
       "MARTY_DEFAULT_REVOCATION_PROFILE_ID",
       "ORG_GRPC_TARGET",
-      "PERSONALIZATION_BUREAU_API_KEY",
-      "PERSONALIZATION_BUREAU_URL",
-      "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-      "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
-      "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
       "REVOCATION_PROFILE_ID",
       "REVOCATION_PROFILE_SERVICE_URL",
       "RP_GRPC_TARGET",
@@ -295,10 +288,10 @@
     ]
   },
   "http": {
-    "route_count": 95,
+    "route_count": 86,
     "routes": [
       {
-        "line": 958,
+        "line": 951,
         "method": "GET",
         "operation": "get_as_metadata",
         "path": "/.well-known/oauth-authorization-server",
@@ -306,7 +299,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 934,
+        "line": 927,
         "method": "GET",
         "operation": "get_org_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}",
@@ -314,7 +307,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 903,
+        "line": 896,
         "method": "GET",
         "operation": "get_org_apple_wallet_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet",
@@ -322,7 +315,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 872,
+        "line": 865,
         "method": "GET",
         "operation": "get_org_credential_manager_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}/credential-manager",
@@ -330,7 +323,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 761,
+        "line": 754,
         "method": "GET",
         "operation": "get_issuer_metadata_root",
         "path": "/.well-known/openid-credential-issuer",
@@ -338,7 +331,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 606,
+        "line": 599,
         "method": "GET",
         "operation": "get_org_issuer_metadata",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}",
@@ -346,7 +339,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 536,
+        "line": 529,
         "method": "GET",
         "operation": "get_org_issuer_metadata_apple_wallet",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet",
@@ -354,7 +347,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 473,
+        "line": 466,
         "method": "GET",
         "operation": "get_org_issuer_metadata_credential_manager",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}/credential-manager",
@@ -362,7 +355,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 842,
+        "line": 835,
         "method": "GET",
         "operation": "get_sd_jwt_vc_type_metadata",
         "path": "/credentials/{credential_type:path}",
@@ -370,7 +363,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 453,
+        "line": 446,
         "method": "GET",
         "operation": "health_check",
         "path": "/health",
@@ -402,7 +395,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 457,
+        "line": 450,
         "method": "GET",
         "operation": "readiness_check",
         "path": "/ready",
@@ -984,78 +977,6 @@
         "path": "/v1/issued-credentials/{credential_id}/suspend",
         "router": "issued_credential_router",
         "source": "services/issuance/infrastructure/api/routes.py"
-      },
-      {
-        "line": 201,
-        "method": "POST",
-        "operation": "create_passport_application",
-        "path": "/v1/passport/applications",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 350,
-        "method": "POST",
-        "operation": "activate_passport",
-        "path": "/v1/passport/applications/{application_id}/activate",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 262,
-        "method": "POST",
-        "operation": "generate_passport_data_groups",
-        "path": "/v1/passport/applications/{application_id}/generate-data-groups",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 248,
-        "method": "POST",
-        "operation": "generate_passport_sod",
-        "path": "/v1/passport/applications/{application_id}/generate-sod",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 309,
-        "method": "GET",
-        "operation": "get_passport_production_status",
-        "path": "/v1/passport/applications/{application_id}/production-status",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 324,
-        "method": "POST",
-        "operation": "record_passport_quality_result",
-        "path": "/v1/passport/applications/{application_id}/quality-verify",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 275,
-        "method": "POST",
-        "operation": "submit_passport_personalization",
-        "path": "/v1/passport/applications/{application_id}/submit-personalization",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 173,
-        "method": "GET",
-        "operation": "get_physical_document_capabilities",
-        "path": "/v1/passport/capabilities",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 366,
-        "method": "POST",
-        "operation": "personalization_webhook",
-        "path": "/v1/passport/webhooks/personalization",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       }
     ]
   },

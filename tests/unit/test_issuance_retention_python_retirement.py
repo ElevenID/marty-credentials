@@ -1,11 +1,17 @@
-"""Keep the Rust-owned retention endpoints retired without trimming live Python."""
+"""Keep Rust-owned retention and passport endpoints retired."""
 
 from __future__ import annotations
 
 import ast
+import copy
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
+import pytest
+
+from scripts import check_physical_passport_python_retirement as passport_gate
 from scripts import issuance_surface_contract
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,7 +19,7 @@ RETIRED = {
     ("GET", "/v1/issuance/organizations/{organization_id}/retention"),
     ("POST", "/v1/issuance/organizations/{organization_id}/retention/purge"),
 }
-RETAINED_PASSPORT = {
+RETIRED_PASSPORT = {
     ("GET", "/v1/passport/applications/{application_id}/production-status"),
     ("GET", "/v1/passport/capabilities"),
     ("POST", "/v1/passport/applications"),
@@ -24,6 +30,60 @@ RETAINED_PASSPORT = {
     ("POST", "/v1/passport/applications/{application_id}/submit-personalization"),
     ("POST", "/v1/passport/webhooks/personalization"),
 }
+PASSPORT_SOURCE_ARTIFACTS = {
+    "contracts/issuance-physical-passport-native.json",
+    "contracts/issuance-native-coverage.json",
+    "contracts/issuance-universal-ownership.json",
+    "contracts/passport-rust-only-retirement-behavior.json",
+    "contracts/passport-beta-cutover-drain-behavior.json",
+    "contracts/passport-beta-scoped-write-fence-behavior.json",
+    "docker-compose.passport-supported-disposable.yml",
+}
+
+
+def _is_sha(value: object, length: int) -> bool:
+    return isinstance(value, str) and re.fullmatch(rf"[0-9a-f]{{{length}}}", value) is not None
+
+
+def _assert_passport_qualification_shape(candidate: dict) -> None:
+    assert candidate["schema"] == "marty.physical-passport-python-retirement-qualification/v3"
+    assert {
+        (row["method"], row["path"])
+        for row in candidate["authorized_python_route_deletions"]
+    } == RETIRED_PASSPORT
+    assert len(candidate["authorized_python_route_deletions"]) == len(RETIRED_PASSPORT)
+    assert candidate["full_python_service_deletion_authorized"] is False
+    assert candidate["retirement_pull_request_number"] == 305
+    source = candidate["source"]
+    assert source["repository"] == "ElevenID/marty-ui"
+    assert set(source["required_artifacts"]) == PASSPORT_SOURCE_ARTIFACTS
+    assert len(source["required_artifacts"]) == len(PASSPORT_SOURCE_ARTIFACTS)
+
+    if candidate["state"] == "blocked_pending_protected_acceptance":
+        assert source["protected_main_commit"] is None
+        assert source["artifact_sha256"] is None
+        assert candidate["predeletion_acceptance_receipt"] is None
+        assert candidate["supported_consumer_cutover_receipt"] is None
+    else:
+        assert candidate["state"] == "qualified"
+        commit = source["protected_main_commit"]
+        assert _is_sha(commit, 40)
+        hashes = source["artifact_sha256"]
+        assert isinstance(hashes, dict) and set(hashes) == PASSPORT_SOURCE_ARTIFACTS
+        assert all(_is_sha(digest, 64) for digest in hashes.values())
+        receipt = candidate["predeletion_acceptance_receipt"]
+        assert isinstance(receipt, dict)
+        assert receipt["release_source_commit"] == commit
+        assert isinstance(receipt["release_tag"], str) and receipt["release_tag"].strip()
+        assert isinstance(receipt["acceptance_run_id"], int)
+        assert receipt["acceptance_run_id"] > 0
+        assert isinstance(receipt["evidence_artifact"], str)
+        assert receipt["evidence_artifact"].strip()
+        assert _is_sha(receipt["evidence_sha256"], 64)
+        assert isinstance(receipt["accepted_at_utc"], str)
+        accepted_at = datetime.fromisoformat(receipt["accepted_at_utc"].replace("Z", "+00:00"))
+        assert accepted_at.utcoffset().total_seconds() == 0
+        assert candidate["supported_consumer_cutover_receipt"] is None
 
 
 def _class_methods(relative: str, class_name: str) -> set[str]:
@@ -38,12 +98,11 @@ def _class_methods(relative: str, class_name: str) -> set[str]:
     }
 
 
-def test_only_the_two_retention_routes_are_retired() -> None:
+def test_retention_and_passport_routes_are_retired() -> None:
     surface = issuance_surface_contract.build_contract()
     routes = {(row["method"], row["path"]) for row in surface["http"]["routes"]}
-    assert RETIRED.isdisjoint(routes)
-    assert routes >= RETAINED_PASSPORT
-    assert surface["http"]["route_count"] == 95
+    assert (RETIRED | RETIRED_PASSPORT).isdisjoint(routes)
+    assert surface["http"]["route_count"] == 86
     assert surface["migrations"]["heads"] == ["issuance_event_owner"]
 
 
@@ -75,3 +134,51 @@ def test_frozen_retention_contract_remains_available_to_rust() -> None:
     )
     assert contract["schema"] == "marty.issuance-retention-management/v1"
     assert {(row["method"], row["path"]) for row in contract["routes"]} == RETIRED
+
+
+def test_passport_retirement_keeps_the_frozen_oracle_and_acceptance_gate() -> None:
+    oracle = json.loads(
+        (ROOT / "contracts/physical-passport-python-route-reference.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    candidate = json.loads(
+        (ROOT / "contracts/physical-passport-python-retirement-qualification.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert {(row["method"], row["path"]) for row in oracle["operations"]} == RETIRED_PASSPORT
+    _assert_passport_qualification_shape(candidate)
+    with pytest.raises(passport_gate.prior_gate.QualificationError, match="blocked"):
+        passport_gate.verify(
+            ROOT / "contracts/physical-passport-python-retirement-qualification.json"
+        )
+
+
+def test_passport_retirement_rejects_fabricated_qualified_record(tmp_path: Path) -> None:
+    candidate = json.loads(
+        (ROOT / "contracts/physical-passport-python-retirement-qualification.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    qualified = copy.deepcopy(candidate)
+    qualified["state"] = "qualified"
+    qualified["source"]["protected_main_commit"] = "a" * 40
+    qualified["source"]["artifact_sha256"] = dict.fromkeys(PASSPORT_SOURCE_ARTIFACTS, "b" * 64)
+    qualified["predeletion_acceptance_receipt"] = {
+        "release_tag": "test-only-shape",
+        "release_source_commit": "a" * 40,
+        "acceptance_run_id": 1,
+        "evidence_artifact": "test-only-shape.json",
+        "evidence_sha256": "c" * 64,
+        "accepted_at_utc": "2026-09-26T00:00:00Z",
+    }
+    qualified["supported_consumer_cutover_receipt"] = {"fabricated": True}
+    with pytest.raises(AssertionError):
+        _assert_passport_qualification_shape(qualified)
+    qualified["supported_consumer_cutover_receipt"] = None
+    _assert_passport_qualification_shape(qualified)
+    candidate_path = tmp_path / "qualification.json"
+    candidate_path.write_text(json.dumps(qualified), encoding="utf-8")
+    with pytest.raises(passport_gate.prior_gate.QualificationError, match="source checkout"):
+        passport_gate.verify(candidate_path)

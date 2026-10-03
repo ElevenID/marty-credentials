@@ -11,7 +11,6 @@ from issuance.application import rust_integration
 from issuance.infrastructure.adapters import canvas_credentials_adapter
 from issuance.infrastructure.adapters.memory_repository import InMemoryIssuanceRepository
 from issuance.infrastructure.api import routes
-from issuance.infrastructure.api.physical_document_routes import physical_document_router
 
 ROOT = Path(__file__).resolve().parents[2]
 ISSUANCE = ROOT / "services" / "issuance"
@@ -68,7 +67,7 @@ RETIRED_ROUTE_SYMBOLS = frozenset(
     }
 )
 
-RETAINED_LEGACY_ROUTE_IDENTITIES = frozenset(
+RETIRED_PASSPORT_ROUTE_IDENTITIES = frozenset(
     {
         ("GET", "/v1/passport/capabilities"),
         ("POST", "/v1/passport/applications"),
@@ -137,12 +136,7 @@ def test_retired_python_repository_writers_stay_absent() -> None:
 def test_remaining_python_feature_surface_is_preserved() -> None:
     identities = _router_identities()
     assert ("POST", "/v1/issuance/didcomm/deliver") in identities
-    physical_identities = {
-        (method, route.path)
-        for route in physical_document_router.routes
-        for method in route.methods or ()
-    }
-    assert identities | physical_identities >= RETAINED_LEGACY_ROUTE_IDENTITIES
+    assert RETIRED_PASSPORT_ROUTE_IDENTITIES.isdisjoint(identities)
 
     assert callable(routes._sync_canvas_lifecycle_delivery_record)
     assert callable(routes._sync_canvas_lifecycle_delivery_records)
