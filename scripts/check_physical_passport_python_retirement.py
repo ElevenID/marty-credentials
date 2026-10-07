@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -13,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts import check_issuance_python_retirement as prior_gate
+from scripts import issuance_surface_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "contracts/physical-passport-python-retirement-qualification.json"
@@ -327,42 +330,57 @@ def _run_artifact(run_id: int, artifact_name: str, digest: str, output: Path,
 
 def _final_cutover_report(commit: str, deletion_head: str, output: Path) -> tuple[dict, datetime, datetime]:
     """Find the attested final drain produced for this exact deletion commit."""
-    listing = json.loads(_command(
-        "gh", "api",
-        "repos/ElevenID/marty-ui/actions/workflows/passport-python-deletion-cutover.yml/runs"
-        "?branch=main&status=success&per_page=100",
-    ))
-    runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
-    prior_gate._require(isinstance(runs, list), "Protected final cutover runs are unavailable")
-    candidates = [run for run in runs if isinstance(run, dict)
-                  and run.get("head_sha") == commit and run.get("head_branch") == "main"
-                  and run.get("status") == "completed" and run.get("conclusion") == "success"]
-    prior_gate._require(bool(candidates), "Final protected deletion cutover run is missing")
-    candidates.sort(key=lambda run: str(run.get("updated_at", "")), reverse=True)
-    for run in candidates:
-        run_id = run.get("id")
-        try:
-            started, completed = _verified_run(
-                run_id, commit, ".github/workflows/passport-python-deletion-cutover.yml",
-            )
-            name = f"passport-python-deletion-cutover-{run_id}"
-            destination = output / str(run_id)
-            destination.mkdir(parents=True, exist_ok=False)
-            _command("gh", "run", "download", str(run_id), "--repo", "ElevenID/marty-ui",
-                     "--name", name, "--dir", str(destination))
-            artifact = destination / f"{name}.json"
-            prior_gate._require(artifact.is_file() and artifact.stat().st_size <= 1024 * 1024,
-                                "Final cutover artifact is missing or oversized")
-            _command("gh", "attestation", "verify", str(artifact),
-                     "--repo", "ElevenID/marty-ui",
-                     "--signer-workflow",
-                     "ElevenID/marty-ui/.github/workflows/passport-python-deletion-cutover.yml",
-                     "--source-digest", commit, "--source-ref", "refs/heads/main")
-            report = prior_gate._json(artifact)
-            if isinstance(report, dict) and report.get("deletion_head") == deletion_head:
-                return report, started, completed
-        except prior_gate.QualificationError:
-            continue
+    page = 1
+    seen: set[int] = set()
+    found_source_run = False
+    while True:
+        listing = json.loads(_command(
+            "gh", "api",
+            "repos/ElevenID/marty-ui/actions/workflows/passport-python-deletion-cutover.yml/runs"
+            f"?branch=main&status=success&per_page=100&page={page}",
+        ))
+        runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        prior_gate._require(isinstance(runs, list), "Protected final cutover runs are unavailable")
+        new_ids = {run.get("id") for run in runs if isinstance(run, dict)
+                   and type(run.get("id")) is int}
+        unseen_ids = new_ids - seen
+        prior_gate._require(not runs or bool(unseen_ids),
+                            "Protected final cutover pagination did not advance")
+        seen.update(new_ids)
+        candidates = [run for run in runs if isinstance(run, dict)
+                      and run.get("id") in unseen_ids
+                      and run.get("head_sha") == commit and run.get("head_branch") == "main"
+                      and run.get("status") == "completed" and run.get("conclusion") == "success"]
+        found_source_run = found_source_run or bool(candidates)
+        candidates.sort(key=lambda run: str(run.get("updated_at", "")), reverse=True)
+        for run in candidates:
+            run_id = run.get("id")
+            try:
+                started, completed = _verified_run(
+                    run_id, commit, ".github/workflows/passport-python-deletion-cutover.yml",
+                )
+                name = f"passport-python-deletion-cutover-{run_id}"
+                destination = output / str(run_id)
+                destination.mkdir(parents=True, exist_ok=False)
+                _command("gh", "run", "download", str(run_id), "--repo", "ElevenID/marty-ui",
+                         "--name", name, "--dir", str(destination))
+                artifact = destination / f"{name}.json"
+                prior_gate._require(artifact.is_file() and artifact.stat().st_size <= 1024 * 1024,
+                                    "Final cutover artifact is missing or oversized")
+                _command("gh", "attestation", "verify", str(artifact),
+                         "--repo", "ElevenID/marty-ui",
+                         "--signer-workflow",
+                         "ElevenID/marty-ui/.github/workflows/passport-python-deletion-cutover.yml",
+                         "--source-digest", commit, "--source-ref", "refs/heads/main")
+                report = prior_gate._json(artifact)
+                if isinstance(report, dict) and report.get("deletion_head") == deletion_head:
+                    return report, started, completed
+            except prior_gate.QualificationError:
+                continue
+        if len(runs) < 100:
+            break
+        page += 1
+    prior_gate._require(found_source_run, "Final protected deletion cutover run is missing")
     raise prior_gate.QualificationError("No attested final cutover report names this deletion head")
 
 
@@ -419,7 +437,7 @@ def _pull_request_lineage(number: int, deletion_head: str) -> None:
                         "Pull-request deletion head is stale relative to the live PR")
 
 
-def _post_pr_lineage(number: int, deletion_head: str) -> None:
+def _post_pr_lineage(number: int, deletion_head: str) -> tuple[bool, str | None]:
     """Bind later PRs and queue/main commits to the merged deletion PR."""
     event_name = os.environ.get("GITHUB_EVENT_NAME")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
@@ -524,6 +542,52 @@ def _post_pr_lineage(number: int, deletion_head: str) -> None:
     prior_gate._require(isinstance(comparison, dict)
                         and comparison.get("status") in {"ahead", "identical"},
                         "Running main base does not contain the deletion PR queue or merge commit")
+    return merged, merge_commit if merged else None
+
+
+def _merged_qualification_anchor(contract_path: Path, merge_commit: str) -> None:
+    """Keep the qualified record identical to the protected merge's immutable bytes."""
+    prior_gate._require(COMMIT.fullmatch(merge_commit) is not None,
+                        "Merged retirement commit is invalid")
+    response = json.loads(_command(
+        "gh", "api",
+        "repos/ElevenID/marty-credentials/contents/"
+        "contracts/physical-passport-python-retirement-qualification.json"
+        f"?ref={merge_commit}",
+    ))
+    prior_gate._require(isinstance(response, dict)
+                        and response.get("encoding") == "base64"
+                        and isinstance(response.get("content"), str),
+                        "Merged passport qualification record is unavailable")
+    try:
+        merged_bytes = base64.b64decode(
+            "".join(response["content"].split()), validate=True,
+        )
+    except (ValueError, binascii.Error) as exc:
+        raise prior_gate.QualificationError(
+            "Merged passport qualification record is invalid"
+        ) from exc
+    prior_gate._require(contract_path.read_bytes() == merged_bytes,
+                        "Passport qualification differs from the protected merge")
+
+
+def _current_python_passport_routes_absent() -> None:
+    """Inspect the current Python source and its frozen runtime route surface."""
+    try:
+        issuance_surface_contract.check_contract()
+        surface = issuance_surface_contract.build_contract()
+    except (OSError, ValueError, SyntaxError, issuance_surface_contract.ContractError) as exc:
+        raise prior_gate.QualificationError(
+            "Current Python issuance surface could not be verified"
+        ) from exc
+    http = surface.get("http") if isinstance(surface, dict) else None
+    routes = http.get("routes") if isinstance(http, dict) else None
+    prior_gate._require(isinstance(routes, list)
+                        and all(isinstance(route, dict) for route in routes),
+                        "Current Python HTTP route surface is invalid")
+    prior_gate._require(not any(str(route.get("path", "")).startswith("/v1/passport/")
+                                for route in routes),
+                        "Python passport routes were reintroduced")
 
 
 def _successful_pr_gate(number: int, deletion_head: str, cutover_completed: datetime) -> None:
@@ -1243,6 +1307,20 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
                         "Protected KMS passport acceptance receipt is required")
     prior_gate._require(predeletion.get("release_source_commit") == commit,
                         "Predeletion release source differs from qualified source")
+    merged_commit: str | None = None
+    if post_pr_check:
+        prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") in
+                            {"pull_request", "merge_group", "push", "workflow_dispatch"},
+                            "Post-PR exact-head check requires a GitHub code event")
+        deletion_head = _retirement_pr_head(contract["retirement_pull_request_number"])
+        lineage = _post_pr_lineage(contract["retirement_pull_request_number"], deletion_head)
+        if lineage is not None and lineage[0]:
+            merged_commit = lineage[1]
+    else:
+        prior_gate._require(isinstance(deletion_head, str)
+                            and COMMIT.fullmatch(deletion_head) is not None,
+                            "Exact pull-request deletion head is required")
+        _pull_request_lineage(contract["retirement_pull_request_number"], deletion_head)
     with tempfile.TemporaryDirectory(prefix="passport-retirement-evidence-") as temporary:
         root = Path(temporary)
         stack_digest = predeletion.get("stack_manifest_sha256")
@@ -1250,6 +1328,11 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
                                           stack_digest, root / "stack")
         expected_images = _image_digests(manifest)
         _all_image_references(manifest)
+        if merged_commit is not None:
+            _merged_qualification_anchor(contract_path, merged_commit)
+            _current_python_passport_routes_absent()
+            _frozen_batch_parity(marty_ui)
+            return
         services_uri = "ghcr.io/elevenid/marty-ui-oss/services"
         services_digest = expected_images[services_uri]
         services_reference = f"{services_uri}@{services_digest}"
@@ -1288,17 +1371,6 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
             <= predeletion_accepted <= predeletion_completed,
             "Beta-source drain is outside protected Rust acceptance",
         )
-        if post_pr_check:
-            prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") in
-                                {"pull_request", "merge_group", "push", "workflow_dispatch"},
-                                "Post-PR exact-head check requires a GitHub code event")
-            deletion_head = _retirement_pr_head(contract["retirement_pull_request_number"])
-            _post_pr_lineage(contract["retirement_pull_request_number"], deletion_head)
-        else:
-            prior_gate._require(isinstance(deletion_head, str)
-                                and COMMIT.fullmatch(deletion_head) is not None,
-                                "Exact pull-request deletion head is required")
-            _pull_request_lineage(contract["retirement_pull_request_number"], deletion_head)
         cutover, cutover_started, cutover_completed = _final_cutover_report(
             commit, deletion_head, root / "cutover",
         )

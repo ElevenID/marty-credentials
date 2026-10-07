@@ -90,17 +90,23 @@ times.
 The PR CI job passes `github.event.pull_request.head.sha` explicitly because
 Actions checks out a synthetic merge commit. It verifies the event's PR number,
 same-repository head and main base, then checks that the live #305 head still
-equals that event head. Merge-group checks resolve #305's
-exact head and its live merge-queue entry, then require that entry's head commit
-to be an ancestor of the running group SHA. Post-merge push checks require #305
-to be merged and its merge commit to be an ancestor of the running main SHA;
-this also covers squash merges. Both paths recheck the final cutover attestation
-for that exact PR head and require a successful post-cutover PR provenance and
-CI Gate jobs from the same workflow attempt on the same head, in the expected
-GitHub Actions check suite. Both jobs must have started after the final cutover;
-the original run creation time can precede it when CI is rerun. They
-also repeat the source, route, and signed-evidence checks; their synthetic or
-merged commit never substitutes for the PR head.
+equals that event head. Merge-group checks resolve #305's exact head and its
+live merge-queue entry, then require that entry's head commit to be an ancestor
+of the running group SHA. Before merge, they recheck the attested final cutover
+for that exact head and require successful post-cutover PR provenance and CI
+Gate jobs from the same workflow attempt, in the expected GitHub Actions check
+suite. Both jobs must have started after the final cutover; the original run
+creation time can precede it when CI is rerun. The protected merge queue must
+pass these full checks before #305 merges.
+
+After merge, later PR, merge-group, and main CI check #305's immutable merge
+ancestry, require the qualification record to match its bytes at that merge,
+verify the signed stack release and pinned source, inspect the current Python
+route surface for the absence of passport routes, and run the frozen Rust batch
+parity test. The permanent gate does not download the pre-deletion or cutover
+Actions artifacts after their 30-day retention expires. The protected merge
+itself is the durable authorization checkpoint; a synthetic or later commit
+never substitutes for #305's exact deletion head before merge.
 There is no short wall-clock expiry: CI and review can take hours while the
 fence prevents new Python passport writes. Any new deletion commit or lost
 fence requires another protected final cutover run before merge.
@@ -108,9 +114,9 @@ fence requires another protected final cutover run before merge.
 `scripts.check_physical_passport_python_retirement` verifies protected-main
 ancestry, committed bytes, signed release and image lineage, exact workflow
 identity, report SHA-256 digests, route and evidence semantics, and the frozen
-Rust shuffled-response batch test. It also verifies the attested final cutover
-artifact from the protected main workflow. The required Passport Python Retirement
-Provenance CI job intentionally fails while the qualification record is
+Rust shuffled-response batch test. Before merge it also verifies the attested
+final cutover artifact from the protected main workflow. The required Passport
+Python Retirement Provenance CI job intentionally fails while the qualification record is
 blocked. After protected evidence exists, qualify the record, resolve maintainer
 findings, run the final cutover on the exact deletion head, pass CI, and merge before
 the official aggregate beta deployment. The beta passport recording and

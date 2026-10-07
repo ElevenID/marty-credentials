@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -967,6 +968,42 @@ def test_final_cutover_fetches_attested_report_for_exact_deletion_head(
         gate._final_cutover_report(COMMIT, "9" * 40, tmp_path / "wrong")
 
 
+def test_final_cutover_searches_beyond_first_hundred_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    older = {"id": 789, "head_sha": COMMIT, "head_branch": "main",
+             "status": "completed", "conclusion": "success"}
+    wrong_head = {**older, "id": 788}
+    unrelated = [{**older, "id": run_id, "head_sha": "9" * 40}
+                 for run_id in range(1000, 1099)] + [wrong_head]
+    seen_pages: list[str] = []
+
+    def command(*args: str) -> str:
+        if args[0:2] == ("gh", "api"):
+            seen_pages.append(args[2])
+            return json.dumps({"workflow_runs": unrelated if args[2].endswith("&page=1")
+                               else [wrong_head, older]})
+        if args[0:3] == ("gh", "run", "download"):
+            run_id = args[3]
+            report = final_cutover_report()
+            if run_id == "788":
+                report["deletion_head"] = "9" * 40
+            (Path(args[-1]) / f"passport-python-deletion-cutover-{run_id}.json").write_text(
+                json.dumps(report), encoding="utf-8",
+            )
+        return ""
+
+    from datetime import datetime
+
+    monkeypatch.setattr(gate, "_command", command)
+    monkeypatch.setattr(gate, "_verified_run", lambda *args: (
+        datetime(2026, 9, 26, 0, 21, tzinfo=UTC),
+        datetime(2026, 9, 26, 0, 26, tzinfo=UTC)))
+    report, _, _ = gate._final_cutover_report(COMMIT, "e" * 40, tmp_path / "older")
+    assert report["deletion_head"] == "e" * 40
+    assert len(seen_pages) == 2 and "page=2" in seen_pages[1]
+
+
 def test_post_pr_head_requires_exact_same_repository_pull_request(monkeypatch) -> None:
     pr = {"number": 305, "head": {"sha": "e" * 40,
                                    "repo": {"full_name": "ElevenID/marty-credentials"}},
@@ -1298,7 +1335,6 @@ def test_qualified_path_requires_complete_provenance_checks(
     monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     gate.verify(path, tmp_path, post_pr_check=True)
     assert lineage_calls[-1] == (305, "e" * 40)
-    monkeypatch.delenv("GITHUB_EVENT_NAME")
     changed = copy.deepcopy(record)
     changed["predeletion_acceptance_receipt"]["release_source_commit"] = "9" * 40
     check(changed, "Predeletion release source")
@@ -1314,6 +1350,67 @@ def test_qualified_path_requires_complete_provenance_checks(
     )
     check(record, "Disposable released Rust runtime")
     predeletion["runtime_images"]["gateway"]["oci_reference"] = SERVICES_REFERENCE
+
+
+def test_merged_retirement_keeps_permanent_ci_independent_of_expiring_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "qualified.json"
+    path.write_text(json.dumps(qualified_record()), encoding="utf-8")
+    manifest = {
+        "components": [{
+            "name": "marty-ui",
+            "artifacts": [{"type": "oci", "uri": uri, "digest": digest}
+                          for uri, digest in IMAGE_DIGESTS.items()],
+        }],
+    }
+    checked: list[str] = []
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
+    monkeypatch.setattr(gate, "_protected_source", lambda *args: COMMIT)
+    monkeypatch.setattr(gate, "_retirement_pr_head", lambda number: "e" * 40)
+    monkeypatch.setattr(gate, "_post_pr_lineage", lambda *args: (True, "f" * 40))
+    monkeypatch.setattr(gate, "_signed_stack_manifest", lambda *args: manifest)
+    monkeypatch.setattr(gate, "_merged_qualification_anchor",
+                        lambda *args: checked.append("merge"))
+    monkeypatch.setattr(gate, "_current_python_passport_routes_absent",
+                        lambda: checked.append("routes"))
+    monkeypatch.setattr(gate, "_frozen_batch_parity",
+                        lambda *args: checked.append("parity"))
+    monkeypatch.setattr(gate, "_verified_run",
+                        lambda *args: pytest.fail("expired workflow run was queried"))
+    monkeypatch.setattr(gate, "_run_artifact",
+                        lambda *args: pytest.fail("expired artifact was downloaded"))
+    monkeypatch.setattr(gate, "_final_cutover_report",
+                        lambda *args: pytest.fail("expired cutover was discovered"))
+
+    gate.verify(path, tmp_path, post_pr_check=True)
+    assert checked == ["merge", "routes", "parity"]
+
+
+def test_merged_qualification_uses_exact_protected_merge_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "qualification.json"
+    path.write_bytes(b'{"state":"qualified"}\n')
+    response = {"encoding": "base64", "content": base64.b64encode(path.read_bytes()).decode()}
+    monkeypatch.setattr(gate, "_command", lambda *args: json.dumps(response))
+    gate._merged_qualification_anchor(path, "f" * 40)
+    path.write_bytes(b'{"state":"changed"}\n')
+    with pytest.raises(gate.prior_gate.QualificationError, match="differs from the protected merge"):
+        gate._merged_qualification_anchor(path, "f" * 40)
+
+
+def test_permanent_surface_gate_rejects_reintroduced_passport_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gate._current_python_passport_routes_absent()
+    monkeypatch.setattr(gate.issuance_surface_contract, "check_contract", lambda: None)
+    monkeypatch.setattr(gate.issuance_surface_contract, "build_contract",
+                        lambda: {"http": {"routes": [
+                            {"method": "GET", "path": "/v1/passport/capabilities"},
+                        ]}})
+    with pytest.raises(gate.prior_gate.QualificationError, match="reintroduced"):
+        gate._current_python_passport_routes_absent()
 
 
 def test_protected_source_rejects_fabricated_hashes(
