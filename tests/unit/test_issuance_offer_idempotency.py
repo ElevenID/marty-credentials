@@ -165,51 +165,6 @@ async def test_http_retry_forwards_idempotency_key_to_native_owner(monkeypatch) 
     repo.recover_transaction_idempotently.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_grpc_retry_recovers_before_template_resolution(monkeypatch) -> None:
-    from issuance.infrastructure.adapters import grpc_adapter
-    from marty_proto.v1 import issuance_service_pb2 as pb2
-
-    repo = InMemoryIssuanceRepository()
-    raw_key = "stable-grpc-key"
-    stored, _ = await repo.reserve_transaction_idempotently(
-        _transaction(raw_key=raw_key, claims={"name": "Ada"})
-    )
-    request = pb2.InitiateIssuanceRequest(
-        organization_id="org-1",
-        credential_template_id="template-1",
-        application_id="application-1",
-        applicant_id="applicant-1",
-        subject_did="did:key:holder",
-        issuer_did="did:web:issuer.example",
-        claims={"name": "Ada"},
-        idempotency_key=raw_key,
-        delivery_mode="wallet_only",
-    )
-    channel_calls = 0
-
-    def unavailable_channel(*_args, **_kwargs):
-        nonlocal channel_calls
-        channel_calls += 1
-        raise RuntimeError("dependency unavailable")
-
-    context = SimpleNamespace(
-        set_code=lambda _code: None,
-        set_details=lambda _details: None,
-    )
-    service = grpc_adapter.IssuanceServiceGrpc(lambda: repo)
-    monkeypatch.setattr(grpc_adapter, "create_service_channel", unavailable_channel)
-    monkeypatch.setattr(
-        service,
-        "_issuance_response_from_transaction",
-        lambda tx: pb2.IssuanceResponse(id=tx.id, pre_auth_code=tx.pre_auth_code),
-    )
-
-    response = await service.InitiateIssuance(request, context)
-
-    assert response.id == stored.id
-    assert response.pre_auth_code == stored.pre_auth_code
-    assert channel_calls == 1  # Organization validation only; no template lookup.
 
 
 def test_database_contract_scopes_unique_hash_to_organization() -> None:

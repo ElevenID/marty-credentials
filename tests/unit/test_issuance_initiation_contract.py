@@ -125,17 +125,6 @@ def test_grpc_projection_preserves_the_existing_transport_boundary() -> None:
     ]
     assert response_fields == CONTRACT["response"]["fields"]
 
-    grpc_source = inspect.getsource(
-        __import__(
-            "issuance.infrastructure.adapters.grpc_adapter",
-            fromlist=["IssuanceServiceGrpc"],
-        ).IssuanceServiceGrpc.InitiateIssuance
-    )
-    assert "tmpl_resp.selective_disclosure_fields" in grpc_source
-    assert 'tmpl.get("selective_disclosure_fields")' in grpc_source
-    assert "selective_disclosure_claims=selective_disclosure_claims" in grpc_source
-
-
 def test_idempotency_and_delivery_vectors_are_frozen() -> None:
     vector = CONTRACT["idempotency"]["vector"]
     canonical = canonical_issuance_request(**vector["request"])

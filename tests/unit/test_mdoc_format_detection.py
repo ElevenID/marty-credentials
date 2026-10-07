@@ -56,7 +56,7 @@ def _load_routes_mdoc_formats():
 
 
 # Instead of fighting import chains, test the set definition directly.
-# Both routes.py and grpc_adapter.py define the same literal set.
+# The retained HTTP route recognizes the supported mdoc format aliases.
 EXPECTED_MDOC_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
 
 

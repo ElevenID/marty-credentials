@@ -5,31 +5,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import grpc
 import pytest
 from fastapi import HTTPException
 from issuance.domain.entities import CredentialStatus
-from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
 from issuance.infrastructure.api import routes
 from marty_proto.v1 import issuance_service_pb2 as pb2
-from marty_proto.v1 import issuance_service_pb2_grpc as pb2_grpc
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = json.loads(
     (ROOT / "contracts/issuance-credential-lifecycle.json").read_text(encoding="utf-8")
 )
-
-
-class RecordingContext:
-    def __init__(self) -> None:
-        self.code = None
-        self.details = None
-
-    def set_code(self, code) -> None:
-        self.code = code
-
-    def set_details(self, details: str) -> None:
-        self.details = details
 
 
 class RecordingRepository:
@@ -75,7 +60,6 @@ def test_contract_freezes_http_and_grpc_surface() -> None:
 
     service = pb2.DESCRIPTOR.services_by_name["IssuanceService"]
     assert set(CONTRACT["scope"]["grpc"]) <= {method.name for method in service.methods}
-    assert issubclass(IssuanceServiceGrpc, pb2_grpc.IssuanceServiceServicer)
 
 
 def test_contract_freezes_cross_transport_state_and_failure_policy() -> None:
@@ -102,93 +86,8 @@ def test_contract_freezes_cross_transport_state_and_failure_policy() -> None:
     assert unavailable["local_status_changes"] == unavailable["stream_events"] == 0
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("initial_status", "method", "expected_status", "expected_event"),
-    [
-        (CredentialStatus.ACTIVE, "RevokeCredential", "revoked", "revoked"),
-        (CredentialStatus.ACTIVE, "SuspendCredential", "suspended", "suspended"),
-        (CredentialStatus.SUSPENDED, "ReinstateCredential", "active", "reinstated"),
-    ],
-)
-async def test_grpc_mutations_reuse_canonical_handler_in_contract_order(
-    monkeypatch,
-    initial_status: CredentialStatus,
-    method: str,
-    expected_status: str,
-    expected_event: str,
-) -> None:
-    calls: list[str] = []
-    issued = credential(status=initial_status)
-    repo = RecordingRepository(issued, calls)
-    service = IssuanceServiceGrpc(lambda: repo)
-
-    async def publish_status(**_kwargs) -> dict:
-        assert issued.status == initial_status
-        calls.append("publish-revocation-profile-status")
-        return {"success": True}
-
-    async def synchronize(_credential, _repo, **_kwargs) -> list:
-        calls.append("synchronize-canvas-delivery-records")
-        return []
-
-    async def emit(event_type: str, **_kwargs) -> None:
-        calls.append(f"emit-grpc-stream-event:{event_type}")
-
-    monkeypatch.setattr(routes, "_delegate_to_revocation_profile", publish_status)
-    monkeypatch.setattr(routes, "_sync_canvas_lifecycle_delivery_records", synchronize)
-    monkeypatch.setattr(service, "_emit_credential_event", emit)
-
-    context = RecordingContext()
-    response = await getattr(service, method)(
-        pb2.CredentialLifecycleRequest(
-            credential_id=issued.id,
-            reason="policy violation",
-        ),
-        context,
-    )
-
-    assert context.code is None
-    assert response.id == issued.id
-    assert response.status == expected_status
-    assert response.reason == "policy violation"
-    assert issued.status.value == expected_status
-    assert calls == [
-        "publish-revocation-profile-status",
-        "persist-local-status",
-        "synchronize-canvas-delivery-records",
-        f"emit-grpc-stream-event:{expected_event}",
-    ]
 
 
-@pytest.mark.asyncio
-async def test_grpc_mutation_fails_closed_before_local_state_or_event(monkeypatch) -> None:
-    calls: list[str] = []
-    issued = credential()
-    repo = RecordingRepository(issued, calls)
-    service = IssuanceServiceGrpc(lambda: repo)
-
-    async def unavailable(**_kwargs) -> dict:
-        calls.append("publish-revocation-profile-status")
-        raise RuntimeError("revocation publication unavailable")
-
-    async def emit(_event_type: str, **_kwargs) -> None:
-        calls.append("emit-grpc-stream-event")
-
-    monkeypatch.setattr(routes, "_delegate_to_revocation_profile", unavailable)
-    monkeypatch.setattr(service, "_emit_credential_event", emit)
-
-    context = RecordingContext()
-    response = await service.RevokeCredential(
-        pb2.CredentialLifecycleRequest(credential_id=issued.id, reason="policy violation"),
-        context,
-    )
-
-    assert response == pb2.CredentialStatusResponse()
-    assert context.code == grpc.StatusCode.INTERNAL
-    assert context.details == "revocation publication unavailable"
-    assert issued.status == CredentialStatus.ACTIVE
-    assert calls == ["publish-revocation-profile-status"]
 
 
 @pytest.mark.asyncio
@@ -217,42 +116,4 @@ async def test_http_wrong_organization_is_hidden_before_mutation() -> None:
     assert mutation_error.value.status_code == 404
     assert mutation_error.value.detail == "Resource not found"
     assert issued.status == CredentialStatus.ACTIVE
-    assert calls == []
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("issued", "method", "expected_code", "expected_detail"),
-    [
-        (None, "RevokeCredential", grpc.StatusCode.NOT_FOUND, "Credential not found"),
-        (
-            credential(status=CredentialStatus.ACTIVE),
-            "ReinstateCredential",
-            grpc.StatusCode.FAILED_PRECONDITION,
-            "Only suspended credentials can be reinstated",
-        ),
-    ],
-)
-async def test_grpc_preserves_transport_specific_failure_codes(
-    issued,
-    method: str,
-    expected_code,
-    expected_detail: str,
-) -> None:
-    calls: list[str] = []
-    repo = RecordingRepository(issued, calls)
-    service = IssuanceServiceGrpc(lambda: repo)
-    context = RecordingContext()
-
-    response = await getattr(service, method)(
-        pb2.CredentialLifecycleRequest(
-            credential_id="credential-1",
-            reason="review",
-        ),
-        context,
-    )
-
-    assert response == pb2.CredentialStatusResponse()
-    assert context.code == expected_code
-    assert context.details == expected_detail
     assert calls == []

@@ -56,7 +56,6 @@ from issuance.domain.entities import (
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
-    stable_issuance_credential_id,
 )
 from issuance.infrastructure.adapters.memory_repository import (
     InMemoryIssuanceRepository,
@@ -1486,42 +1485,6 @@ class TestStatusListAllocationOrganizationScope:
             "headers": {"x-service-token": "s" * 48},
         }
 
-    async def test_grpc_template_http_fallback_uses_service_auth(self, monkeypatch):
-        from issuance.infrastructure.adapters import grpc_adapter
-
-        captured = {}
-        response = object()
-
-        class FakeClient:
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *_args):
-                return None
-
-            async def get(self, url, headers):
-                captured.update({"url": url, "headers": headers})
-                return response
-
-        monkeypatch.setattr(
-            grpc_adapter.httpx,
-            "AsyncClient",
-            lambda *args, **kwargs: FakeClient(),
-        )
-        monkeypatch.setattr(
-            grpc_adapter,
-            "CREDENTIAL_TEMPLATE_SERVICE_URL",
-            "http://credential-template:8003",
-        )
-        monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
-
-        result = await grpc_adapter._fetch_credential_template_http("template/one")
-
-        assert result is response
-        assert captured == {
-            "url": "http://credential-template:8003/v1/credential-templates/template%2Fone",
-            "headers": {"x-service-token": "s" * 48},
-        }
 
     async def test_rejects_mismatched_allocation_response(self, monkeypatch):
         from issuance.infrastructure.api import routes
@@ -4233,89 +4196,6 @@ class TestRustIntegrationOrgIdValidation:
                 verification_method_id=verification_method_id,
             )
 
-    async def test_grpc_remote_signing_helper_uses_admitted_did_context_without_reresolving(
-        self, monkeypatch
-    ):
-        from issuance.application.rust_integration import base64url_decode
-        from issuance.infrastructure.adapters import grpc_adapter
-        from issuance.infrastructure.api import signing_context
-
-        issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
-        verification_method_id = f"{issuer_did}#cred-issuer-acme-es256"
-        captured: dict[str, object] = {}
-
-        async def reject_second_resolution(*_args, **_kwargs):
-            raise AssertionError("the signing helper must use its admitted issuer context")
-
-        async def fake_sign_payload_with_issuer_did(**kwargs):
-            captured["sign"] = kwargs
-            return {
-                "signature_raw_b64": _sign_es256_test_payload(kwargs["payload"]),
-                "algorithm": kwargs.get("algorithm"),
-            }
-
-        monkeypatch.setattr(
-            signing_context, "resolve_remote_issuer_context", reject_second_resolution
-        )
-        monkeypatch.setattr(
-            signing_context,
-            "sign_payload_with_issuer_did",
-            fake_sign_payload_with_issuer_did,
-        )
-
-        tx = _make_transaction(
-            issuer_did_override=issuer_did,
-            signing_service_id="svc-old",
-            issuer_profile_id="ip-grpc",
-            issuer_mode="org_managed",
-            issuer_algorithm="ES256",
-        )
-        expected_credential_id = stable_issuance_credential_id(tx.id)
-        admitted_context = {
-            "ok": True,
-            "issuer_did": issuer_did,
-            "issuer_profile_id": "ip-grpc",
-            "issuer_mode": "org_managed",
-            "algorithm": "ES256",
-            "verification_method_id": verification_method_id,
-            "public_jwk": _es256_test_public_jwk(),
-            "issuer_x5c": ["leaf-certificate", "issuer-certificate"],
-            "signing_service_id": "svc-old",
-        }
-
-        (
-            credential,
-            credential_id,
-            remote_context,
-        ) = await grpc_adapter._create_remote_signed_sd_jwt_for_tx(
-            tx,
-            issuer_context=admitted_context,
-            credential_id=expected_credential_id,
-            subject_id="did:key:z6Mk_subject",
-            credential_type="https://beta.elevenidllc.com/credentials/access_badge",
-            claims_json=json.dumps({"name": "Alice"}),
-            credential_format="dc+sd-jwt",
-            selective_disclosure_claims=[],
-        )
-
-        jwt = credential.split("~", 1)[0]
-        header = json.loads(base64url_decode(jwt.split(".", 1)[0]))
-
-        assert header["kid"] == verification_method_id
-        assert header["x5c"] == ["leaf-certificate", "issuer-certificate"]
-        assert tx.issuer_did_override == issuer_did
-        assert tx.signing_service_id == "svc-old"
-        assert remote_context["verification_method_id"] == verification_method_id
-        assert remote_context is admitted_context
-        assert captured["sign"]["organization_id"] == "org-1"
-        assert captured["sign"]["issuer_did"] == issuer_did
-        assert captured["sign"]["credential_format"] == "dc+sd-jwt"
-        assert captured["sign"]["key_purpose"] == "vc_jwt_issuer"
-        assert captured["sign"]["expected_verification_method_id"] == verification_method_id
-        assert "issuer_profile_id" not in captured["sign"]
-        assert "signing_service_id" not in captured["sign"]
-        assert "signing_key_reference" not in captured["sign"]
-        assert credential_id == expected_credential_id
 
 
 # ============================================================================

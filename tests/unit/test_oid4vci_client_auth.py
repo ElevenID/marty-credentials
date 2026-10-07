@@ -5,7 +5,6 @@ import base64
 import json
 from datetime import UTC, datetime, timedelta
 
-import grpc
 import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -22,13 +21,11 @@ from issuance.domain.entities import (
     IssuanceTransaction,
     Oid4vciRegisteredClient,
 )
-from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
 from issuance.infrastructure.adapters.memory_repository import (
     InMemoryIssuanceRepository,
 )
 from issuance.infrastructure.api import routes
 from issuance.infrastructure.api.routes import _authenticate_oid4vci_client
-from marty_proto.v1 import issuance_service_pb2 as issuance_pb2
 from starlette.requests import Request
 
 CLIENT_ID = "marty-official-wallet-00000000-0000-0000-0000-000000000001"
@@ -566,80 +563,3 @@ class _GrpcContext:
 
     def set_details(self, details: str) -> None:
         self.details = details
-
-
-@pytest.mark.asyncio
-async def test_grpc_token_exchange_cannot_bypass_registered_client_authentication(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from issuance.application import rust_integration
-    from issuance.infrastructure.adapters import grpc_adapter
-
-    private_key, public_jwk = _key_material()
-    repo = InMemoryIssuanceRepository()
-    _seed_client(
-        repo,
-        Oid4vciRegisteredClient(
-            organization_id="org-a",
-            client_id=CLIENT_ID,
-            jwks={"keys": [public_jwk]},
-        ),
-    )
-    transaction = IssuanceTransaction(
-        organization_id="org-a",
-        credential_template_id="template-a",
-        oid4vci_client_id=CLIENT_ID,
-    )
-    await repo.save_transaction(transaction)
-    monkeypatch.setattr(grpc_adapter, "ISSUER_BASE_URL", "https://issuer.example")
-    monkeypatch.setattr(
-        rust_integration,
-        "oid4vci_create_token_response",
-        lambda _code, _lifetime: {
-            "access_token": "grpc-access-token",
-            "expires_in": 1800,
-        },
-    )
-    service = IssuanceServiceGrpc(lambda: repo)
-
-    missing_context = _GrpcContext()
-    missing = await service.ExchangeToken(
-        issuance_pb2.ExchangeTokenRequest(
-            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
-            pre_authorized_code=transaction.pre_auth_code,
-            client_id=CLIENT_ID,
-        ),
-        missing_context,
-    )
-    pending = await repo.get_transaction(transaction.id)
-
-    assert missing.access_token == ""
-    assert missing_context.code == grpc.StatusCode.UNAUTHENTICATED
-    assert missing_context.details == "Client authentication failed"
-    assert pending is not None
-    assert pending.status == IssuanceStatus.PENDING
-
-    accepted_context = _GrpcContext()
-    accepted = await service.ExchangeToken(
-        issuance_pb2.ExchangeTokenRequest(
-            grant_type="urn:ietf:params:oauth:grant-type:pre-authorized_code",
-            pre_authorized_code=transaction.pre_auth_code,
-            client_id=CLIENT_ID,
-            client_assertion_type=JWT_BEARER_ASSERTION_TYPE,
-            client_assertion=_assertion(
-                private_key,
-                claims={
-                    "aud": "https://issuer.example/org/org-a",
-                    "jti": "grpc-assertion",
-                },
-                now=datetime.now(UTC),
-            ),
-        ),
-        accepted_context,
-    )
-    authorized = await repo.get_transaction(transaction.id)
-
-    assert accepted_context.code is None
-    assert accepted.access_token == "grpc-access-token"
-    assert authorized is not None
-    assert authorized.status == IssuanceStatus.AUTHORIZED

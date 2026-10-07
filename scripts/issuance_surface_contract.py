@@ -187,9 +187,7 @@ def _http_routes(sources: list[PythonSource]) -> list[dict[str, Any]]:
 
 def _grpc_methods() -> list[dict[str, Any]]:
     generated_path = ROOT / "packages" / "marty_proto" / "v1" / "issuance_service_pb2_grpc.py"
-    adapter_path = ISSUANCE_ROOT / "infrastructure" / "adapters" / "grpc_adapter.py"
     generated = ast.parse(generated_path.read_text(encoding="utf-8"), filename=str(generated_path))
-    adapter = ast.parse(adapter_path.read_text(encoding="utf-8"), filename=str(adapter_path))
 
     stub = next(
         node
@@ -229,28 +227,6 @@ def _grpc_methods() -> list[dict[str, Any]]:
             }
         )
 
-    adapter_class = next(
-        node
-        for node in adapter.body
-        if isinstance(node, ast.ClassDef) and node.name == "IssuanceServiceGrpc"
-    )
-    implemented = {
-        node.name: node.lineno
-        for node in adapter_class.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and not node.name.startswith("_")
-    }
-    declared = {method["method"] for method in methods}
-    if declared != implemented.keys():
-        raise ContractError(
-            "generated and implemented gRPC methods differ: "
-            f"declared_only={sorted(declared - implemented.keys())}, "
-            f"implemented_only={sorted(implemented.keys() - declared)}"
-        )
-    adapter_source = adapter_path.relative_to(ROOT).as_posix()
-    for method in methods:
-        method["implementation_source"] = adapter_source
-        method["implementation_line"] = implemented[method["method"]]
     methods.sort(key=lambda method: method["method"])
     return methods
 
@@ -390,9 +366,13 @@ def build_contract() -> dict[str, Any]:
     variables, dynamic = _environment_variables(sources)
     return {
         "schema": "marty.issuance-runtime-surface/v1",
-        "purpose": "Language-neutral feature floor for the native Rust issuance cutover",
+        "purpose": "Retained Python HTTP inventory and native Rust issuance gRPC IDL",
         "http": {"route_count": len(routes), "routes": routes},
-        "grpc": {"method_count": len(grpc), "methods": grpc},
+        "grpc": {
+            "method_count": len(grpc),
+            "owner": "marty-ui/rust/services/issuance/src/credential_management_grpc.rs",
+            "methods": grpc,
+        },
         "runtime": {"modes": _runtime_modes(sources)},
         "configuration": {
             "environment_variable_count": len(variables),
