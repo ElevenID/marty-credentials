@@ -79,6 +79,22 @@ def test_native_extension_capability_contract_accepts_complete_module(monkeypatc
     rust_integration.validate_marty_rs_capabilities()
 
 
+@pytest.mark.asyncio
+async def test_python_grpc_owner_fails_before_database_startup(monkeypatch) -> None:
+    from issuance import main
+
+    monkeypatch.setattr(main, "ISSUANCE_GRPC_ENABLED", True)
+    monkeypatch.setattr(main, "validate_marty_rs_capabilities", lambda: None)
+    monkeypatch.setattr(
+        main,
+        "create_async_engine",
+        lambda *_args, **_kwargs: pytest.fail("retired Python gRPC started a database engine"),
+    )
+    with pytest.raises(RuntimeError, match="Python issuance gRPC has been retired"):
+        async with main.lifespan(SimpleNamespace()):
+            pass
+
+
 def test_native_extension_does_not_require_retired_internal_didcomm_adapters(monkeypatch) -> None:
     from issuance.application import rust_integration
 

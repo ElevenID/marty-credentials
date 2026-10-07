@@ -16,6 +16,8 @@ operation. The release must prove that the scoped plugin operation keeps
 long-lived sender private keys inside OpenBao and fails closed when unavailable.
 There is no old-data or legacy behavior compatibility requirement.
 
-The Python gRPC issuance adapter still contains an independent initiation
-path and must be retired after supported RPC consumers are routed to native
-Rust. Qualify exact release images and artifacts together before cutover.
+The Python gRPC server is disabled by default and an explicit enablement
+fails startup before the database engine is created. Its unserved adapter
+source and Python-only tests remain to be deleted after the native RPC
+contract review. Qualify exact release images and artifacts together before
+cutover.

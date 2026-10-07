@@ -323,8 +323,7 @@ def get_repo() -> IIssuanceRepository:
     return _repo
 
 
-ISSUANCE_GRPC_PORT = int(os.environ.get("ISSUANCE_GRPC_PORT", "9005"))
-ISSUANCE_GRPC_ENABLED = os.environ.get("ISSUANCE_GRPC_ENABLED", "true").lower() in (
+ISSUANCE_GRPC_ENABLED = os.environ.get("ISSUANCE_GRPC_ENABLED", "false").lower() in (
     "1",
     "true",
     "yes",
@@ -374,6 +373,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {SERVICE_NAME}...")
     validate_marty_rs_capabilities()
     logger.info("Canonical marty-rs capability contract verified")
+    if ISSUANCE_GRPC_ENABLED:
+        raise RuntimeError("Python issuance gRPC has been retired; use the native Rust owner")
 
     # Initialize PostgreSQL adapter
     config = get_config()
@@ -390,28 +391,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_physical_document_store(session_factory)
     logger.info("PostgreSQL adapter initialized for issuance service")
 
-    # Start gRPC server
-    grpc_server = None
-    if ISSUANCE_GRPC_ENABLED:
-        import grpc.aio as grpc_aio
-        from issuance.infrastructure.adapters.grpc_adapter import IssuanceServiceGrpc
-        from issuance.infrastructure.grpc_security import server_interceptors
-        from marty_proto.v1 import issuance_service_pb2_grpc
-
-        grpc_server = grpc_aio.server(interceptors=server_interceptors())
-        servicer = IssuanceServiceGrpc(get_repo_fn=get_repo)
-        issuance_service_pb2_grpc.add_IssuanceServiceServicer_to_server(servicer, grpc_server)
-        grpc_server.add_insecure_port(f"[::]:{ISSUANCE_GRPC_PORT}")
-        await grpc_server.start()
-        logger.info(f"gRPC server started on port {ISSUANCE_GRPC_PORT}")
-
     try:
         yield
     finally:
         logger.info(f"Shutting down {SERVICE_NAME}...")
-        if grpc_server:
-            await grpc_server.stop(grace=5)
-            logger.info("gRPC server stopped")
         configure_physical_document_store(None)
         await engine.dispose()
 
