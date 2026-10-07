@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -75,3 +76,18 @@ def test_raw_master_key_is_not_a_configuration_fallback(monkeypatch) -> None:
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-key")
     with pytest.raises(RuntimeError, match="Raw integration-secret master keys"):
         RemoteIntegrationSecretEncryption.from_env()
+
+
+@pytest.mark.asyncio
+async def test_startup_proof_fails_if_remote_decrypt_returns_wrong_value(monkeypatch) -> None:
+    cipher = RemoteIntegrationSecretEncryption("http://signing-keys:8017/internal", "test-key")
+    encrypted = json.dumps(
+        {"schema": "marty.integration-secret-envelope/v1", "ciphertext": "vault:v1:opaque"}
+    )
+    monkeypatch.setattr(cipher, "encrypt", AsyncMock(return_value=encrypted))
+    monkeypatch.setattr(cipher, "decrypt", AsyncMock(return_value="wrong-proof"))
+
+    with pytest.raises(RuntimeError, match="startup proof failed"):
+        await cipher.verify_ready("org-1")
+    assert cipher.encrypt.await_count == 1
+    assert cipher.decrypt.await_count == 1

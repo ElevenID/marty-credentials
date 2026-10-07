@@ -375,6 +375,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Canonical marty-rs capability contract verified")
     if ISSUANCE_GRPC_ENABLED:
         raise RuntimeError("Python issuance gRPC has been retired; use the native Rust owner")
+    from issuance.infrastructure.security.encryption import RemoteIntegrationSecretEncryption
+
+    await RemoteIntegrationSecretEncryption.from_env().verify_ready(
+        os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+    )
 
     # Initialize PostgreSQL adapter
     config = get_config()

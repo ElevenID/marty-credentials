@@ -6,6 +6,7 @@ import base64
 import binascii
 import json
 import os
+import secrets
 from urllib.parse import urlsplit
 
 import httpx
@@ -56,17 +57,25 @@ class RemoteIntegrationSecretEncryption:
 
     async def _post(self, operation: str, organization_id: str, payload: dict) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
-                response = await client.post(
+            async with httpx.AsyncClient(
+                timeout=30.0, follow_redirects=False, trust_env=False
+            ) as client:
+                async with client.stream(
+                    "POST",
                     f"{self._base_url}/integration-secrets/{operation}",
                     params={"organization_id": organization_id},
                     headers={"X-API-Key": self._api_key},
                     json=payload,
-                )
-            response.raise_for_status()
-            if len(response.content) > 256 * 1024:
-                raise ValueError("Remote integration-secret KMS response is too large")
-            result = response.json()
+                ) as response:
+                    response.raise_for_status()
+                    chunks = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > 256 * 1024:
+                            raise ValueError("Remote integration-secret KMS response is too large")
+                        chunks.append(chunk)
+            result = json.loads(b"".join(chunks))
         except (httpx.HTTPError, ValueError) as exc:
             raise RuntimeError("Remote integration-secret KMS operation failed") from exc
         if not isinstance(result, dict):
@@ -91,6 +100,18 @@ class RemoteIntegrationSecretEncryption:
         )
         self._validate_envelope(envelope)
         return json.dumps(envelope, sort_keys=True, separators=(",", ":"))
+
+    async def verify_ready(self, organization_id: str) -> None:
+        """Prove the configured remote route can round-trip without persistence."""
+        proof = secrets.token_hex(32)
+        secret_id = f"startup-{secrets.token_hex(16)}"
+        envelope = await self.encrypt(
+            organization_id, secret_id, "system", "startup_proof", proof
+        )
+        if await self.decrypt(
+            organization_id, secret_id, "system", "startup_proof", envelope
+        ) != proof:
+            raise RuntimeError("Remote integration-secret KMS startup proof failed")
 
     async def decrypt(
         self, organization_id: str, secret_id: str, provider: str, purpose: str, stored: str

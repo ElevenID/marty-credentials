@@ -95,6 +95,27 @@ async def test_python_grpc_owner_fails_before_database_startup(monkeypatch) -> N
             pass
 
 
+@pytest.mark.asyncio
+async def test_remote_custody_failure_stops_python_before_database_startup(monkeypatch) -> None:
+    from issuance import main
+    from issuance.infrastructure.security.encryption import RemoteIntegrationSecretEncryption
+
+    monkeypatch.setattr(main, "ISSUANCE_GRPC_ENABLED", False)
+    monkeypatch.setattr(main, "validate_marty_rs_capabilities", lambda: None)
+    cipher = SimpleNamespace(verify_ready=AsyncMock(side_effect=RuntimeError("KMS unavailable")))
+    monkeypatch.setattr(
+        RemoteIntegrationSecretEncryption, "from_env", classmethod(lambda _cls: cipher)
+    )
+    monkeypatch.setattr(
+        main,
+        "create_async_engine",
+        lambda *_args, **_kwargs: pytest.fail("KMS failure started a database engine"),
+    )
+    with pytest.raises(RuntimeError, match="KMS unavailable"):
+        async with main.lifespan(SimpleNamespace()):
+            pass
+
+
 def test_native_extension_does_not_require_retired_internal_didcomm_adapters(monkeypatch) -> None:
     from issuance.application import rust_integration
 
