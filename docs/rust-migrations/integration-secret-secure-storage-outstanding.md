@@ -1,7 +1,13 @@
 # INTEGRATION-SECRET-KMS-001: opaque integration-secret storage
 
-Status: deferred; required before advancing the production
-`marty-verification` wheel beyond `v0.1.60`.
+Status: active KMS-only hardening, resumed 2026-10-07.
+
+The maintainer confirmed there are no public deployments and no need to read
+old ciphertext. Retire the compatibility wheel, local AES-GCM master-key
+adapter, and related private-key/legacy fixtures. Route supported integration
+secret operations to the native Rust service's opaque remote envelope API and
+fail closed on old ciphertext or unavailable KMS. The migration obligations
+below are historical and superseded; qualify new-data rotation and recovery.
 
 Credentials persists Canvas and other organization integration secrets as
 `base64(nonce || AES-256-GCM ciphertext || tag)`. The current adapter supplies

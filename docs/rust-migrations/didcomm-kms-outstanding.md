@@ -1,9 +1,19 @@
 # DIDCOMM-KMS-001: correct DIDComm key custody after the Rust migration
 
-Status: **outstanding, explicitly deferred by the user on 2026-09-08**.
+Status: **active KMS-only hardening, resumed 2026-10-07**.
 Owner: the Rust DIDComm consumer and canonical Core maintainers, coordinated
-with the crypto worker. No backend implementation or provisioning is authorized
-by this note.
+with the crypto worker. The cross-repository tracker is
+`marty-ui/docs/remote-kms-hardening-plan.md` on the integration worktree.
+
+The 2026-10-07 maintainer decision supersedes the earlier deferral and all
+legacy-owner/fallback language below. There are no public deployments, so
+Credentials must retire its local X25519 sender private-key configuration and
+tests, select the qualified native Rust owner only, and fail closed if remote
+KMS custody is unavailable. OpenBao's standard Transit lacks the required
+X25519 operation; the planned OpenBao extension is written in Go and exposes
+scoped, versioned remote operations to Rust. No old-data or behavior
+compatibility gate remains. The paragraphs below describe historical context,
+not the target release behavior.
 
 ## Current decision
 
