@@ -1,63 +1,21 @@
-# DIDCOMM-KMS-001: correct DIDComm key custody after the Rust migration
+# DIDCOMM-KMS-001: native remote sender custody
 
-Status: **active KMS-only hardening, resumed 2026-10-07**.
-Owner: the Rust DIDComm consumer and canonical Core maintainers, coordinated
-with the crypto worker. The cross-repository tracker is
-`marty-ui/docs/remote-kms-hardening-plan.md` on the integration worktree.
+Status: active KMS-only hardening (2026-10-07). The cross-repository tracker
+is `marty-ui/docs/remote-kms-hardening-plan.md` on the integration worktree.
 
-The 2026-10-07 maintainer decision supersedes the earlier deferral and all
-legacy-owner/fallback language below. There are no public deployments, so
-Credentials must retire its local X25519 sender private-key configuration and
-tests, select the qualified native Rust owner only, and fail closed if remote
-KMS custody is unavailable. OpenBao's standard Transit lacks the required
-X25519 operation; the planned OpenBao extension is written in Go and exposes
-scoped, versioned remote operations to Rust. No old-data or behavior
-compatibility gate remains. The paragraphs below describe historical context,
-not the target release behavior.
+Credentials selects the native Rust issuance owner for HTTP initiation and
+DIDComm direct delivery and rejects any legacy owner setting. Python local
+X25519 sender-key parsing, authcrypt preparation, capability requirements and
+private-key test fixtures have been removed. The native owner must preserve
+anoncrypt and authenticated authcrypt, tenant/sender/recipient binding, frozen
+attempt inputs, retry/finalization semantics and actual wallet decryption.
 
-## Current decision
+The native Rust service and the Go OpenBao plugin are the remaining custody
+boundary. Standard OpenBao Transit does not provide the needed X25519
+operation. The release must prove that the scoped plugin operation keeps
+long-lived sender private keys inside OpenBao and fails closed when unavailable.
+There is no old-data or legacy behavior compatibility requirement.
 
-Complete the feature-preserving Rust migration first. Preserve anoncrypt,
-sender-authenticated authcrypt, issuer/recipient binding, frozen attempt inputs,
-fail-closed errors, retry behavior and all intended consumers. Reuse the existing
-Rust implementation rather than designing a Python KMS workaround. Keep the
-existing key-custody limitation explicit; moving private bytes from Python into
-Rust does not itself make them KMS-only. Production remains unchanged.
-
-## Outstanding correction
-
-Credentials currently reads a deployment-owned X25519 sender private key for
-authcrypt only when the explicit legacy delivery owner remains selected. The
-native consumer selector delegates complete initiation and direct delivery to
-the Rust issuance service before Python repository or crypto work and therefore
-does not require the five Python DIDComm delivery bindings. Legacy remains the
-standalone default until every deployment selects the qualified Rust owner, so
-its implementation and capability checks are not deleted yet. There is no
-native-to-legacy fallback.
-
-Core `1ae5b71e53ebfd2bad29b2e7c23c3d048461245c` removes the old
-private-key Python APIs from its production binding and does not provide an
-opaque KMS authcrypt/decrypt replacement. Anoncrypt encryption uses recipient
-public keys and short-lived envelope keys; its optional Core feature and the
-policy governing ephemeral keys still need explicit artifact qualification.
-
-After the Rust port:
-
-1. Design the Rust/Core KMS boundary from the actual native delivery owner.
-   Choose and qualify backend key-agreement/envelope support; do not assume
-   existing signing or wrap/unwrap endpoints provide non-exportable X25519.
-2. Replace raw sender-key configuration with a scoped, versioned key reference.
-   Bind tenant, sender DID/key and frozen recipient documents to each attempt;
-   specify rotation, expiry, replay, cancellation and failure semantics.
-3. Prove that long-lived private keys do not reach consumer memory, logs or
-   configuration. Do not reintroduce removed private-key Python bindings or
-   silently fall back to anoncrypt/plaintext.
-4. Test actual recipient decryption and sender authentication, wrong-key and
-   cross-tenant rejection, backend failures, rotation and finalization through
-   real wallet/backend/database boundaries. Mocks are not acceptance evidence.
-5. Qualify the actual published Core artifacts and consumer startup capabilities
-   together before changing release pins. Preserve immutable failed release
-   evidence; do not retag an existing version to conceal a compatibility repair.
-
-This follow-up is not complete merely because the Rust port passes. Conversely,
-its deferral must not be used to hold up the feature-preserving Rust port.
+The Python gRPC issuance adapter still contains an independent initiation
+path and must be retired after supported RPC consumers are routed to native
+Rust. Qualify exact release images and artifacts together before cutover.

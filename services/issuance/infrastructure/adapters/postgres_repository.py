@@ -145,27 +145,12 @@ def _delivery_status_for_management_read(status: str) -> CredentialDeliveryStatu
 
 
 def _get_integration_secret_encryption():
-    """Return AES-GCM encryption for organization integration secrets."""
+    """Return the remote-only signing-keys envelope transport."""
     global _integration_secret_encryption
     if _integration_secret_encryption is None:
-        try:
-            from issuance.infrastructure.security.encryption import SymmetricEncryption
-        except ImportError as exc:  # pragma: no cover - deployment packaging guard
-            raise RuntimeError(
-                "issuance encryption adapter is required for integration secrets"
-            ) from exc
-        env_name = os.environ.get(
-            "INTEGRATION_SECRET_MASTER_KEY_ENV", "INTEGRATION_SECRET_MASTER_KEY"
-        )
-        if not os.environ.get(env_name):
-            key_file = os.environ.get(f"{env_name}_FILE")
-            if key_file:
-                try:
-                    with open(key_file, encoding="utf-8") as handle:
-                        os.environ[env_name] = handle.read().strip()
-                except OSError as exc:
-                    raise RuntimeError(f"{env_name}_FILE could not be read: {key_file}") from exc
-        _integration_secret_encryption = SymmetricEncryption.from_env(env_name)
+        from issuance.infrastructure.security.encryption import RemoteIntegrationSecretEncryption
+
+        _integration_secret_encryption = RemoteIntegrationSecretEncryption.from_env()
     return _integration_secret_encryption
 
 
@@ -4836,7 +4821,13 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             )
             existing = existing_result.first()
             encrypted_value = (
-                encryption.encrypt(secret.secret_value)
+                await encryption.encrypt(
+                    secret.organization_id,
+                    secret.id,
+                    secret.provider,
+                    secret.purpose or "api_token",
+                    secret.secret_value,
+                )
                 if secret.secret_value
                 else (existing.encrypted_secret_value if existing else None)
             )
@@ -4906,7 +4897,6 @@ class PostgresIssuanceRepository(IIssuanceRepository):
     async def get_integration_secret_value(
         self, organization_id: str, secret_id: str
     ) -> str | None:
-        encryption = _get_integration_secret_encryption()
         async with self._session_factory() as session:
             result = await session.execute(
                 select(organization_integration_secrets_table).where(
@@ -4918,13 +4908,20 @@ class PostgresIssuanceRepository(IIssuanceRepository):
             row = result.first()
             if row is None:
                 return None
+            plaintext = await _get_integration_secret_encryption().decrypt(
+                row.organization_id,
+                row.id,
+                row.provider,
+                row.purpose,
+                row.encrypted_secret_value,
+            )
             await session.execute(
                 update(organization_integration_secrets_table)
                 .where(organization_integration_secrets_table.c.id == secret_id)
                 .values(last_used_at=datetime.now(UTC))
             )
             await session.commit()
-        return encryption.decrypt(row.encrypted_secret_value)
+        return plaintext
 
     async def delete_integration_secret(self, secret_id: str) -> None:
         async with self._session_factory() as session:

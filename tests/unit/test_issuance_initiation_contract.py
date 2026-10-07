@@ -168,20 +168,12 @@ def test_idempotency_and_delivery_vectors_are_frozen() -> None:
 
 def test_dependency_order_and_custody_boundary_are_frozen() -> None:
     source = inspect.getsource(routes.initiate_issuance)
-    prefix_markers = [
-        "normalize_idempotency_key",
-        "normalize_delivery_mode",
-        "GetOrganization",
-        "get_oid4vci_client",
-        "recover_transaction_idempotently",
-    ]
-    prefix_positions = [source.index(marker) for marker in prefix_markers]
-    assert prefix_positions == sorted(prefix_positions)
     owner_precheck_markers = [
         "normalize_idempotency_key",
         "normalize_delivery_mode",
         "_reject_direct_signing_headers",
         "didcomm_delivery_owner",
+        "_post_to_native_issuance",
     ]
     assert CONTRACT["owner_precheck_order"] == [
         "normalize-idempotency-key",
@@ -191,24 +183,9 @@ def test_dependency_order_and_custody_boundary_are_frozen() -> None:
     ]
     owner_precheck_positions = [source.index(marker) for marker in owner_precheck_markers]
     assert owner_precheck_positions == sorted(owner_precheck_positions)
-
-    recovery_position = source.index("recover_transaction_idempotently")
-    recovery_response_position = source.index(
-        "_issuance_response_from_transaction", recovery_position
-    )
-    template_position = source.index("GetTemplate")
-    assert recovery_position < recovery_response_position < template_position
-
-    normal_path_markers = [
-        "GetTemplate",
-        "_require_active_revocation_profile_binding",
-        "get_application",
-        "apply_required_remote_issuer_context",
-        "reserve_transaction_idempotently",
-    ]
-    normal_positions = [source.index(marker) for marker in normal_path_markers]
-    assert normal_positions == sorted(normal_positions)
-    assert normal_positions[-1] < source.rindex("_issuance_response_from_transaction")
+    assert "recover_transaction_idempotently" not in source
+    assert "reserve_transaction_idempotently" not in source
+    assert "_issuance_response_from_transaction" not in source
     assert len(CONTRACT["dependency_order"]) == 12
     assert CONTRACT["idempotent_recovery_branch"][-1] == ("return-before-template-resolution")
     assert set(CONTRACT["domain_request"]["credential_subject_formats"]) == (
@@ -228,71 +205,3 @@ def test_dependency_order_and_custody_boundary_are_frozen() -> None:
             CONTRACT["issuer_custody"]["direct_header_failure"]["http_status"],
             CONTRACT["issuer_custody"]["direct_header_failure"]["detail"],
         )
-
-
-@pytest.mark.asyncio
-async def test_http_offer_projection_uses_only_the_committed_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def stable_offer(**values: object) -> str:
-        return json.dumps(values, sort_keys=True, separators=(",", ":"))
-
-    monkeypatch.setattr(routes, "oid4vci_create_credential_offer", stable_offer)
-    transaction = IssuanceTransaction(
-        id="tx-1",
-        organization_id="org-1",
-        credential_template_id="template-1",
-        credential_type="EmployeeBadge",
-        credential_payload_format="w3c_vcdm_v2_sd_jwt",
-        pre_auth_code="pre-auth-1",
-        wallet_configs=[
-            {
-                "wallet_id": "default-wallet",
-                "display_name": "Default Wallet",
-                "deep_link_scheme": "openid-credential-offer://",
-            },
-            {
-                "wallet_id": "credential-manager",
-                "display_name": "Credential Manager",
-                "format_variant": "credential-manager",
-                "deep_link_scheme": "marty-manager://offer",
-            },
-            {
-                "wallet_id": "apple-wallet",
-                "display_name": "Apple Wallet",
-                "format_variant": "apple-wallet",
-                "deep_link_scheme": "marty-apple://offer",
-            },
-            {
-                "wallet_id": "didcomm-wallet",
-                "display_name": "DIDComm Wallet",
-                "format_variant": "didcomm_v2",
-            },
-        ],
-    )
-    request = routes.InitiateIssuanceRequest(**_base_request())
-
-    response = await routes._issuance_response_from_transaction(
-        tx=transaction,
-        request=request,
-        repo=object(),
-    )
-
-    assert response.id == transaction.id
-    assert response.pre_auth_code == transaction.pre_auth_code
-    assert set(response.credential_offer_uris) == {
-        "default-wallet",
-        "credential-manager",
-        "apple-wallet",
-        "didcomm-wallet",
-    }
-    assert response.credential_offer_uris["didcomm-wallet"] == (
-        "didcomm://pending?transaction_id=tx-1"
-    )
-    assert response.credential_offer_labels == {
-        "default-wallet": "Default Wallet",
-        "credential-manager": "Credential Manager",
-        "apple-wallet": "Apple Wallet",
-        "didcomm-wallet": "DIDComm Wallet",
-    }
-    assert response.model_dump().keys() == set(CONTRACT["response"]["fields"])

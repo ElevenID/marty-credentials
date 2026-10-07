@@ -127,14 +127,13 @@ async def test_committed_offer_can_be_recovered_before_mutable_dependency_reads(
 
 
 @pytest.mark.asyncio
-async def test_http_retry_recovers_before_template_resolution(monkeypatch) -> None:
+async def test_http_retry_forwards_idempotency_key_to_native_owner(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+
     from issuance.infrastructure.api import routes
 
-    repo = InMemoryIssuanceRepository()
     raw_key = "stable-http-key"
-    stored, _ = await repo.reserve_transaction_idempotently(
-        _transaction(raw_key=raw_key, claims={"name": "Ada"})
-    )
+    monkeypatch.setenv("ISSUANCE_NATIVE_SERVICE_URL", "http://issuance-native:8005")
     request = routes.InitiateIssuanceRequest(
         organization_id="org-1",
         credential_template_id="template-1",
@@ -144,29 +143,26 @@ async def test_http_retry_recovers_before_template_resolution(monkeypatch) -> No
         issuer_did="did:web:issuer.example",
         claims={"name": "Ada"},
     )
-    channel_calls = 0
-
-    def unavailable_channel(*_args, **_kwargs):
-        nonlocal channel_calls
-        channel_calls += 1
-        raise RuntimeError("dependency unavailable")
-
-    monkeypatch.setattr(routes, "_create_grpc_channel", unavailable_channel)
-    monkeypatch.setattr(
-        routes,
-        "oid4vci_create_credential_offer",
-        lambda **_kwargs: '{"credential_issuer":"https://issuer.example"}',
-    )
+    forwarded_response = object()
+    forward = AsyncMock(return_value=forwarded_response)
+    monkeypatch.setattr(routes, "_post_to_native_issuance", forward)
+    repo = SimpleNamespace(recover_transaction_idempotently=AsyncMock())
+    http_request = SimpleNamespace(headers={"Idempotency-Key": raw_key})
 
     response = await routes.initiate_issuance(
         request=request,
-        http_request=SimpleNamespace(headers={"Idempotency-Key": raw_key}),
+        http_request=http_request,
         repo=repo,
     )
 
-    assert response.id == stored.id
-    assert response.pre_auth_code == stored.pre_auth_code
-    assert channel_calls == 1  # Organization validation only; no template lookup.
+    assert response is forwarded_response
+    forward.assert_awaited_once_with(
+        "/v1/issuance/initiate",
+        request.model_dump(mode="json", exclude_unset=True),
+        http_request,
+        routes.IssuanceResponse,
+    )
+    repo.recover_transaction_idempotently.assert_not_awaited()
 
 
 @pytest.mark.asyncio

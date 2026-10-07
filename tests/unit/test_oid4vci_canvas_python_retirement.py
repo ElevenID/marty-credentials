@@ -153,12 +153,13 @@ def test_remaining_python_feature_surface_is_preserved() -> None:
     assert callable(canvas_worker.run_canvas_sync_worker_loop)
     assert hasattr(InMemoryIssuanceRepository, "get_oid4vci_client")
 
-    assert callable(rust_integration.didcomm_encrypt_prepared_delivery)
     assert {
         "didcomm_encrypt",
         "didcomm_encrypt_authcrypt",
         "didcomm_pack_credential",
-    } <= rust_integration.REQUIRED_MARTY_RS_CAPABILITIES
+    }.isdisjoint(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
+    assert not hasattr(rust_integration, "didcomm_encrypt_prepared_delivery")
+    assert not hasattr(routes, "_didcomm_sign_and_deliver")
 
 
 def test_storage_history_and_didcomm_kms_follow_up_remain() -> None:

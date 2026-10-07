@@ -1,9 +1,4 @@
-"""Closed configuration for the DIDComm delivery implementation owner.
-
-The legacy Python service remains the default for standalone deployments.  A
-deployment that supplies the native Rust issuance service may select it
-explicitly; that selection is fail-closed and never falls back to Python.
-"""
+"""Require the native Rust service for DIDComm delivery."""
 
 from __future__ import annotations
 
@@ -35,13 +30,11 @@ class DidcommDeliveryOwner:
 def didcomm_delivery_owner() -> DidcommDeliveryOwner:
     """Return the validated, deployment-owned DIDComm delivery selector."""
 
-    owner = os.environ.get(_OWNER_ENV, "legacy").strip().lower()
-    if owner not in {"legacy", "native"}:
-        raise RuntimeError(f"{_OWNER_ENV} must be either legacy or native")
+    owner = os.environ.get(_OWNER_ENV, "native").strip().lower()
+    if owner != "native":
+        raise RuntimeError(f"{_OWNER_ENV} must be native")
 
     configured_url = os.environ.get(_NATIVE_URL_ENV, "").strip()
-    if owner == "legacy":
-        return DidcommDeliveryOwner(name=owner, native_service_url=None)
     if not configured_url:
         raise RuntimeError(f"{_NATIVE_URL_ENV} is required when {_OWNER_ENV}=native")
 

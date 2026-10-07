@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "python"))
@@ -84,14 +85,14 @@ def test_native_extension_does_not_require_retired_internal_didcomm_adapters(mon
     retired = {"didcomm_decrypt", "didcomm_unpack_message"}
     assert retired.isdisjoint(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
     assert all(not hasattr(rust_integration, name) for name in retired)
-    # Outbound delivery remains supported, including authenticated encryption.
+    # The Python service delegates DIDComm delivery to the native Rust owner.
     assert {
         "didcomm_encrypt",
         "didcomm_encrypt_authcrypt",
         "didcomm_pack_credential",
         "didcomm_extract_endpoint",
         "didcomm_resolve_did_with_metadata",
-    }.issubset(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
+    }.isdisjoint(rust_integration.REQUIRED_MARTY_RS_CAPABILITIES)
     module = SimpleNamespace(
         **{name: (lambda: None) for name in rust_integration.REQUIRED_MARTY_RS_CAPABILITIES}
     )
@@ -145,19 +146,15 @@ def test_native_didcomm_owner_configuration_fails_closed(monkeypatch, owner, url
 
 
 @pytest.mark.asyncio
-async def test_legacy_didcomm_owner_readiness_never_contacts_native(monkeypatch) -> None:
+async def test_native_didcomm_owner_requires_configured_url(monkeypatch) -> None:
     from issuance import main
 
     monkeypatch.delenv("DIDCOMM_DELIVERY_OWNER", raising=False)
     monkeypatch.delenv("ISSUANCE_NATIVE_SERVICE_URL", raising=False)
 
-    class UnexpectedClient:
-        def __init__(self, **_options) -> None:
-            raise AssertionError("legacy readiness must not contact the native owner")
-
-    monkeypatch.setattr(main.httpx, "AsyncClient", UnexpectedClient)
-
-    await main._require_didcomm_owner_ready()
+    with pytest.raises(HTTPException) as rejected:
+        await main._require_didcomm_owner_ready()
+    assert rejected.value.status_code == 503
 
 
 @pytest.mark.asyncio

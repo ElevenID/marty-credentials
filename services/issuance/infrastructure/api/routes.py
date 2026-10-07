@@ -5,12 +5,9 @@ import base64
 import copy
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import os
-import socket
-import ssl
 import time
 import uuid
 from dataclasses import dataclass
@@ -36,12 +33,8 @@ from issuance.application.canvas_issuance_guard import (
     require_canvas_issuance_ready,
 )
 from issuance.application.canvas_sync_service import record_canvas_credential_claim
-from issuance.application.credential_vct import resolve_credential_vct
 from issuance.application.didcomm_owner import didcomm_delivery_owner
 from issuance.application.issuance_idempotency import (
-    canonical_issuance_request,
-    hash_idempotency_key,
-    issuance_request_hash,
     normalize_idempotency_key,
 )
 from issuance.application.key_attestation import verify_oid4vci_proof_with_issuer_policy
@@ -54,21 +47,14 @@ from issuance.application.oid4vci_client_auth import (
     authenticate_oid4vci_client,
 )
 from issuance.application.rust_integration import (
-    DidcommAuthcryptError,
-    DidcommEncryptionPolicyError,
     create_jwt_vc_with_remote_signing,
     create_mdoc_credential_with_issuer_profile_signing,
     create_sd_jwt_vc_with_remote_signing,
     create_vcdm_data_integrity_with_remote_signing,
-    didcomm_encrypt_prepared_delivery,
-    didcomm_extract_endpoint,
-    didcomm_pack_credential,
-    didcomm_resolve_did,
     normalize_ecdsa_signature,
     oid4vci_create_credential_offer,
     oid4vci_create_token_response,
     oid4vci_exchange_auth_code_for_token,
-    prepare_didcomm_delivery_encryption,
     verify_compact_jwt,
     verify_key_attestation_bound_proof_jwt,
     verify_proof_jwt,
@@ -82,11 +68,9 @@ from issuance.domain.entities import (
     DeliveryTarget,
     EventType,
     IssuanceEvent,
-    IssuanceIdempotencyConflictError,
     IssuanceStatus,
     IssuanceTransaction,
     IssuedCredential,
-    Oid4vciRegisteredClient,
     stable_issuance_credential_id,
 )
 from issuance.domain.ports import IIssuanceRepository
@@ -1152,109 +1136,6 @@ class DidcommDeliveryResponse(BaseModel):
     error: str | None = None
 
 
-def _log_didcomm_failure(
-    stage: Literal["auto-delivery", "encryption-preflight", "encryption", "transport"],
-    exc: BaseException,
-) -> None:
-    """Record a DIDComm failure without retaining exception or identity data."""
-
-    exception_type = type(exc).__name__
-    logger.warning(
-        f"DIDComm {stage} failed ({exception_type})",
-        extra={
-            "didcomm_stage": stage,
-            "didcomm_exception_type": exception_type,
-        },
-    )
-
-
-def _didcomm_private_ips_enabled() -> bool:
-    """Allow private-address agents only when a deployment opts in explicitly."""
-
-    return os.environ.get("DIDCOMM_ALLOW_PRIVATE_IPS", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-
-
-def _didcomm_tls_verifier() -> bool | ssl.SSLContext:
-    """Return normal Web PKI verification plus an optional operator CA.
-
-    Private trust material is deployment configuration, never a public API
-    selector. Loading it into a default context preserves the system trust
-    store instead of replacing public roots or disabling verification.
-    """
-
-    ca_file = os.environ.get("DIDCOMM_TLS_CA_FILE", "").strip()
-    if not ca_file:
-        return True
-
-    try:
-        context = ssl.create_default_context()
-        context.load_verify_locations(cafile=ca_file)
-    except (OSError, ssl.SSLError) as exc:
-        logger.error("DIDComm TLS trust configuration could not be loaded")
-        raise HTTPException(
-            status_code=503,
-            detail="DIDComm TLS trust configuration is unavailable",
-        ) from exc
-    return context
-
-
-async def _validated_didcomm_delivery_endpoint(endpoint: str) -> str:
-    """Reject endpoints that could turn DID resolution into an SSRF primitive."""
-
-    if len(endpoint) > 2048:
-        raise HTTPException(status_code=422, detail="DIDComm service endpoint is invalid")
-
-    parsed = urlparse(endpoint)
-    allow_private_ips = _didcomm_private_ips_enabled()
-    if parsed.scheme != "https":
-        raise HTTPException(
-            status_code=422,
-            detail="DIDComm service endpoint must use HTTPS",
-        )
-    if not parsed.hostname or parsed.username or parsed.password:
-        raise HTTPException(status_code=422, detail="DIDComm service endpoint is invalid")
-
-    hostname = parsed.hostname.rstrip(".").lower()
-    if not allow_private_ips and (hostname == "localhost" or hostname.endswith(".localhost")):
-        raise HTTPException(
-            status_code=422,
-            detail="DIDComm service endpoint is not publicly routable",
-        )
-
-    try:
-        addresses = await asyncio.get_running_loop().getaddrinfo(
-            hostname,
-            parsed.port or 443,
-            type=socket.SOCK_STREAM,
-        )
-    except (OSError, ValueError) as exc:
-        raise HTTPException(
-            status_code=422,
-            detail="DIDComm service endpoint could not be resolved",
-        ) from exc
-
-    if not allow_private_ips:
-        for address in addresses:
-            try:
-                ip = ipaddress.ip_address(address[4][0].split("%", 1)[0])
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail="DIDComm service endpoint resolved to an invalid address",
-                ) from exc
-            if not ip.is_global:
-                raise HTTPException(
-                    status_code=422,
-                    detail="DIDComm service endpoint is not publicly routable",
-                )
-
-    return endpoint
-
-
 class CredentialStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1927,94 +1808,6 @@ async def _sync_canvas_lifecycle_delivery_records(
 # ============================================================================
 
 
-async def _issuance_response_from_transaction(
-    *,
-    tx: IssuanceTransaction,
-    request: InitiateIssuanceRequest,
-    repo: IIssuanceRepository,
-) -> IssuanceResponse:
-    """Reconstruct an offer only from the committed transaction snapshot."""
-
-    credential_config_id = tx.credential_type or "default"
-    normalized_payload_format = _normalize_payload_format(tx.credential_payload_format)
-    default_config_id = _credential_configuration_id_for_format(
-        credential_config_id,
-        normalized_payload_format or None,
-    )
-    offer_json_str = oid4vci_create_credential_offer(
-        issuer_url=org_issuer_url(tx.organization_id),
-        credential_types=[default_config_id],
-        pre_authorized_code=tx.pre_auth_code,
-        user_pin_required=False,
-    )
-    offer_uri = f"openid-credential-offer://?credential_offer={quote(offer_json_str)}"
-
-    credential_offer_uris: dict[str, str] = {}
-    credential_offer_labels: dict[str, str] = {}
-    logger.info(
-        "Building credential_offer_uris from %d wallet configs",
-        len(tx.wallet_configs),
-    )
-    for wallet_config in tx.wallet_configs:
-        wallet_id = wallet_config.get("wallet_id", "")
-        if not wallet_id:
-            continue
-        scheme = wallet_config.get("deep_link_scheme", "openid-credential-offer://")
-        format_variant = wallet_config.get("format_variant")
-
-        if format_variant == "didcomm_v2":
-            holder_did = request.holder_did or request.subject_did
-            if holder_did:
-                try:
-                    delivery = await _didcomm_sign_and_deliver(
-                        tx=tx,
-                        holder_did=holder_did,
-                        repo=repo,
-                    )
-                    credential_offer_uris[wallet_id] = f"didcomm://{delivery.service_endpoint}"
-                except Exception as exc:
-                    _log_didcomm_failure("auto-delivery", exc)
-                    credential_offer_uris[wallet_id] = f"didcomm://pending?transaction_id={tx.id}"
-            else:
-                credential_offer_uris[wallet_id] = f"didcomm://pending?transaction_id={tx.id}"
-        else:
-            wallet_config_id = _credential_configuration_id_for_format(
-                credential_config_id,
-                format_variant,
-            )
-            wallet_issuer_url = (
-                org_issuer_url_credential_manager(tx.organization_id)
-                if format_variant == "credential-manager"
-                else org_issuer_url_apple_wallet(tx.organization_id)
-                if format_variant == "apple-wallet"
-                else org_issuer_url(tx.organization_id)
-            )
-            wallet_offer_json = oid4vci_create_credential_offer(
-                issuer_url=wallet_issuer_url,
-                credential_types=[wallet_config_id],
-                pre_authorized_code=tx.pre_auth_code,
-                user_pin_required=False,
-            )
-            encoded = quote(wallet_offer_json)
-            separator = "&" if "?" in scheme else "?"
-            credential_offer_uris[wallet_id] = f"{scheme}{separator}credential_offer={encoded}"
-
-        if wallet_config.get("display_name"):
-            credential_offer_labels[wallet_id] = wallet_config["display_name"]
-
-    return IssuanceResponse(
-        id=tx.id,
-        organization_id=tx.organization_id,
-        credential_template_id=tx.credential_template_id,
-        status=tx.status.value,
-        credential_offer_uri=offer_uri,
-        credential_offer_uris=credential_offer_uris,
-        credential_offer_labels=credential_offer_labels,
-        pre_auth_code=tx.pre_auth_code,
-        expires_at=tx.expires_at.isoformat(),
-    )
-
-
 @issuance_router.post(
     "/initiate", response_model=IssuanceResponse, dependencies=[Depends(_verify_management_api_key)]
 )
@@ -2023,382 +1816,35 @@ async def initiate_issuance(
     http_request: Request = None,
     repo: IIssuanceRepository = Depends(),
 ) -> IssuanceResponse:
-    """Initiate a credential issuance transaction.
-
-    Client errors from the org or template services (4xx) are hard failures
-    so callers receive a proper 4xx response.  Network / 5xx failures are
-    logged and allowed to proceed for internal service-to-service resilience.
-    """
+    """Validate the public request boundary and forward initiation to Rust."""
 
     try:
         raw_idempotency_key = (
             http_request.headers.get("Idempotency-Key") if http_request is not None else None
         )
-        normalized_idempotency_key = normalize_idempotency_key(raw_idempotency_key)
+        normalize_idempotency_key(raw_idempotency_key)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     try:
-        delivery_mode = normalize_delivery_mode(request.delivery_mode)
+        normalize_delivery_mode(request.delivery_mode)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if http_request is not None:
         _reject_direct_signing_headers(http_request.headers)
 
-    if didcomm_delivery_owner().is_native:
-        if http_request is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Native issuance service requires an authenticated request context",
-            )
-        forwarded = await _post_to_native_issuance(
-            "/v1/issuance/initiate",
-            request.model_dump(mode="json", exclude_unset=True),
-            http_request,
-            IssuanceResponse,
-        )
-        return forwarded
-
-    request_semantics = canonical_issuance_request(
-        organization_id=request.organization_id,
-        credential_template_id=request.credential_template_id,
-        application_id=request.application_id,
-        applicant_id=request.applicant_id,
-        subject_did=request.subject_did,
-        holder_did=request.holder_did,
-        issuer_did=request.issuer_did,
-        authorized_client_id=request.authorized_client_id,
-        delivery_mode=delivery_mode,
-        claims=request.claims,
-        credential_subject=request.credential_subject,
-        credential_document=request.credential_document,
-    )
-    idempotency_key_hash = (
-        hash_idempotency_key(normalized_idempotency_key) if normalized_idempotency_key else None
-    )
-    idempotency_request_hash = (
-        issuance_request_hash(request_semantics) if normalized_idempotency_key else None
-    )
-
-    # Validate organization exists via gRPC
-    try:
-        from marty_proto.v1 import organization_service_pb2 as org_pb2
-        from marty_proto.v1 import organization_service_pb2_grpc as org_grpc
-
-        org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
-        async with _create_grpc_channel(org_grpc_target) as channel:
-            org_stub = org_grpc.OrganizationServiceStub(channel)
-            org_resp = await org_stub.GetOrganization(
-                org_pb2.GetOrganizationRequest(organization_id=request.organization_id)
-            )
-            if not org_resp.id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Organization not found: {request.organization_id}",
-                )
-    except HTTPException:
-        raise  # Hard fail — propagate to caller
-    except Exception as e:
-        logger.warning(
-            f"Could not validate organization {request.organization_id} (proceeding): {e}"
-        )
-
-    authorized_client: Oid4vciRegisteredClient | None = None
-    if request.authorized_client_id:
-        authorized_client = await repo.get_oid4vci_client(
-            request.organization_id,
-            request.authorized_client_id,
-        )
-        if authorized_client is None:
-            raise HTTPException(
-                status_code=422,
-                detail="authorized_client_id is not registered for this organization",
-            )
-        if not authorized_client.active:
-            raise HTTPException(
-                status_code=422,
-                detail="authorized_client_id is inactive",
-            )
-        if authorized_client.token_endpoint_auth_method != "private_key_jwt":
-            raise HTTPException(
-                status_code=422,
-                detail="authorized_client_id has an unsupported authentication method",
-            )
-
-    if idempotency_key_hash and idempotency_request_hash:
-        try:
-            recovered = await repo.recover_transaction_idempotently(
-                organization_id=request.organization_id,
-                idempotency_key_hash=idempotency_key_hash,
-                idempotency_request_hash=idempotency_request_hash,
-            )
-        except IssuanceIdempotencyConflictError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if recovered is not None:
-            return await _issuance_response_from_transaction(
-                tx=recovered,
-                request=request,
-                repo=repo,
-            )
-
-    # Resolve credential type from template via gRPC (preferred) with HTTP fallback.
-    credential_type = "org.iso.18013.5.1.mDL"  # Default fallback
-    credential_vct: str | None = None
-    zk_predicate_claims: list[str] = []
-    selective_disclosure_claims: list[str] = []
-    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
-    revocation_profile_id: str | None = None
-    template_issuer_did: str | None = None
-    template_issuer_algorithm: str | None = None
-    wallet_configs: list[dict] = []
-    validity_days = 365
-    renewable = False
-    renewal_window_days = 30
-    if request.credential_template_id:
-        _tmpl_resolved = False
-        # Try gRPC first
-        try:
-            from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
-            from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
-
-            ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
-            async with _create_grpc_channel(ct_grpc_target) as channel:
-                ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
-                tmpl_resp = await ct_stub.GetTemplate(
-                    ct_pb2.GetTemplateRequest(template_id=request.credential_template_id)
-                )
-            if not tmpl_resp.id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Credential template not found: {request.credential_template_id}",
-                )
-            credential_type = tmpl_resp.credential_type or credential_type
-            credential_vct = resolve_credential_vct(
-                tmpl_resp.vct,
-                credential_type,
-                ISSUER_BASE_URL,
-            )
-            zk_predicate_claims = list(tmpl_resp.zk_predicate_claims) or []
-            selective_disclosure_claims = (
-                list(tmpl_resp.selective_disclosure_fields)
-                if tmpl_resp.selective_disclosure_fields
-                else []
-            )
-            credential_payload_format = tmpl_resp.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-            revocation_profile_id = tmpl_resp.revocation_profile_id or None
-            template_issuer_did = getattr(tmpl_resp, "issuer_did", None) or None
-            template_issuer_algorithm = getattr(tmpl_resp, "issuer_algorithm", None) or None
-            wallet_configs = (
-                json.loads(tmpl_resp.wallet_configs_json) if tmpl_resp.wallet_configs_json else []
-            )
-            validity_days = tmpl_resp.validity_rules.default_validity_days or 365
-            renewable = bool(tmpl_resp.validity_rules.renewable)
-            renewal_window_days = tmpl_resp.validity_rules.renewal_window_days or 30
-            logger.info(
-                f"Fetched credential type from template (gRPC): {credential_type} vct={credential_vct}"
-            )
-            logger.info(f"Template wallet_configs_json: {tmpl_resp.wallet_configs_json}")
-            logger.info(
-                f"Parsed wallet_configs ({len(wallet_configs)} entries): {[wc.get('wallet_id') for wc in wallet_configs]}"
-            )
-            _tmpl_resolved = True
-        except HTTPException:
-            raise
-        except Exception as _grpc_err:
-            logger.warning(f"gRPC template fetch failed, falling back to HTTP: {_grpc_err}")
-
-        # HTTP fallback
-        if not _tmpl_resolved:
-            try:
-                resp = await _fetch_credential_template_http(request.credential_template_id)
-                if resp.status_code == 404:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Credential template not found: {request.credential_template_id}",
-                    )
-                if resp.status_code >= 400:
-                    raise HTTPException(status_code=resp.status_code, detail=resp.text)
-                tmpl = resp.json()
-            except HTTPException:
-                raise
-            except httpx.ConnectError:
-                raise HTTPException(
-                    status_code=503, detail="Credential template service unavailable"
-                )
-            except httpx.TimeoutException:
-                raise HTTPException(status_code=504, detail="Credential template service timeout")
-            credential_type = tmpl.get("credential_type") or credential_type
-            credential_vct = resolve_credential_vct(
-                tmpl.get("vct"),
-                credential_type,
-                ISSUER_BASE_URL,
-            )
-            logger.info(
-                f"Fetched credential type from template (HTTP): {credential_type} vct={credential_vct}"
-            )
-            zk_predicate_claims = tmpl.get("zk_predicate_claims") or []
-            selective_disclosure_claims = tmpl.get("selective_disclosure_fields") or []
-            credential_payload_format = (
-                tmpl.get("credential_payload_format") or "w3c_vcdm_v2_sd_jwt"
-            )
-            revocation_profile_id = tmpl.get("revocation_profile_id") or None
-            template_issuer_did = tmpl.get("issuer_did") or None
-            template_issuer_algorithm = tmpl.get("issuer_algorithm") or None
-            wallet_configs = tmpl.get("wallet_configs") or []
-            validity_rules = tmpl.get("validity_rules") or {}
-            validity_days = int(validity_rules.get("default_validity_days") or 0)
-            if validity_days <= 0:
-                ttl_seconds = int(validity_rules.get("ttl_seconds") or 0)
-                validity_days = max(ttl_seconds // 86400, 1) if ttl_seconds else 365
-            renewable = bool(validity_rules.get("renewable", False))
-            renewal_window_days = int(validity_rules.get("renewal_window_days") or 0)
-            if renewal_window_days <= 0:
-                reissue_seconds = int(validity_rules.get("reissue_within_seconds") or 0)
-                renewal_window_days = max(reissue_seconds // 86400, 1) if reissue_seconds else 30
-
-    # Derive vct fallback if not already resolved
-    if not credential_vct:
-        credential_vct = f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-
-    if request.credential_template_id:
-        if not template_issuer_did:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "credential_template_id must reference a template with an issuer_did; "
-                    "migrate the legacy template before issuance."
-                ),
-            )
-        if template_issuer_did != request.issuer_did:
-            raise HTTPException(
-                status_code=422,
-                detail="issuer_did cannot override the credential template issuer DID.",
-            )
-        if template_issuer_algorithm not in {"ES256", "ES384", "RS256", "EdDSA"}:
-            raise HTTPException(
-                status_code=422,
-                detail="credential_template_id must define a supported issuer_algorithm.",
-            )
-
-    if request.credential_subject is not None and _normalize_payload_format(
-        credential_payload_format
-    ) not in (_JWT_VC_PAYLOAD_FORMATS | _DATA_INTEGRITY_PAYLOAD_FORMATS):
+    didcomm_delivery_owner()
+    if http_request is None:
         raise HTTPException(
-            status_code=422,
-            detail=(
-                "credential_subject is supported only for VCDM JWT-VC or Data Integrity templates"
-            ),
+            status_code=503,
+            detail="Native issuance service requires an authenticated request context",
         )
-    if (
-        request.credential_document is not None
-        and _normalize_payload_format(credential_payload_format)
-        not in _DATA_INTEGRITY_PAYLOAD_FORMATS
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="credential_document is supported only for Data Integrity templates",
-        )
-    if request.credential_document is not None:
-        await _validate_vcdm_related_resources(request.credential_document)
-
-    await _require_active_revocation_profile_binding(
-        organization_id=request.organization_id,
-        revocation_profile_id=revocation_profile_id,
+    return await _post_to_native_issuance(
+        "/v1/issuance/initiate",
+        request.model_dump(mode="json", exclude_unset=True),
+        http_request,
+        IssuanceResponse,
     )
-    # Store vct in claims under a reserved key so the credential endpoint can
-    # use it at signing time without a second template lookup.
-    merged_claims = {**request.claims, "_vct": credential_vct}
-    if request.credential_subject is not None:
-        merged_claims[_CREDENTIAL_SUBJECT_FIELD] = request.credential_subject
-    if request.credential_document is not None:
-        merged_claims[_CREDENTIAL_DOCUMENT_FIELD] = request.credential_document
-    # MIP §8.3 – when the caller supplies only a canonical application,
-    # resolve its claim values from form_data. The application is a
-    # first-class request field, never a hidden claim.
-    if request.application_id and (not merged_claims or list(merged_claims.keys()) == ["_vct"]):
-        try:
-            app = await repo.get_application(request.application_id)
-            if app and app.form_data:
-                merged_claims = {**app.form_data, "_vct": credential_vct}
-                logger.info(
-                    "[initiate] resolved claims from application %s: keys=%s",
-                    request.application_id,
-                    list(app.form_data.keys()),
-                )
-            else:
-                logger.warning(
-                    "[initiate] application %s not found or has empty form_data",
-                    request.application_id,
-                )
-        except Exception as _app_err:
-            logger.warning(
-                "[initiate] could not resolve application %s: %s",
-                request.application_id,
-                _app_err,
-            )
-    logger.info(
-        "[initiate] org=%s template=%s cred_type=%s received_claims=%s merged_claims=%s",
-        request.organization_id,
-        request.credential_template_id,
-        credential_type,
-        list(request.claims.keys()),
-        list(merged_claims.keys()),
-    )
-
-    # DB column is NOT NULL; when callers omit template id, persist a stable fallback.
-    effective_credential_template_id = request.credential_template_id or "default"
-
-    if normalized_idempotency_key and any(
-        str(wallet.get("format_variant") or "") == "didcomm_v2" for wallet in wallet_configs
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="idempotent initiation does not support DIDComm push delivery",
-        )
-
-    tx = IssuanceTransaction(
-        organization_id=request.organization_id,
-        credential_template_id=effective_credential_template_id,
-        revocation_profile_id=revocation_profile_id,
-        applicant_id=request.applicant_id,
-        application_id=request.application_id,
-        subject_did=request.subject_did,
-        idempotency_key_hash=idempotency_key_hash,
-        idempotency_request_hash=idempotency_request_hash,
-        # The request supplies a DID only. The internal resolver records the
-        # canonical issuer-profile ID after it proves the org/DID/format match.
-        issuer_profile_id=None,
-        issuer_mode="org_managed",
-        issuer_did_override=request.issuer_did,
-        issuer_algorithm=template_issuer_algorithm,
-        signing_service_id=None,
-        oid4vci_client_id=authorized_client.client_id if authorized_client else None,
-        delivery_mode=delivery_mode,
-        claims=merged_claims,
-        credential_type=credential_type,
-        zk_predicate_claims=zk_predicate_claims,
-        selective_disclosure_claims=selective_disclosure_claims,
-        credential_payload_format=credential_payload_format,
-        wallet_configs=wallet_configs,
-        validity_days=validity_days,
-        renewable=renewable,
-        renewal_window_days=renewal_window_days,
-    )
-    await apply_required_remote_issuer_context(
-        tx,
-        credential_format=_credential_format_for_remote_context(credential_payload_format),
-    )
-    try:
-        tx, _created = await repo.reserve_transaction_idempotently(tx)
-    except IssuanceIdempotencyConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-    return await _issuance_response_from_transaction(
-        tx=tx,
-        request=request,
-        repo=repo,
-    )
-
 
 async def _finalize_credential_renewal(
     tx: IssuanceTransaction,
@@ -3638,372 +3084,6 @@ async def issue_credential(
 # ── DIDComm v2 Push Delivery ─────────────────────────────────────────────
 
 
-async def _didcomm_sign_and_deliver(
-    tx: "IssuanceTransaction",
-    holder_did: str,
-    repo: "IIssuanceRepository",
-) -> DidcommDeliveryResponse:
-    """Sign a credential and deliver it to the holder via DIDComm v2.
-
-    1. Resolve and validate all deterministic DIDComm delivery prerequisites.
-    2. Sign the credential using the same Rust signer as OID4VCI.
-    3. Pack the signed credential into a DIDComm v2 issue-credential/3.0 message.
-    4. Encrypt with the prepared context and POST to the holder endpoint.
-    """
-    credential_type = tx.credential_type or "VerifiableCredential"
-    _INTERNAL_CLAIM_FIELDS = {
-        "credential_offer_uri",
-        "credential_offer_uris",
-        "offer_expires_at",
-        "issuance_transaction_id",
-        "issuance_fallback",
-        "credential_type",
-        "credential_display_name",
-        "rejection_reason",
-        "review_notes",
-        "info_requests",
-        "applicant_id",
-        "_vct",
-        _CREDENTIAL_SUBJECT_FIELD,
-        _CREDENTIAL_DOCUMENT_FIELD,
-    }
-    clean_claims = {k: v for k, v in tx.claims.items() if k not in _INTERNAL_CLAIM_FIELDS}
-
-    credential_payload_fmt = tx.credential_payload_format or "w3c_vcdm_v2_sd_jwt"
-    normalized_payload_format = _normalize_payload_format(credential_payload_fmt)
-    if normalized_payload_format in _MDOC_PAYLOAD_FORMATS:
-        signing_format = "mso_mdoc"
-    elif normalized_payload_format in _VDS_NC_PAYLOAD_FORMATS:
-        if not _VDSNC_RUST_ENABLED:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="VDS-NC credential issuance is temporarily disabled (VDSNC_RUST_ENABLED=false)",
-            )
-        signing_format = "vds_nc"
-    elif normalized_payload_format in _SD_JWT_PAYLOAD_FORMATS:
-        signing_format = "vc+sd-jwt"
-    else:
-        signing_format = "vc+sd-jwt"
-
-    vct_for_signing = tx.claims.get("_vct") or (
-        f"{ISSUER_BASE_URL}/credentials/{credential_type}"
-        if credential_type and not credential_type.startswith("http")
-        else credential_type
-    )
-    signing_credential_type = (
-        tx.credential_type if signing_format in ("mso_mdoc", "vds_nc") else vct_for_signing
-    )
-
-    # SD-JWT default: all top-level claims if none configured
-    sd_claims_dc = tx.selective_disclosure_claims or []
-    if signing_format == "vc+sd-jwt" and not sd_claims_dc:
-        sd_claims_dc = [k for k in clean_claims if not k.startswith("_")]
-
-    # Step 1: Sign the credential - all credentials require remote signing
-    remote_credential_format = _credential_format_for_remote_context(credential_payload_fmt)
-    effective_request_format = remote_credential_format
-    if signing_format != "vc+sd-jwt":
-        raise HTTPException(
-            status_code=503,
-            detail=_unsupported_remote_signing_format_detail(
-                signing_format, remote_credential_format
-            ),
-        )
-
-    # Resolve and validate the holder endpoint before any irreversible status
-    # allocation or signing work. Freeze the recipient DID Document used by
-    # this attempt so later encryption cannot silently switch recipient keys.
-    did_doc = didcomm_resolve_did(holder_did)
-    service_endpoint = didcomm_extract_endpoint(did_doc)
-    if not service_endpoint:
-        raise HTTPException(
-            status_code=422,
-            detail="Holder DID has no DIDComm service endpoint",
-        )
-    service_endpoint = await _validated_didcomm_delivery_endpoint(service_endpoint)
-
-    remote_context: dict[str, Any] | None = None
-
-    # Ensure remote signing is configured for all credentials
-    try:
-        remote_context = await apply_remote_issuer_context(
-            tx,
-            credential_format=remote_credential_format,
-            force=True,
-            raise_on_error=True,
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=503, detail=_did_resolution_failure_detail(tx, exc)
-        ) from exc
-    if remote_context:
-        await repo.save_transaction(tx)
-
-    if not (tx.issuer_did_override and tx.issuer_profile_id):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Issuer profile configuration is required. "
-                "An active issuer profile and its DID must be configured for this organization."
-            ),
-        )
-
-    if not remote_context or not isinstance(remote_context.get("service"), dict):
-        try:
-            remote_context = await resolve_remote_issuer_context(
-                tx.organization_id,
-                issuer_did=tx.issuer_did_override,
-                issuer_mode=_normalize_issuer_mode(tx.issuer_mode),
-                credential_format=remote_credential_format,
-                key_purpose=_key_purpose_for_credential_format(remote_credential_format),
-                algorithm=tx.issuer_algorithm,
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=503, detail=_did_resolution_failure_detail(tx, exc)
-            ) from exc
-        if remote_context:
-            tx.signing_service_id = (
-                remote_context.get("signing_service_id") or tx.signing_service_id
-            )
-            tx.issuer_profile_id = (
-                remote_context.get("issuer_profile_id")
-                or (remote_context.get("issuer_profile") or {}).get("id")
-                or tx.issuer_profile_id
-            )
-            tx.issuer_mode = _normalize_issuer_mode(
-                remote_context.get("issuer_mode")
-                or (remote_context.get("issuer_profile") or {}).get("issuer_mode")
-                or tx.issuer_mode
-            )
-            resolved_algorithm = remote_context.get("algorithm") or (
-                remote_context.get("issuer_profile") or {}
-            ).get("algorithm")
-            if (
-                remote_context.get("issuer_did") != tx.issuer_did_override
-                or resolved_algorithm != tx.issuer_algorithm
-            ):
-                raise HTTPException(
-                    status_code=503,
-                    detail="Resolved issuer context changed during credential issuance.",
-                )
-            await repo.save_transaction(tx)
-    if not remote_context:
-        raise HTTPException(
-            status_code=503,
-            detail="Unable to resolve the remote DID issuer profile for this organization.",
-        )
-
-    signing_algorithm = str(tx.issuer_algorithm)
-    verification_method_id = (
-        remote_context.get("verification_method_id") if isinstance(remote_context, dict) else None
-    )
-    issuer_public_jwk = (
-        remote_context.get("public_jwk") if isinstance(remote_context, dict) else None
-    )
-    if not isinstance(verification_method_id, str) or not verification_method_id:
-        raise RuntimeError("issuer DID resolution returned no verification method")
-    if not isinstance(issuer_public_jwk, dict):
-        raise RuntimeError("issuer DID resolution returned no public JWK")
-    effective_issuer_did_dc = tx.issuer_did_override
-
-    # Load the exhaustive issuer policy and validate recipient key agreement,
-    # sender DID resolution, and authcrypt private/public binding through the
-    # canonical Rust implementation before allocating a status-list entry.
-    try:
-        delivery_encryption_context = prepare_didcomm_delivery_encryption(
-            effective_issuer_did_dc,
-            did_doc,
-        )
-    except (DidcommEncryptionPolicyError, DidcommAuthcryptError) as enc_err:
-        logger.error("DIDComm sender-authenticated encryption is unavailable")
-        raise HTTPException(
-            status_code=503,
-            detail="DIDComm sender-authentication configuration is unavailable",
-        ) from enc_err
-    except Exception as enc_err:
-        _log_didcomm_failure("encryption-preflight", enc_err)
-        raise HTTPException(
-            status_code=422,
-            detail="Holder DID does not provide a compatible DIDComm key agreement method",
-        ) from enc_err
-
-    async def _remote_sign(payload: bytes, algorithm: str | None) -> dict[str, Any]:
-        if algorithm and algorithm != signing_algorithm:
-            raise RuntimeError("Credential builder requested a different issuer algorithm")
-        return await sign_payload_with_issuer_did(
-            organization_id=tx.organization_id,
-            issuer_did=effective_issuer_did_dc,
-            credential_format=remote_credential_format,
-            key_purpose=_key_purpose_for_credential_format(remote_credential_format),
-            payload=payload,
-            algorithm=signing_algorithm,
-            expected_verification_method_id=verification_method_id,
-        )
-
-    credential_id = stable_issuance_credential_id(tx.id)
-    revocation_profile_id, status_list_entries = await _allocate_credential_status_list_entries(
-        credential_id=credential_id,
-        organization_id=tx.organization_id,
-        credential_format=_credential_format_for_revocation_profile(tx, effective_request_format),
-        revocation_profile_id=tx.revocation_profile_id,
-    )
-    signing_claims = dict(clean_claims)
-    credential_status_claim = _status_list_entries_to_credential_status_claim(status_list_entries)
-    if credential_status_claim:
-        signing_claims["credentialStatus"] = credential_status_claim
-
-    logger.info(
-        "[credential] tx_id=%s signing_path=didcomm format=%s jwt_typ_will_be=%s",
-        tx.id,
-        effective_request_format,
-        effective_request_format,
-    )
-    jwt_credential, signed_credential_id = await create_sd_jwt_vc_with_remote_signing(
-        issuer_did=effective_issuer_did_dc,
-        remote_sign=_remote_sign,
-        subject_id=holder_did,
-        credential_type=signing_credential_type,
-        claims_json=json.dumps(signing_claims),
-        expiration_seconds=31536000,
-        selective_disclosure_claims=sd_claims_dc,
-        algorithm=signing_algorithm,
-        verification_method_id=verification_method_id,
-        issuer_public_jwk=issuer_public_jwk,
-        credential_format=effective_request_format,
-        credential_id=credential_id,
-        issuer_certificate_chain=(
-            remote_context.get("issuer_x5c") if isinstance(remote_context, dict) else None
-        ),
-    )
-    if signed_credential_id != credential_id:
-        raise RuntimeError("DIDComm credential builder changed the stable credential ID")
-
-    # Step 2: Pack into DIDComm v2 envelope
-    didcomm_message_json = didcomm_pack_credential(
-        credential=jwt_credential,
-        credential_format=credential_payload_fmt,
-        issuer_did=effective_issuer_did_dc,
-        holder_did=holder_did,
-        thread_id=tx.id,
-        credential_id=credential_id,
-    )
-    didcomm_msg = json.loads(didcomm_message_json)
-    didcomm_message_id = didcomm_msg.get("id", "")
-
-    # Step 3: Encryption is mandatory. Reuse the exact preflight context so a
-    # policy or DID-document change cannot downgrade or retarget this attempt.
-    try:
-        delivery_content = didcomm_encrypt_prepared_delivery(
-            didcomm_message_json,
-            delivery_encryption_context,
-        )
-    except (DidcommEncryptionPolicyError, DidcommAuthcryptError) as enc_err:
-        logger.error("DIDComm sender-authenticated encryption is unavailable")
-        raise HTTPException(
-            status_code=503,
-            detail="DIDComm sender-authentication configuration is unavailable",
-        ) from enc_err
-    except Exception as enc_err:
-        _log_didcomm_failure("encryption", enc_err)
-        raise HTTPException(
-            status_code=422,
-            detail="Holder DID does not provide a compatible DIDComm key agreement method",
-        ) from enc_err
-    delivery_content_type = "application/didcomm-encrypted+json"
-
-    # Step 4: POST the DIDComm message to the holder's endpoint
-    delivery_status = "delivered"
-    delivery_error = None
-    tls_verifier = _didcomm_tls_verifier()
-    try:
-        async with httpx.AsyncClient(
-            timeout=30.0,
-            verify=tls_verifier,
-        ) as client:
-            resp = await client.post(
-                service_endpoint,
-                content=delivery_content,
-                headers={"Content-Type": delivery_content_type},
-            )
-            if resp.status_code >= 400:
-                delivery_status = "delivery_failed"
-                delivery_error = f"HTTP {resp.status_code}"
-    except Exception as exc:
-        delivery_status = "delivery_failed"
-        delivery_error = "DIDComm transport failed"
-        _log_didcomm_failure("transport", exc)
-
-    # Commit the credential and issued state atomically only after transport
-    # succeeds. Signing or delivery failure leaves the original transaction
-    # state retryable; the stable credential ID reuses the same status index.
-    if delivery_status == "delivered" and tx.status != IssuanceStatus.ISSUED:
-        issued_at = datetime.now(UTC)
-        expires_at = issued_at + timedelta(days=tx.validity_days)
-        issued_credential = IssuedCredential(
-            id=credential_id,
-            transaction_id=tx.id,
-            organization_id=tx.organization_id,
-            credential_template_id=tx.credential_template_id,
-            applicant_id=tx.applicant_id,
-            subject_did=holder_did,
-            issuer_did=effective_issuer_did_dc,
-            revocation_profile_id=revocation_profile_id,
-            renewed_from_credential_id=tx.renewal_of_credential_id,
-            status_list_entries=status_list_entries,
-            credential_jwt=jwt_credential,
-            credential_hash=hashlib.sha256(jwt_credential.encode("utf-8")).hexdigest(),
-            status=CredentialStatus.ACTIVE,
-            issued_at=issued_at,
-            expires_at=expires_at,
-        )
-        created = await repo.finalize_direct_credential_issuance(tx, issued_credential)
-        if created:
-            tx.nonce = None
-            tx.status = IssuanceStatus.ISSUED
-            tx.issued_at = issued_at
-            await record_canvas_credential_claim(
-                repo=repo,
-                application_id=tx.application_id,
-                credential_id=issued_credential.id,
-            )
-            await _finalize_credential_renewal(tx, issued_credential, repo)
-            await repo.save_event(
-                IssuanceEvent(
-                    transaction_id=tx.id,
-                    application_id=tx.application_id,
-                    event_type=EventType.CREDENTIAL_ISSUED,
-                    metadata={
-                        "credential_id": credential_id,
-                        "credential_type": credential_type,
-                        "delivery_protocol": "didcomm_v2",
-                        "service_endpoint": service_endpoint,
-                    },
-                )
-            )
-            await record_post_issuance_deliveries(
-                repo,
-                tx,
-                issued_credential,
-                delivered_target=DeliveryTarget.DIDCOMM_V2,
-                delivery_metadata={
-                    "protocol": "didcomm_v2",
-                    "service_endpoint": service_endpoint,
-                    "didcomm_message_id": didcomm_message_id,
-                },
-            )
-
-    return DidcommDeliveryResponse(
-        transaction_id=tx.id,
-        credential_id=credential_id,
-        holder_did=holder_did,
-        service_endpoint=service_endpoint,
-        didcomm_message_id=didcomm_message_id,
-        status=delivery_status,
-        error=delivery_error,
-    )
-
-
 @issuance_router.post(
     "/didcomm/deliver",
     response_model=DidcommDeliveryResponse,
@@ -4025,31 +3105,12 @@ async def didcomm_deliver(
         request.organization_id,
         hide_resource=True,
     )
-    if didcomm_delivery_owner().is_native:
-        forwarded = await _post_to_native_issuance(
-            "/v1/issuance/didcomm/deliver",
-            request.model_dump(mode="json"),
-            http_request,
-            DidcommDeliveryResponse,
-        )
-        return forwarded
-    tx = await repo.get_transaction(request.transaction_id)
-    if not tx:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    _require_trusted_organization(
+    didcomm_delivery_owner()
+    return await _post_to_native_issuance(
+        "/v1/issuance/didcomm/deliver",
+        request.model_dump(mode="json"),
         http_request,
-        tx.organization_id,
-        hide_resource=True,
-    )
-    if tx.status == IssuanceStatus.ISSUED:
-        raise HTTPException(status_code=409, detail="Credential already issued")
-    if tx.status not in (IssuanceStatus.PENDING, IssuanceStatus.AUTHORIZED):
-        raise HTTPException(status_code=400, detail=f"Transaction in {tx.status.value} state")
-
-    return await _didcomm_sign_and_deliver(
-        tx=tx,
-        holder_did=request.holder_did,
-        repo=repo,
+        DidcommDeliveryResponse,
     )
 
 

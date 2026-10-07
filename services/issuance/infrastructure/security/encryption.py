@@ -1,77 +1,137 @@
-"""Fail-closed native encryption adapter for issuance integration secrets."""
+"""Remote-only integration-secret envelope transport; Rust signing-keys owns crypto."""
 
 from __future__ import annotations
 
 import base64
 import binascii
+import json
 import os
+from urllib.parse import urlsplit
 
-from marty_credentials.native_backend import require_marty_verification
+import httpx
 
-_NONCE_LENGTH = 12
-_native = require_marty_verification(
-    ("aes_gcm_encrypt", "aes_gcm_decrypt", "generate_random_bytes")
-)
+SCHEMA = "marty.integration-secret-envelope/v1"
+MAX_SECRET_BYTES = 64 * 1024
+MAX_CIPHERTEXT_BYTES = 200 * 1024
 
 
-class SymmetricEncryption:
-    """Preserve the stored ``base64(nonce || ciphertext || tag)`` format."""
-
-    def __init__(self, master_key: bytes):
-        if len(master_key) != 32:
-            raise ValueError(f"Master key must be 32 bytes, got {len(master_key)}")
-        self._master_key = master_key
+class RemoteIntegrationSecretEncryption:
+    def __init__(self, base_url: str, api_key: str):
+        parsed = urlsplit(base_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or not api_key.strip()
+        ):
+            raise RuntimeError("Remote integration-secret KMS configuration is invalid")
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
 
     @classmethod
-    def from_env(cls, env_var: str = "INTEGRATION_SECRET_MASTER_KEY") -> SymmetricEncryption:
-        key_b64 = os.environ.get(env_var)
-        if not key_b64:
-            raise ValueError(f"Environment variable {env_var} is not set")
-        try:
-            master_key = base64.b64decode(key_b64, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError(f"Invalid base64 encoding in {env_var}") from exc
-        return cls(master_key)
-
-    def encrypt(self, plaintext: str) -> str:
-        nonce = bytes(_native.generate_random_bytes(_NONCE_LENGTH))
-        ciphertext = bytes(
-            _native.aes_gcm_encrypt(
-                self._master_key,
-                nonce,
-                plaintext.encode("utf-8"),
-                b"",
+    def from_env(cls) -> RemoteIntegrationSecretEncryption:
+        if any(
+            os.environ.get(name)
+            for name in (
+                "INTEGRATION_SECRET_MASTER_KEY",
+                "INTEGRATION_SECRET_MASTER_KEY_FILE",
+                "INTEGRATION_SECRET_MASTER_KEY_ENV",
             )
-        )
-        return base64.b64encode(nonce + ciphertext).decode("ascii")
+        ):
+            raise RuntimeError("Raw integration-secret master keys are not supported")
+        base_url = os.environ.get("SIGNING_KEYS_INTERNAL_URL", "").strip()
+        api_key = os.environ.get("SIGNING_KEYS_INTERNAL_API_KEY", "").strip()
+        if not api_key:
+            key_file = os.environ.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE", "").strip()
+            if key_file:
+                try:
+                    with open(key_file, encoding="utf-8") as handle:
+                        api_key = handle.read().strip()
+                except OSError as exc:
+                    raise RuntimeError("Remote integration-secret KMS key file is unavailable") from exc
+        return cls(base_url, api_key)
 
-    def decrypt(self, ciphertext_b64: str) -> str:
+    async def _post(self, operation: str, organization_id: str, payload: dict) -> dict:
         try:
-            encrypted = base64.b64decode(ciphertext_b64, validate=True)
-        except (binascii.Error, ValueError) as exc:
-            raise ValueError("Encrypted integration secret is not valid base64") from exc
-        if len(encrypted) <= _NONCE_LENGTH:
-            raise ValueError("Encrypted integration secret is truncated")
-        nonce = encrypted[:_NONCE_LENGTH]
-        ciphertext = encrypted[_NONCE_LENGTH:]
-        try:
-            plaintext = bytes(
-                _native.aes_gcm_decrypt(
-                    self._master_key,
-                    nonce,
-                    ciphertext,
-                    b"",
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+                response = await client.post(
+                    f"{self._base_url}/integration-secrets/{operation}",
+                    params={"organization_id": organization_id},
+                    headers={"X-API-Key": self._api_key},
+                    json=payload,
                 )
-            )
-        except Exception as exc:
-            raise ValueError("Failed to decrypt integration secret") from exc
+            response.raise_for_status()
+            if len(response.content) > 256 * 1024:
+                raise ValueError("Remote integration-secret KMS response is too large")
+            result = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RuntimeError("Remote integration-secret KMS operation failed") from exc
+        if not isinstance(result, dict):
+            raise ValueError("Remote integration-secret KMS response is invalid")
+        return result
+
+    async def encrypt(
+        self, organization_id: str, secret_id: str, provider: str, purpose: str, plaintext: str
+    ) -> str:
+        if len(plaintext.encode("utf-8")) > MAX_SECRET_BYTES:
+            raise ValueError("Integration secret is too large")
+        envelope = await self._post(
+            "encrypt",
+            organization_id,
+            {
+                "organization_id": organization_id,
+                "secret_id": secret_id,
+                "provider": provider,
+                "purpose": purpose,
+                "plaintext_b64": base64.b64encode(plaintext.encode("utf-8")).decode("ascii"),
+            },
+        )
+        self._validate_envelope(envelope)
+        return json.dumps(envelope, sort_keys=True, separators=(",", ":"))
+
+    async def decrypt(
+        self, organization_id: str, secret_id: str, provider: str, purpose: str, stored: str
+    ) -> str:
+        if len(stored) > MAX_CIPHERTEXT_BYTES + 1024:
+            raise ValueError("Integration-secret envelope is too large")
         try:
+            envelope = json.loads(stored)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Integration-secret envelope is invalid") from exc
+        self._validate_envelope(envelope)
+        result = await self._post(
+            "decrypt",
+            organization_id,
+            {
+                "organization_id": organization_id,
+                "secret_id": secret_id,
+                "provider": provider,
+                "purpose": purpose,
+                "envelope": envelope,
+            },
+        )
+        encoded = result.get("plaintext_b64")
+        if not isinstance(encoded, str) or len(encoded) > (MAX_SECRET_BYTES + 2) // 3 * 4:
+            raise ValueError("Remote integration-secret KMS response is invalid")
+        try:
+            plaintext = base64.b64decode(encoded, validate=True)
+            if len(plaintext) > MAX_SECRET_BYTES:
+                raise ValueError("Integration secret is too large")
             return plaintext.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("Decrypted integration secret is not UTF-8") from exc
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise ValueError("Remote integration-secret KMS response is invalid") from exc
 
-    def encrypt_optional(self, plaintext: str | None) -> str | None:
-        return self.encrypt(plaintext) if plaintext is not None else None
-
-    def decrypt_optional(self, ciphertext: str | None) -> str | None:
-        return self.decrypt(ciphertext) if ciphertext is not None else None
+    @staticmethod
+    def _validate_envelope(envelope: object) -> None:
+        if (
+            not isinstance(envelope, dict)
+            or set(envelope) != {"schema", "ciphertext"}
+            or envelope.get("schema") != SCHEMA
+            or not isinstance(envelope.get("ciphertext"), str)
+            or not envelope["ciphertext"].startswith("vault:v")
+            or len(envelope["ciphertext"]) > MAX_CIPHERTEXT_BYTES
+        ):
+            raise ValueError("Integration-secret envelope is invalid")
