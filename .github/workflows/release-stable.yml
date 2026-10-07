@@ -181,7 +181,7 @@ jobs:
           maturin-version: v1.14.1
           working-directory: rust/marty-rs
           target: ${{ matrix.target }}
-          args: --locked --release --out ../../dist --features python
+          args: --locked --release --out ../../dist --no-default-features --features python
           # Release compilation must not depend on a separately downloaded
           # cache executable. CI still uses optional sccache with direct-rustc
           # fallback; immutable release artifacts always compile directly.

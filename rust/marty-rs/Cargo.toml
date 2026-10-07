@@ -71,6 +71,7 @@ wasm = [
 # compile or export APIs that accept issuer private keys.
 local-key-operations = [
     "python",
+    "isomdl/issuer-local-signing",
     "marty-oid4vci/local-key-operations",
     "marty-verification/local-key-operations",
     "marty-verification/authority-issuance",
@@ -78,6 +79,7 @@ local-key-operations = [
 # Native tools that still need local signing must opt in explicitly.
 native-local-key-operations = [
     "native",
+    "isomdl/issuer-local-signing",
     "marty-oid4vci/local-key-operations",
     "marty-verification/local-key-operations",
     "marty-verification/authority-issuance",
@@ -86,6 +88,7 @@ native-local-key-operations = [
 # private keys in WASM memory. Production packages must use `wasm` alone.
 wasm-local-key-operations = [
     "wasm",
+    "isomdl/issuer-local-signing",
     "marty-oid4vci/local-key-operations",
     "marty-verification/local-key-operations",
 ]
