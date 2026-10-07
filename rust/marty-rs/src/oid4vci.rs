@@ -14,11 +14,10 @@ use marty_oid4vci::issuance_input::normalize_zk_predicate_claims;
 use marty_oid4vci::issuer::IssuanceEngine;
 use marty_oid4vci::metadata;
 use marty_oid4vci::types::{
-    ClaimDefinition, CredentialFormat, CredentialTypeConfig, IssuerConfig, IssuerKey, OfferConfig,
-    SigningAlgorithm,
+    ClaimDefinition, CredentialFormat, CredentialTypeConfig, IssuerConfig, OfferConfig,
 };
 #[cfg(feature = "local-key-operations")]
-use marty_oid4vci::types::CredentialClaims;
+use marty_oid4vci::types::{CredentialClaims, IssuerKey, SigningAlgorithm};
 use marty_oid4vci::verifier::VerificationEngine;
 
 // ── Credential Issuance ──────────────────────────────────────────────
@@ -123,17 +122,9 @@ pub fn create_credential_offer(
         credential_issuer_url: issuer_url.clone(),
         issuer_name: "".into(),
         credential_types: vec![],
-        issuer_key: IssuerKey {
-            issuer_id: issuer_url.clone(),
-            jwk_json: "{}".into(), // placeholder — not needed for offer creation
-            algorithm: SigningAlgorithm::ES256,
-        },
-        token_endpoint: None,
-        credential_endpoint: None,
-        deferred_credential_endpoint: None,
-        authorization_endpoint: None,
         binding_methods: vec!["did:key".into(), "did:jwk".into()],
         proof_signing_alg_values: vec!["ES256".into(), "EdDSA".into()],
+        ..IssuerConfig::stateless()
     };
 
     let engine = IssuanceEngine::new(config);
