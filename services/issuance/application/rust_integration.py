@@ -9,23 +9,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from issuance.application.public_jwk import PRIVATE_JWK_FIELDS
 from marty_credentials.native_backend import NativeOperationError, require_marty_rs
 
 logger = logging.getLogger(__name__)
-
-_PRIVATE_JWK_MEMBERS = frozenset(
-    {
-        "d",
-        "p",
-        "q",
-        "dp",
-        "dq",
-        "qi",
-        "oth",
-        "k",
-    }
-)
-
 
 # ---------------------------------------------------------------------------
 # Base58btc helpers (needed for did:key encoding — no stdlib support)
@@ -163,7 +150,7 @@ def _public_jwk_json(
 ) -> str:
     if not isinstance(public_jwk, Mapping):
         raise RuntimeError(f"{label} must be an object")
-    private_members = sorted(_PRIVATE_JWK_MEMBERS.intersection(public_jwk))
+    private_members = sorted(PRIVATE_JWK_FIELDS.intersection(public_jwk))
     if private_members:
         raise RuntimeError(
             f"{label} must not contain private member '{private_members[0]}'"
@@ -417,7 +404,7 @@ def _public_ed25519_jwk(
 ) -> dict[str, Any]:
     if not isinstance(public_jwk, dict):
         raise RuntimeError("issuer DID resolution returned no public JWK")
-    private_members = sorted(_PRIVATE_JWK_MEMBERS.intersection(public_jwk))
+    private_members = sorted(PRIVATE_JWK_FIELDS.intersection(public_jwk))
     if private_members:
         raise RuntimeError(
             "issuer DID resolution exposed prohibited private JWK members: "

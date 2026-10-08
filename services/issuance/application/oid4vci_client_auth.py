@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from issuance.application.public_jwk import PRIVATE_JWK_FIELDS
 from issuance.application.rust_integration import verify_compact_jwt
 from marty_credentials.native_backend import (
     NativeOperationError,
@@ -94,7 +95,7 @@ def normalize_public_client_jwks(jwks: dict[str, Any]) -> dict[str, list[dict[st
     for index, raw_key in enumerate(keys):
         if not isinstance(raw_key, dict):
             raise ClientAuthenticationError(f"jwks.keys[{index}] must be an object")
-        private_fields = set(raw_key) & {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+        private_fields = PRIVATE_JWK_FIELDS.intersection(raw_key)
         if private_fields:
             raise ClientAuthenticationError(f"jwks.keys[{index}] contains private key material")
         unknown_fields = set(raw_key) - _ALLOWED_PUBLIC_JWK_FIELDS

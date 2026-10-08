@@ -204,6 +204,46 @@ async def test_hosted_probe_uses_documented_global_lti_profile_not_custom_well_k
     )
 
 
+@pytest.mark.parametrize("private_field", ["d", "k", "rsa_d", "private_key_pem"])
+@pytest.mark.asyncio
+async def test_probe_rejects_private_jwk_before_persisting_canvas_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    private_field: str,
+) -> None:
+    def resolve(host: str, port: int, **_: object) -> list[tuple[object, ...]]:
+        return _dns_answer("93.184.216.34", port)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"keys": [{"kty": "RSA", "kid": "canvas-key", private_field: "private"}]},
+        )
+
+    def client_factory(*, timeout: float) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler), timeout=timeout)
+
+    monkeypatch.setattr("issuance.application.canvas_lti_services.socket.getaddrinfo", resolve)
+    monkeypatch.setattr(
+        "issuance.application.canvas_lti_services.canvas_http_client", client_factory
+    )
+
+    with pytest.raises(CanvasLtiServiceError, match="private key material"):
+        await probe_canvas_lti_platform("https://canvas.school.example")
+
+
+def test_canvas_jwks_private_material_scan_preserves_public_extensions() -> None:
+    from issuance.application.public_jwk import contains_private_jwk_material
+
+    public = {"keys": [{"kty": "RSA", "kid": "canvas-key", "ext": True}], "issuer": "Canvas"}
+    assert not contains_private_jwk_material(public)
+    assert contains_private_jwk_material(
+        {**public, "extension": {"private_jwk": {"kty": "RSA", "d": "secret"}}}
+    )
+    assert contains_private_jwk_material(
+        {"keys": [{"kty": "RSA", "kid": "canvas-key", "note": "-----BEGIN RSA PRIVATE KEY-----"}]}
+    )
+
+
 def test_hosted_canvas_profile_uses_environment_specific_global_trust() -> None:
     beta = hosted_canvas_lti_profile("https://school.beta.instructure.com")
     test = hosted_canvas_lti_profile("https://school.test.instructure.com")

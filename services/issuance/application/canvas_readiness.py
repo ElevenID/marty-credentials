@@ -33,6 +33,7 @@ from issuance.application.canvas_oauth import (
     CANVAS_OAUTH_CAPABILITY_SCOPES,
     canvas_oauth_scopes_for_capabilities,
 )
+from issuance.application.public_jwk import PRIVATE_JWK_FIELDS
 from issuance.application.rust_integration import verify_detached_signature
 from issuance.domain.entities import (
     ApplicationTemplate,
@@ -59,7 +60,6 @@ SUPPORTED_OPEN_BADGE_PAYLOAD_FORMATS = frozenset(
         "dc+sd-jwt",
     }
 )
-_PRIVATE_JWK_FIELDS = frozenset({"d", "p", "q", "dp", "dq", "qi", "oth", "k"})
 DEFAULT_CANVAS_BINDING_READINESS_MAX_AGE_SECONDS = 15 * 60
 CANVAS_BINDING_READINESS_MAX_AGE_ENV = (
     "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS"
@@ -497,7 +497,7 @@ def _b64url_decode(value: str) -> bytes:
 
 
 def _validate_public_jwk_policy(jwk: Mapping[str, Any], algorithm: str) -> None:
-    if _PRIVATE_JWK_FIELDS.intersection(jwk):
+    if PRIVATE_JWK_FIELDS.intersection(jwk):
         raise ValueError("DID resolver returned private JWK material")
     key_type = _string(jwk.get("kty"))
     jwk_algorithm = _string(jwk.get("alg"))

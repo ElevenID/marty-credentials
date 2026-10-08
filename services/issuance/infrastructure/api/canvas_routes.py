@@ -94,6 +94,7 @@ from issuance.application.mip_integration_primitives import (
     canvas_lti_experience_exchange_metadata,
     canvas_lti_experience_handoff,
 )
+from issuance.application.public_jwk import PRIVATE_JWK_FIELDS
 from issuance.application.rust_integration import (
     verify_canvas_lti_launch,
     verify_compact_jwt,
@@ -1870,9 +1871,6 @@ def _json_b64url(value: dict[str, Any]) -> str:
     return _b64url_encode(json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
 
-_RSA_PRIVATE_JWK_FIELDS = {"d", "p", "q", "dp", "dq", "qi", "oth"}
-
-
 class ToolJwtSigner(Protocol):
     async def sign_jwt(self, payload: dict[str, Any]) -> str: ...
 
@@ -1936,7 +1934,7 @@ class IssuerDidToolJwtSigner:
             raise HTTPException(status_code=503, detail="Canvas LTI issuer DID could not be resolved")
         verification_method_id = str(resolution.get("verification_method_id") or "").strip()
         public_jwk = resolution.get("public_jwk")
-        if isinstance(public_jwk, dict) and _RSA_PRIVATE_JWK_FIELDS.intersection(public_jwk):
+        if isinstance(public_jwk, dict) and PRIVATE_JWK_FIELDS.intersection(public_jwk):
             raise HTTPException(
                 status_code=503,
                 detail="Canvas LTI DID resolver output must not contain private key material",
@@ -1978,7 +1976,7 @@ class IssuerDidToolJwtSigner:
                 method_id not in assertion_ids
                 or not method_id.startswith(f"{self.issuer_did}#")
                 or not isinstance(public_jwk, dict)
-                or _RSA_PRIVATE_JWK_FIELDS.intersection(public_jwk)
+                or PRIVATE_JWK_FIELDS.intersection(public_jwk)
                 or public_jwk.get("kty") != "RSA"
                 or public_jwk.get("alg") not in {None, "RS256"}
             ):
@@ -2072,7 +2070,7 @@ async def _lti_tool_signing_challenge_ready() -> bool:
             return False
         jwk = matching[0]
         if (
-            _RSA_PRIVATE_JWK_FIELDS.intersection(jwk)
+            PRIVATE_JWK_FIELDS.intersection(jwk)
             or jwk.get("kty") != "RSA"
             or jwk.get("alg") not in {None, "RS256"}
             or jwk.get("use") not in {None, "sig"}

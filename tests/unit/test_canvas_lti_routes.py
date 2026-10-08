@@ -28,6 +28,7 @@ if _SERVICES not in sys.path:
 from issuance.application import canvas_evidence_revisions
 from issuance.application.canvas_sync_jobs import complete_canvas_sync_job
 from issuance.application.evidence_policy import EvidencePolicyDecision
+from issuance.application.public_jwk import PRIVATE_JWK_FIELDS
 from issuance.domain.entities import (
     ApplicationTemplate,
     CanvasEventReceipt,
@@ -352,7 +353,7 @@ async def test_production_canvas_tool_signer_uses_only_organization_and_issuer_d
                 **{
                     name: value
                     for name, value in private_jwk.items()
-                    if name not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+                    if name not in PRIVATE_JWK_FIELDS
                 },
                 "kid": kid,
                 "alg": "RS256",
@@ -449,12 +450,12 @@ async def test_production_canvas_tool_jwks_uses_did_assertion_methods_for_rotati
     active_public = {
         name: value
         for name, value in active_private.items()
-        if name not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+        if name not in PRIVATE_JWK_FIELDS
     }
     retired_public = {
         name: value
         for name, value in retired_private.items()
-        if name not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+        if name not in PRIVATE_JWK_FIELDS
     }
 
     async def resolve(*_args, **_kwargs):
@@ -487,7 +488,7 @@ async def test_production_canvas_tool_jwks_uses_did_assertion_methods_for_rotati
 
     assert [key["kid"] for key in document["keys"]] == [active_id, retired_id]
     assert all(
-        not canvas_routes._RSA_PRIVATE_JWK_FIELDS.intersection(key)
+        not PRIVATE_JWK_FIELDS.intersection(key)
         for key in document["keys"]
     )
 
@@ -503,7 +504,7 @@ async def test_lti_tool_readiness_challenge_requires_signer_to_match_published_j
     other_public_jwk = {
         key: value
         for key, value in other_private_jwk.items()
-        if key not in canvas_routes._RSA_PRIVATE_JWK_FIELDS
+        if key not in PRIVATE_JWK_FIELDS
     }
 
     async def mismatched_jwks() -> dict[str, object]:

@@ -22,6 +22,7 @@ from issuance.application.canvas_feature_flags import (
     private_canvas_origin_allowlist,
     self_managed_canvas_origin_allowlist,
 )
+from issuance.application.public_jwk import contains_private_jwk_material
 
 AGS_RESULT_READ_SCOPE = "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly"
 NRPS_MEMBERSHIP_READ_SCOPE = "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
@@ -435,6 +436,10 @@ async def probe_canvas_lti_platform(
         jwks = await _read_limited_canvas_json(client, jwks_uri, label="JWKS")
         if not isinstance(jwks.get("keys"), list) or not jwks["keys"]:
             raise CanvasLtiServiceError("Canvas JWKS does not include any keys")
+        if any(not isinstance(key, dict) for key in jwks["keys"]):
+            raise CanvasLtiServiceError("Canvas JWKS contains a malformed key")
+        if contains_private_jwk_material(jwks):
+            raise CanvasLtiServiceError("Canvas JWKS contains private key material")
     configuration = {
         "issuer": issuer,
         "authorization_endpoint": authorization_endpoint,
