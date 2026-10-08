@@ -55,18 +55,18 @@ The frozen file has the same hash and passes full regeneration. Earlier B/C
 captures also matched; their actual observations are unchanged in the final
 label-stable corpus. All generated evidence remains retained outside the repo.
 
-The normal Python quality script requires:
+After Python service retirement, replay the frozen reference from its pinned
+historical checkout:
 
 ```sh
-python scripts/capture_canvas_privacy_reference.py --verify contracts/canvas-worker-privacy-reference.json
+python scripts/verify_canvas_privacy_reference.py
 ```
 
-A shallow CI checkout fetches only the required source commit when absent,
+The historical verifier fetches only the required source commit when absent,
 using the capture tool's revision query as the single source of that pin.
-The gate runs for both supported Python versions and the configured platforms.
-Before removing the Python runtime source at completed cutover, preserve this
-pinned reference checkout/image as test tooling; do not retain a Python
-production service merely to regenerate historical evidence.
+The pre-retirement CI gate ran for both supported Python versions and the
+configured platforms. The pinned source remains available as test tooling;
+the Python production service has been retired.
 
 Initial local qualification passed 736 affected tests and 200 subtests in 7.30
 seconds, then a separate full regeneration passed all 63 observations.
