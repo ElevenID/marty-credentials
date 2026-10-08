@@ -23,6 +23,15 @@ PASSPORT_ROUTES = {
     ("POST", "/v1/passport/applications/{application_id}/submit-personalization"),
     ("POST", "/v1/passport/webhooks/personalization"),
 }
+RECORD = ROOT / "contracts/full-issuance-retirement-qualification.json"
+REQUIRED_UI_CHECKS = {
+    "Release Contract Tests",
+    "Rust Service Tests (canvas)",
+    "Rust Service Tests (contracts)",
+    "Rust Service Images",
+    "Passport Fence PostgreSQL",
+    "Rust Passport Test-mode Image",
+}
 
 
 class RetirementError(RuntimeError):
@@ -69,37 +78,84 @@ def verify_protected_ui(marty_ui: Path, ui_commit: str) -> dict:
     pull = json.loads(
         command_output(
             [
-                "gh", "pr", "view", "1178", "--repo", "ElevenID/marty-ui",
-                "--json", "mergedAt,mergeCommit,baseRefName,headRefOid",
+                "gh",
+                "pr",
+                "view",
+                "1178",
+                "--repo",
+                "ElevenID/marty-ui",
+                "--json",
+                "mergedAt,mergeCommit,baseRefName,headRefOid",
             ],
             marty_ui,
         )
     )
-    require(pull.get("baseRefName") == "main" and pull.get("mergedAt"), "UI PR #1178 is not merged to main")
-    require((pull.get("mergeCommit") or {}).get("oid") == ui_commit, "UI commit is not PR #1178's merge commit")
+    require(
+        pull.get("baseRefName") == "main" and pull.get("mergedAt"),
+        "UI PR #1178 is not merged to main",
+    )
+    require(
+        (pull.get("mergeCommit") or {}).get("oid") == ui_commit,
+        "UI commit is not PR #1178's merge commit",
+    )
     checks = json.loads(
         command_output(
             ["gh", "pr", "checks", "1178", "--repo", "ElevenID/marty-ui", "--json", "name,state"],
             marty_ui,
         )
     )
-    require(checks and all(row["state"] in {"SUCCESS", "SKIPPED", "NEUTRAL"} for row in checks), "UI PR checks are not settled and passing")
-    required = {
-        "Release Contract Tests",
-        "Rust Service Tests (canvas)",
-        "Rust Service Tests (contracts)",
-        "Rust Service Images",
-        "Passport Fence PostgreSQL",
-        "Rust Passport Test-mode Image",
-    }
+    require(
+        checks and all(row["state"] in {"SUCCESS", "SKIPPED", "NEUTRAL"} for row in checks),
+        "UI PR checks are not settled and passing",
+    )
     passed = {row["name"] for row in checks if row["state"] == "SUCCESS"}
-    require(required <= passed, f"required UI checks did not pass: {sorted(required - passed)}")
-    return {"ui_pr": 1178, "ui_pr_head": pull["headRefOid"], "required_checks": sorted(required)}
+    require(
+        passed >= REQUIRED_UI_CHECKS,
+        f"required UI PR checks did not pass: {sorted(REQUIRED_UI_CHECKS - passed)}",
+    )
+    main_checks = read_json_from_command(
+        ["gh", "api", f"repos/ElevenID/marty-ui/commits/{ui_commit}/check-runs?per_page=100"],
+        marty_ui,
+    )["check_runs"]
+    require(main_checks, "UI merge commit has no check runs")
+    main_passed = {
+        row["name"]: row["html_url"]
+        for row in main_checks
+        if row.get("status") == "completed" and row.get("conclusion") == "success"
+    }
+    require(
+        main_passed.keys() >= REQUIRED_UI_CHECKS,
+        f"UI merge commit checks did not pass: {sorted(REQUIRED_UI_CHECKS - main_passed.keys())}",
+    )
+    return {
+        "ui_pr": 1178,
+        "ui_pr_head": pull["headRefOid"],
+        "required_checks": sorted(REQUIRED_UI_CHECKS),
+        "ui_merge_check_urls": {name: main_passed[name] for name in sorted(REQUIRED_UI_CHECKS)},
+    }
 
 
-def verify(credentials: Path, marty_ui: Path, ui_commit: str) -> dict:
+def read_json_from_command(args: list[str], cwd: Path) -> dict:
+    value = json.loads(command_output(args, cwd))
+    require(isinstance(value, dict), "command did not return a JSON object")
+    return value
+
+
+def verify(credentials: Path, marty_ui: Path, ui_commit: str, credentials_commit: str) -> dict:
     require(SHA.fullmatch(ui_commit) is not None, "UI commit must be a full SHA")
-    require(command_output(["git", "rev-parse", "HEAD"], marty_ui) == ui_commit, "UI checkout is not pinned")
+    require(SHA.fullmatch(credentials_commit) is not None, "Credentials commit must be a full SHA")
+    require(
+        command_output(["git", "rev-parse", "HEAD"], credentials) == credentials_commit,
+        "Credentials checkout is not pinned",
+    )
+    require(
+        not command_output(["git", "status", "--porcelain", "--untracked-files=no"], credentials),
+        "Credentials checkout has local changes",
+    )
+    require(
+        command_output(["git", "rev-parse", "HEAD"], marty_ui) == ui_commit,
+        "UI checkout is not pinned",
+    )
     dirty = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=no"],
         cwd=marty_ui,
@@ -137,11 +193,18 @@ def verify(credentials: Path, marty_ui: Path, ui_commit: str) -> dict:
     current_routes = route_keys(current["http"]["routes"])
     frozen_routes = route_keys(frozen["http"]["routes"])
     native_routes = route_keys(native["native_http"])
-    require(len(current_routes) == current["http"]["route_count"] == 86, "current route floor changed")
-    require(len(frozen_routes) == frozen["http"]["route_count"] == 131, "frozen route floor changed")
+    require(
+        len(current_routes) == current["http"]["route_count"] == 86, "current route floor changed"
+    )
+    require(
+        len(frozen_routes) == frozen["http"]["route_count"] == 131, "frozen route floor changed"
+    )
     require(len(native_routes) == 122, "native route coverage changed")
     require(frozen_routes - native_routes == PASSPORT_ROUTES, "passport route split changed")
-    require(current_routes - native_routes == {("GET", "/ready")}, "current Python HTTP behavior lacks a Rust owner")
+    require(
+        current_routes - native_routes == {("GET", "/ready")},
+        "current Python HTTP behavior lacks a Rust owner",
+    )
     require(current_routes.isdisjoint(PASSPORT_ROUTES), "passport Python route was reintroduced")
     current_grpc = {row["method"] for row in current["grpc"]["methods"]}
     frozen_grpc = {row["method"] for row in frozen["grpc"]["methods"]}
@@ -168,6 +231,7 @@ def verify(credentials: Path, marty_ui: Path, ui_commit: str) -> dict:
     return {
         "status": "qualified_source_only",
         "ui_commit": ui_commit,
+        "credentials_source_commit": credentials_commit,
         "current_http_routes": len(current_routes),
         "native_http_routes": len(native_routes),
         "grpc_methods": len(current_grpc),
@@ -178,13 +242,73 @@ def verify(credentials: Path, marty_ui: Path, ui_commit: str) -> dict:
     }
 
 
+def verify_record(credentials: Path, credentials_head: str) -> dict:
+    require(SHA.fullmatch(credentials_head) is not None, "Credentials PR head must be a full SHA")
+    record = read_json(RECORD)
+    source = record.get("credentials_source_commit")
+    require(
+        isinstance(source, str) and SHA.fullmatch(source) is not None,
+        "record has no Credentials source commit",
+    )
+    require(SHA.fullmatch(record.get("ui_commit", "")) is not None, "record has no UI merge commit")
+    require(record.get("status") == "qualified_source_only", "retirement is not qualified")
+    require(
+        record.get("beta_deployment_authorized") is False,
+        "record improperly authorizes beta deployment",
+    )
+    require(record.get("service_images") == 0, "record permits a Credentials service image")
+    require(
+        record.get("required_checks") == sorted(REQUIRED_UI_CHECKS),
+        "record has incomplete UI checks",
+    )
+    require(
+        set(record.get("ui_merge_check_urls", {})) == REQUIRED_UI_CHECKS,
+        "record has incomplete merge-commit evidence",
+    )
+    require(
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", source, credentials_head],
+            cwd=credentials,
+            capture_output=True,
+            check=False,
+        ).returncode
+        == 0,
+        "record's Credentials source is not an ancestor of this PR head",
+    )
+    changed = command_output(
+        ["git", "diff", "--name-only", source, credentials_head], credentials
+    ).splitlines()
+    require(
+        changed == ["contracts/full-issuance-retirement-qualification.json"],
+        "Credentials source changed after qualification",
+    )
+    return record
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--marty-ui", type=Path, required=True)
-    parser.add_argument("--ui-commit", required=True)
+    parser.add_argument("--marty-ui", type=Path)
+    parser.add_argument("--ui-commit")
+    parser.add_argument("--credentials-source-commit")
+    parser.add_argument("--verify-record", action="store_true")
+    parser.add_argument("--credentials-head")
     args = parser.parse_args()
     try:
-        result = verify(ROOT, args.marty_ui.resolve(), args.ui_commit)
+        if args.verify_record:
+            require(
+                args.credentials_head is not None, "record verification requires --credentials-head"
+            )
+            result = verify_record(ROOT, args.credentials_head)
+        else:
+            require(
+                args.marty_ui is not None
+                and args.ui_commit is not None
+                and args.credentials_source_commit is not None,
+                "local qualification requires UI checkout and both commit SHAs",
+            )
+            result = verify(
+                ROOT, args.marty_ui.resolve(), args.ui_commit, args.credentials_source_commit
+            )
     except (OSError, KeyError, TypeError, json.JSONDecodeError, RetirementError) as error:
         print(json.dumps({"status": "blocked", "reason": str(error)}))
         return 1

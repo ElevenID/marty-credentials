@@ -457,10 +457,30 @@ jobs:
       - name: Test WASM
         run: wasm-pack test --node --no-default-features --features wasm
 
+  issuance-retirement-qualification:
+    name: Issuance Retirement Qualification
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Bind the reviewed local Rust evidence to this deletion PR
+        if: github.event_name == 'pull_request'
+        working-directory: marty-credentials
+        env:
+          CREDENTIALS_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python -m scripts.check_full_issuance_retirement
+          --verify-record --credentials-head "$CREDENTIALS_HEAD"
+
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, test-local-python-binding, security, python-security, build-core-python-wheels, test-python, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, build-core-python-wheels, test-python, test-wasm, issuance-retirement-qualification]
     runs-on: ubuntu-latest
     permissions:
       actions: read
