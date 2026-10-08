@@ -95,13 +95,14 @@ source = "vcs"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["python/marty_credentials"]
+# Tooling metadata only. No Python runtime package is distributed.
+only-include = []
+bypass-selection = true
 
 [tool.hatch.build.targets.sdist]
 include = [
     "/Cargo.toml",
     "/Cargo.lock",
-    "/python",
     "/rust",
     "/README.md",
     "/LICENSE-MIT",
