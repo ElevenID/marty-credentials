@@ -25,6 +25,7 @@ from issuance.application.mip_integration_primitives import (  # noqa: E402
     canvas_lti_experience_exchange_metadata,
     canvas_lti_experience_handoff,
 )
+from issuance.application.public_jwk import PRIVATE_JWK_FIELDS  # noqa: E402
 from issuance.domain.entities import (  # noqa: E402
     ApplicationTemplate,
     CanvasLtiLaunchState,
@@ -771,7 +772,7 @@ def test_canvas_lti_security_and_lifetime_constants_are_frozen(
     assert CONTRACT["launch"]["jwt"]["algorithm_compatibility"] == (
         "preserve-marty-oid4vci-verifier-set"
     )
-    assert sorted(canvas_routes._RSA_PRIVATE_JWK_FIELDS) == sorted(
+    assert sorted(PRIVATE_JWK_FIELDS) == sorted(
         CONTRACT["tool_signing"]["private_jwk_fields_forbidden"]
     )
     assert (
