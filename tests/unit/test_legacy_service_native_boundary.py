@@ -19,11 +19,6 @@ SERVICE_FILES = (
     ROOT / "python/marty_credentials/adapters/services/verification_service.py",
 )
 RETIRED_OR_NATIVE_KERNEL_FILES = SERVICE_FILES + (
-    ROOT / "services/issuance/application/key_attestation.py",
-    ROOT / "services/issuance/application/oid4vci_client_auth.py",
-    ROOT / "services/issuance/application/canvas_readiness.py",
-    ROOT / "services/issuance/infrastructure/api/canvas_routes.py",
-    ROOT / "services/issuance/infrastructure/api/routes.py",
     ROOT / "python/marty_credentials/adapters/adapters/credentials/multipaz.py",
 )
 

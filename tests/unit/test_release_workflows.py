@@ -318,7 +318,8 @@ def test_docker_actions_use_verified_node24_commits() -> None:
 def test_image_release_has_fail_closed_recovery_states() -> None:
     assert "state: ${{ steps.release_state.outputs.state }}" in IMAGES
     assert 'echo "state=$STATE" >> "$GITHUB_OUTPUT"' in IMAGES
-    assert "if: needs.validate-draft.outputs.state == 'build'" in IMAGES
+    assert "needs.validate-draft.outputs.state == 'build'" in IMAGES
+    assert "needs.validate-draft.outputs.service_matrix != '{\"include\":[]}'" in IMAGES
     assert "needs.validate-draft.outputs.state == 'complete'" in IMAGES
     assert "needs.publish-by-digest.result == 'skipped'" in IMAGES
     assert "if: needs.validate-draft.outputs.state != 'complete'" in IMAGES
@@ -328,6 +329,19 @@ def test_image_release_has_fail_closed_recovery_states() -> None:
     assert "cosign verify-blob" in IMAGES
     assert "Verify every image's tag-scoped provenance" in IMAGES
     assert "Existing $name is identical; retaining it" in IMAGES
+
+
+def test_source_only_release_skips_image_build_and_preserves_finalization() -> None:
+    matrix_job = IMAGES.split("  publish-by-digest:", 1)[1].split("\n  finalize-release:", 1)[0]
+    finalizer = IMAGES.split("  finalize-release:", 1)[1].split("\n  publish-pypi:", 1)[0]
+    empty_matrix = 'needs.validate-draft.outputs.service_matrix == \'{"include":[]}\''
+    assert 'needs.validate-draft.outputs.service_matrix != \'{"include":[]}\'' in matrix_job
+    assert empty_matrix in finalizer
+    assert 'needs.publish-by-digest.result == \'skipped\'' in finalizer
+    assert 'mapfile -t services < <(jq -r \'.include[].service\'' in finalizer
+    assert 'done <<< "$service_lines"' not in finalizer
+    assert 'pattern: image-evidence-*' in finalizer
+    assert finalizer.count('if: needs.validate-draft.outputs.service_matrix != \'{"include":[]}\'') >= 2
 
 
 def test_image_release_derives_one_canonical_handoff_from_the_checked_out_tag() -> None:
@@ -369,13 +383,13 @@ def test_every_service_specific_release_phase_consumes_the_same_handoff() -> Non
 
     assert "SERVICE_MATRIX: ${{ steps.service_contract.outputs.service_matrix }}" in release_state
     assert ".include[].service" in release_state
-    assert 'done <<< "$service_lines"' in terminal
+    assert 'for service in "${services[@]}"; do' in terminal
     assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
     assert matrix_job.count("${{ matrix.service }}") >= 8
     for step in steps:
         assert "SERVICE_MATRIX: ${{ needs.validate-draft.outputs.service_matrix }}" in step
         assert ".include[].service" in step
-    assert "< <(jq -er '.include[].service'" not in IMAGES
+    assert "mapfile -t services < <(jq -r '.include[].service'" in IMAGES
     assert "for service in issuance" not in IMAGES
     assert "service: issuance" not in matrix_job
 
@@ -386,7 +400,7 @@ def test_partial_and_complete_draft_recovery_cover_every_handoff_service() -> No
     promote = _image_workflow_step("Promote every verified service digest to the stable tag")
     prepublish = _image_workflow_step("Publish the exact complete draft once")
 
-    assert "if: needs.validate-draft.outputs.state == 'build'" in matrix_job
+    assert "needs.validate-draft.outputs.state == 'build'" in matrix_job
     assert "matrix: ${{ fromJSON(needs.validate-draft.outputs.service_matrix) }}" in matrix_job
     assert "for suffix in digest spdx.json; do" in reconcile
     assert "Existing $name differs from the rebuilt evidence" in reconcile

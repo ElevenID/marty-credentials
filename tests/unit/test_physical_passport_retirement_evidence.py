@@ -1481,17 +1481,8 @@ def test_merged_qualification_uses_exact_protected_merge_bytes(
         gate._merged_qualification_anchor(path, "f" * 40)
 
 
-def test_permanent_surface_gate_rejects_reintroduced_passport_route(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gate._current_python_passport_routes_absent()
-    monkeypatch.setattr(gate.issuance_surface_contract, "check_contract", lambda: None)
-    monkeypatch.setattr(gate.issuance_surface_contract, "build_contract",
-                        lambda: {"http": {"routes": [
-                            {"method": "GET", "path": "/v1/passport/capabilities"},
-                        ]}})
-    with pytest.raises(gate.prior_gate.QualificationError, match="reintroduced"):
-        gate._current_python_passport_routes_absent()
+def test_permanent_source_gate_rejects_reintroduced_python_issuance() -> None:
+    assert not (Path(__file__).resolve().parents[2] / "services" / "issuance").exists()
 
 
 def test_protected_source_rejects_fabricated_hashes(
@@ -1518,27 +1509,15 @@ def test_protected_source_rejects_untracked_or_ignored_inputs(
         gate._protected_source(source, tmp_path)
 
 
-def test_required_ci_gate_includes_passport_retirement_provenance() -> None:
+def test_required_ci_gate_keeps_the_post_retirement_python_suite() -> None:
     workflow = yaml.safe_load((gate.ROOT / ".github/workflows/ci.yml").read_text(
         encoding="utf-8"
     ))
     jobs = workflow["jobs"]
-    assert "passport-retirement-provenance" in jobs
     gate_job = jobs["ci-gate"]
-    assert "passport-retirement-provenance" in gate_job["needs"]
+    assert "test-python" in gate_job["needs"]
     assert gate_job["if"] == "always()"
     assert gate_job["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
     assert 'test "$result" = success' in gate_job["steps"][0]["run"]
-    steps = jobs["passport-retirement-provenance"]["steps"]
-    assert jobs["passport-retirement-provenance"]["env"]["PASSPORT_DELETION_PR_HEAD"] == (
-        "${{ github.event.pull_request.head.sha }}"
-    )
-    pin = next(step for step in steps if step.get("name") == "Pin qualified passport source commit")
-    assert "--print-checkout-commit" in pin["run"]
-    assert 'git -C ../marty-ui merge-base --is-ancestor "$source_commit" refs/remotes/origin/main' in pin["run"]
-    assert 'git -C ../marty-ui checkout --detach "$source_commit"' in pin["run"]
-    assert any(step.get("with", {}).get("toolchain") == "1.95.0" for step in steps)
-    gate_step = next(step for step in steps if step.get("name")
-                     == "Verify passport source retirement without authorizing deployment")
-    assert '--deletion-head "$PASSPORT_DELETION_PR_HEAD"' in gate_step["run"]
-    assert "--post-pr-check" in gate_step["run"]
+    assert "passport-retirement-provenance" not in jobs
+    assert "issuance-idempotency-contract" not in jobs

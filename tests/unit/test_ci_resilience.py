@@ -156,7 +156,5 @@ def test_published_python_dependency_resolution_uses_bounded_retry() -> None:
     assert f"{retry} python -m pip install --disable-pip-version-check -e '.[dev]'" in PYTHON_CI
     assert f"{retry} pip-audit . --format json --output pip-audit.json" in CI
     assert f"{retry} python -m pip install --disable-pip-version-check local-wheels/*.whl" in CI
-    assert f'{retry} pip install -e .[dev] "psycopg[binary]==3.2.3"' in CI
     assert "python -m pytest tests/ packages/tests/ -v" in PYTHON_CI
     assert "pytest rust/marty-rs/tests/python" in CI
-    assert "pytest tests/test_oid4vci_ephemeral_capabilities_postgres.py -v" in CI

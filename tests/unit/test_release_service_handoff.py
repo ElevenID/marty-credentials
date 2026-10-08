@@ -36,12 +36,12 @@ def _write_contract_repository(
     return root
 
 
-def test_current_contract_produces_canonical_issuance_only_handoff() -> None:
+def test_current_contract_produces_source_only_handoff() -> None:
     assert release_service_handoff.build_service_matrix(ROOT) == {
-        "include": [{"service": "issuance", "dockerfile": "services/Dockerfile"}]
+        "include": []
     }
     assert release_service_handoff.canonical_service_matrix(ROOT) == (
-        '{"include":[{"dockerfile":"services/Dockerfile","service":"issuance"}]}'
+        '{"include":[]}'
     )
 
 
@@ -125,7 +125,6 @@ def test_historical_partial_and_complete_drafts_use_both_service_contracts(
 @pytest.mark.parametrize(
     ("assignment", "message"),
     [
-        ("SERVICES = ()", "must not be empty"),
         ('SERVICES = ("issuance", "issuance")', "must not contain duplicates"),
         ('SERVICES = ("issuance", "future")', "is not allowed"),
         ('SERVICES = ("issuance", "bad/name")', "name is invalid"),

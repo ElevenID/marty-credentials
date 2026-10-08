@@ -160,9 +160,7 @@ def test_import_from_another_checkout_cannot_produce_a_document(monkeypatch, tmp
     document.assert_not_called()
 
 
-def test_python_quality_suite_requires_regeneration_from_pinned_source() -> None:
+def test_retired_python_quality_suite_keeps_the_frozen_privacy_oracle() -> None:
     script = (CAPTURE.ROOT / "scripts/run-python-ci.sh").read_text(encoding="utf-8")
-    assert "python scripts/verify_canvas_privacy_reference.py" in script
-    assert script.index("python -m pytest tests/ packages/tests/ -v") < script.index(
-        "python scripts/verify_canvas_privacy_reference.py"
-    )
+    assert "python scripts/verify_canvas_privacy_reference.py" not in script
+    assert (CAPTURE.ROOT / "contracts/canvas-worker-privacy-reference.json").is_file()
