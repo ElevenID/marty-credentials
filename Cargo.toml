@@ -10,15 +10,15 @@ rust-version = "1.95"
 repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
-marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7" }
+marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7", default-features = false, features = ["kms-only", "bbs-verification"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7", default-features = false, features = ["kms-only", "iaca", "csca", "icao-client"] }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7" }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "bbs-verification"] }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "iaca", "csca", "icao-client"] }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }

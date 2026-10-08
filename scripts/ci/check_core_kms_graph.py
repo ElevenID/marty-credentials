@@ -4,7 +4,7 @@ import json
 import sys
 
 
-CORE_REVISION = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7"
+CORE_REVISION = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82"
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
     f"?rev={CORE_REVISION}#{CORE_REVISION}"

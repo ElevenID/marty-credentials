@@ -221,7 +221,7 @@ def test_ci_builds_both_core_wheels_from_reviewed_kms_only_revision() -> None:
     for workflow in (CI, WARM_CACHES):
         assert verification_features in workflow
         assert binding_features in workflow
-        assert "MARTY_CORE_REVISION: a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7" in workflow
+        assert "MARTY_CORE_REVISION: d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" in workflow
         assert "core-python-wheels-v5-" in workflow
         assert workflow.count("ref: ${{ env.MARTY_CORE_REVISION }}") == 1
     assert "Validate built Core module exports" in CI
@@ -252,14 +252,14 @@ def test_credentials_rust_graph_and_release_artifacts_use_hardened_core() -> Non
         manifest["workspace"]["dependencies"][package]["rev"]
         for package in ("marty-crypto", "marty-verification", "marty-oid4vci")
     }
-    assert local_revisions == {"a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7"}
+    assert local_revisions == {"d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82"}
     assert dependencies["marty-rs"]["version"] == "0.2.0"
     assert dependencies["marty-rs"]["commit"] == (
-        "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7"
+        "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82"
     )
     assert dependencies["marty-verification"]["version"] == "0.2.0"
     assert dependencies["marty-verification"]["commit"] == (
-        "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7"
+        "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82"
     )
     assert dependencies["marty-rs"]["commit"] == next(iter(local_revisions))
 
