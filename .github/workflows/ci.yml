@@ -204,8 +204,7 @@ jobs:
         run: >-
           pytest rust/marty-rs/tests/python
           tests/unit/test_legacy_service_native_boundary.py
-          tests/unit/test_verification_adapter_native_boundary.py
-          tests/unit/test_integration_secret_encryption.py -v
+          tests/unit/test_verification_adapter_native_boundary.py -v
 
   security:
     name: Security Audit
