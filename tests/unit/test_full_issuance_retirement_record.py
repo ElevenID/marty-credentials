@@ -32,11 +32,17 @@ def test_receipt_rejects_source_changes_after_qualification(
         "status": "qualified_source_only",
         "credentials_source_commit": source,
         "ui_commit": "a" * 40,
+        "ui_pr": 1178,
+        "ui_pr_head": "b" * 40,
+        "current_http_routes": 86,
+        "native_http_routes": 122,
+        "grpc_methods": 12,
+        "passport_http_routes": 9,
         "beta_deployment_authorized": False,
         "service_images": 0,
         "required_checks": sorted(gate.REQUIRED_UI_CHECKS),
         "ui_merge_check_urls": dict.fromkeys(
-            gate.REQUIRED_UI_CHECKS, "https://github.com/example/check"
+            gate.REQUIRED_UI_CHECKS, "https://github.com/ElevenID/marty-ui/actions/runs/1"
         ),
     }
     record_path.write_text(json.dumps(record), encoding="utf-8")
@@ -44,6 +50,13 @@ def test_receipt_rejects_source_changes_after_qualification(
     git(tmp_path, "add", "contracts/full-issuance-retirement-qualification.json")
     git(tmp_path, "commit", "-qm", "record local qualification")
     assert gate.verify_record(tmp_path, git(tmp_path, "rev-parse", "HEAD")) == record
+
+    incomplete = dict(record)
+    incomplete["ui_merge_check_urls"] = {}
+    record_path.write_text(json.dumps(incomplete), encoding="utf-8")
+    with pytest.raises(gate.RetirementError, match="incomplete merge-commit evidence"):
+        gate.verify_record(tmp_path, git(tmp_path, "rev-parse", "HEAD"))
+    record_path.write_text(json.dumps(record), encoding="utf-8")
 
     (tmp_path / "source.py").write_text("owner = 'python'\n", encoding="utf-8")
     git(tmp_path, "add", "source.py")

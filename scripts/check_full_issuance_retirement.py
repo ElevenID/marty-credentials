@@ -32,6 +32,21 @@ REQUIRED_UI_CHECKS = {
     "Passport Fence PostgreSQL",
     "Rust Passport Test-mode Image",
 }
+RECORD_FIELDS = {
+    "status",
+    "ui_commit",
+    "credentials_source_commit",
+    "current_http_routes",
+    "native_http_routes",
+    "grpc_methods",
+    "passport_http_routes",
+    "service_images",
+    "beta_deployment_authorized",
+    "ui_pr",
+    "ui_pr_head",
+    "required_checks",
+    "ui_merge_check_urls",
+}
 
 
 class RetirementError(RuntimeError):
@@ -245,18 +260,32 @@ def verify(credentials: Path, marty_ui: Path, ui_commit: str, credentials_commit
 def verify_record(credentials: Path, credentials_head: str) -> dict:
     require(SHA.fullmatch(credentials_head) is not None, "Credentials PR head must be a full SHA")
     record = read_json(RECORD)
+    require(set(record) == RECORD_FIELDS, "retirement record shape changed")
     source = record.get("credentials_source_commit")
     require(
         isinstance(source, str) and SHA.fullmatch(source) is not None,
         "record has no Credentials source commit",
     )
     require(SHA.fullmatch(record.get("ui_commit", "")) is not None, "record has no UI merge commit")
+    require(record.get("ui_pr") == 1178, "record is not bound to UI PR #1178")
+    require(
+        isinstance(record.get("ui_pr_head"), str)
+        and SHA.fullmatch(record["ui_pr_head"]) is not None,
+        "record has no UI PR head",
+    )
     require(record.get("status") == "qualified_source_only", "retirement is not qualified")
     require(
         record.get("beta_deployment_authorized") is False,
         "record improperly authorizes beta deployment",
     )
     require(record.get("service_images") == 0, "record permits a Credentials service image")
+    for key, expected in (
+        ("current_http_routes", 86),
+        ("native_http_routes", 122),
+        ("grpc_methods", 12),
+        ("passport_http_routes", 9),
+    ):
+        require(record.get(key) == expected, f"record has invalid {key}")
     require(
         record.get("required_checks") == sorted(REQUIRED_UI_CHECKS),
         "record has incomplete UI checks",
@@ -264,6 +293,13 @@ def verify_record(credentials: Path, credentials_head: str) -> dict:
     require(
         set(record.get("ui_merge_check_urls", {})) == REQUIRED_UI_CHECKS,
         "record has incomplete merge-commit evidence",
+    )
+    require(
+        all(
+            isinstance(url, str) and url.startswith("https://github.com/ElevenID/marty-ui/")
+            for url in record["ui_merge_check_urls"].values()
+        ),
+        "record has invalid merge-commit check URLs",
     )
     require(
         subprocess.run(
