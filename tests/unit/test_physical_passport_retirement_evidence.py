@@ -591,6 +591,87 @@ def test_qualified_checkout_pin_rejects_malformed_or_wrong_repository(tmp_path: 
     assert gate._checkout_commit(path) is None
 
 
+def source_only_record() -> dict:
+    return {
+        "schema": "marty.physical-passport-python-retirement-qualification/v4",
+        "state": "source_deletion_authorized_beta_not_qualified",
+        "retirement_pull_request_number": 305,
+        "source": {
+            "repository": "ElevenID/marty-ui",
+            "protected_main_commit": COMMIT,
+            "ci_run_id": 123,
+            "required_artifacts": sorted(gate.SOURCE_ONLY_ARTIFACTS),
+            "artifact_sha256": dict.fromkeys(gate.SOURCE_ONLY_ARTIFACTS, "1" * 64),
+        },
+        "authorized_python_route_deletions": [
+            {"method": method, "path": path}
+            for method, path in sorted(gate.EXPECTED_DELETIONS)
+        ],
+        "full_python_service_deletion_authorized": False,
+        "beta_deployment_authorized": False,
+        "predeletion_acceptance_receipt": None,
+        "supported_consumer_cutover_receipt": None,
+    }
+
+
+def test_source_only_ci_requires_exact_protected_full_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = {
+        "status": "completed", "conclusion": "success", "event": "merge_group",
+        "head_sha": COMMIT, "head_branch": "gh-readonly-queue/main/pr-305-base",
+        "path": ".github/workflows/ci.yml",
+        "repository": {"full_name": "ElevenID/marty-ui"},
+        "head_repository": {"full_name": "ElevenID/marty-ui"},
+    }
+    names = sorted(gate.REQUIRED_SOURCE_CI_JOBS)
+    jobs = {"total_count": len(names), "jobs": [
+        {"name": name, "status": "completed", "conclusion": "success"}
+        for name in names
+    ]}
+    monkeypatch.setattr(gate, "_command", lambda *args:
+                        json.dumps(jobs if "/jobs?" in args[-1] else run))
+    gate._verified_source_ci(123, COMMIT)
+    for broken in (
+        {**run, "head_sha": "b" * 40},
+        {**run, "event": "pull_request"},
+        {**run, "conclusion": "failure"},
+    ):
+        monkeypatch.setattr(gate, "_command", lambda *args, value=broken:
+                            json.dumps(jobs if "/jobs?" in args[-1] else value))
+        with pytest.raises(gate.prior_gate.QualificationError,
+                           match="successful protected full CI"):
+            gate._verified_source_ci(123, COMMIT)
+    jobs["jobs"][0]["conclusion"] = "skipped"
+    monkeypatch.setattr(gate, "_command", lambda *args:
+                        json.dumps(jobs if "/jobs?" in args[-1] else run))
+    with pytest.raises(gate.prior_gate.QualificationError, match="jobs are incomplete"):
+        gate._verified_source_ci(123, COMMIT)
+
+
+def test_source_only_deletion_keeps_beta_gate_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    record = source_only_record()
+    contract = tmp_path / "qualification.json"
+    contract.write_text(json.dumps(record), encoding="utf-8")
+    assert gate._checkout_commit(contract) == COMMIT
+    calls: list[str] = []
+    monkeypatch.setattr(gate, "_protected_source", lambda *args: COMMIT)
+    monkeypatch.setattr(gate, "_verified_source_ci", lambda *args: calls.append("ci"))
+    monkeypatch.setattr(gate, "_pull_request_lineage", lambda *args: calls.append("head"))
+    monkeypatch.setattr(gate, "_current_python_passport_routes_absent",
+                        lambda: calls.append("routes"))
+    monkeypatch.setattr(gate, "_removed_passport_files_absent",
+                        lambda: calls.append("modules"))
+    monkeypatch.setattr(gate, "_frozen_batch_parity", lambda *args: calls.append("parity"))
+    gate.verify(contract, tmp_path, deletion_head="e" * 40)
+    assert calls == ["ci", "head", "routes", "modules", "parity"]
+    record["beta_deployment_authorized"] = True
+    contract.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(gate.prior_gate.QualificationError,
+                       match="cannot imply beta deployment"):
+        gate.verify(contract, tmp_path, deletion_head="e" * 40)
+
+
 def test_supported_report_requires_each_rust_runtime() -> None:
     report = {
         "schema": "marty.passport-supported-consumer-acceptance/v1",
@@ -1458,6 +1539,6 @@ def test_required_ci_gate_includes_passport_retirement_provenance() -> None:
     assert 'git -C ../marty-ui checkout --detach "$source_commit"' in pin["run"]
     assert any(step.get("with", {}).get("toolchain") == "1.95.0" for step in steps)
     gate_step = next(step for step in steps if step.get("name")
-                     == "Refuse Python deletion until passport acceptance is verifiable")
+                     == "Verify passport source retirement without authorizing deployment")
     assert '--deletion-head "$PASSPORT_DELETION_PR_HEAD"' in gate_step["run"]
     assert "--post-pr-check" in gate_step["run"]

@@ -1,4 +1,4 @@
-"""Fail closed until Rust passport route compatibility is verifiable."""
+"""Verify scoped Python passport source retirement and its release evidence."""
 
 from __future__ import annotations
 
@@ -38,6 +38,36 @@ EXPECTED_ARTIFACTS = {
     "contracts/passport-beta-cutover-drain-behavior.json",
     "contracts/passport-beta-scoped-write-fence-behavior.json",
     "docker-compose.passport-supported-disposable.yml",
+}
+SOURCE_ONLY_ARTIFACTS = {
+    "contracts/issuance-physical-passport-native.json",
+    "contracts/issuance-native-coverage.json",
+    "contracts/issuance-universal-ownership.json",
+    "contracts/passport-beta-bureau-behavior.json",
+    "contracts/passport-webhook-progress-behavior.json",
+    "contracts/passport-supported-consumer-routing.json",
+    "rust/services/issuance/src/passport_http.rs",
+    "rust/services/issuance/src/passport_signer.rs",
+    "rust/services/issuance/src/passport_bureau.rs",
+    "rust/services/gateway/src/contract.rs",
+    "rust/services/flow/src/connections.rs",
+    "rust/services/flow/src/http_providers.rs",
+    "docker-compose.passport-supported-disposable.yml",
+}
+REMOVED_PASSPORT_FILES = {
+    "services/issuance/infrastructure/api/physical_document_routes.py",
+    "services/issuance/infrastructure/adapters/emrtd_signer_client.py",
+    "services/issuance/infrastructure/adapters/personalization_bureau_client.py",
+}
+REQUIRED_SOURCE_CI_JOBS = {
+    "Rust Service Tests (canvas)",
+    "Rust Service Tests (contracts)",
+    "Rust Passport Test-mode Image",
+    "Rust Service Images",
+    "Release Contract Tests",
+    "Public Protocol Contract",
+    "Security Scanning",
+    "CI Gate",
 }
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -647,7 +677,8 @@ def _successful_pr_gate(number: int, deletion_head: str, cutover_completed: date
     )
 
 
-def _protected_source(source: dict, marty_ui: Path) -> str:
+def _protected_source(source: dict, marty_ui: Path,
+                      expected_artifacts: set[str] = EXPECTED_ARTIFACTS) -> str:
     commit = source.get("protected_main_commit")
     prior_gate._require(isinstance(commit, str) and COMMIT.fullmatch(commit) is not None,
                         "Passport source commit is not immutable")
@@ -661,7 +692,7 @@ def _protected_source(source: dict, marty_ui: Path) -> str:
     prior_gate._require(prior_gate._git_is_from_protected_main(marty_ui, commit),
                         "Passport source is not on live protected UI main")
     hashes = source.get("artifact_sha256")
-    prior_gate._require(isinstance(hashes, dict) and set(hashes) == EXPECTED_ARTIFACTS,
+    prior_gate._require(isinstance(hashes, dict) and set(hashes) == expected_artifacts,
                         "Passport source artifact hashes are incomplete")
     for relative, expected in hashes.items():
         prior_gate._require(isinstance(expected, str) and SHA256.fullmatch(expected) is not None,
@@ -669,6 +700,47 @@ def _protected_source(source: dict, marty_ui: Path) -> str:
         actual = hashlib.sha256(prior_gate._git_blob(marty_ui, commit, relative)).hexdigest()
         prior_gate._require(actual == expected, f"Passport artifact hash mismatch: {relative}")
     return commit
+
+
+def _verified_source_ci(run_id: object, source_commit: str) -> None:
+    """Require full protected merge-group CI for the frozen Rust source."""
+    prior_gate._require(isinstance(run_id, int) and run_id > 0,
+                        "Passport source CI run ID is invalid")
+    run = json.loads(_command("gh", "api", f"repos/ElevenID/marty-ui/actions/runs/{run_id}"))
+    branch = run.get("head_branch")
+    prior_gate._require(
+        run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+        and run.get("event") == "merge_group"
+        and run.get("head_sha") == source_commit
+        and isinstance(branch, str)
+        and branch.startswith("gh-readonly-queue/main/pr-")
+        and run.get("path") == ".github/workflows/ci.yml"
+        and run.get("repository", {}).get("full_name") == "ElevenID/marty-ui"
+        and run.get("head_repository", {}).get("full_name") == "ElevenID/marty-ui",
+        "Passport source lacks successful protected full CI",
+    )
+    jobs = json.loads(_command(
+        "gh", "api", f"repos/ElevenID/marty-ui/actions/runs/{run_id}/jobs?per_page=100",
+    ))
+    listed = jobs.get("jobs") if isinstance(jobs, dict) else None
+    prior_gate._require(
+        isinstance(listed, list)
+        and jobs.get("total_count") == len(listed)
+        and len(listed) >= len(REQUIRED_SOURCE_CI_JOBS)
+        and all(isinstance(job, dict) and isinstance(job.get("name"), str)
+                and job.get("status") == "completed"
+                and job.get("conclusion") == "success" for job in listed)
+        and {job["name"] for job in listed} >= REQUIRED_SOURCE_CI_JOBS,
+        "Passport source full CI jobs are incomplete",
+    )
+
+
+def _removed_passport_files_absent() -> None:
+    prior_gate._require(
+        all(not (ROOT / relative).exists() for relative in REMOVED_PASSPORT_FILES),
+        "Superseded Python passport modules remain in the source",
+    )
 
 
 def _frozen_batch_parity(marty_ui: Path) -> None:
@@ -1241,13 +1313,20 @@ def _all_image_references(manifest: dict) -> dict[str, str]:
 def _checkout_commit(contract_path: Path) -> str | None:
     """Select only a syntactically valid source pin; verify() proves its ancestry."""
     contract = prior_gate._json(contract_path)
+    schema = contract.get("schema")
     prior_gate._require(
-        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v3",
+        schema in {
+            "marty.physical-passport-python-retirement-qualification/v3",
+            "marty.physical-passport-python-retirement-qualification/v4",
+        },
         "Unknown passport retirement qualification schema",
     )
-    if contract.get("state") == "blocked_pending_protected_acceptance":
+    if schema.endswith("/v3") and contract.get("state") == "blocked_pending_protected_acceptance":
         return None
-    prior_gate._require(contract.get("state") == "qualified", "Unknown passport qualification state")
+    expected_state = ("source_deletion_authorized_beta_not_qualified"
+                      if schema.endswith("/v4") else "qualified")
+    prior_gate._require(contract.get("state") == expected_state,
+                        "Unknown passport qualification state")
     source = contract.get("source")
     prior_gate._require(isinstance(source, dict)
                         and source.get("repository") == "ElevenID/marty-ui"
@@ -1260,8 +1339,12 @@ def _checkout_commit(contract_path: Path) -> str | None:
 def verify(contract_path: Path, marty_ui: Path | None = None,
            deletion_head: str | None = None, post_pr_check: bool = False) -> None:
     contract = prior_gate._json(contract_path)
+    schema = contract.get("schema")
     prior_gate._require(
-        contract.get("schema") == "marty.physical-passport-python-retirement-qualification/v3",
+        schema in {
+            "marty.physical-passport-python-retirement-qualification/v3",
+            "marty.physical-passport-python-retirement-qualification/v4",
+        },
         "Unknown passport retirement qualification schema",
     )
     prior_gate._require(
@@ -1279,12 +1362,44 @@ def verify(contract_path: Path, marty_ui: Path | None = None,
     prior_gate._require(isinstance(source, dict), "Passport source checkpoint is missing")
     prior_gate._require(source.get("repository") == "ElevenID/marty-ui", "Unexpected source repository")
     artifacts = source.get("required_artifacts")
+    expected_artifacts = (SOURCE_ONLY_ARTIFACTS if schema.endswith("/v4")
+                          else EXPECTED_ARTIFACTS)
     prior_gate._require(
         isinstance(artifacts, list)
-        and len(artifacts) == len(EXPECTED_ARTIFACTS)
-        and set(artifacts) == EXPECTED_ARTIFACTS,
+        and len(artifacts) == len(expected_artifacts)
+        and set(artifacts) == expected_artifacts,
         "Passport source artifact set changed",
     )
+
+    if schema.endswith("/v4"):
+        prior_gate._require(
+            contract.get("state") == "source_deletion_authorized_beta_not_qualified"
+            and contract.get("beta_deployment_authorized") is False
+            and contract.get("predeletion_acceptance_receipt") is None
+            and contract.get("supported_consumer_cutover_receipt") is None,
+            "Source deletion cannot imply beta deployment acceptance",
+        )
+        prior_gate._require(marty_ui is not None,
+                            "Qualified passport source checkout is required")
+        commit = _protected_source(source, marty_ui, SOURCE_ONLY_ARTIFACTS)
+        _verified_source_ci(source.get("ci_run_id"), commit)
+        if post_pr_check:
+            prior_gate._require(os.environ.get("GITHUB_EVENT_NAME") in
+                                {"pull_request", "merge_group", "push", "workflow_dispatch"},
+                                "Post-PR exact-head check requires a GitHub code event")
+            current_head = _retirement_pr_head(contract["retirement_pull_request_number"])
+            lineage = _post_pr_lineage(contract["retirement_pull_request_number"], current_head)
+            if lineage is not None and lineage[0]:
+                _merged_qualification_anchor(contract_path, lineage[1])
+        else:
+            prior_gate._require(isinstance(deletion_head, str)
+                                and COMMIT.fullmatch(deletion_head) is not None,
+                                "Exact pull-request deletion head is required")
+            _pull_request_lineage(contract["retirement_pull_request_number"], deletion_head)
+        _current_python_passport_routes_absent()
+        _removed_passport_files_absent()
+        _frozen_batch_parity(marty_ui)
+        return
 
     if contract.get("state") == "blocked_pending_protected_acceptance":
         prior_gate._require(
