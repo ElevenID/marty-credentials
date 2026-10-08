@@ -281,7 +281,7 @@ def test_transitional_local_binding_is_disjoint_from_production_core() -> None:
     assert "--ignore=tests/unit/test_integration_secret_encryption.py" not in PYTHON_CI
     assert "tests/unit/test_legacy_service_native_boundary.py" in CI
     assert "tests/unit/test_verification_adapter_native_boundary.py" in CI
-    assert "tests/unit/test_integration_secret_encryption.py" in CI
+    assert "tests/unit/test_integration_secret_encryption.py" not in CI
 
 
 def test_pypi_waits_for_the_immutable_stable_release() -> None:
