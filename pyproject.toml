@@ -3,9 +3,9 @@ requires = ["hatchling==1.32.0", "hatch-vcs==0.5.0", "maturin==1.14.1"]
 build-backend = "hatchling.build"
 
 [project]
-name = "marty-credentials"
+name = "marty-credentials-test-harness"
 dynamic = ["version"]
-description = "Credential domain logic and adapters for the Marty ecosystem"
+description = "Internal contract test harness for Marty Rust credentials"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 requires-python = ">=3.11"
@@ -56,18 +56,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# marty-core owns the canonical native wheel. Install the exact
-# release/dependencies.json asset before selecting this compatibility extra.
-ffi = []
-spruceid = [
-    "didkit>=0.3",
-]
-multipaz = [
-    # multipaz dependencies
-]
-all = [
-    "marty-credentials[ffi,spruceid,multipaz]",
-]
+# The root project is a test harness. Core owns the canonical native wheel.
 dev = [
     "alembic>=1.13",
     "psycopg[binary]>=3.2",

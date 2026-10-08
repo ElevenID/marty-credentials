@@ -51,6 +51,7 @@
   ],
   "consumer_audit": {
     "live_product_imports_found": 0,
+    "merge_precondition": "ElevenID/marty-integration-tests#428 must merge on protected main before this source deletion merges",
     "test_only_imports": [
       "marty-integration-tests/tests/integration/test_production_features.py"
     ],

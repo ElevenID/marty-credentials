@@ -268,7 +268,7 @@ jobs:
 
       - name: Run bandit
         working-directory: marty-credentials
-        run: bandit -r scripts/ -x scripts/issuance_surface_contract.py -ll -ii
+        run: bandit -r scripts/ packages/marty_proto/ -ll -ii
 
       - name: Audit resolvable Python dependencies
         working-directory: marty-credentials
@@ -454,7 +454,7 @@ jobs:
         run: wasm-pack test --node --no-default-features --features wasm
 
   issuance-retirement-qualification:
-    name: Issuance Retirement Qualification
+    name: Python Retirement Guard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -464,14 +464,20 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.11'
-      - name: Bind the reviewed local Rust evidence to this deletion PR
-        if: github.event_name == 'pull_request'
+      - name: Keep retired Python source and publication paths absent
         working-directory: marty-credentials
-        env:
-          CREDENTIALS_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: >-
-          python -m scripts.check_full_issuance_retirement
-          --verify-record --credentials-head "$CREDENTIALS_HEAD"
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The #311 receipt is immutable provenance; its source SHA predates
+          # the squash merge and cannot be an ancestry gate for later PRs.
+          test ! -d services/issuance
+          test ! -e services/Dockerfile
+          test ! -d python/marty_credentials
+          test ! -e .github/workflows/release-images.yml
+          test ! -e .github/workflows/release-stable.yml
+          test ! -e .github/workflows/publish-pypi.yml
+          python -c 'import json; from pathlib import Path; assert json.loads(Path("contracts/python-sdk-retirement-v1.json").read_text())["schema"] == "marty.python-sdk-retirement/v1"'
 
   ci-gate:
     name: CI Gate

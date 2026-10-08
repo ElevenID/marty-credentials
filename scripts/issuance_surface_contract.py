@@ -365,7 +365,8 @@ def _runtime_modes(sources: list[PythonSource]) -> list[dict[str, Any]]:
                 "uvicorn",
                 "main:app",
                 "--host",
-                "0.0.0.0",
+                # Frozen historical CLI argument, not a socket bind.
+                "0.0.0.0",  # nosec B104
                 "--port",
                 "8005",
             ],

@@ -1,5 +1,5 @@
 """
-Tests for marty_credentials package.
+Source and contract tests for the Rust credential owner.
 """
 import os
 
