@@ -1020,7 +1020,7 @@
     "heads": [
       "issuance_event_owner"
     ],
-    "revision_count": 48,
+    "revision_count": 46,
     "revisions": [
       {
         "down_revisions": [],
@@ -1112,15 +1112,7 @@
         "down_revisions": [
           "add_revocation_to_tx"
         ],
-        "line": 13,
-        "revision": "add_issuer_signing_keys",
-        "source": "services/issuance/infrastructure/migrations/versions/20260330_1200_add_issuer_signing_keys_table.py"
-      },
-      {
-        "down_revisions": [
-          "add_issuer_signing_keys"
-        ],
-        "line": 13,
+        "line": 12,
         "revision": "add_sd_claims_col",
         "source": "services/issuance/infrastructure/migrations/versions/20260405_2100_add_selective_disclosure_claims.py"
       },
@@ -1344,21 +1336,13 @@
         "down_revisions": [
           "issuance_tx_issuer_algorithm"
         ],
-        "line": 16,
-        "revision": "drop_legacy_issuer_keys",
-        "source": "services/issuance/infrastructure/migrations/versions/20260807_1000_drop_legacy_issuer_signing_keys.py"
-      },
-      {
-        "down_revisions": [
-          "drop_legacy_issuer_keys"
-        ],
         "line": 11,
         "revision": "issuance_offer_idempotency",
         "source": "services/issuance/infrastructure/migrations/versions/20260809_1000_add_issuance_idempotency.py"
       },
       {
         "down_revisions": [
-          "drop_legacy_issuer_keys"
+          "issuance_tx_issuer_algorithm"
         ],
         "line": 11,
         "revision": "oid4vci_ephemeral_caps",

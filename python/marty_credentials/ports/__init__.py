@@ -15,8 +15,6 @@ from marty_credentials.ports.types import (
     VerificationResult,
     ZkChallengeSession,
 )
-from marty_credentials.ports.issuer import ICredentialIssuer
-from marty_credentials.ports.key_manager import IKeyManager
 from marty_credentials.ports.verifier import ICredentialVerifier
 from marty_credentials.ports.wallet import ICredentialWallet
 
@@ -32,8 +30,6 @@ __all__ = [
     "VerificationResult",
     "ZkChallengeSession",
     # Ports
-    "ICredentialIssuer",
     "ICredentialVerifier",
     "ICredentialWallet",
-    "IKeyManager",
 ]

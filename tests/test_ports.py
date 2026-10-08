@@ -3,15 +3,11 @@ Tests for credential ports and types.
 """
 
 from marty_credentials.ports import (
-    CredentialData,
     CredentialFormat,
     CredentialSubject,
-    ICredentialIssuer,
     ICredentialVerifier,
     ICredentialWallet,
-    IKeyManager,
     KeyAlgorithm,
-    KeyPair,
 )
 
 
@@ -48,7 +44,5 @@ def test_credential_subject_with_claims():
 
 def test_protocol_is_runtime_checkable():
     """Test that port protocols are runtime checkable."""
-    assert hasattr(IKeyManager, "__protocol_attrs__") or callable(IKeyManager)
-    assert hasattr(ICredentialIssuer, "__protocol_attrs__") or callable(ICredentialIssuer)
     assert hasattr(ICredentialVerifier, "__protocol_attrs__") or callable(ICredentialVerifier)
     assert hasattr(ICredentialWallet, "__protocol_attrs__") or callable(ICredentialWallet)

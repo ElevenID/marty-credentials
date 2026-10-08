@@ -1,13 +1,9 @@
 """SQLAlchemy models for credential persistence"""
 from datetime import datetime
 from enum import Enum as PyEnum
-from typing import Dict, Any, Optional
 
-from sqlalchemy import (
-    Column, Integer, String, DateTime, Text, ForeignKey, Enum, JSON, Boolean
-)
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy import JSON, Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
@@ -72,9 +68,6 @@ class Credential(Base):
     issued_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     expires_at = Column(DateTime, nullable=True)
     revoked_at = Column(DateTime, nullable=True)
-    
-    # Selective disclosure info (for SD-JWT)
-    selective_disclosure_keys = Column(JSON, nullable=True)
     
     # Relationships
     holder = relationship("Holder", back_populates="credentials")

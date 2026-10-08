@@ -33,8 +33,6 @@ pub(crate) fn register_mdoc_module(parent: &Bound<'_, PyModule>) -> PyResult<()>
     parent.add_class::<MdocBuilder>()?;
     parent.add_class::<MdocSignedDocument>()?;
     parent.add_class::<MdocPreparedForHsm>()?;
-    #[cfg(feature = "local-key-operations")]
-    parent.add_function(wrap_pyfunction!(bindings::create_mdoc, parent)?)?;
     parent.add_function(wrap_pyfunction!(bindings::prepare_mdoc_for_hsm, parent)?)?;
     parent.add_function(wrap_pyfunction!(
         bindings::complete_mdoc_with_signature,

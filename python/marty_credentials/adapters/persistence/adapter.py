@@ -15,9 +15,6 @@ from marty_credentials.ports import (
     CredentialData,
     CredentialSubject,
     ICredentialWallet,
-    IKeyManager,
-    KeyAlgorithm,
-    KeyPair,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,18 +22,6 @@ Base = declarative_base()
 
 
 # ==================== Database Models ====================
-
-
-class KeyModel(Base):
-    """Database model for cryptographic keys."""
-
-    __tablename__ = "credential_keys"
-
-    id = Column(String, primary_key=True)
-    did = Column(String, nullable=False)
-    jwk_json = Column(String, nullable=False)
-    algorithm = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class CredentialModel(Base):
@@ -56,82 +41,6 @@ class CredentialModel(Base):
 
 
 # ==================== Adapters ====================
-
-
-class SQLAlchemyKeyManager:
-    """Key manager implementation using SQLAlchemy for persistence.
-
-    Wraps a delegate key manager (SpruceID, Multipaz, etc.) and adds
-    database persistence for keys.
-    """
-
-    def __init__(self, session: AsyncSession, delegate: IKeyManager):
-        self.session = session
-        self.delegate = delegate
-
-    async def generate_key(self, algorithm: KeyAlgorithm = KeyAlgorithm.ES256) -> KeyPair:
-        """Generate a new key pair using the delegate."""
-        return self.delegate.generate_key(algorithm)
-
-    async def store_key(self, key_id: str, key_pair: KeyPair) -> None:
-        """Store a key pair in both delegate cache and database."""
-        # Store in delegate (in-memory cache)
-        self.delegate.store_key(key_id, key_pair)
-
-        # Store in DB
-        model = KeyModel(
-            id=key_id,
-            did=key_pair.did,
-            jwk_json=key_pair.jwk_json,
-            algorithm=key_pair.algorithm.value,
-            created_at=key_pair.created_at,
-        )
-        self.session.add(model)
-        await self.session.commit()
-
-    async def get_key(self, key_id: str) -> KeyPair | None:
-        """Retrieve a stored key pair."""
-        # Try delegate first (faster)
-        key = self.delegate.get_key(key_id)
-        if key:
-            return key
-
-        # Try DB
-        result = await self.session.execute(select(KeyModel).where(KeyModel.id == key_id))
-        model = result.scalar_one_or_none()
-
-        if model:
-            key_pair = KeyPair(
-                did=model.did,
-                jwk_json=model.jwk_json,
-                algorithm=KeyAlgorithm(model.algorithm),
-                created_at=model.created_at,
-            )
-            # Cache in delegate
-            self.delegate.store_key(key_id, key_pair)
-            return key_pair
-
-        return None
-
-    async def list_keys(self) -> list[str]:
-        """List all stored key identifiers."""
-        result = await self.session.execute(select(KeyModel.id))
-        return list(result.scalars().all())
-
-    async def delete_key(self, key_id: str) -> bool:
-        """Delete a key from both delegate and database."""
-        # Delete from delegate
-        deleted = self.delegate.delete_key(key_id)
-
-        # Delete from DB
-        result = await self.session.execute(select(KeyModel).where(KeyModel.id == key_id))
-        model = result.scalar_one_or_none()
-        if model:
-            await self.session.delete(model)
-            await self.session.commit()
-            return True
-
-        return deleted
 
 
 class SQLAlchemyCredentialWallet:
@@ -195,9 +104,7 @@ class SQLAlchemyCredentialWallet:
 
         return None
 
-    async def list_credentials(
-        self, credential_type: str | None = None
-    ) -> list[CredentialData]:
+    async def list_credentials(self, credential_type: str | None = None) -> list[CredentialData]:
         """List stored credentials."""
         result = await self.session.execute(select(CredentialModel))
         models = result.scalars().all()

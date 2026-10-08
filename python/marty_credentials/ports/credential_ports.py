@@ -106,45 +106,6 @@ class ZkChallengeSession:
 
 
 @runtime_checkable
-class IKeyManager(Protocol):
-    """Interface for cryptographic key management."""
-
-    def generate_key(self, algorithm: KeyAlgorithm = KeyAlgorithm.ES256) -> KeyPair: ...
-    def store_key(self, key_id: str, key_pair: KeyPair) -> None: ...
-    def get_key(self, key_id: str) -> KeyPair | None: ...
-    def list_keys(self) -> list[str]: ...
-
-
-@runtime_checkable
-class ICredentialIssuer(Protocol):
-    """Interface for credential issuance."""
-
-    def create_credential(
-        self,
-        issuer_key: KeyPair,
-        credential_type: str,
-        subject: CredentialSubject,
-        expiration_seconds: int | None = None,
-    ) -> CredentialData: ...
-
-    def create_offer(
-        self,
-        issuer_url: str,
-        credential_types: list[str],
-        pre_authorized: bool = True,
-        user_pin_required: bool = False,
-        wallet_format: str = "standard",
-    ) -> CredentialOffer: ...
-
-    def generate_issuer_metadata(
-        self,
-        issuer_url: str,
-        issuer_name: str,
-        supported_credentials: list[dict[str, Any]],
-    ) -> str: ...
-
-
-@runtime_checkable
 class ICredentialWallet(Protocol):
     """Interface for credential wallet operations."""
 

@@ -22,7 +22,6 @@ default = ["python"]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",
-    "marty-verification/default",
     "dep:marty-oid4vci",
     "sd-jwt-rs",
     "jsonwebtoken",
@@ -35,7 +34,6 @@ python = [
     "pyo3",
     "dep:marty-crypto",
     "dep:marty-verification",
-    "marty-verification/default",
     "dep:marty-oid4vci",
     "tokio",
     "isomdl",
@@ -65,32 +63,6 @@ wasm = [
     "web-sys",
     "console_error_panic_hook",
     "getrandom/js"
-]
-# Explicitly opt in only for offline development and migration tools. ElevenID
-# production issuers use prepare -> remote KMS sign -> assemble and must not
-# compile or export APIs that accept issuer private keys.
-local-key-operations = [
-    "python",
-    "isomdl/issuer-local-signing",
-    "marty-oid4vci/local-key-operations",
-    "marty-verification/local-key-operations",
-    "marty-verification/authority-issuance",
-]
-# Native tools that still need local signing must opt in explicitly.
-native-local-key-operations = [
-    "native",
-    "isomdl/issuer-local-signing",
-    "marty-oid4vci/local-key-operations",
-    "marty-verification/local-key-operations",
-    "marty-verification/authority-issuance",
-]
-# Browser-only development tooling that intentionally keeps holder or issuer
-# private keys in WASM memory. Production packages must use `wasm` alone.
-wasm-local-key-operations = [
-    "wasm",
-    "isomdl/issuer-local-signing",
-    "marty-oid4vci/local-key-operations",
-    "marty-verification/local-key-operations",
 ]
 wasm-full = [
     "wasm",

@@ -1,7 +1,7 @@
 """add durable issuance-initiation idempotency.
 
 Revision ID: issuance_offer_idempotency
-Revises: drop_legacy_issuer_keys
+Revises: issuance_tx_issuer_algorithm
 Create Date: 2026-08-09 10:00:00.000000
 """
 
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "issuance_offer_idempotency"
-down_revision = "drop_legacy_issuer_keys"
+down_revision = "issuance_tx_issuer_algorithm"
 branch_labels = None
 depends_on = None
 

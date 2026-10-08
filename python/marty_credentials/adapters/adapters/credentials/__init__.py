@@ -2,16 +2,8 @@
 Credential Adapters - Marty Application Layer
 
 This module provides credential adapter implementations for the Marty credential manager.
-These are vendor-specific implementations (SpruceID, Multipaz) that implement
-MMF's credential port interfaces.
-
-Architecture:
-- MMF owns: IKeyManager, ICredentialIssuer, ICredentialWallet, ICredentialVerifier (ports)
-- Marty owns: SpruceID, Multipaz implementations (adapters)
-
-Key ID Namespacing:
-- auth:* - MMF authentication keys (device identity, sessions)
-- cred:* - Marty credential keys (issuer signing, holder binding)
+The Python adapter factory only provides wallet and verifier helpers. Issuer
+signing belongs to the remote-KMS-backed native service.
 """
 
 import logging
@@ -44,24 +36,18 @@ _spruceid_loaded = False
 _multipaz_loaded = False
 _persistence_loaded = False
 
-_SpruceIDKeyManager = None
-_SpruceIDCredentialIssuer = None
 _SpruceIDCredentialWallet = None
 _SpruceIDCredentialVerifier = None
 
-_MultipazKeyManager = None
-_MultipazCredentialIssuer = None
 _MultipazCredentialWallet = None
 _MultipazCredentialVerifier = None
 
 _SQLAlchemyCredentialWallet = None
-_SQLAlchemyKeyManager = None
 
 
 def _load_spruceid():
     """Lazy load SpruceID adapters."""
     global _spruceid_loaded
-    global _SpruceIDKeyManager, _SpruceIDCredentialIssuer
     global _SpruceIDCredentialWallet, _SpruceIDCredentialVerifier
 
     if _spruceid_loaded:
@@ -69,14 +55,10 @@ def _load_spruceid():
 
     try:
         from .spruceid import (
-            SpruceIDCredentialIssuer,
             SpruceIDCredentialVerifier,
             SpruceIDCredentialWallet,
-            SpruceIDKeyManager,
         )
 
-        _SpruceIDKeyManager = SpruceIDKeyManager
-        _SpruceIDCredentialIssuer = SpruceIDCredentialIssuer
         _SpruceIDCredentialWallet = SpruceIDCredentialWallet
         _SpruceIDCredentialVerifier = SpruceIDCredentialVerifier
         _spruceid_loaded = True
@@ -89,7 +71,6 @@ def _load_spruceid():
 def _load_multipaz():
     """Lazy load Multipaz adapters."""
     global _multipaz_loaded
-    global _MultipazKeyManager, _MultipazCredentialIssuer
     global _MultipazCredentialWallet, _MultipazCredentialVerifier
 
     if _multipaz_loaded:
@@ -97,14 +78,10 @@ def _load_multipaz():
 
     try:
         from .multipaz import (
-            MultipazCredentialIssuer,
             MultipazCredentialVerifier,
             MultipazCredentialWallet,
-            MultipazKeyManager,
         )
 
-        _MultipazKeyManager = MultipazKeyManager
-        _MultipazCredentialIssuer = MultipazCredentialIssuer
         _MultipazCredentialWallet = MultipazCredentialWallet
         _MultipazCredentialVerifier = MultipazCredentialVerifier
         _multipaz_loaded = True
@@ -117,16 +94,15 @@ def _load_multipaz():
 def _load_persistence():
     """Lazy load persistence adapters."""
     global _persistence_loaded
-    global _SQLAlchemyCredentialWallet, _SQLAlchemyKeyManager
+    global _SQLAlchemyCredentialWallet
 
     if _persistence_loaded:
         return True
 
     try:
-        from .persistence import SQLAlchemyCredentialWallet, SQLAlchemyKeyManager
+        from .persistence import SQLAlchemyCredentialWallet
 
         _SQLAlchemyCredentialWallet = SQLAlchemyCredentialWallet
-        _SQLAlchemyKeyManager = SQLAlchemyKeyManager
         _persistence_loaded = True
         return True
     except ImportError as e:
@@ -134,9 +110,7 @@ def _load_persistence():
         return False
 
 
-# Singleton instances for backward compatibility
-_key_manager = None
-_issuer = None
+# Singleton instances for wallet and verifier helpers
 _wallet = None
 _verifier = None
 
@@ -145,31 +119,24 @@ def _create_adapters():
     """Create adapter instances based on configuration."""
     mode = get_adapter_mode()
 
-    if mode == AdapterMode.MULTIPAZ and _load_multipaz():
-        return (
-            _MultipazKeyManager(),
-            _MultipazCredentialIssuer(),
-            _MultipazCredentialWallet(),
-            _MultipazCredentialVerifier(),
-        )
+    if mode == AdapterMode.MULTIPAZ:
+        if _load_multipaz():
+            return _MultipazCredentialWallet(), _MultipazCredentialVerifier()
+        raise RuntimeError("Multipaz adapters are unavailable")
 
-    # Default to SpruceID
     if _load_spruceid():
-        return (
-            _SpruceIDKeyManager(),
-            _SpruceIDCredentialIssuer(),
-            _SpruceIDCredentialWallet(),
-            _SpruceIDCredentialVerifier(),
-        )
+        return _SpruceIDCredentialWallet(), _SpruceIDCredentialVerifier()
 
-    raise RuntimeError("No credential adapters available. Install SpruceID or Multipaz dependencies.")
+    raise RuntimeError(
+        "No credential adapters available. Install SpruceID or Multipaz dependencies."
+    )
 
 
 def _initialize_adapters():
     """Initialize singleton adapter instances."""
-    global _key_manager, _issuer, _wallet, _verifier
+    global _wallet, _verifier
 
-    if _key_manager is not None:
+    if _wallet is not None:
         return
 
     mode = get_adapter_mode()
@@ -177,23 +144,11 @@ def _initialize_adapters():
 
     logger.info(f"Initializing credential adapters in {mode.value} mode with {storage} storage")
 
-    _key_manager, _issuer, _wallet, _verifier = _create_adapters()
+    _wallet, _verifier = _create_adapters()
 
     # TODO: Wrap with persistence if enabled
     if storage == "postgres" and _load_persistence():
         logger.info("Postgres storage available but not wired (requires session factory)")
-
-
-def get_key_manager():
-    """Get the configured key manager instance."""
-    _initialize_adapters()
-    return _key_manager
-
-
-def get_issuer():
-    """Get the configured credential issuer instance."""
-    _initialize_adapters()
-    return _issuer
 
 
 def get_wallet():
@@ -208,32 +163,14 @@ def get_verifier():
     return _verifier
 
 
-# Factory functions for explicit instantiation (preferred over singletons)
-def create_key_manager(mode: AdapterMode | None = None):
-    """Create a new key manager instance."""
-    mode = mode or get_adapter_mode()
-    if mode == AdapterMode.MULTIPAZ and _load_multipaz():
-        return _MultipazKeyManager()
-    if _load_spruceid():
-        return _SpruceIDKeyManager()
-    raise RuntimeError("No credential adapters available")
-
-
-def create_issuer(mode: AdapterMode | None = None):
-    """Create a new credential issuer instance."""
-    mode = mode or get_adapter_mode()
-    if mode == AdapterMode.MULTIPAZ and _load_multipaz():
-        return _MultipazCredentialIssuer()
-    if _load_spruceid():
-        return _SpruceIDCredentialIssuer()
-    raise RuntimeError("No credential adapters available")
-
-
+# Factory functions for explicit instantiation
 def create_wallet(mode: AdapterMode | None = None):
     """Create a new credential wallet instance."""
     mode = mode or get_adapter_mode()
-    if mode == AdapterMode.MULTIPAZ and _load_multipaz():
-        return _MultipazCredentialWallet()
+    if mode == AdapterMode.MULTIPAZ:
+        if _load_multipaz():
+            return _MultipazCredentialWallet()
+        raise RuntimeError("Multipaz wallet adapter is unavailable")
     if _load_spruceid():
         return _SpruceIDCredentialWallet()
     raise RuntimeError("No credential adapters available")
@@ -242,8 +179,10 @@ def create_wallet(mode: AdapterMode | None = None):
 def create_verifier(mode: AdapterMode | None = None):
     """Create a new credential verifier instance."""
     mode = mode or get_adapter_mode()
-    if mode == AdapterMode.MULTIPAZ and _load_multipaz():
-        return _MultipazCredentialVerifier()
+    if mode == AdapterMode.MULTIPAZ:
+        if _load_multipaz():
+            return _MultipazCredentialVerifier()
+        raise RuntimeError("Multipaz verifier adapter is unavailable")
     if _load_spruceid():
         return _SpruceIDCredentialVerifier()
     raise RuntimeError("No credential adapters available")
@@ -255,14 +194,10 @@ __all__ = [
     # Configuration
     "get_adapter_mode",
     "get_storage_mode",
-    # Singleton accessors (legacy compatibility)
-    "get_key_manager",
-    "get_issuer",
+    # Singleton accessors
     "get_wallet",
     "get_verifier",
-    # Factory functions (preferred)
-    "create_key_manager",
-    "create_issuer",
+    # Factory functions
     "create_wallet",
     "create_verifier",
 ]

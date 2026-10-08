@@ -6,8 +6,6 @@ use isomdl::definitions::device_key::cose_key::{CoseKey, EC2Curve};
 use isomdl::definitions::helpers::ByteStr;
 use isomdl::definitions::issuer_signed::IssuerSignedItem;
 use isomdl::definitions::{DeviceKeyInfo, DigestAlgorithm, Mso, ValidityInfo};
-#[cfg(feature = "local-key-operations")]
-use p256::pkcs8::DecodePrivateKey;
 use pyo3::prelude::*;
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use std::collections::BTreeMap;
@@ -256,26 +254,4 @@ pub fn der_to_cose_signature(der_sig: &[u8]) -> PyResult<Vec<u8>> {
     result[s_start..64].copy_from_slice(&s_trimmed[..s_trimmed.len().min(32)]);
 
     Ok(result)
-}
-
-/// Sign data with DER-encoded private key (P-256)
-#[cfg(feature = "local-key-operations")]
-pub fn sign_with_der_key(key_der: &[u8], data: &[u8]) -> PyResult<Vec<u8>> {
-    use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-
-    // Try PKCS#8 format first
-    if let Ok(signing_key) = SigningKey::from_pkcs8_der(key_der) {
-        let signature: Signature = signing_key.sign(data);
-        return Ok(signature.to_der().to_bytes().to_vec());
-    }
-
-    // Try SEC1 format
-    if let Ok(signing_key) = SigningKey::from_slice(key_der) {
-        let signature: Signature = signing_key.sign(data);
-        return Ok(signature.to_der().to_bytes().to_vec());
-    }
-
-    Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-        "Invalid private key format: expected PKCS#8 or SEC1 DER",
-    ))
 }

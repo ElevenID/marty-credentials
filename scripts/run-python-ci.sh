@@ -16,6 +16,6 @@ python -c "from issuance.application.rust_integration import validate_marty_rs_c
 # compatibility extension. The production job intentionally installs canonical
 # Core marty-rs v0.2 instead; the local-binding job owns these tests.
 python -m pytest tests/ packages/tests/ -v \
-  --ignore=tests/unit/test_legacy_service_native_boundary.py \
+  --ignore=tests/unit/test_service_native_boundary.py \
   --ignore=tests/unit/test_verification_adapter_native_boundary.py
 python scripts/verify_canvas_privacy_reference.py

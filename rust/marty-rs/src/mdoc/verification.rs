@@ -332,7 +332,7 @@ mod tests {
     use super::*;
     use isomdl::definitions::device_key::cose_key::EC2Y;
     use isomdl::definitions::{DeviceKeyInfo, ValidityInfo};
-    use p256::ecdsa::SigningKey;
+    use p256::{elliptic_curve::sec1::ToSec1Point, ProjectivePoint};
     use std::collections::BTreeMap;
     use time::Duration;
 
@@ -356,8 +356,8 @@ mod tests {
     }
 
     fn mso_with_validity(valid_from: OffsetDateTime, valid_until: OffsetDateTime) -> Mso {
-        let signing_key = SigningKey::from_slice(&[7_u8; 32]).unwrap();
-        let point = signing_key.verifying_key().to_sec1_bytes();
+        let point = ProjectivePoint::GENERATOR.to_affine().to_sec1_point(false);
+        let point = point.as_bytes();
         assert_eq!(point.len(), 65);
         assert_eq!(point[0], 0x04);
         Mso {
@@ -458,10 +458,10 @@ mod tests {
             b"public-certificate"
         );
 
-        let private_key =
-            pem_rfc7468::encode_string("PRIVATE KEY", pem_rfc7468::LineEnding::LF, b"private")
+        let public_key =
+            pem_rfc7468::encode_string("PUBLIC KEY", pem_rfc7468::LineEnding::LF, b"public")
                 .unwrap();
-        assert!(certificate_pem_to_der(&private_key).is_err());
+        assert!(certificate_pem_to_der(&public_key).is_err());
         assert!(certificate_pem_to_der("not pem").is_err());
     }
 }

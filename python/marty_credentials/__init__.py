@@ -17,21 +17,27 @@ __all__ = [
     "PresentationRequest",
     "VerificationResult",
     # Port interfaces
-    "ICredentialIssuer",
     "ICredentialVerifier",
     "ICredentialWallet",
-    "IKeyManager",
 ]
 
 _ports_symbols = {
-    "CredentialData", "CredentialFormat", "CredentialOffer", "CredentialSubject",
-    "ICredentialIssuer", "ICredentialVerifier", "ICredentialWallet", "IKeyManager",
-    "KeyAlgorithm", "KeyPair", "PresentationRequest", "VerificationResult",
+    "CredentialData",
+    "CredentialFormat",
+    "CredentialOffer",
+    "CredentialSubject",
+    "ICredentialVerifier",
+    "ICredentialWallet",
+    "KeyAlgorithm",
+    "KeyPair",
+    "PresentationRequest",
+    "VerificationResult",
 }
 
 
 def __getattr__(name: str):
     if name in _ports_symbols:
         from marty_credentials import ports as _ports
+
         return getattr(_ports, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

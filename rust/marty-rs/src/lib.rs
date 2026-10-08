@@ -17,11 +17,6 @@ mod canonical_verification;
 #[cfg(feature = "python")]
 pub mod mdoc;
 
-// eMRTD issuance currently requires in-process private keys and is therefore
-// available only to explicitly opted-in offline tooling.
-#[cfg(feature = "local-key-operations")]
-pub mod emrtd;
-
 // SD-JWT module (only for python - has PyO3 and sd-jwt-rs dependencies)
 #[cfg(feature = "python")]
 mod sd_jwt;
@@ -56,10 +51,6 @@ pub use marty_verification::{
 mod python_bindings {
     use super::*;
     use pyo3::prelude::*;
-    #[cfg(feature = "local-key-operations")]
-    use ssi_crypto::{AlgorithmInstance, SecretKey};
-    #[cfg(feature = "local-key-operations")]
-    use ssi_jwk::{Params, JWK};
 
     /// Formats the sum of two numbers as string.
     #[pyfunction]
@@ -78,272 +69,6 @@ mod python_bindings {
     pub fn check_isomdl() -> PyResult<String> {
         let _ = isomdl::definitions::x509::trust_anchor::TrustAnchorRegistry::default();
         Ok("isomdl is linked".to_string())
-    }
-
-    /// Generates a new Ed25519 key and returns (did, jwk_json)
-    #[cfg(feature = "local-key-operations")]
-    #[pyfunction]
-    pub fn generate_did_key() -> PyResult<(String, String)> {
-        let jwk = JWK::generate_ed25519()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-        let pk_bytes = if let Params::OKP(params) = &jwk.params {
-            &params.public_key.0
-        } else {
-            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                "Invalid key type",
-            ));
-        };
-
-        let mut multicodec = vec![0xed, 0x01];
-        multicodec.extend(pk_bytes);
-
-        let did = format!("did:key:z{}", bs58::encode(multicodec).into_string());
-        let jwk_str = serde_json::to_string(&jwk)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        Ok((did, jwk_str))
-    }
-
-    /// Generates a new P-256 key and returns (did, jwk_json) - preferred for OID4VCI
-    #[cfg(feature = "local-key-operations")]
-    #[pyfunction]
-    pub fn generate_p256_key() -> PyResult<(String, String)> {
-        let material = marty_oid4vci::generate_p256_did_jwk_holder_key()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        Ok((material.kid, material.private_jwk))
-    }
-
-    /// Generates a P-256 private JWK and its public-only JWK.
-    #[cfg(feature = "local-key-operations")]
-    #[pyfunction]
-    pub fn generate_p256_jwk() -> PyResult<(String, String)> {
-        marty_oid4vci::issuer::generate_p256_jwk_pair()
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-    }
-
-    /// Generates a new P-384 key and returns (did, jwk_json) - for ES384
-    #[cfg(feature = "local-key-operations")]
-    #[pyfunction]
-    pub fn generate_p384_key() -> PyResult<(String, String)> {
-        let jwk = JWK::generate_p384();
-        let jwk_str = serde_json::to_string(&jwk)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_str.as_bytes());
-        let did = format!("did:jwk:{}", encoded);
-        Ok((did, jwk_str))
-    }
-
-    /// Generates a new RSA key and returns (did, jwk_json)
-    /// key_size: RSA key size in bits (2048, 3072, or 4096). Default is 2048 (fastest).
-    /// use_pss: If true, marks the key for RSA-PSS (PS256/384/512). If false, PKCS#1 v1.5 (RS256/384/512).
-    #[cfg(feature = "local-key-operations")]
-    #[pyfunction]
-    #[pyo3(signature = (key_size=2048, use_pss=false))]
-    pub fn generate_rsa_key(
-        key_size: Option<u32>,
-        use_pss: Option<bool>,
-    ) -> PyResult<(String, String)> {
-        use rsa::{
-            rand_core::OsRng, traits::PrivateKeyParts, traits::PublicKeyParts, RsaPrivateKey,
-        };
-        use ssi_jwk::{Algorithm, RSAParams};
-
-        let bits = key_size.unwrap_or(2048);
-        if bits != 2048 && bits != 3072 && bits != 4096 {
-            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "key_size must be 2048, 3072, or 4096",
-            ));
-        }
-
-        let private_key = RsaPrivateKey::new(&mut OsRng, bits as usize).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "RSA key generation failed: {}",
-                e
-            ))
-        })?;
-
-        // Convert to JWK format (SSI 0.12 uses descriptive field names)
-        let n = private_key.n().to_bytes_be();
-        let e = private_key.e().to_bytes_be();
-        let d = private_key.d().to_bytes_be();
-        let primes = private_key.primes();
-        let p = primes.first().map(|p| p.to_bytes_be()).unwrap_or_default();
-        let q = primes.get(1).map(|q| q.to_bytes_be()).unwrap_or_default();
-
-        let rsa_params = RSAParams {
-            modulus: Some(ssi_jwk::Base64urlUInt(n)),
-            exponent: Some(ssi_jwk::Base64urlUInt(e)),
-            private_exponent: Some(ssi_jwk::Base64urlUInt(d)),
-            first_prime_factor: Some(ssi_jwk::Base64urlUInt(p)),
-            second_prime_factor: Some(ssi_jwk::Base64urlUInt(q)),
-            first_prime_factor_crt_exponent: None,
-            second_prime_factor_crt_exponent: None,
-            first_crt_coefficient: None,
-            other_primes_info: None,
-        };
-
-        let alg = if use_pss.unwrap_or(false) {
-            match bits {
-                2048 => Algorithm::PS256,
-                3072 => Algorithm::PS384,
-                4096 => Algorithm::PS512,
-                _ => Algorithm::PS256,
-            }
-        } else {
-            match bits {
-                2048 => Algorithm::RS256,
-                3072 => Algorithm::RS384,
-                4096 => Algorithm::RS512,
-                _ => Algorithm::RS256,
-            }
-        };
-
-        let jwk = JWK {
-            params: ssi_jwk::Params::RSA(rsa_params),
-            public_key_use: None,
-            key_operations: None,
-            algorithm: Some(alg),
-            key_id: None,
-            x509_url: None,
-            x509_certificate_chain: None,
-            x509_thumbprint_sha1: None,
-            x509_thumbprint_sha256: None,
-        };
-
-        let jwk_str = serde_json::to_string(&jwk)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(jwk_str.as_bytes());
-        let did = format!("did:jwk:{}", encoded);
-        Ok((did, jwk_str))
-    }
-
-    /// Extract SecretKey from JWK for signing
-    #[cfg(feature = "local-key-operations")]
-    fn jwk_to_secret_key(jwk: &JWK) -> Result<SecretKey, String> {
-        match &jwk.params {
-            Params::OKP(params) => {
-                if let Some(d) = &params.private_key {
-                    SecretKey::new_ed25519(&d.0)
-                        .map_err(|e| format!("Invalid Ed25519 key: {:?}", e))
-                } else {
-                    Err("Missing private key (d) in OKP JWK".to_string())
-                }
-            }
-            Params::EC(params) => {
-                if let Some(d) = &params.ecc_private_key {
-                    match params.curve.as_deref() {
-                        Some("P-256") => SecretKey::new_p256(&d.0)
-                            .map_err(|e| format!("Invalid P-256 key: {:?}", e)),
-                        Some("secp256k1") => SecretKey::new_secp256k1(&d.0)
-                            .map_err(|e| format!("Invalid secp256k1 key: {:?}", e)),
-                        curve => Err(format!(
-                            "Unsupported curve: {:?}. Supported: P-256, secp256k1",
-                            curve
-                        )),
-                    }
-                } else {
-                    Err("Missing private key (d) in EC JWK".to_string())
-                }
-            }
-            _ => Err("Unsupported key type".to_string()),
-        }
-    }
-
-    /// Get algorithm instance based on JWK type
-    #[cfg(feature = "local-key-operations")]
-    fn get_algorithm_for_jwk(jwk: &JWK) -> Result<(AlgorithmInstance, &'static str), String> {
-        match &jwk.params {
-            Params::OKP(_) => Ok((AlgorithmInstance::EdDSA, "EdDSA")),
-            Params::EC(ec) => match ec.curve.as_deref() {
-                Some("P-256") => Ok((AlgorithmInstance::ES256, "ES256")),
-                Some("secp256k1") => Ok((AlgorithmInstance::ES256K, "ES256K")),
-                curve => Err(format!(
-                    "Unsupported curve: {:?}. Supported: P-256, secp256k1",
-                    curve
-                )),
-            },
-            _ => Err("Unsupported key type".to_string()),
-        }
-    }
-
-    /// Sign a message using the JWK
-    #[cfg(feature = "local-key-operations")]
-    fn sign_message(jwk: &JWK, message: &[u8]) -> Result<String, String> {
-        let secret_key = jwk_to_secret_key(jwk)?;
-        let (alg_instance, _) = get_algorithm_for_jwk(jwk)?;
-
-        let signature = secret_key
-            .sign(alg_instance, message)
-            .map_err(|e| format!("Signing failed: {:?}", e))?;
-
-        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature))
-    }
-
-    /// Creates a verifiable presentation from credentials
-    #[cfg(feature = "local-key-operations")]
-    #[pyfunction]
-    #[pyo3(signature = (holder_did, holder_jwk_json, credential_jwts, audience, nonce=None))]
-    pub fn create_presentation(
-        holder_did: String,
-        holder_jwk_json: String,
-        credential_jwts: Vec<String>,
-        audience: String,
-        nonce: Option<String>,
-    ) -> PyResult<String> {
-        use chrono::Utc;
-
-        let jwk: JWK = serde_json::from_str(&holder_jwk_json).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Invalid JWK: {}", e))
-        })?;
-
-        let now = Utc::now();
-        let vp = serde_json::json!({
-            "@context": ["https://www.w3.org/2018/credentials/v1"],
-            "type": ["VerifiablePresentation"],
-            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
-            "holder": holder_did,
-            "verifiableCredential": credential_jwts,
-        });
-
-        let mut payload = serde_json::json!({
-            "iss": holder_did,
-            "aud": audience,
-            "iat": now.timestamp(),
-            "exp": now.timestamp() + 300,
-            "vp": vp,
-        });
-
-        if let Some(n) = nonce {
-            payload["nonce"] = serde_json::json!(n);
-        }
-
-        let (_, alg_str) = get_algorithm_for_jwk(&jwk)
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
-        let header = serde_json::json!({ "alg": alg_str, "typ": "JWT" });
-
-        let header_str = serde_json::to_string(&header).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to serialize header: {}",
-                e
-            ))
-        })?;
-        let payload_str = serde_json::to_string(&payload).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to serialize payload: {}",
-                e
-            ))
-        })?;
-
-        let header_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_str.as_bytes());
-        let payload_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_str.as_bytes());
-
-        let message = format!("{}.{}", header_b64, payload_b64);
-        let signature = sign_message(&jwk, message.as_bytes())
-            .map_err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>)?;
-
-        Ok(format!("{}.{}", message, signature))
     }
 
     /// Verifies a JWT structure and claims
@@ -471,15 +196,6 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
         m.add_function(wrap_pyfunction!(get_ssi_version, m)?)?;
         m.add_function(wrap_pyfunction!(check_isomdl, m)?)?;
-        #[cfg(feature = "local-key-operations")]
-        {
-            m.add_function(wrap_pyfunction!(generate_did_key, m)?)?;
-            m.add_function(wrap_pyfunction!(generate_p256_key, m)?)?;
-            m.add_function(wrap_pyfunction!(generate_p256_jwk, m)?)?;
-            m.add_function(wrap_pyfunction!(generate_p384_key, m)?)?;
-            m.add_function(wrap_pyfunction!(generate_rsa_key, m)?)?;
-            m.add_function(wrap_pyfunction!(create_presentation, m)?)?;
-        }
         m.add_function(wrap_pyfunction!(verify_jwt, m)?)?;
         m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
         m.add_function(wrap_pyfunction!(
@@ -495,10 +211,6 @@ mod python_bindings {
 
         // mDoc classes and functions for ISO 18013-5 mobile driver's license
         crate::mdoc::register_mdoc_module(m)?;
-
-        // eMRTD classes and functions for ICAO 9303 passport issuance
-        #[cfg(feature = "local-key-operations")]
-        crate::emrtd::register_emrtd_module(m)?;
 
         // SD-JWT classes and functions for Selective Disclosure JWT
         crate::sd_jwt::register_sd_jwt_module(m)?;
@@ -520,7 +232,6 @@ mod python_bindings {
         use super::*;
 
         #[test]
-        #[cfg(not(feature = "local-key-operations"))]
         fn production_module_excludes_private_key_operations() {
             Python::initialize();
             Python::attach(|py| {
@@ -563,23 +274,6 @@ mod python_bindings {
                     );
                 }
             });
-        }
-
-        #[test]
-        #[cfg(feature = "local-key-operations")]
-        fn p256_binding_keeps_private_key_out_of_did_jwk() {
-            let (did, private_jwk) = generate_p256_key().unwrap();
-            let encoded = did.strip_prefix("did:jwk:").unwrap();
-            let public_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .decode(encoded)
-                .unwrap();
-            let public: serde_json::Value = serde_json::from_slice(&public_bytes).unwrap();
-            let private: serde_json::Value = serde_json::from_str(&private_jwk).unwrap();
-
-            assert!(public.get("d").is_none());
-            assert!(private.get("d").is_some());
-            assert_eq!(public["x"], private["x"]);
-            assert_eq!(public["y"], private["y"]);
         }
     }
 } // End of python_bindings module

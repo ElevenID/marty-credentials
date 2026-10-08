@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 from marty_credentials.adapters.adapters.credentials.multipaz import MultipazKeyManager
-from marty_credentials.adapters.services import issuance_service, verification_service
+from marty_credentials.adapters.services import verification_service
 from marty_credentials.native_backend import (
     NativeBackendUnavailable,
     NativeOperationError,
@@ -16,7 +16,6 @@ from marty_credentials.native_backend import (
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_FILES = (
-    ROOT / "python/marty_credentials/adapters/services/issuance_service.py",
     ROOT / "python/marty_credentials/adapters/services/verification_service.py",
 )
 RETIRED_OR_NATIVE_KERNEL_FILES = SERVICE_FILES + (
@@ -34,18 +33,9 @@ def test_production_service_package_exposes_verification_only() -> None:
 
     assert services.__all__ == ["VerificationService"]
     assert services.VerificationService is verification_service.VerificationService
-    with pytest.raises(AttributeError, match="explicit local-key compatibility adapter"):
-        services.__getattr__("IssuanceService")
-
-
-def test_local_issuance_adapter_fails_explicitly_without_local_build(monkeypatch) -> None:
-    def unavailable(_capabilities) -> None:
-        raise NativeBackendUnavailable("local capability omitted")
-
-    monkeypatch.setattr(issuance_service, "require_marty_rs", unavailable)
-
-    with pytest.raises(NativeOperationError, match="explicit local-key-operations build"):
-        issuance_service.IssuanceService(object())
+    assert not hasattr(services, "IssuanceService")
+    assert not (ROOT / "python/marty_credentials/adapters/services/issuance_service.py").exists()
+    assert not (ROOT / "python/marty_credentials/examples/local_key_usage.py").exists()
 
 
 def test_standalone_python_verifier_does_not_return() -> None:
@@ -110,59 +100,6 @@ def test_verification_loader_rejects_missing_capability(monkeypatch) -> None:
 
     with pytest.raises(NativeBackendUnavailable, match="open_badge_ob3_verify"):
         require_marty_verification(("public_key_pem_to_jwk", "open_badge_ob3_verify"))
-
-
-def test_issuance_uses_native_jwk_generation_and_sd_jwt_selection(monkeypatch) -> None:
-    backend = SimpleNamespace(
-        generate_p256_jwk=lambda: ("private", "public"),
-        sd_jwt_create_presentation=lambda token, fields, nonce, audience: (
-            token,
-            fields,
-            nonce,
-            audience,
-        ),
-    )
-    monkeypatch.setattr(issuance_service, "_marty_rs", backend)
-    service = issuance_service.IssuanceService.__new__(issuance_service.IssuanceService)
-
-    assert service._generate_keys() == ("private", "public")
-    assert service.create_sd_jwt_presentation("token", ["name"]) == (
-        "token",
-        ["name"],
-        None,
-        None,
-    )
-
-
-def test_open_badge_x509_private_key_path_fails_closed() -> None:
-    service = issuance_service.IssuanceService.__new__(issuance_service.IssuanceService)
-
-    with pytest.raises(NativeOperationError, match="X.509 private-key conversion"):
-        service.issue_open_badge_ob3(
-            issuer_did="did:example:issuer",
-            recipient_did="did:example:holder",
-            badge_name="Example",
-            badge_description="Example badge",
-            x509_cert_pem="certificate",
-            x509_key_pem="private key",
-        )
-
-
-def test_mdoc_issuance_rejects_ambiguous_multiple_namespaces(monkeypatch) -> None:
-    monkeypatch.setattr(
-        issuance_service,
-        "_marty_rs",
-        SimpleNamespace(generate_p256_jwk=lambda: ("private", "public")),
-    )
-    service = issuance_service.IssuanceService.__new__(issuance_service.IssuanceService)
-
-    with pytest.raises(NativeOperationError, match="exactly one namespace"):
-        service.issue_mdoc(
-            issuer_did="did:example:issuer",
-            subject_did="did:example:holder",
-            doc_type="org.iso.18013.5.1.mDL",
-            namespaces={"one": {"name": "Alice"}, "two": {"name": "Alice"}},
-        )
 
 
 def test_sd_jwt_verification_passes_public_jwk_to_native_backend(monkeypatch) -> None:
