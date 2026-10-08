@@ -1,5 +1,6 @@
 """Shared public-JWK boundary for Python-owned metadata ingestion."""
 
+import json
 from collections.abc import Mapping
 from typing import Any
 
@@ -12,17 +13,25 @@ PRIVATE_JWK_FIELDS = frozenset(
 )
 
 
-def contains_private_jwk_material(value: Any) -> bool:
+def contains_private_jwk_material(value: Any, depth: int = 0) -> bool:
     """Reject private-key fields even when wrapped in JWKS extensions."""
 
+    if depth > 16:
+        return True
     if isinstance(value, Mapping):
         return bool(PRIVATE_JWK_FIELDS.intersection(value)) or any(
-            contains_private_jwk_material(item) for item in value.values()
+            contains_private_jwk_material(item, depth + 1) for item in value.values()
         )
     if isinstance(value, list):
-        return any(contains_private_jwk_material(item) for item in value)
-    return (
-        isinstance(value, str)
-        and "-----BEGIN " in value
-        and "PRIVATE KEY-----" in value
-    )
+        return any(contains_private_jwk_material(item, depth + 1) for item in value)
+    if isinstance(value, str):
+        if "-----BEGIN " in value and "PRIVATE KEY-----" in value:
+            return True
+        if value.lstrip().startswith(("{", "[")):
+            try:
+                return contains_private_jwk_material(json.loads(value), depth + 1)
+            except RecursionError:
+                return True
+            except (ValueError, TypeError):
+                return False
+    return False

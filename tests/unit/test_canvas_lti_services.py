@@ -242,6 +242,9 @@ def test_canvas_jwks_private_material_scan_preserves_public_extensions() -> None
     assert contains_private_jwk_material(
         {"keys": [{"kty": "RSA", "kid": "canvas-key", "note": "-----BEGIN RSA PRIVATE KEY-----"}]}
     )
+    assert contains_private_jwk_material(
+        {"keys": [{"kty": "RSA", "kid": "canvas-key", "note": '{"kty":"RSA","d":"secret"}'}]}
+    )
 
 
 def test_hosted_canvas_profile_uses_environment_specific_global_trust() -> None:
