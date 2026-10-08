@@ -1,0 +1,67 @@
+{
+  "schema": "marty.physical-passport-python-retirement-qualification/v4",
+  "state": "source_deletion_authorized_beta_not_qualified",
+  "retirement_pull_request_number": 305,
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "protected_main_commit": "89622bff8c1ffa73e4ef8f4386052396102e1e01",
+    "ci_run_id": 37732109566,
+    "artifact_sha256": {
+      "contracts/issuance-physical-passport-native.json": "8e8027e656d03939f89622f616d6b0d095542ecfcb37fa23f10b92f49cb4750c",
+      "contracts/issuance-native-coverage.json": "4e7e2b29f400342ab254aad8538be8688050c64abde8af6095e8d10ec3c8f5ba",
+      "contracts/issuance-universal-ownership.json": "a381e74dcd10ad40aba6e7efc2a42e60397ee7ba57300507ffd47713f6b58732",
+      "contracts/passport-beta-bureau-behavior.json": "387015ed375d0469d6b9625ea3a06416ff2be5d3cb0c652f91aff23820c8200f",
+      "contracts/passport-webhook-progress-behavior.json": "cefd7f7822f4681f5d12ac5bd48728ed8d5b7626b36d1749d7e1b43f491a8d4d",
+      "contracts/passport-supported-consumer-routing.json": "9d68abbabf8724be06de6a2105818e60ad23487db365b32acbf3752617f80e86",
+      "rust/services/issuance/src/passport_http.rs": "2c3dddc477b47553e11bb3e7c1d59417ea9d8c362657f42770118a3646c44c2b",
+      "rust/services/issuance/src/passport_signer.rs": "fe6d1ed7b4c665896d1bbb3f4cdc0e1218aa9bae70160e3643a2e0a63d48cf76",
+      "rust/services/issuance/src/passport_bureau.rs": "efab0d919d78c4f1b6dc3a2be09ff2a88f7ce444d8c5eda787cb856d6cddc458",
+      "rust/services/gateway/src/contract.rs": "3807fe2ead73541ea8b9c0a7e7cfe6e15d2cd99316eec8c8adaf81bcd241008a",
+      "rust/services/flow/src/connections.rs": "a0ffe00c6be35be14e9ce74b3cdbc0ff38d2e90521bf0ef67300478e3fb6423d",
+      "rust/services/flow/src/http_providers.rs": "ce8cfa83bba95d5111bfa212a506e9df4c6acac4a1326e28a9146c095cb8e73c",
+      "docker-compose.passport-supported-disposable.yml": "7ad85b4a148dfbf05926ab09751c532ea43fab08272086fa3a983d3d3019b951"
+    },
+    "required_artifacts": [
+      "contracts/issuance-physical-passport-native.json",
+      "contracts/issuance-native-coverage.json",
+      "contracts/issuance-universal-ownership.json",
+      "contracts/passport-beta-bureau-behavior.json",
+      "contracts/passport-webhook-progress-behavior.json",
+      "contracts/passport-supported-consumer-routing.json",
+      "rust/services/issuance/src/passport_http.rs",
+      "rust/services/issuance/src/passport_signer.rs",
+      "rust/services/issuance/src/passport_bureau.rs",
+      "rust/services/gateway/src/contract.rs",
+      "rust/services/flow/src/connections.rs",
+      "rust/services/flow/src/http_providers.rs",
+      "docker-compose.passport-supported-disposable.yml"
+    ]
+  },
+  "source_deletion_evidence": [
+    "all nine frozen passport route identities have reviewed Rust Gateway, Flow, and native handlers",
+    "the direct Python passport router, signer, and bureau adapters are absent while unrelated issuance remains",
+    "the frozen Rust batch parity test and exact-source protected merge-group CI pass",
+    "source deletion does not deploy a new image or authorize beta or production routing"
+  ],
+  "remaining_beta_acceptance": [
+    "publish the signed post-deletion stack and prove six-service Rust KMS passport behavior in protected disposable acceptance",
+    "fence and drain the real beta passport writer and preserve every in-flight job and artifact",
+    "select Rust Gateway, Flow, and native ownership together and verify all nine public beta routes",
+    "perform one aggregate beta-only deployment and soak while production stays unchanged"
+  ],
+  "beta_deployment_authorized": false,
+  "predeletion_acceptance_receipt": null,
+  "supported_consumer_cutover_receipt": null,
+  "authorized_python_route_deletions": [
+    {"method": "GET", "path": "/v1/passport/applications/{application_id}/production-status"},
+    {"method": "GET", "path": "/v1/passport/capabilities"},
+    {"method": "POST", "path": "/v1/passport/applications"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-data-groups"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/generate-sod"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/quality-verify"},
+    {"method": "POST", "path": "/v1/passport/applications/{application_id}/submit-personalization"},
+    {"method": "POST", "path": "/v1/passport/webhooks/personalization"}
+  ],
+  "full_python_service_deletion_authorized": false
+}

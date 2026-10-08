@@ -281,10 +281,6 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 from issuance.infrastructure.adapters.postgres_repository import PostgresIssuanceRepository
 from issuance.infrastructure.api.canvas_operations_routes import canvas_operations_router
 from issuance.infrastructure.api.canvas_routes import canvas_integration_router
-from issuance.infrastructure.api.physical_document_routes import (
-    configure_physical_document_store,
-    physical_document_router,
-)
 from issuance.infrastructure.api.routes import (
     issuance_router,
     issued_credential_router,
@@ -387,7 +383,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresIssuanceRepository(session_factory)
-    configure_physical_document_store(session_factory)
     logger.info("PostgreSQL adapter initialized for issuance service")
 
     # Start gRPC server
@@ -412,7 +407,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         if grpc_server:
             await grpc_server.stop(grace=5)
             logger.info("gRPC server stopped")
-        configure_physical_document_store(None)
         await engine.dispose()
 
 
@@ -445,7 +439,6 @@ def create_app() -> FastAPI:
     app.include_router(canvas_operations_router)
     app.include_router(issued_credential_router)
     app.include_router(resource_owner_router)
-    app.include_router(physical_document_router)
 
     # Override FastAPI dependency injection
     app.dependency_overrides[IIssuanceRepository] = get_repo
