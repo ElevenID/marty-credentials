@@ -138,21 +138,6 @@ jobs:
           jq -e --arg tag "$TAG" '([.[][] | select(.tag_name == $tag)] | length) == 0' \
             releases.json >/dev/null
 
-      - name: Reject existing versioned image tags
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.target.outputs.tag }}
-        run: |
-          set -euo pipefail
-          for service in issuance; do
-            package="marty-credentials-$service"
-            gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "orgs/$GITHUB_REPOSITORY_OWNER/packages/container/$package/versions?per_page=100" \
-              > "package-$service.json"
-            python scripts/release_contract.py validate-package-tag-absent \
-              --json "package-$service.json" --tag "$TAG"
-          done
-
   build-python-wheels:
     name: Build Python Wheels
     needs: validate-release-source
@@ -387,7 +372,7 @@ jobs:
             --json release.json --release-id "$RELEASE_ID" --tag "$TAG" \
             --commit "$COMMIT" --phase stable-draft
           echo "release_id=$RELEASE_ID" >> "$GITHUB_OUTPUT"
-      - name: Start digest-first image publication
+      - name: Finalize the signed source release
         env:
           GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ needs.validate-release-source.outputs.commit }}

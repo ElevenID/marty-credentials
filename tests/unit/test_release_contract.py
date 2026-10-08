@@ -97,10 +97,7 @@ def test_release_asset_contract_is_complete_and_disjoint() -> None:
     images = release_contract.image_evidence_names()
     assert stable == {"marty_credentials-0.1.7.tar.gz"}
     assert all(not name.startswith("marty_rs-") for name in stable)
-    assert images == {
-        "marty-credentials-issuance.digest",
-        "marty-credentials-issuance.spdx.json",
-    }
+    assert images == set()
     assert stable.isdisjoint(images)
     assert release_contract.data_asset_names("0.1.7") == stable | images
     assert release_contract.final_asset_names("0.1.7") == stable | images | {
@@ -264,11 +261,7 @@ def test_release_lifecycle_is_bound_to_id_tag_commit_and_asset_phase() -> None:
 
 def test_resumable_draft_accepts_only_partial_final_evidence() -> None:
     stable = release_contract.stable_asset_names("0.1.7")
-    optional = {
-        "marty-credentials-issuance.digest",
-        "marty-credentials-issuance.spdx.json",
-        "SHA256SUMS",
-    }
+    optional = {"SHA256SUMS"}
     assert (
         release_contract.validate_release(
             _release_payload(names=stable | optional, draft=True),
@@ -303,6 +296,15 @@ def test_resumable_draft_accepts_only_partial_final_evidence() -> None:
     with pytest.raises(release_contract.ReleaseContractError, match="unexpected"):
         release_contract.validate_release(
             _release_payload(names=stable | {"unapproved.txt"}, draft=True),
+            release_id=1234,
+            tag="v0.1.7",
+            commit="a" * 40,
+            phase="resumable",
+        )
+
+    with pytest.raises(release_contract.ReleaseContractError, match="unexpected"):
+        release_contract.validate_release(
+            _release_payload(names=stable | {"marty-credentials-issuance.digest"}, draft=True),
             release_id=1234,
             tag="v0.1.7",
             commit="a" * 40,

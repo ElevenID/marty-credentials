@@ -58,8 +58,6 @@ def _parse_contract_services(contract: Path) -> tuple[str, ...]:
             raise ServiceHandoffError("release contract SERVICES entries must be literal strings")
         services.append(item.value)
 
-    if not services:
-        raise ServiceHandoffError("release contract SERVICES must not be empty")
     if len(set(services)) != len(services):
         raise ServiceHandoffError("release contract SERVICES must not contain duplicates")
     for service in services:
