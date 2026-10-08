@@ -9,7 +9,6 @@ import pytest
 ROOT = Path(__file__).parents[2]
 CI = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 WARM_CACHES = (ROOT / ".github" / "workflows" / "warm-ci-caches.yml").read_text(encoding="utf-8")
-STABLE = (ROOT / ".github" / "workflows" / "release-stable.yml").read_text(encoding="utf-8")
 OPTIONAL_SCCACHE = (ROOT / ".github" / "actions" / "optional-sccache" / "action.yml").read_text(
     encoding="utf-8"
 )
@@ -87,8 +86,6 @@ def test_compiler_cache_falls_back_without_suppressing_rust_gates() -> None:
     assert "uses: ./marty-credentials/.github/actions/optional-sccache" in WARM_CACHES
     assert "uses: ./.github/actions/optional-sccache" in WARM_CACHES
     assert "continue-on-error:" not in CI
-    assert "sccache: 'true'" not in STABLE
-    assert "sccache: 'false'" in STABLE
     for command in (
         "cargo fmt --all -- --check",
         "cargo check --locked --no-default-features --features native",

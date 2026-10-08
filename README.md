@@ -1,197 +1,31 @@
 # Marty Credentials
 
-Credential domain logic and adapters for the Marty ecosystem. This package provides:
+This repository retains Rust credential bindings, frozen migration contracts, and their tests. The deployed issuance service is Rust owned in [marty-ui](https://github.com/ElevenID/marty-ui); canonical credential and verification libraries are Rust owned in [marty-core](https://github.com/ElevenID/marty-core).
 
-- **Port Interfaces**: Abstract contracts for credential operations (issuance, verification, wallet, key management)
-- **Adapters**: Concrete implementations using SpruceID, Multipaz, and other credential libraries
-- **Rust FFI**: Python bindings for high-performance cryptographic operations via `marty-rs`
+The Python issuance service was retired in [#311](https://github.com/ElevenID/marty-credentials/pull/311). The former `marty_credentials` Python convenience SDK is retired by the source change described in `contracts/python-sdk-retirement-v1.json`. The root `pyproject.toml` now builds an internal metadata-only test harness named `marty-credentials-test-harness`; it does not install an SDK or provide a signing path. Existing immutable Python images and releases remain historical records and the currently pinned production image until the governed beta transition; no new Python issuance image or SDK distribution is published.
 
-> **Note**: Integration tests have been moved to a separate repository: [marty-integration-tests](https://github.com/ElevenID/marty-integration-tests)
+## Source layout
 
-## Architecture
+- `rust/marty-rs`: local Rust and WASM binding code and tests. Core owns canonical published native wheels.
+- `contracts`: frozen issuance behavior and retirement evidence.
+- `scripts`: migration evidence and source verification tools.
+- `tests`: source and contract checks.
 
-```
-marty-credentials/
-├── python/
-│   └── marty_credentials/
-│       ├── ports/           # Abstract port interfaces
-│       │   ├── __init__.py
-│       │   ├── key_manager.py
-│       │   ├── issuer.py
-│       │   ├── verifier.py
-│       │   └── wallet.py
-│       └── adapters/        # Concrete implementations
-│           ├── __init__.py
-│           ├── spruceid/
-│           ├── multipaz/
-│           └── persistence/
-├── rust/
-│   └── marty-rs/           # Rust FFI bindings (PyO3)
-├── docs/
-└── tests/
-```
-
-## Installation
+## Development checks
 
 ```bash
-pip install marty-credentials
+cargo test --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features native
+python -m pytest tests/unit packages/tests
 ```
 
-For Rust FFI support (requires Rust toolchain):
+For browser or Node.js consumers, build the Rust WASM target directly:
 
 ```bash
-pip install marty-credentials[ffi]
-```
-
-## Usage
-
-### Port Interfaces
-
-```python
-from marty_credentials.ports import IKeyManager, ICredentialIssuer
-
-class MyKeyManager(IKeyManager):
-    async def generate_key_pair(self, algorithm: str) -> KeyPair:
-        ...
-```
-
-### Adapters
-
-```python
-from marty_credentials.adapters.spruceid import SpruceIDAdapter
-
-adapter = SpruceIDAdapter()
-credential = await adapter.issue_credential(claims, key_pair)
-```
-
-## Relationship to Marty Core
-
-This package depends on [marty-core](https://github.com/ElevenID/marty-core) for cryptographic primitives:
-
-- `marty-crypto`: Low-level cryptographic operations
-- `marty-verification`: Trust chain verification
-- `marty-secure-storage`: Encrypted credential storage
-
-## Verification Governance
-
-Verification management endpoints require purpose-scoped, organization-bound
-governance rather than caller-selected organization or trust inputs. The
-canonical implementation and deployment contract now live in the Rust
-verification service in `ElevenID/marty-ui`; this repository retains only
-Credentials package adapters that have separate caller-level deletion gates.
-
-## Native Issuance Service
-
-The feature-preserving replacement of the deployed Python issuance API and
-Canvas synchronization worker is governed by the
-[`Native Rust issuance migration roadmap`](docs/RUST_ISSUANCE_MIGRATION_ROADMAP.md).
-Its checked-in runtime-surface contract freezes every current HTTP and gRPC
-operation, runtime mode, configuration input, and migration revision before
-native cutover work begins.
-
-## Release Process
-
-Stable releases are tag-driven, fail closed, and use only commits already on
-`main`. The version in `Cargo.toml` and the locked `marty-rs` package must match
-the tag before any artifact is built.
-
-### Stable Releases
-
-```bash
-# After the version change and its checks are merged to main:
-git fetch origin main
-git tag -a v0.2.0 origin/main -m "marty-credentials v0.2.0"
-git push origin refs/tags/v0.2.0
-```
-
-The stable workflow runs Rust and Python tests, builds the exact Python, WASM,
-and source artifact set, attests it, and creates a draft release. It then starts
-the image finalizer at that exact release tag and commit. The finalizer verifies
-that the release commit is reachable from protected `main`, builds both service
-images by digest, signs and attests them, creates their SBOMs, verifies every
-draft asset, and publishes the release exactly once. This makes the signed image
-and SBOM provenance identify the immutable release tag rather than a later
-protected-main workflow revision. Published releases are immutable and `v*`
-tags cannot be updated or deleted.
-
-If the stable workflow must be started manually before it creates a draft, run
-it from the tag itself:
-
-```bash
-gh workflow run release-stable.yml --ref v0.2.0 -f tag=v0.2.0
-```
-
-If a valid draft already exists, resume only the finalizer from the exact tag,
-using the draft's numeric release ID and the tag's fully dereferenced commit
-SHA:
-
-```bash
-gh workflow run release-images.yml --ref v0.2.0 \
-  -f tag=v0.2.0 \
-  -f release_id=<release-id> \
-  -f commit_sha=<40-character-commit-sha>
-```
-
-Never move or recreate a release tag. A conflicting draft asset or image tag is
-an integrity failure that must be investigated rather than overwritten.
-
-### Artifacts
-
-Production service images never install the Credentials-owned local
-`rust/marty-rs` compatibility wheel. They install the exact independently
-pinned Core wheels and hashes in `release/dependencies.json`: canonical
-`marty-rs` `v0.2.0` uses the KMS-only binding profile, while
-`marty-verification` remains at `v0.1.60` to preserve integration-secret
-AES-GCM until `INTEGRATION-SECRET-KMS-001` provides an opaque secure-storage
-replacement. The local native/Python/WASM extension remains on its older Core
-revision temporarily so its CSCA, OID4VCI, and demo exports can be migrated
-without deletion; CI tests it separately, and the stable artifact collector
-excludes its wheels. See the
-[`DIDComm KMS delivery contract`](docs/rust-migrations/didcomm-kms-delivery-contract.md#transitional-dual-revision-boundary).
-
-Each release produces:
-- **A Python source distribution** for the Credentials package
-- **WASM packages** for browser and Node.js
-- **The issuance service image**, pinned by digest in GHCR
-- **SBOMs, SHA256 checksums, Sigstore signatures, and GitHub provenance**
-
-GitHub Releases and GHCR are the canonical artifact sources. PyPI publication
-starts only after the immutable GitHub release is published and remains gated
-by the `ENABLE_PUBLIC_REGISTRY_PUBLISHING` repository variable and the protected
-`pypi` environment.
-
-If that optional PyPI step needs a manual retry, run the reusable publisher from
-protected `main` with the same tag, release ID, and commit SHA shown above:
-
-```bash
-gh workflow run publish-pypi.yml --ref main \
-  -f tag=v0.2.0 \
-  -f release_id=<release-id> \
-  -f commit_sha=<40-character-commit-sha>
-```
-
-### Building from Source
-
-**Python wheels with Rust bindings:**
-```bash
-python -m pip install maturin==1.14.1
-cd rust/marty-rs
-maturin build --locked --release --features python
-```
-
-**WASM packages:**
-```bash
-cargo install wasm-pack --version 0.15.0 --locked
-
 cd rust/marty-rs
 wasm-pack build --locked --target web --no-default-features --features wasm
 ```
 
-**Pure Python package:**
-```bash
-pip install build
-python -m build --sdist
-```
+Product deployment and release instructions live in `marty-ui`. The old Credentials Python source distribution, PyPI publisher, and issuance image release path are retired; do not create a new Python package or image from this repository.
 
 ## License
 
