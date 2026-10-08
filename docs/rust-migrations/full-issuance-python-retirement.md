@@ -1,0 +1,9 @@
+# Full Python issuance service retirement
+
+The Python issuance source and image build path were deleted in [Credentials #311](https://github.com/ElevenID/marty-credentials/pull/311), merged as `12897ba58803e630fc46f12f6d35a9c0677e49d4`. The Rust owner and the baseline migration were merged in [UI #1178](https://github.com/ElevenID/marty-ui/pull/1178) as `927f765cfce54c06f30a4dacba5421960af9a6ff`. `contracts/full-issuance-retirement-qualification.json` records the exact source and protected UI evidence used for that deletion. Its one-time qualification script and release publisher were retired after the merge; the current CI gate checks that the deleted source and publication paths stay absent.
+
+The frozen Credentials surface has 86 current HTTP routes and 12 gRPC methods. The Rust coverage inventory includes 85 of those HTTP routes (the remaining `/ready` route is operational), all 12 gRPC methods, and nine historical passport routes deleted earlier from Python. Rust also owns the Canvas worker and the issuance schema baseline. The retained JSON contracts are historical behavior oracles; Rust PostgreSQL and behavior tests execute in the UI owner.
+
+The deletion did not deploy an image. Production remains on its previously pinned immutable image until a separately qualified release changes it. The signed aggregate beta candidate, beta-only acceptance deployment, and soak are distinct release gates.
+
+The separate Python convenience SDK had no live in-repository product consumer. Its retirement mapping and consumer inventory are in `contracts/python-sdk-retirement-v1.json`. The only direct cross-repository importer was a mock-only integration test; its deletion in Integration [#428](https://github.com/ElevenID/marty-integration-tests/pull/428) must merge before the SDK deletion merges.

@@ -1,0 +1,72 @@
+{
+  "schema": "marty.python-sdk-retirement/v1",
+  "python_source_commit": "12897ba58803e630fc46f12f6d35a9c0677e49d4",
+  "rust_ui_commit": "ad0cd884f826573e462c7a2ab50238b921cddeb6",
+  "rust_core_commit": "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7",
+  "scope": "Retire the published Python convenience SDK without removing current Marty product behavior",
+  "product_behavior": [
+    {
+      "python": "adapters/services/issuance_service.py: W3C VC, SD-JWT, mDoc, presentation, OID4VP request, credential lookup and revocation",
+      "rust": [
+        "marty-ui/rust/services/issuance/src/credential_builder.rs",
+        "marty-ui/rust/services/issuance/src/credential.rs",
+        "marty-ui/rust/services/flow/src/presentation_request.rs",
+        "marty-core/marty-oid4vci/src/wallet.rs"
+      ],
+      "frozen_evidence": [
+        "contracts/issuance-runtime-surface.json",
+        "marty-ui/contracts/issuance-native-coverage.json"
+      ]
+    },
+    {
+      "python": "adapters/services/verification_service.py: W3C VC, SD-JWT, mDoc, presentation and badge verification",
+      "rust": [
+        "marty-core/marty-verification/src/open_badges",
+        "marty-ui/rust/services/verification/src"
+      ],
+      "frozen_evidence": [
+        "marty-core/marty-verification/tests/open_badges_tests.rs",
+        "marty-ui/rust/services/verification/tests"
+      ]
+    },
+    {
+      "python": "infrastructure/auth/token_validator.py, infrastructure/observability/rate_limiter.py, infrastructure/events/publisher.py",
+      "rust": [
+        "marty-ui/rust/services/auth/src/oidc.rs",
+        "marty-ui/rust/services/gateway/src/middleware.rs",
+        "marty-ui/rust/services/issuance/src/credential_management_events.rs"
+      ],
+      "frozen_evidence": [
+        "marty-ui/rust/services/gateway/src/middleware.rs",
+        "marty-ui/rust/services/issuance/tests/credential_admission_behavior.rs"
+      ]
+    }
+  ],
+  "retired_sdk_only_behavior": [
+    "Local private-JWK OB2 and OB3 signing; product issuance uses managed signer profiles and KMS",
+    "In-memory and SQLAlchemy wallet/key-store convenience APIs without a product caller",
+    "Credential/verifier-filtered SQLAlchemy verification logs without a product caller",
+    "Fail-open Redis rate limiting; product paths use the Rust distributed limiter",
+    "Implicit-token offer redemption and ZK placeholder methods that fail closed"
+  ],
+  "consumer_audit": {
+    "live_product_imports_found": 0,
+    "merge_precondition": "ElevenID/marty-integration-tests#428 must merge on protected main before this source deletion merges",
+    "test_only_imports": [
+      "marty-integration-tests/tests/integration/test_production_features.py"
+    ],
+    "repositories_scanned": [
+      "marty-credentials",
+      "marty-ui",
+      "marty-core",
+      "marty-integration-tests",
+      "Marty",
+      "marty-verifier",
+      "marty-cli",
+      "marty-authenticator",
+      "marty-demo-recorder",
+      "marty-subscriptions"
+    ],
+    "external_sdk_consumers": "unknown; no compatibility guarantee requested"
+  }
+}

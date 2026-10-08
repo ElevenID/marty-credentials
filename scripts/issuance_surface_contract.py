@@ -341,7 +341,8 @@ def _runtime_modes(sources: list[PythonSource]) -> list[dict[str, Any]]:
                 "uvicorn",
                 "main:app",
                 "--host",
-                "0.0.0.0",
+                # Frozen historical CLI argument, not a socket bind.
+                "0.0.0.0",  # nosec B104
                 "--port",
                 "8005",
             ],
@@ -359,7 +360,14 @@ def _runtime_modes(sources: list[PythonSource]) -> list[dict[str, Any]]:
 
 
 def build_contract() -> dict[str, Any]:
-    """Build the deterministic issuance surface contract from the parity oracle."""
+    """Read the frozen oracle after source retirement; inspect source if it returns."""
+    if not (ROOT / "services/issuance/main.py").exists():
+        if (ROOT / "services/issuance").exists():
+            raise ContractError("partial Python issuance source was reintroduced")
+        try:
+            return json.loads(MANIFEST.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ContractError("frozen issuance surface is unavailable") from error
     sources = _python_sources()
     routes = _http_routes(sources)
     grpc = _grpc_methods()
@@ -388,6 +396,8 @@ def _render(contract: dict[str, Any]) -> str:
 
 
 def write_contract() -> None:
+    if not (ROOT / "services/issuance/main.py").exists():
+        raise ContractError("frozen issuance surface cannot be regenerated after source retirement")
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(_render(build_contract()), encoding="utf-8")
 

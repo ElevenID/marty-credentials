@@ -134,8 +134,10 @@ def run(source, fixture):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", choices=("published", "checkout", "both"), default="both")
+    parser.add_argument("--source", choices=("published", "checkout", "both"), default="published")
     arguments = parser.parse_args()
+    if arguments.source != "published" and not (ROOT / "services/issuance").is_dir():
+        raise RuntimeError("checkout replay requires a pre-retirement worktree")
     fixture = json.loads(
         (ROOT / "contracts/canvas-worker-consumer-range-oracle.json").read_text(encoding="utf-8")
     )

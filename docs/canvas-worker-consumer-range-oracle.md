@@ -30,16 +30,15 @@ recovery, provider processing, readiness, routing, or beta/device acceptance.
 With Docker available, run from this repository:
 
 ```sh
-python scripts/run_canvas_worker_consumer_oracle.py --source both
+python scripts/run_canvas_worker_consumer_oracle.py --source published
 ```
 
 The standard-library runner pulls the exact two image digests and creates a new
-PostgreSQL container for **each** source mode: published modules, then this
-checkout's actual service modules using the published runtime dependencies.
-Neither mode replaces worker cycles, SQL repositories, or the loop. Repository
-wrappers record method entry/results; exception logging alone is suppressed to
-keep SQL details out of output. Checkout module paths are asserted, so a passing
-published import cannot masquerade as current-source evidence.
+PostgreSQL container to replay the published modules. It does not replace worker
+cycles, SQL repositories, or the loop. Repository wrappers record method
+entry/results; exception logging alone is suppressed to keep SQL details out of
+output. The former `checkout` and `both` modes require a pre-retirement worktree
+with the Python issuance service source.
 
 Each database has network mode `none`, no published ports, tmpfs-only data and
 synthetic credentials. The probe joins only that network namespace, is read-only,
@@ -52,11 +51,10 @@ Only those disposable databases and probe containers are removed; no production
 or beta containers, data or credentials are accessed. Raw SQL exceptions are not
 printed. Successful stdout reports bind source/fixture hashes and case counts.
 
-CI requires this PostgreSQL lane in `CI Gate` on PRs, merge groups and main. It
-executes all 36 cycles and all 3 loops twice (published and checkout); there are no
-optional database flags or skipped vectors. The pytest-discoverable unit test
-also validates fixture structure/provenance and replays all 36 startup inputs.
-Those unit tests alone are not evidence of downstream SQL behavior.
+The pre-retirement CI lane ran all 36 cycles and all 3 loops against both the
+published image and then-current checkout. Current CI retains the frozen fixture
+and its unit checks; this published-image replay remains available as a historical
+oracle. Those unit tests alone are not evidence of downstream SQL behavior.
 
 ## Rust implementation boundary
 
@@ -66,6 +64,6 @@ clamping. Cap OAuth before machine conversion; preserve lease-time validation
 on empty queues and loop survival. Use one shared Rust configuration owner and
 consume these exact portable contracts rather than copying expectations.
 
-The Python worker and every production consumer stay in place until the complete
-worker/all-consumer parity and cutover gates pass. This test-only patch changes
-no runtime, dependency/crypto pin, routing, release coordinate or deployment.
+The Python worker was retired after the Rust worker and consumer parity gates
+passed. This historical replay changes no runtime, dependency/crypto pin, routing,
+release coordinate or deployment.

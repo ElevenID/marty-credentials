@@ -14,15 +14,15 @@
         "source": "services/issuance/application/canvas_readiness.py"
       },
       {
-        "line": 33,
+        "line": 38,
         "source": "services/issuance/application/didcomm_owner.py"
       },
       {
-        "line": 37,
+        "line": 42,
         "source": "services/issuance/application/didcomm_owner.py"
       },
       {
-        "line": 169,
+        "line": 202,
         "source": "services/issuance/application/rust_integration.py"
       },
       {
@@ -46,6 +46,18 @@
         "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
       },
       {
+        "line": 160,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 161,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
+        "line": 165,
+        "source": "services/issuance/infrastructure/adapters/postgres_repository.py"
+      },
+      {
         "line": 12,
         "source": "services/issuance/infrastructure/api/signing_context.py"
       },
@@ -54,11 +66,11 @@
         "source": "services/issuance/infrastructure/api/signing_context.py"
       },
       {
-        "line": 38,
+        "line": 27,
         "source": "services/issuance/infrastructure/security/encryption.py"
       }
     ],
-    "environment_variable_count": 75,
+    "environment_variable_count": 76,
     "environment_variables": [
       "APP_ENV",
       "CANVAS_ADMIN_API_TOKEN",
@@ -97,40 +109,41 @@
       "CANVAS_SYNC_WORKER_POLL_SECONDS",
       "CORS_ALLOWED_ORIGINS",
       "CREDENTIAL_TEMPLATE_SERVICE_URL",
+      "CT_GRPC_TARGET",
       "DATABASE_URL",
+      "DIDCOMM_ALLOW_PRIVATE_IPS",
+      "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+      "DIDCOMM_ENCRYPTION_POLICY_FILE",
+      "DIDCOMM_TLS_CA_FILE",
+      "DIDCOMM_UNIVERSAL_RESOLVER_URL",
       "DOCUMENT_SIGNER_GRPC_TARGET",
       "ENVIRONMENT",
       "GRPC_CA_CERT",
       "GRPC_SERVICE_TOKEN",
       "GRPC_SERVICE_TOKEN_FILE",
       "GRPC_TLS_CA_CERT",
-      "ICAO_DOCUMENT_SIGNER_API_KEY",
-      "ICAO_DOCUMENT_SIGNER_URL",
+      "INTEGRATION_SECRET_MASTER_KEY_ENV",
       "ISSUANCE_API_KEY",
       "ISSUANCE_APPROVAL_POLICY_CACHE_SECONDS",
       "ISSUANCE_AUTH_SESSION_TTL_MINUTES",
       "ISSUANCE_GRPC_ENABLED",
+      "ISSUANCE_GRPC_PORT",
       "ISSUANCE_OFFER_TTL_MINUTES",
       "ISSUANCE_SERVICE_PORT",
       "ISSUER_BASE_URL",
       "ISSUER_DISPLAY_NAME",
       "LOG_LEVEL",
       "MARTY_DEFAULT_REVOCATION_PROFILE_ID",
-      "MARTY_ORG_ID",
-      "PERSONALIZATION_BUREAU_API_KEY",
-      "PERSONALIZATION_BUREAU_URL",
-      "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-      "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
-      "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+      "ORG_GRPC_TARGET",
       "REVOCATION_PROFILE_ID",
       "REVOCATION_PROFILE_SERVICE_URL",
       "RP_GRPC_TARGET",
       "SIGNING_KEYS_INTERNAL_API_KEY",
-      "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
       "SIGNING_KEYS_INTERNAL_URL",
       "TOKEN_RATE_LIMIT",
       "TOKEN_RATE_WINDOW",
       "UI_BASE_URL",
+      "UNIVERSAL_RESOLVER_URL",
       "VCDM_RELATED_RESOURCE_MAX_BYTES",
       "VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS",
       "VCDM_RELATED_RESOURCE_URLS",
@@ -141,6 +154,8 @@
     "method_count": 12,
     "methods": [
       {
+        "implementation_line": 708,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 44,
         "method": "ExchangeToken",
         "path": "/marty.ui.issuance.v1.IssuanceService/ExchangeToken",
@@ -150,6 +165,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1349,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 84,
         "method": "GetCredentialStatus",
         "path": "/marty.ui.issuance.v1.IssuanceService/GetCredentialStatus",
@@ -159,6 +176,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1189,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 54,
         "method": "GetOffer",
         "path": "/marty.ui.issuance.v1.IssuanceService/GetOffer",
@@ -168,6 +187,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1254,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 64,
         "method": "GetTransaction",
         "path": "/marty.ui.issuance.v1.IssuanceService/GetTransaction",
@@ -177,6 +198,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1438,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 94,
         "method": "HealthCheck",
         "path": "/marty.ui.issuance.v1.IssuanceService/HealthCheck",
@@ -186,6 +209,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 296,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 39,
         "method": "InitiateIssuance",
         "path": "/marty.ui.issuance.v1.IssuanceService/InitiateIssuance",
@@ -195,6 +220,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 899,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 49,
         "method": "IssueCredential",
         "path": "/marty.ui.issuance.v1.IssuanceService/IssueCredential",
@@ -204,6 +231,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1223,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 59,
         "method": "ListTransactions",
         "path": "/marty.ui.issuance.v1.IssuanceService/ListTransactions",
@@ -213,6 +242,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1346,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 79,
         "method": "ReinstateCredential",
         "path": "/marty.ui.issuance.v1.IssuanceService/ReinstateCredential",
@@ -222,6 +253,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1340,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 69,
         "method": "RevokeCredential",
         "path": "/marty.ui.issuance.v1.IssuanceService/RevokeCredential",
@@ -231,6 +264,8 @@
         "transport": "unary_unary"
       },
       {
+        "implementation_line": 1404,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 89,
         "method": "StreamCredentialEvents",
         "path": "/marty.ui.issuance.v1.IssuanceService/StreamCredentialEvents",
@@ -240,6 +275,8 @@
         "transport": "unary_stream"
       },
       {
+        "implementation_line": 1343,
+        "implementation_source": "services/issuance/infrastructure/adapters/grpc_adapter.py",
         "line": 74,
         "method": "SuspendCredential",
         "path": "/marty.ui.issuance.v1.IssuanceService/SuspendCredential",
@@ -248,14 +285,13 @@
         "source": "packages/marty_proto/v1/issuance_service_pb2_grpc.py",
         "transport": "unary_unary"
       }
-    ],
-    "owner": "marty-ui/rust/services/issuance/src/credential_management_grpc.rs"
+    ]
   },
   "http": {
-    "route_count": 95,
+    "route_count": 86,
     "routes": [
       {
-        "line": 946,
+        "line": 951,
         "method": "GET",
         "operation": "get_as_metadata",
         "path": "/.well-known/oauth-authorization-server",
@@ -263,7 +299,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 922,
+        "line": 927,
         "method": "GET",
         "operation": "get_org_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}",
@@ -271,7 +307,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 891,
+        "line": 896,
         "method": "GET",
         "operation": "get_org_apple_wallet_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet",
@@ -279,7 +315,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 860,
+        "line": 865,
         "method": "GET",
         "operation": "get_org_credential_manager_as_metadata",
         "path": "/.well-known/oauth-authorization-server/org/{org_id}/credential-manager",
@@ -287,7 +323,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 749,
+        "line": 754,
         "method": "GET",
         "operation": "get_issuer_metadata_root",
         "path": "/.well-known/openid-credential-issuer",
@@ -295,7 +331,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 594,
+        "line": 599,
         "method": "GET",
         "operation": "get_org_issuer_metadata",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}",
@@ -303,7 +339,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 524,
+        "line": 529,
         "method": "GET",
         "operation": "get_org_issuer_metadata_apple_wallet",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet",
@@ -311,7 +347,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 461,
+        "line": 466,
         "method": "GET",
         "operation": "get_org_issuer_metadata_credential_manager",
         "path": "/.well-known/openid-credential-issuer/org/{org_id}/credential-manager",
@@ -319,7 +355,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 830,
+        "line": 835,
         "method": "GET",
         "operation": "get_sd_jwt_vc_type_metadata",
         "path": "/credentials/{credential_type:path}",
@@ -327,7 +363,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 441,
+        "line": 446,
         "method": "GET",
         "operation": "health_check",
         "path": "/health",
@@ -335,7 +371,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 1047,
+        "line": 1063,
         "method": "GET",
         "operation": "get_application_template_owner",
         "path": "/internal/v1/resource-owners/application-templates/{template_id}",
@@ -343,7 +379,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 1011,
+        "line": 1027,
         "method": "GET",
         "operation": "get_issuance_transaction_owner",
         "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
@@ -351,7 +387,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 1029,
+        "line": 1045,
         "method": "GET",
         "operation": "get_issued_credential_owner",
         "path": "/internal/v1/resource-owners/issued-credentials/{credential_id}",
@@ -359,7 +395,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 445,
+        "line": 450,
         "method": "GET",
         "operation": "readiness_check",
         "path": "/ready",
@@ -367,7 +403,7 @@
         "source": "services/issuance/main.py"
       },
       {
-        "line": 6734,
+        "line": 6736,
         "method": "POST",
         "operation": "process_canvas_ags_score_event_route",
         "path": "/v1/integrations/canvas/ags/score-events",
@@ -375,7 +411,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3672,
+        "line": 3674,
         "method": "POST",
         "operation": "approve_canvas_application",
         "path": "/v1/integrations/canvas/applications/{application_id}/approve",
@@ -399,7 +435,7 @@
         "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
       },
       {
-        "line": 5186,
+        "line": 5188,
         "method": "POST",
         "operation": "validate_canvas_credentials_provider",
         "path": "/v1/integrations/canvas/canvas-credentials/validate",
@@ -439,7 +475,7 @@
         "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
       },
       {
-        "line": 6705,
+        "line": 6707,
         "method": "POST",
         "operation": "process_canvas_evidence_event_route",
         "path": "/v1/integrations/canvas/evidence-events",
@@ -447,7 +483,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6790,
+        "line": 6792,
         "method": "GET",
         "operation": "get_canvas_evidence_event_status",
         "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
@@ -471,7 +507,7 @@
         "source": "services/issuance/infrastructure/api/canvas_operations_routes.py"
       },
       {
-        "line": 5251,
+        "line": 5253,
         "method": "GET",
         "operation": "list_canvas_integration_secrets",
         "path": "/v1/integrations/canvas/integration-secrets",
@@ -479,7 +515,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5218,
+        "line": 5220,
         "method": "POST",
         "operation": "create_canvas_integration_secret",
         "path": "/v1/integrations/canvas/integration-secrets",
@@ -487,7 +523,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5301,
+        "line": 5303,
         "method": "DELETE",
         "operation": "delete_canvas_integration_secret",
         "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
@@ -495,7 +531,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5268,
+        "line": 5270,
         "method": "PUT",
         "operation": "update_canvas_integration_secret",
         "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
@@ -503,7 +539,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3763,
+        "line": 3765,
         "method": "GET",
         "operation": "get_public_canvas_lti_config",
         "path": "/v1/integrations/canvas/lti/config/{token}",
@@ -511,7 +547,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6973,
+        "line": 6975,
         "method": "GET",
         "operation": "get_canvas_lti_experience_session_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current",
@@ -519,7 +555,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7020,
+        "line": 7022,
         "method": "POST",
         "operation": "bootstrap_canvas_lti_experience_application_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
@@ -527,7 +563,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 7082,
+        "line": 7084,
         "method": "POST",
         "operation": "create_canvas_lti_deep_linking_response_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
@@ -535,7 +571,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6681,
+        "line": 6683,
         "method": "GET",
         "operation": "get_canvas_lti_evidence_status",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
@@ -543,7 +579,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6643,
+        "line": 6645,
         "method": "POST",
         "operation": "sync_canvas_lti_evidence",
         "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
@@ -551,7 +587,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6921,
+        "line": 6923,
         "method": "POST",
         "operation": "exchange_canvas_lti_experience_code_route",
         "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
@@ -559,7 +595,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3755,
+        "line": 3757,
         "method": "GET",
         "operation": "get_canvas_lti_tool_jwks",
         "path": "/v1/integrations/canvas/lti/jwks",
@@ -567,7 +603,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6884,
+        "line": 6886,
         "method": "POST",
         "operation": "launch_canvas_lti_experience_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience",
@@ -575,7 +611,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6849,
+        "line": 6851,
         "method": "POST",
         "operation": "initiate_canvas_lti_experience_login_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login",
@@ -583,7 +619,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6866,
+        "line": 6868,
         "method": "POST",
         "operation": "verify_canvas_lti_launch_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
@@ -591,7 +627,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6832,
+        "line": 6834,
         "method": "POST",
         "operation": "initiate_canvas_lti_login_route",
         "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
@@ -599,7 +635,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 6762,
+        "line": 6764,
         "method": "POST",
         "operation": "process_canvas_nrps_membership_event_route",
         "path": "/v1/integrations/canvas/nrps/membership-events",
@@ -607,7 +643,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4014,
+        "line": 4016,
         "method": "GET",
         "operation": "complete_canvas_oauth_connection",
         "path": "/v1/integrations/canvas/oauth/callback",
@@ -615,7 +651,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4441,
+        "line": 4443,
         "method": "GET",
         "operation": "list_canvas_platforms",
         "path": "/v1/integrations/canvas/platforms",
@@ -623,7 +659,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4424,
+        "line": 4426,
         "method": "POST",
         "operation": "create_canvas_platform",
         "path": "/v1/integrations/canvas/platforms",
@@ -631,7 +667,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4509,
+        "line": 4511,
         "method": "DELETE",
         "operation": "delete_canvas_platform",
         "path": "/v1/integrations/canvas/platforms/{platform_id}",
@@ -639,7 +675,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4461,
+        "line": 4463,
         "method": "GET",
         "operation": "get_canvas_platform",
         "path": "/v1/integrations/canvas/platforms/{platform_id}",
@@ -647,7 +683,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4480,
+        "line": 4482,
         "method": "PUT",
         "operation": "update_canvas_platform",
         "path": "/v1/integrations/canvas/platforms/{platform_id}",
@@ -655,7 +691,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4780,
+        "line": 4782,
         "method": "GET",
         "operation": "get_canvas_catalog",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog",
@@ -663,7 +699,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4649,
+        "line": 4651,
         "method": "POST",
         "operation": "refresh_canvas_platform_jwks",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
@@ -671,7 +707,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3810,
+        "line": 3812,
         "method": "PUT",
         "operation": "update_canvas_lti_installation",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
@@ -679,7 +715,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4312,
+        "line": 4314,
         "method": "DELETE",
         "operation": "disconnect_canvas_oauth_connection",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
@@ -687,7 +723,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3923,
+        "line": 3925,
         "method": "POST",
         "operation": "start_canvas_oauth_connection",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
@@ -695,7 +731,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4814,
+        "line": 4816,
         "method": "POST",
         "operation": "create_canvas_program_binding",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
@@ -703,7 +739,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3869,
+        "line": 3871,
         "method": "GET",
         "operation": "get_canvas_platform_readiness",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness",
@@ -711,7 +747,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 3789,
+        "line": 3791,
         "method": "GET",
         "operation": "get_canvas_lti_registration_config",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
@@ -719,7 +755,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4613,
+        "line": 4615,
         "method": "POST",
         "operation": "probe_canvas_platform_sandbox",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
@@ -727,7 +763,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4673,
+        "line": 4675,
         "method": "POST",
         "operation": "discover_canvas_scope",
         "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
@@ -735,7 +771,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4840,
+        "line": 4842,
         "method": "GET",
         "operation": "list_canvas_program_bindings",
         "path": "/v1/integrations/canvas/program-bindings",
@@ -743,7 +779,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4931,
+        "line": 4933,
         "method": "DELETE",
         "operation": "delete_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
@@ -751,7 +787,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4873,
+        "line": 4875,
         "method": "GET",
         "operation": "get_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
@@ -759,7 +795,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 4897,
+        "line": 4899,
         "method": "PUT",
         "operation": "update_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
@@ -767,7 +803,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5041,
+        "line": 5043,
         "method": "POST",
         "operation": "activate_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
@@ -775,7 +811,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5155,
+        "line": 5157,
         "method": "POST",
         "operation": "deactivate_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
@@ -783,7 +819,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 5022,
+        "line": 5024,
         "method": "POST",
         "operation": "validate_canvas_program_binding",
         "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
@@ -791,7 +827,7 @@
         "source": "services/issuance/infrastructure/api/canvas_routes.py"
       },
       {
-        "line": 2236,
+        "line": 2790,
         "method": "POST",
         "operation": "issue_credential",
         "path": "/v1/issuance/credential",
@@ -799,7 +835,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3467,
+        "line": 4406,
         "method": "POST",
         "operation": "reinstate_credential",
         "path": "/v1/issuance/credentials/{credential_id}/reinstate",
@@ -807,7 +843,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3375,
+        "line": 4314,
         "method": "POST",
         "operation": "revoke_credential",
         "path": "/v1/issuance/credentials/{credential_id}/revoke",
@@ -815,7 +851,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3522,
+        "line": 4461,
         "method": "GET",
         "operation": "get_credential_status",
         "path": "/v1/issuance/credentials/{credential_id}/status",
@@ -823,7 +859,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3415,
+        "line": 4354,
         "method": "POST",
         "operation": "suspend_credential",
         "path": "/v1/issuance/credentials/{credential_id}/suspend",
@@ -831,7 +867,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3087,
+        "line": 4007,
         "method": "POST",
         "operation": "didcomm_deliver",
         "path": "/v1/issuance/didcomm/deliver",
@@ -839,7 +875,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 1811,
+        "line": 2018,
         "method": "POST",
         "operation": "initiate_issuance",
         "path": "/v1/issuance/initiate",
@@ -847,7 +883,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 2204,
+        "line": 2758,
         "method": "POST",
         "operation": "nonce_endpoint",
         "path": "/v1/issuance/nonce",
@@ -855,7 +891,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3117,
+        "line": 4056,
         "method": "GET",
         "operation": "get_credential_offer",
         "path": "/v1/issuance/offers/{tx_id}",
@@ -863,7 +899,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 1932,
+        "line": 2486,
         "method": "POST",
         "operation": "exchange_token",
         "path": "/v1/issuance/token",
@@ -871,7 +907,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3142,
+        "line": 4081,
         "method": "GET",
         "operation": "list_transactions",
         "path": "/v1/issuance/transactions",
@@ -879,7 +915,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3170,
+        "line": 4109,
         "method": "GET",
         "operation": "get_transaction",
         "path": "/v1/issuance/transactions/{tx_id}",
@@ -887,7 +923,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3207,
+        "line": 4146,
         "method": "GET",
         "operation": "get_transaction_revocation_status",
         "path": "/v1/issuance/transactions/{tx_id}/revocation-status",
@@ -895,7 +931,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3551,
+        "line": 4490,
         "method": "GET",
         "operation": "list_issued_credentials",
         "path": "/v1/issued-credentials",
@@ -903,7 +939,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3571,
+        "line": 4510,
         "method": "GET",
         "operation": "get_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}",
@@ -911,7 +947,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3654,
+        "line": 4593,
         "method": "POST",
         "operation": "reinstate_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/reinstate",
@@ -919,7 +955,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3685,
+        "line": 4624,
         "method": "POST",
         "operation": "renew_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/renew",
@@ -927,7 +963,7 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3592,
+        "line": 4531,
         "method": "POST",
         "operation": "revoke_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/revoke",
@@ -935,84 +971,12 @@
         "source": "services/issuance/infrastructure/api/routes.py"
       },
       {
-        "line": 3623,
+        "line": 4562,
         "method": "POST",
         "operation": "suspend_issued_credential",
         "path": "/v1/issued-credentials/{credential_id}/suspend",
         "router": "issued_credential_router",
         "source": "services/issuance/infrastructure/api/routes.py"
-      },
-      {
-        "line": 201,
-        "method": "POST",
-        "operation": "create_passport_application",
-        "path": "/v1/passport/applications",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 350,
-        "method": "POST",
-        "operation": "activate_passport",
-        "path": "/v1/passport/applications/{application_id}/activate",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 262,
-        "method": "POST",
-        "operation": "generate_passport_data_groups",
-        "path": "/v1/passport/applications/{application_id}/generate-data-groups",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 248,
-        "method": "POST",
-        "operation": "generate_passport_sod",
-        "path": "/v1/passport/applications/{application_id}/generate-sod",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 309,
-        "method": "GET",
-        "operation": "get_passport_production_status",
-        "path": "/v1/passport/applications/{application_id}/production-status",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 324,
-        "method": "POST",
-        "operation": "record_passport_quality_result",
-        "path": "/v1/passport/applications/{application_id}/quality-verify",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 275,
-        "method": "POST",
-        "operation": "submit_passport_personalization",
-        "path": "/v1/passport/applications/{application_id}/submit-personalization",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 173,
-        "method": "GET",
-        "operation": "get_physical_document_capabilities",
-        "path": "/v1/passport/capabilities",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
-      },
-      {
-        "line": 366,
-        "method": "POST",
-        "operation": "personalization_webhook",
-        "path": "/v1/passport/webhooks/personalization",
-        "router": "physical_document_router",
-        "source": "services/issuance/infrastructure/api/physical_document_routes.py"
       }
     ]
   },
@@ -1020,7 +984,7 @@
     "heads": [
       "issuance_event_owner"
     ],
-    "revision_count": 46,
+    "revision_count": 48,
     "revisions": [
       {
         "down_revisions": [],
@@ -1112,7 +1076,15 @@
         "down_revisions": [
           "add_revocation_to_tx"
         ],
-        "line": 12,
+        "line": 13,
+        "revision": "add_issuer_signing_keys",
+        "source": "services/issuance/infrastructure/migrations/versions/20260330_1200_add_issuer_signing_keys_table.py"
+      },
+      {
+        "down_revisions": [
+          "add_issuer_signing_keys"
+        ],
+        "line": 13,
         "revision": "add_sd_claims_col",
         "source": "services/issuance/infrastructure/migrations/versions/20260405_2100_add_selective_disclosure_claims.py"
       },
@@ -1336,13 +1308,21 @@
         "down_revisions": [
           "issuance_tx_issuer_algorithm"
         ],
+        "line": 16,
+        "revision": "drop_legacy_issuer_keys",
+        "source": "services/issuance/infrastructure/migrations/versions/20260807_1000_drop_legacy_issuer_signing_keys.py"
+      },
+      {
+        "down_revisions": [
+          "drop_legacy_issuer_keys"
+        ],
         "line": 11,
         "revision": "issuance_offer_idempotency",
         "source": "services/issuance/infrastructure/migrations/versions/20260809_1000_add_issuance_idempotency.py"
       },
       {
         "down_revisions": [
-          "issuance_tx_issuer_algorithm"
+          "drop_legacy_issuer_keys"
         ],
         "line": 11,
         "revision": "oid4vci_ephemeral_caps",
@@ -1394,7 +1374,7 @@
       "735160618517"
     ]
   },
-  "purpose": "Retained Python HTTP inventory and native Rust issuance gRPC IDL",
+  "purpose": "Language-neutral feature floor for the native Rust issuance cutover",
   "runtime": {
     "modes": [
       {

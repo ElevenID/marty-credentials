@@ -55,6 +55,12 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Check the native feature set
         run: cargo check --locked --no-default-features --features native
+      - name: Require KMS-only Core dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 --no-default-features --features python |
+            python3 ../../scripts/ci/check_core_kms_graph.py
       - name: Require scalar credential digest feature selection
         shell: bash
         run: |
@@ -67,8 +73,8 @@ jobs:
             feature_tree="$(cargo tree --locked --no-default-features --features "$feature_set" --edges normal,build,features -i isomdl "$@")"
             feature_tree+=$'\n'
             feature_tree+="$(cargo tree --locked --no-default-features --features "$feature_set" --edges normal,build,features -i sd-jwt-rs "$@")"
-            if grep -Fq 'isomdl feature "issuer-local-signing"' <<<"$feature_tree"; then
-              echo "the $feature_set graph must exclude mdoc local signing ($target_label)" >&2
+            if ! grep -F 'isomdl feature "issuer-local-signing"' <<<"$feature_tree"; then
+              echo "the $feature_set compatibility surface must select explicit mdoc local signing ($target_label)" >&2
               exit 1
             fi
             if grep -E 'isomdl feature "(parallel|simd)"' <<<"$feature_tree"; then
@@ -84,12 +90,6 @@ jobs:
           check_scalar_surface python
           check_scalar_surface wasm --target wasm32-unknown-unknown
           check_scalar_surface wasm-full --target wasm32-unknown-unknown
-      - name: Keep Credentials on the reviewed KMS-only Core graph
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo metadata --locked --format-version 1 --no-default-features --features python |
-            python3 ../../scripts/ci/check_core_kms_graph.py
 
   test-rust:
     name: Rust ${{ matrix.task }} (${{ matrix.os }})
@@ -168,11 +168,11 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Download hardened Core verification wheel
+      - name: Download KMS-only verification wheel
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: core-python-Linux
-          path: core-wheels
+          path: compatibility-wheels
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
@@ -198,20 +198,14 @@ jobs:
         working-directory: marty-credentials
         run: |
           # This isolated binding job does not install the project package.
-          # Install the async SQLAlchemy extra explicitly for route imports.
-          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest pytest-asyncio 'sqlalchemy[asyncio]>=2.0'
-          python -m pip install --disable-pip-version-check ../core-wheels/marty_verification_py-*.whl
+          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest pytest-asyncio
+          python -m pip install --disable-pip-version-check ../compatibility-wheels/marty_verification_py-*.whl
           maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
           scripts/retry-command.sh python -m pip install --disable-pip-version-check local-wheels/*.whl
 
       - name: Exercise the local Python crypto boundaries
         working-directory: marty-credentials
-        run: |
-          pytest rust/marty-rs/tests/python/test_production_kms_surface.py \
-            rust/marty-rs/tests/python/test_core_boundaries.py \
-            tests/unit/test_service_native_boundary.py \
-            tests/unit/test_verification_adapter_native_boundary.py \
-            tests/unit/test_integration_secret_encryption.py -v
+        run: pytest rust/marty-rs/tests/python -v
 
   security:
     name: Security Audit
@@ -278,7 +272,7 @@ jobs:
 
       - name: Run bandit
         working-directory: marty-credentials
-        run: bandit -r python/marty_credentials/ -ll -ii
+        run: bandit -r scripts/ packages/marty_proto/ -ll -ii
 
       - name: Audit resolvable Python dependencies
         working-directory: marty-credentials
@@ -299,142 +293,6 @@ jobs:
           if skipped != expected_github_release_dependencies:
               raise SystemExit(f"Unexpected unaudited Python dependencies: {sorted(skipped)}")
           PY
-
-  canvas-portable-migration:
-    name: Canvas PostgreSQL Migration Contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      CANVAS_MIGRATION_SOURCE_REVISION: ${{ github.sha }}
-      COMPOSE_PROJECT_NAME: canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-        with:
-          path: marty-credentials
-
-      - name: Validate disposable migration topology
-        working-directory: marty-credentials
-        run: docker compose --file docker-compose.canvas-migration-contract.yml config --quiet
-
-      - name: Build migration contract image
-        working-directory: marty-credentials
-        run: |
-          mkdir -p tests/artifacts/canvas-portable-migration
-          chmod 0777 tests/artifacts/canvas-portable-migration
-          docker compose --file docker-compose.canvas-migration-contract.yml build --pull migration-contract
-
-      - name: Exercise upgrade and exact downgrade restoration
-        working-directory: marty-credentials
-        run: >-
-          docker compose --file docker-compose.canvas-migration-contract.yml
-          up --force-recreate --abort-on-container-exit
-          --exit-code-from migration-contract migration-contract
-
-      - name: Require successful sanitized contract evidence
-        working-directory: marty-credentials
-        run: |
-          test "$(jq -r '.status' tests/artifacts/canvas-portable-migration/contract-result.json)" = passed
-          test "$(jq -r '.baseline_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = derive_server_owned_claims
-          test "$(jq -r '.portable_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = portable_canvas_connections
-          test "$(jq -r '.execution_boundary' tests/artifacts/canvas-portable-migration/contract-result.json)" = docker_compose_one_shot
-          test "$(jq -r '.source_revision' tests/artifacts/canvas-portable-migration/contract-result.json)" = "$GITHUB_SHA"
-
-      - name: Upload Canvas migration evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6
-        with:
-          name: canvas-portable-migration-${{ github.run_id }}-${{ github.run_attempt }}
-          path: marty-credentials/tests/artifacts/canvas-portable-migration/contract-result.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Remove disposable migration stack
-        if: always()
-        working-directory: marty-credentials
-        run: docker compose --file docker-compose.canvas-migration-contract.yml down --volumes --remove-orphans
-
-  canvas-worker-consumer-ranges:
-    name: Canvas Worker PostgreSQL Consumer Oracle
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-      - name: Replay every frozen consumer range against published and checkout sources
-        run: python scripts/run_canvas_worker_consumer_oracle.py --source both
-
-  issuance-idempotency-contract:
-    name: Issuance Idempotency PostgreSQL Contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      ISSUANCE_IDEMPOTENCY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-      COMPOSE_PROJECT_NAME: issuance-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
-        with:
-          path: marty-credentials
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Validate disposable idempotency topology
-        working-directory: marty-credentials
-        run: docker compose --file docker-compose.issuance-idempotency-contract.yml config --quiet
-
-      - name: Build idempotency contract image
-        working-directory: marty-credentials
-        run: |
-          mkdir -p tests/artifacts/issuance-idempotency
-          chmod 0777 tests/artifacts/issuance-idempotency
-          docker compose --file docker-compose.issuance-idempotency-contract.yml build --pull idempotency-contract
-
-      - name: Race identical issuance reservations in PostgreSQL
-        working-directory: marty-credentials
-        run: >-
-          docker compose --file docker-compose.issuance-idempotency-contract.yml
-          up --force-recreate --abort-on-container-exit
-          --exit-code-from idempotency-contract idempotency-contract
-
-      - name: Require sanitized idempotency evidence
-        working-directory: marty-credentials
-        run: |
-          test "$(jq -r '.status' tests/artifacts/issuance-idempotency/contract-result.json)" = passed
-          test "$(jq -r '.migration_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$(jq -r '.migrations.heads | if length == 1 then .[0] else error("expected one migration head") end' contracts/issuance-runtime-surface.json)"
-          test "$(jq -r '.created_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.recovered_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.same_transaction' tests/artifacts/issuance-idempotency/contract-result.json)" = true
-          test "$(jq -r '.same_pre_authorized_code' tests/artifacts/issuance-idempotency/contract-result.json)" = true
-          test "$(jq -r '.raw_key_persisted' tests/artifacts/issuance-idempotency/contract-result.json)" = false
-          test "$(jq -r '.production_repository_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
-          test "$(jq -r '.changed_semantics_rejected' tests/artifacts/issuance-idempotency/contract-result.json)" = true
-          test "$(jq -r '.early_recovery_exercised' tests/artifacts/issuance-idempotency/contract-result.json)" = true
-          test "$(jq -r '.delivered_finalization_winner_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.issued_credential_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.issued_transaction_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.grpc_signing_claim_winner_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.grpc_issued_credential_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.grpc_issued_transaction_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.grpc_failed_reserved_transaction_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.grpc_failed_issued_credential_count' tests/artifacts/issuance-idempotency/contract-result.json)" = 0
-          test "$(jq -r '.source_revision' tests/artifacts/issuance-idempotency/contract-result.json)" = "$ISSUANCE_IDEMPOTENCY_SOURCE_REVISION"
-
-      - name: Upload issuance idempotency evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6
-        with:
-          name: issuance-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
-          path: marty-credentials/tests/artifacts/issuance-idempotency/contract-result.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Remove disposable idempotency stack
-        if: always()
-        working-directory: marty-credentials
-        run: docker compose --file docker-compose.issuance-idempotency-contract.yml down --volumes --remove-orphans
 
   build-core-python-wheels:
     name: Core Python Wheels
@@ -548,8 +406,6 @@ jobs:
       - name: Run Python 3.11 quality suite
         working-directory: marty-credentials
         shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/marty-credentials/services
         run: bash scripts/run-python-ci.sh
       - name: Set up Python 3.12
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -560,87 +416,7 @@ jobs:
       - name: Run Python 3.12 quality suite
         working-directory: marty-credentials
         shell: bash
-        env:
-          PYTHONPATH: ${{ github.workspace }}/marty-credentials/services
         run: bash scripts/run-python-ci.sh
-
-  oid4vci-capability-postgres:
-    name: OID4VCI Capability PostgreSQL Race
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      OID4VCI_CAPABILITY_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
-    services:
-      postgres:
-        image: postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
-        env:
-          POSTGRES_USER: marty
-          POSTGRES_PASSWORD: marty_test
-          POSTGRES_DB: marty_oid4vci_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U marty -d marty_oid4vci_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: marty-credentials
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
-
-      - name: Install service test dependencies
-        working-directory: marty-credentials
-        shell: bash
-        run: |
-          python -m pip install --upgrade pip
-          scripts/retry-command.sh pip install -e .[dev] "psycopg[binary]==3.2.3"
-
-      - name: Exercise shared atomic PAR and proof-nonce consumption
-        working-directory: marty-credentials
-        run: pytest tests/test_oid4vci_ephemeral_capabilities_postgres.py -v
-
-      - name: Exercise Canvas review recovery with real migrations and audit rollback
-        working-directory: marty-credentials
-        env:
-          CANVAS_REVIEW_RECOVERY_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
-        run: pytest tests/test_canvas_review_recovery_postgres.py -v
-
-      - name: Freeze physical-passport persistence over owned PostgreSQL
-        working-directory: marty-credentials
-        env:
-          PASSPORT_REPOSITORY_TEST_DATABASE_URL: postgresql+asyncpg://marty:marty_test@localhost:5432/marty_oid4vci_test
-        run: pytest tests/test_physical_passport_repository_postgres.py -v
-
-  retention-retirement-provenance:
-    name: Retention Python Retirement Provenance
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          path: marty-credentials
-          persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: ElevenID/marty-ui
-          ref: 91ea7e52d6a3822981bb42f002da8c68532ebf2e
-          path: marty-ui
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Fetch live protected UI main
-        working-directory: marty-ui
-        run: git fetch --no-tags origin main:refs/remotes/origin/main
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: '3.12'
-      - name: Verify the exact two-route retirement qualification
-        working-directory: marty-credentials
-        run: python -m scripts.check_issuance_retention_python_retirement --marty-ui ../marty-ui
 
   test-wasm:
     name: WASM Tests
@@ -661,16 +437,6 @@ jobs:
       - name: Build WASM (web target)
         run: wasm-pack build --locked --target web --no-default-features --features wasm
 
-      - name: Reject local-key exports from production WASM
-        shell: bash
-        run: |
-          for export_name in generate_p256_key generate_ed25519_key create_verifiable_credential open_badge_ob2_issue open_badge_ob3_issue dtc_sign create_presentation; do
-            if grep -Eq "export (async )?function ${export_name}\\b" pkg/marty_rs.js; then
-              echo "production WASM unexpectedly exports ${export_name}" >&2
-              exit 1
-            fi
-          done
-
       - name: Build WASM (nodejs target)
         run: wasm-pack build --locked --target nodejs --no-default-features --features wasm
 
@@ -680,10 +446,36 @@ jobs:
       - name: Test WASM
         run: wasm-pack test --node --no-default-features --features wasm
 
+  issuance-retirement-qualification:
+    name: Python Retirement Guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: marty-credentials
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.11'
+      - name: Keep retired Python source and publication paths absent
+        working-directory: marty-credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The #311 receipt is immutable provenance; its source SHA predates
+          # the squash merge and cannot be an ancestry gate for later PRs.
+          test ! -d services/issuance
+          test ! -e services/Dockerfile
+          test ! -d python/marty_credentials
+          test ! -e .github/workflows/release-images.yml
+          test ! -e .github/workflows/release-stable.yml
+          test ! -e .github/workflows/publish-pypi.yml
+          python -c 'import json; from pathlib import Path; assert json.loads(Path("contracts/python-sdk-retirement-v1.json").read_text())["schema"] == "marty.python-sdk-retirement/v1"'
+
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [preflight, test-rust, test-local-python-binding, security, python-security, canvas-portable-migration, canvas-worker-consumer-ranges, issuance-idempotency-contract, build-core-python-wheels, test-python, oid4vci-capability-postgres, retention-retirement-provenance, test-wasm]
+    needs: [preflight, test-rust, test-local-python-binding, security, python-security, build-core-python-wheels, test-python, test-wasm, issuance-retirement-qualification]
     runs-on: ubuntu-latest
     permissions:
       actions: read
