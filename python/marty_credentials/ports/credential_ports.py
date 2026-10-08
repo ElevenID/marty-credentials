@@ -20,25 +20,6 @@ class CredentialFormat(Enum):
     MDOC = "mso_mdoc"
 
 
-class KeyAlgorithm(Enum):
-    """Supported key algorithms."""
-
-    ES256 = "ES256"
-    ES384 = "ES384"
-    ES256K = "ES256K"
-    EDDSA = "EdDSA"
-
-
-@dataclass
-class KeyPair:
-    """Represents a cryptographic key pair."""
-
-    did: str
-    jwk_json: str
-    algorithm: KeyAlgorithm
-    created_at: datetime = field(default_factory=datetime.utcnow)
-
-
 @dataclass
 class CredentialSubject:
     """Credential subject with claims."""
@@ -112,17 +93,6 @@ class ICredentialWallet(Protocol):
     def store_credential(self, credential: CredentialData) -> str: ...
     def get_credential(self, credential_id: str) -> CredentialData | None: ...
     def list_credentials(self, credential_type: str | None = None) -> list[CredentialData]: ...
-
-    def create_presentation(
-        self,
-        holder_key: KeyPair,
-        credentials: list[CredentialData],
-        audience: str,
-        nonce: str | None = None,
-    ) -> str: ...
-
-    def redeem_offer(self, offer_uri: str, holder_key: KeyPair) -> CredentialData: ...
-
 
 @runtime_checkable
 class ICredentialVerifier(Protocol):

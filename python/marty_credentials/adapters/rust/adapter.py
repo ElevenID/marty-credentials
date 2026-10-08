@@ -8,13 +8,11 @@ Provides high-performance OID4VCI/OID4VP operations.
 import secrets
 from uuid import uuid4
 
-from marty_credentials.config import get_config
 from marty_credentials.native_backend import (
     NativeOperationError,
 )
 from marty_credentials.ports import (
     CredentialData,
-    KeyPair,
     PresentationRequest,
     VerificationResult,
 )
@@ -47,45 +45,6 @@ class RustCredentialWallet:
             del self._credentials[credential_id]
             return True
         return False
-
-    def create_presentation(
-        self,
-        holder_key: KeyPair,
-        credentials: list[CredentialData],
-        audience: str,
-        nonce: str | None = None,
-    ) -> str:
-        """Create a verifiable presentation using Rust."""
-        raise NativeOperationError(
-            "Legacy VP-JWT construction is not exposed by the supported native boundary; "
-            "use the OID4VP wallet flow"
-        )
-
-    def redeem_offer(self, offer_uri: str, holder_key: KeyPair) -> CredentialData:
-        """Redeem a credential offer from an issuer.
-
-        Note: This method requires network access and is implemented in Python
-        since the HTTP client logic is wallet-specific.
-        """
-        from urllib.parse import parse_qs, urlparse
-
-        parsed = urlparse(offer_uri)
-        params = parse_qs(parsed.query)
-
-        if "credential_offer_uri" not in params:
-            raise ValueError("Unsupported offer URI format")
-
-        config = get_config()
-        if not config.oauth_client_id or not config.oauth_client_secret:
-            raise ValueError(
-                "OAuth2 credentials not configured. Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET"
-            )
-
-        raise NativeOperationError(
-            "Credential offer redemption requires the canonical OID4VCI wallet flow; "
-            "the legacy implicit-token adapter is disabled"
-        )
-
 
 class RustCredentialVerifier:
     """Credential verifier implementation using marty-rs Rust library."""

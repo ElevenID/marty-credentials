@@ -12,8 +12,6 @@ __all__ = [
     "CredentialFormat",
     "CredentialOffer",
     "CredentialSubject",
-    "KeyAlgorithm",
-    "KeyPair",
     "PresentationRequest",
     "VerificationResult",
     # Port interfaces
@@ -28,8 +26,6 @@ _ports_symbols = {
     "CredentialSubject",
     "ICredentialVerifier",
     "ICredentialWallet",
-    "KeyAlgorithm",
-    "KeyPair",
     "PresentationRequest",
     "VerificationResult",
 }

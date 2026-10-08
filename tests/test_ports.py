@@ -7,7 +7,6 @@ from marty_credentials.ports import (
     CredentialSubject,
     ICredentialVerifier,
     ICredentialWallet,
-    KeyAlgorithm,
 )
 
 
@@ -18,11 +17,15 @@ def test_credential_format_values():
     assert CredentialFormat.MDOC.value == "mso_mdoc"
 
 
-def test_key_algorithm_values():
-    """Test KeyAlgorithm enum values."""
-    assert KeyAlgorithm.ES256.value == "ES256"
-    assert KeyAlgorithm.ES384.value == "ES384"
-    assert KeyAlgorithm.EDDSA.value == "EdDSA"
+def test_wallet_port_does_not_accept_raw_holder_keys():
+    """Legacy local-key methods cannot be called through the wallet port."""
+    import marty_credentials
+    import marty_credentials.ports as ports
+
+    assert not hasattr(marty_credentials, "KeyPair")
+    assert not hasattr(ports, "KeyPair")
+    assert not hasattr(ICredentialWallet, "create_presentation")
+    assert not hasattr(ICredentialWallet, "redeem_offer")
 
 
 def test_credential_subject_defaults():

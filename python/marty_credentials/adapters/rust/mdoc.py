@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from marty_credentials.native_backend import NativeOperationError
-
 
 @dataclass
 class MdocCredential:
@@ -33,31 +31,7 @@ class MdocCredential:
 
 
 class RustMdocPresenter:
-    """mDoc presentation handler using marty-rs Rust library.
-
-    Creates DeviceResponse presentations with selective disclosure.
-    """
-
-    def create_presentation(
-        self,
-        credential: MdocCredential,
-        disclosed_claims: dict[str, list[str]],
-        device_key_pem: str,
-    ) -> str:
-        """Create an mDoc presentation with selective disclosure.
-
-        Args:
-            credential: The mDoc to present
-            disclosed_claims: Namespace-to-claims mapping for disclosure
-            device_key_pem: PEM-encoded device private key
-
-        Returns:
-            Base64-encoded DeviceResponse CBOR
-        """
-        raise NativeOperationError(
-            "The legacy mDoc presentation contract lacks verifier-owned session state; "
-            "use the canonical ISO 18013/OID4VP wallet flow"
-        )
+    """mDoc disclosure request presets for the native wallet flow."""
 
     @staticmethod
     def age_verification_request() -> dict[str, list[str]]:

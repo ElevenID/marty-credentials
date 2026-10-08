@@ -8,11 +8,9 @@ by the remote-KMS-backed native service.
 import secrets
 from uuid import uuid4
 
-from marty_credentials.config import get_config
 from marty_credentials.native_backend import NativeOperationError
 from marty_credentials.ports.credential_ports import (
     CredentialData,
-    KeyPair,
     PresentationRequest,
     VerificationResult,
 )
@@ -38,42 +36,6 @@ class SpruceIDCredentialWallet:
         if credential_type is None:
             return list(self._credentials.values())
         return [c for c in self._credentials.values() if credential_type in c.types]
-
-    def create_presentation(
-        self,
-        holder_key: KeyPair,
-        credentials: list[CredentialData],
-        audience: str,
-        nonce: str | None = None,
-    ) -> str:
-        """Create a verifiable presentation."""
-        raise NativeOperationError(
-            "Legacy VP-JWT construction is not exposed by the supported native boundary; "
-            "use the OID4VP wallet flow"
-        )
-
-    def redeem_offer(self, offer_uri: str, holder_key: KeyPair) -> CredentialData:
-        """
-        Redeem a credential offer from an issuer.
-        """
-        from urllib.parse import parse_qs, urlparse
-
-        # Parse offer URI
-        parsed = urlparse(offer_uri)
-        params = parse_qs(parsed.query)
-
-        if "credential_offer_uri" not in params:
-            raise ValueError("Unsupported offer URI format")
-
-        config = get_config()
-        if not config.oauth_client_id or not config.oauth_client_secret:
-            raise ValueError(
-                "OAuth2 credentials not configured. Set OAUTH_CLIENT_ID and OAUTH_CLIENT_SECRET"
-            )
-        raise NativeOperationError(
-            "Credential offer redemption requires the canonical OID4VCI wallet flow; "
-            "the legacy implicit-token adapter is disabled"
-        )
 
 
 class SpruceIDCredentialVerifier:

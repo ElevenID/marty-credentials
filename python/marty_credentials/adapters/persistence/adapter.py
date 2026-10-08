@@ -144,12 +144,3 @@ class SQLAlchemyCredentialWallet:
             return True
 
         return deleted
-
-    # Delegate presentation methods to underlying implementation
-    def create_presentation(self, *args, **kwargs):
-        """Delegate to underlying implementation."""
-        return self.delegate.create_presentation(*args, **kwargs)
-
-    def redeem_offer(self, *args, **kwargs):
-        """Delegate to underlying implementation."""
-        return self.delegate.redeem_offer(*args, **kwargs)
