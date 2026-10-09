@@ -26,6 +26,7 @@ default = ["python"]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",
+    "marty-verification/icao-client",
     "dep:marty-oid4vci",
     "sd-jwt-rs",
     "jsonwebtoken",
@@ -38,6 +39,7 @@ python = [
     "pyo3",
     "dep:marty-crypto",
     "dep:marty-verification",
+    "marty-verification/icao-client",
     "dep:marty-oid4vci",
     "tokio",
     "isomdl",

@@ -13,7 +13,8 @@ repository = "https://github.com/ElevenID/marty-credentials"
 marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
 # Core crates from marty-core
 marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "bbs-verification"] }
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "iaca", "csca", "icao-client"] }
+# Browser builds use the verification core; native bindings enable the LDAP-backed ICAO client.
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "iaca", "csca"] }
 marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
 
 # PEM encoding
