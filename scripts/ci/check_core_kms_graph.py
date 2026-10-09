@@ -4,10 +4,11 @@ import json
 import sys
 
 
-CORE_REVISION = "6855721d7e863682f18fad613ec46f9f4975e33e"
+CORE_REVISION = "7c50d31bf0b1d969f42f8cb1125995f1c99cb96c"
+CORE_REF = "7c50d31"
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
-    f"?rev={CORE_REVISION}#{CORE_REVISION}"
+    f"?rev={CORE_REF}#{CORE_REVISION}"
 )
 CORE_CRATES = {
     "marty-canonical-digest",
