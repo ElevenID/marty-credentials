@@ -10,16 +10,16 @@ rust-version = "1.95"
 repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
-marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
+marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e" }
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "bbs-verification"] }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "bbs-verification"] }
 # Browser builds use the verification core; native bindings enable the LDAP-backed ICAO client.
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "iaca", "csca"] }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "iaca", "csca"] }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
