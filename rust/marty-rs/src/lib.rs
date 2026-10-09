@@ -1,6 +1,3 @@
-#[cfg(feature = "python")]
-use base64::Engine;
-
 // Error module (only for python - has tracing dependencies)
 #[cfg(feature = "python")]
 mod error;
@@ -49,7 +46,6 @@ pub use marty_verification::{
 
 #[cfg(feature = "python")]
 mod python_bindings {
-    use super::*;
     use pyo3::prelude::*;
 
     /// Formats the sum of two numbers as string.
@@ -69,75 +65,6 @@ mod python_bindings {
     pub fn check_isomdl() -> PyResult<String> {
         let _ = isomdl::definitions::x509::trust_anchor::TrustAnchorRegistry::default();
         Ok("isomdl is linked".to_string())
-    }
-
-    /// Verifies a JWT structure and claims
-    #[pyfunction]
-    #[pyo3(signature = (jwt, expected_issuer=None, expected_audience=None))]
-    pub fn verify_jwt(
-        jwt: String,
-        expected_issuer: Option<String>,
-        expected_audience: Option<String>,
-    ) -> PyResult<(bool, String, String)> {
-        use chrono::Utc;
-
-        let parts: Vec<&str> = jwt.split('.').collect();
-        if parts.len() != 3 {
-            return Ok((false, "{}".to_string(), "Invalid JWT format".to_string()));
-        }
-
-        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(parts[1])
-            .map_err(|_| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid base64 in payload")
-            })?;
-
-        let payload: serde_json::Value = serde_json::from_slice(&payload_bytes).map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>("Invalid JSON in payload")
-        })?;
-
-        let payload_json = serde_json::to_string(&payload).map_err(|e| {
-            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
-                "Failed to serialize payload: {}",
-                e
-            ))
-        })?;
-
-        if let Some(exp) = payload.get("exp").and_then(|v| v.as_i64()) {
-            if Utc::now().timestamp() > exp {
-                return Ok((false, payload_json, "JWT has expired".to_string()));
-            }
-        }
-
-        if let Some(expected) = expected_issuer {
-            if let Some(iss) = payload.get("iss").and_then(|v| v.as_str()) {
-                if iss != expected {
-                    return Ok((
-                        false,
-                        payload_json,
-                        format!("Issuer mismatch: expected {}, got {}", expected, iss),
-                    ));
-                }
-            } else {
-                return Ok((false, payload_json, "Missing issuer claim".to_string()));
-            }
-        }
-
-        if let Some(expected) = expected_audience {
-            if let Some(aud) = payload.get("aud").and_then(|v| v.as_str()) {
-                if aud != expected {
-                    return Ok((
-                        false,
-                        payload_json,
-                        format!("Audience mismatch: expected {}, got {}", expected, aud),
-                    ));
-                }
-            } else {
-                return Ok((false, payload_json, "Missing audience claim".to_string()));
-            }
-        }
-
-        Ok((true, payload_json, "".to_string()))
     }
 
     /// Prepare a VCDM v2 EdDSA Data Integrity credential for issuer-DID signing.
@@ -196,7 +123,6 @@ mod python_bindings {
         m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
         m.add_function(wrap_pyfunction!(get_ssi_version, m)?)?;
         m.add_function(wrap_pyfunction!(check_isomdl, m)?)?;
-        m.add_function(wrap_pyfunction!(verify_jwt, m)?)?;
         m.add_function(wrap_pyfunction!(prepare_vcdm_data_integrity_credential, m)?)?;
         m.add_function(wrap_pyfunction!(
             complete_vcdm_data_integrity_credential,

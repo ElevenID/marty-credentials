@@ -18,6 +18,7 @@ def test_production_module_excludes_local_private_key_operations():
         "bbs_sign",
         "issue_emrtd_passport",
         "issue_emrtd_passport_self_signed",
+        "verify_jwt",  # Claims-only parsing must not masquerade as signature verification.
     }
 
     assert forbidden.isdisjoint(dir(_marty_rs))
@@ -27,5 +28,6 @@ def test_production_module_excludes_local_private_key_operations():
         "SdJwtVerifier",
         "verify_sd_jwt",
         "bbs_verify",
+        "verify_vcdm_jwt",
     ):
         assert hasattr(_marty_rs, safe_name), safe_name
