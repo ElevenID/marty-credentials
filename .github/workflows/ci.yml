@@ -73,8 +73,8 @@ jobs:
             feature_tree="$(cargo tree --locked --no-default-features --features "$feature_set" --edges normal,build,features -i isomdl "$@")"
             feature_tree+=$'\n'
             feature_tree+="$(cargo tree --locked --no-default-features --features "$feature_set" --edges normal,build,features -i sd-jwt-rs "$@")"
-            if ! grep -F 'isomdl feature "issuer-local-signing"' <<<"$feature_tree"; then
-              echo "the $feature_set compatibility surface must select explicit mdoc local signing ($target_label)" >&2
+            if grep -F 'isomdl feature "issuer-local-signing"' <<<"$feature_tree"; then
+              echo "the $feature_set KMS-only surface must exclude mdoc local signing ($target_label)" >&2
               exit 1
             fi
             if grep -E 'isomdl feature "(parallel|simd)"' <<<"$feature_tree"; then
