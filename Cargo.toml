@@ -10,16 +10,16 @@ rust-version = "1.95"
 repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
-marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e" }
+marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "7c50d31" }
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "bbs-verification"] }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "7c50d31", default-features = false, features = ["kms-only", "bbs-verification"] }
 # Browser builds use the verification core; native bindings enable the LDAP-backed ICAO client.
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "iaca", "csca"] }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e" }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "7c50d31", default-features = false, features = ["kms-only", "iaca", "csca"] }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "7c50d31" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "7c50d31", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
