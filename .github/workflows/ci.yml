@@ -111,7 +111,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: matrix.task == 'tests'
-        uses: taiki-e/install-action@7623a79cdfecb99d681017af368ca353d9f49bb5
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad
         with:
           tool: cargo-nextest@0.9.143
 
@@ -164,7 +164,7 @@ jobs:
           python-version: '3.11'
 
       - name: Download retained verification compatibility wheel
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: core-python-Linux
           path: compatibility-wheels
@@ -379,7 +379,7 @@ jobs:
           test "$(find core-wheels -maxdepth 1 -name 'marty_rs-*.whl' | wc -l)" -eq 1
           test "$(find core-wheels -maxdepth 1 -name 'marty_verification_py-*.whl' | wc -l)" -eq 1
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: core-python-${{ runner.os }}
           path: core-wheels/*.whl
@@ -399,7 +399,7 @@ jobs:
         with:
           path: marty-credentials
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: core-python-${{ runner.os }}
           path: marty-credentials/release-deps
