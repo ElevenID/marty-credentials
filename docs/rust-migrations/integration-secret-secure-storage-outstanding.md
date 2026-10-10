@@ -1,29 +1,19 @@
-# INTEGRATION-SECRET-KMS-001: opaque integration-secret storage
+# INTEGRATION-SECRET-KMS-001: remote integration-secret custody
 
-Status: deferred; required before advancing the production
-`marty-verification` wheel beyond `v0.1.60`.
+Status: active KMS-only hardening (2026-10-07). The cross-repository tracker
+is `marty-ui/docs/remote-kms-hardening-plan.md` on the integration worktree.
 
-Credentials persists Canvas and other organization integration secrets as
-`base64(nonce || AES-256-GCM ciphertext || tag)`. The current adapter supplies
-the 32-byte deployment master key to the compatibility verification binding.
-Core `v0.2.0` intentionally removes generic random-byte and AES-GCM operations
-from its production Python surface, so replacing that wheel without another
-storage boundary would disable secret creation and retrieval.
+The Credentials Python issuance service and SDK have been retired on main.
+The native Rust issuance and Canvas worker owners ask Signing Keys to encrypt
+and decrypt purpose-bound integration-secret envelopes over authenticated TLS.
+Signing Keys delegates the application key to OpenBao; neither client holds an
+AES master key or a local encryption fallback. Native startup proves a remote
+round trip before accepting stored rows. The supported self-host and Kubernetes
+deployments give clients only the server CA and give Signing Keys its separate
+TLS server leaf/key. Existing beta data may be discarded.
 
-Hosted CI reproduces the retained `v0.1.60` wheel from its exact source commit
-with `pyo3/extension-module,python,iaca,csca,eudi`. That release predates and
-does not define `local-key-operations`; adding that feature to its build command
-is a fail-closed CI error, not a hardening measure. Export validation must keep
-proving `generate_random_bytes`, `aes_gcm_encrypt`, and `aes_gcm_decrypt`.
-
-Design and qualify a purpose-specific Rust secure-storage API with opaque key
-custody. It must preserve existing ciphertext reads, fail-closed authentication
-and malformed-input behavior, tenant/purpose separation, rotation and recovery,
-and atomic repository semantics. Migration needs language-neutral vectors for
-the existing envelope plus restart, rotation, wrong-key and tamper tests. Only
-after deployed data is readable through that boundary may the compatibility
-wheel and raw master-key adapter be removed.
-
-This item is independent of DIDCOMM-KMS-001. It does not authorize changing
-DIDComm authcrypt behavior, reintroducing issuer private-key operations, or
-claiming that `marty-verification` `v0.1.60` is KMS-only.
+Remaining release evidence: prove native consumers against one clean KMS-backed
+database, cross-tenant and purpose rejection, tamper handling, rotation,
+recovery and exact-image configuration. Retire stale Python conformance
+fixtures and scripts. No legacy ciphertext readability or migration gate
+applies.

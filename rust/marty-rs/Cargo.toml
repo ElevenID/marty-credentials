@@ -11,6 +11,10 @@ name = "_marty_rs"
 # cdylib for both PyO3 and wasm-bindgen
 crate-type = ["cdylib", "rlib"]
 
+[[test]]
+name = "isomdl_digest_semantics"
+required-features = ["python"]
+
 # wasm-pack currently bundles a Binaryen validator that does not recognize
 # the bulk-memory instructions emitted by the supported Rust toolchain.
 # Keep rustc/wasm-bindgen validation enabled and skip only that optimizer.
@@ -19,21 +23,11 @@ wasm-opt = false
 
 [features]
 default = ["python"]
-# The separately shipped local compatibility binding still exposes these
-# non-production issuer/demo capabilities against its older pinned Core API.
-# Production services install the canonical KMS-only marty-rs wheel recorded
-# in release/dependencies.json instead.
-local-key-operations = [
-    "marty-oid4vci/local-key-operations",
-    "marty-verification/local-key-operations",
-]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",
-    "marty-verification/default",
-    "marty-verification/authority-issuance",
+    "marty-verification/icao-client",
     "dep:marty-oid4vci",
-    "local-key-operations",
     "sd-jwt-rs",
     "jsonwebtoken",
     "dep:jsonwebtoken-legacy",
@@ -45,10 +39,8 @@ python = [
     "pyo3",
     "dep:marty-crypto",
     "dep:marty-verification",
-    "marty-verification/default",
-    "marty-verification/authority-issuance",
+    "marty-verification/icao-client",
     "dep:marty-oid4vci",
-    "local-key-operations",
     "tokio",
     "isomdl",
     "coset",
@@ -70,9 +62,7 @@ python = [
 wasm = [
     "dep:marty-crypto",
     "dep:marty-verification",
-    "marty-verification/authority-issuance",
     "dep:marty-oid4vci",
-    "local-key-operations",
     "wasm-bindgen",
     "wasm-bindgen-futures",
     "js-sys",

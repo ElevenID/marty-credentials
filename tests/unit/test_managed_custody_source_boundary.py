@@ -23,7 +23,7 @@ def test_duplicate_python_status_list_package_is_absent() -> None:
 
 
 def test_python_issuance_secret_storage_is_retired() -> None:
-    assert not (ROOT / "services" / "issuance").exists()
+    assert not list((ROOT / "services" / "issuance").rglob("*.py"))
 
 
 def test_issuance_service_has_no_database_or_process_local_issuer_signer() -> None:
