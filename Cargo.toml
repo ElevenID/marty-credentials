@@ -25,8 +25,6 @@ marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "6acba9d
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
 
 # SSI ecosystem
-ssi-crypto = { version = "0.2.1", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1"] }
-ssi-jwk = { version = "0.4.0", default-features = false, features = ["secp256k1", "ed25519", "secp256r1", "secp384r1"] }
 ssi-status = { version = "0.8.1", default-features = false }
 isomdl = { version = "0.3", default-features = false }
 coset = { version = "0.4" }
@@ -44,9 +42,7 @@ serde_json = { version = "1.0" }
 ciborium = { version = "0.2" }
 
 # Crypto
-bs58 = { version = "0.5" }
 base64 = { version = "0.23" }
-rsa = { version = "0.9" }
 rand = { version = "0.10" }
 
 # Async
