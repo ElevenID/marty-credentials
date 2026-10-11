@@ -59,8 +59,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --locked --format-version 1 --no-default-features --features python |
-            python3 ../../scripts/ci/check_core_kms_graph.py
+          for mode in python native wasm; do
+            platform=()
+            if [[ "$mode" == wasm ]]; then
+              platform=(--filter-platform wasm32-unknown-unknown)
+            fi
+            cargo metadata --locked --format-version 1 "${platform[@]}" --no-default-features --features "$mode" |
+              python3 ../../scripts/ci/check_core_kms_graph.py --mode "$mode"
+          done
       - name: Require scalar credential digest feature selection
         shell: bash
         run: |

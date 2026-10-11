@@ -1,8 +1,8 @@
 """Reject Credentials binding graphs that restore Core issuer-key custody."""
 
+import argparse
 import json
 import sys
-
 
 CORE_REVISION = "6acba9d9e079cfba7ae9f94356899b29c93466b0"
 CORE_REF = "6acba9d"
@@ -18,6 +18,11 @@ CORE_CRATES = {
     "marty-status",
     "marty-verification",
 }
+CORE_CRATES_BY_MODE = {
+    "python": CORE_CRATES,
+    "native": CORE_CRATES - {"marty-python-adapters", "marty-status"},
+    "wasm": CORE_CRATES - {"marty-python-adapters", "marty-status"},
+}
 KMS_ONLY_CRATES = {"marty-crypto", "marty-oid4vci", "marty-verification"}
 FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
 ISOMDL_REVISION = "784a52943469622873c7ae3200dbc11e89d6bd8e"
@@ -27,7 +32,7 @@ ISOMDL_SOURCE = (
 )
 
 
-def check(metadata: dict) -> None:
+def check(metadata: dict, mode: str = "python") -> None:
     nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
     core = [
         package
@@ -35,8 +40,9 @@ def check(metadata: dict) -> None:
         if "github.com/ElevenID/marty-core" in (package.get("source") or "")
     ]
     names = [package["name"] for package in core]
-    if len(names) != len(CORE_CRATES) or set(names) != CORE_CRATES:
-        raise ValueError(f"Credentials Core packages changed: {sorted(names)}")
+    expected = CORE_CRATES_BY_MODE[mode]
+    if len(names) != len(expected) or set(names) != expected:
+        raise ValueError(f"Credentials {mode} Core packages changed: {sorted(names)}")
 
     for package in core:
         name = package["name"]
@@ -61,7 +67,10 @@ def check(metadata: dict) -> None:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=CORE_CRATES_BY_MODE, default="python")
+    args = parser.parse_args()
     try:
-        check(json.load(sys.stdin))
+        check(json.load(sys.stdin), args.mode)
     except (KeyError, ValueError) as error:
         raise SystemExit(str(error)) from error
