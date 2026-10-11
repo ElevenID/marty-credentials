@@ -4,8 +4,8 @@ import argparse
 import json
 import sys
 
-CORE_REVISION = "6acba9d9e079cfba7ae9f94356899b29c93466b0"
-CORE_REF = "6acba9d"
+CORE_REVISION = "08489a2aa5c6215878c38f64f4b257b79e164c14"
+CORE_REF = "08489a2"
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
     f"?rev={CORE_REF}#{CORE_REVISION}"
@@ -17,6 +17,7 @@ CORE_CRATES = {
     "marty-python-adapters",
     "marty-status",
     "marty-verification",
+    "marty-x509-verification",
 }
 CORE_CRATES_BY_MODE = {
     "python": CORE_CRATES,
@@ -46,7 +47,7 @@ def check(metadata: dict, mode: str = "python") -> None:
 
     for package in core:
         name = package["name"]
-        if package["version"] != "0.2.0" or package["source"] != CORE_SOURCE:
+        if package["version"] != "0.2.2" or package["source"] != CORE_SOURCE:
             raise ValueError(f"{name} is not pinned to reviewed KMS-only Core")
         features = set(nodes[package["id"]]["features"])
         forbidden = features & FORBIDDEN_FEATURES
