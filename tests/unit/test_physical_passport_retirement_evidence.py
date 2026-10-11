@@ -1482,7 +1482,12 @@ def test_merged_qualification_uses_exact_protected_merge_bytes(
 
 
 def test_permanent_source_gate_rejects_reintroduced_python_issuance() -> None:
-    assert not (Path(__file__).resolve().parents[2] / "services" / "issuance").exists()
+    legacy_source = Path(__file__).resolve().parents[2] / "services" / "issuance"
+    # Retired Windows worktrees may retain ignored bytecode after source removal.
+    assert not any(
+        path.is_file() and path.suffix != ".pyc"
+        for path in legacy_source.rglob("*")
+    )
 
 
 def test_protected_source_rejects_fabricated_hashes(
