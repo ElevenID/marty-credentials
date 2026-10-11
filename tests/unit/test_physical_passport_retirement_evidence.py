@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from scripts import check_physical_passport_python_retirement as gate
+from tests.retired_python_source import has_source
 
 COMMIT = "a" * 40
 STACK_DIGEST = "b" * 64
@@ -1483,11 +1484,7 @@ def test_merged_qualification_uses_exact_protected_merge_bytes(
 
 def test_permanent_source_gate_rejects_reintroduced_python_issuance() -> None:
     legacy_source = Path(__file__).resolve().parents[2] / "services" / "issuance"
-    # Retired Windows worktrees may retain ignored bytecode after source removal.
-    assert not any(
-        path.is_file() and path.suffix != ".pyc"
-        for path in legacy_source.rglob("*")
-    )
+    assert not has_source(legacy_source)
 
 
 def test_protected_source_rejects_fabricated_hashes(

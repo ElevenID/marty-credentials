@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from scripts import check_physical_passport_python_retirement as passport_gate
+from tests.retired_python_source import has_source
 
 ROOT = Path(__file__).resolve().parents[2]
 RETIRED = {
@@ -73,7 +74,7 @@ def _assert_passport_qualification_shape(candidate: dict) -> None:
 
 
 def test_retention_and_passport_python_owner_is_removed() -> None:
-    assert not (ROOT / "services" / "issuance").exists()
+    assert not has_source(ROOT / "services" / "issuance")
 
 
 def test_frozen_retention_contract_remains_available_to_rust() -> None:
