@@ -13,3 +13,7 @@ def test_retired_owner_gate_ignores_bytecode_but_rejects_reintroduced_source(
 
     (tmp_path / "issuer.py").write_text("issuer_private_key = True", encoding="utf-8")
     assert has_source(tmp_path)
+
+    (tmp_path / "issuer.py").unlink()
+    (tmp_path / "issuer.pyc").write_bytes(b"sourceless bytecode")
+    assert has_source(tmp_path)
