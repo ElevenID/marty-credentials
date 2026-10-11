@@ -43,12 +43,5 @@
         "sha256": "e97862835e8c92972ecf6e82cf550d05d19c0839d62723e37d80b75e23a8fe8b"
       }
     }
-  },
-  "marty-common": {
-    "version": "0.2.6",
-    "repository": "ElevenID/Marty",
-    "tag": "marty-common-v0.2.6",
-    "asset": "marty_common-0.2.6-py3-none-any.whl",
-    "sha256": "82236ca999fb0d28eec7a5709667c5e3b2f32abd57e518c1b1e2e9e5d0ac2f1a"
   }
 }

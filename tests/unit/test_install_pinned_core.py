@@ -15,6 +15,16 @@ install_pinned_core = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(install_pinned_core)
 
 
+def test_release_manifest_contains_only_canonical_core_wheels() -> None:
+    repository = SCRIPT.parents[1]
+    manifest = json.loads((repository / "release" / "dependencies.json").read_text(encoding="utf-8"))
+
+    assert set(manifest) == {"schema", *install_pinned_core.CORE_WHEELS}
+    for dependency_name in install_pinned_core.CORE_WHEELS:
+        for target in ("linux-x86_64", "macos-arm64", "windows-x86_64"):
+            install_pinned_core.load_core_dependency(repository, target, dependency_name)
+
+
 def _repository(tmp_path: Path, *, digest: str = "a" * 64) -> Path:
     release = tmp_path / "release"
     release.mkdir()
