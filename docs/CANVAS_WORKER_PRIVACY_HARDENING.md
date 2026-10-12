@@ -83,18 +83,24 @@ Existing warning/info messages and cancellation/fencing behavior are retained.
 
 The original local run loaded a globally installed `marty-rs==0.1.60`, which
 does not implement the issuer-public-JWK prepare signatures required here.
-Credentials now pins the canonical `marty-rs` source build and immutable
-release wheel to Core `v0.2.0` at
+At this historical checkpoint, Credentials pinned the canonical `marty-rs`
+source build and immutable release wheel to Core `v0.2.0` at
 `7d501aea7a2a815b4cf842ab37ff729520d8191c`, with each platform asset hash
 recorded in `release/dependencies.json`. CI builds that binding with the
 KMS-only boundary and without the retired local-key feature flags. The
-independently named `marty-verification` wheel remains pinned to `v0.1.60` at
+independently named `marty-verification` wheel was pinned to `v0.1.60` at
 `dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f` to preserve the existing
 integration-secret AES-GCM format until an opaque secure-storage API is
 qualified. See `INTEGRATION-SECRET-KMS-001`; this compatibility pin does not
 authorize private issuer-key use. A stale global wheel is not qualification
 evidence and must not trigger a fallback. Require fresh pinned-build CI before
 aggregate adoption; do not hide a binding mismatch by changing assertions.
+
+2026-10-11 KMS-only retirement: the historical release-wheel pins above and
+their unused download installer were removed. Credentials CI now builds both
+Core Python wheels from the same reviewed Core revision as its Rust binding
+graph, with `kms-only` features. This old compatibility note records earlier
+evidence; it is no longer an installation instruction.
 
 After protected landing, record the exact revised source provenance and capture
 the hardened language-neutral privacy observations for Rust comparison. Retain

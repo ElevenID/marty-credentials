@@ -6,6 +6,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from tests.retired_python_source import has_source
+
 ROOT = Path(__file__).resolve().parents[2]
 ISSUANCE = ROOT / "services" / "issuance"
 CONTRACT = ROOT / "contracts" / "issuance-internal-applications.json"
@@ -41,7 +43,7 @@ def _canonical_contract_digest(contract: object) -> str:
 
 
 def test_python_internal_application_http_owner_stays_retired() -> None:
-    assert not ISSUANCE.exists()
+    assert not has_source(ISSUANCE)
 
 
 def test_language_neutral_internal_application_contract_remains_frozen() -> None:

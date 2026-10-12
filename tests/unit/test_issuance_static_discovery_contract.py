@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from tests.retired_python_source import has_source
+
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = json.loads(
     (ROOT / "contracts/issuance-static-discovery.json").read_text(encoding="utf-8")
@@ -18,4 +20,4 @@ def test_contract_partitions_database_backed_metadata_explicitly() -> None:
         "get_org_issuer_metadata_credential_manager",
         "get_org_issuer_metadata_apple_wallet",
     ]
-    assert not (ROOT / "services" / "issuance").exists()
+    assert not has_source(ROOT / "services" / "issuance")

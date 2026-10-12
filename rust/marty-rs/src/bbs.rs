@@ -1,54 +1,9 @@
 // BBS+ signature Python bindings
 //
-// Exposes BBS+ key generation, signing, verification, and selective
-// disclosure proof operations from marty-crypto to Python via PyO3.
+// Exposes BBS+ verification and selective disclosure proof operations from
+// marty-crypto to Python via PyO3.
 
 use pyo3::prelude::*;
-
-/// Generate a BLS12-381 key pair for BBS+ signatures.
-///
-/// Returns (secret_key_bytes, public_key_bytes) where public key is 96 bytes
-/// (BLS12-381 G2 compressed point).
-///
-/// Args:
-///     ciphersuite: "BBS_BLS12381_SHA256" or "BBS_BLS12381_SHAKE256" (default)
-#[pyfunction]
-#[pyo3(signature = (ciphersuite="BBS_BLS12381_SHAKE256"))]
-pub fn generate_bls12381_key(ciphersuite: &str) -> PyResult<(Vec<u8>, Vec<u8>)> {
-    let cs = marty_crypto::bbs::BbsCiphersuite::from_algorithm_name(ciphersuite)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    let kp = marty_crypto::bbs::BbsKeyPair::generate(cs)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-
-    Ok((kp.secret_key().to_vec(), kp.public_key().to_vec()))
-}
-
-/// Sign multiple messages with BBS+.
-///
-/// Args:
-///     secret_key: Secret key bytes
-///     public_key: Public key bytes (96 bytes)
-///     messages: List of byte strings to sign
-///     header: Header bytes for domain separation
-///     ciphersuite: "BBS_BLS12381_SHA256" or "BBS_BLS12381_SHAKE256"
-///
-/// Returns: Signature bytes (80 bytes)
-#[pyfunction]
-#[pyo3(signature = (secret_key, public_key, messages, header, ciphersuite="BBS_BLS12381_SHAKE256"))]
-pub fn bbs_sign(
-    secret_key: Vec<u8>,
-    public_key: Vec<u8>,
-    messages: Vec<Vec<u8>>,
-    header: Vec<u8>,
-    ciphersuite: &str,
-) -> PyResult<Vec<u8>> {
-    let cs = marty_crypto::bbs::BbsCiphersuite::from_algorithm_name(ciphersuite)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
-
-    marty_crypto::bbs::bbs_sign(&secret_key, &public_key, &messages, &header, cs)
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-}
 
 /// Verify a BBS+ signature over multiple messages.
 ///
@@ -167,8 +122,6 @@ pub fn bbs_verify_proof(
 
 /// Register BBS+ functions into the Python module.
 pub fn register_bbs_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(generate_bls12381_key, m)?)?;
-    m.add_function(wrap_pyfunction!(bbs_sign, m)?)?;
     m.add_function(wrap_pyfunction!(bbs_verify, m)?)?;
     m.add_function(wrap_pyfunction!(bbs_create_proof, m)?)?;
     m.add_function(wrap_pyfunction!(bbs_verify_proof, m)?)?;

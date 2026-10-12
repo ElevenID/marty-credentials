@@ -89,7 +89,7 @@ def test_compiler_cache_falls_back_without_suppressing_rust_gates() -> None:
     for command in (
         "cargo fmt --all -- --check",
         "cargo check --locked --no-default-features --features native",
-        "cargo nextest run --locked --no-default-features --features native",
+        "cargo test --locked --lib --no-default-features --features native",
         "cargo test --locked --doc --no-default-features --features native",
         "cargo clippy --locked --no-default-features --features native -- -D warnings",
     ):

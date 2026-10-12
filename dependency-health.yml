@@ -12,6 +12,18 @@ dependencies:
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
     review-after: 2026-10-20
     rationale: Re-reviewed 2026-09-20. The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; spruceid/ssi#706 was closed unmerged, so ssi-jwt stays pinned to the verified exact ElevenID revision that removes the unused vulnerable serde_with dependency. The lock contains only serde_with 3.x through Cedar, not SSI, and the repository security audit remains green.
+  - package: linked-data
+    ecosystem: rust
+    owner: ElevenID
+    upstream: https://github.com/spruceid/ssi
+    current: "ElevenID/ssi-elevenid@6f86efc1579033e14ff2ad7d115ca0857e16a67f"
+    target: current-upstream-without-unsound-containers
+    status: maintained
+    decision: fork
+    advisories: [RUSTSEC-2023-0126, RUSTSEC-2026-0255]
+    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
+    review-after: 2026-11-04
+    rationale: Re-reviewed 2026-10-07. The exact reviewed ElevenID revision removes linked-data's im dependency, eliminating the unsound and unmaintained im/sized-chunks chain implicated in safe-code aliasing and double-free/use-after-free advisories. The patch applies to production Python and WASM graphs and remains exact-revision pinned for reproducibility.
   - package: isomdl
     ecosystem: rust
     owner: ElevenID

@@ -938,7 +938,7 @@
     "identity_selector": ["organization_id", "issuer_did"],
     "forbidden_selectors": ["issuer_profile_id", "signing_service_id", "key_reference"],
     "verification_method_prefix": "<issuer_did>#",
-    "private_jwk_fields_forbidden": ["d", "p", "q", "dp", "dq", "qi", "oth"],
+    "private_jwk_fields_forbidden": ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d", "private_key", "private_key_pem", "private_jwk", "private_jwk_json", "privateKey", "privateKeyPem", "secret_key"],
     "jwks_order": "active-first-then-assertion-method-id",
     "rotation_scope": "issuer-did-assertion-methods-only",
     "client_assertion": {
