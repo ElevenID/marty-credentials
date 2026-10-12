@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 
 [[test]]
 name = "isomdl_digest_semantics"
-required-features = ["python"]
+required-features = ["isomdl-digest-tests"]
 
 # wasm-pack currently bundles a Binaryen validator that does not recognize
 # the bulk-memory instructions emitted by the supported Rust toolchain.
@@ -23,6 +23,7 @@ wasm-opt = false
 
 [features]
 default = ["python"]
+isomdl-digest-tests = ["isomdl/issuer-planning", "coset-isomdl", "ciborium", "time", "sha2"]
 native = [
     "dep:marty-crypto",
     "dep:marty-verification",

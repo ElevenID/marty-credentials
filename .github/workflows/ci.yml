@@ -142,6 +142,10 @@ jobs:
         if: matrix.task == 'tests'
         run: cargo test --locked --doc --no-default-features --features native
 
+      - name: Verify mdoc digest commitments and scalar execution
+        if: matrix.task == 'tests'
+        run: cargo test --locked --test isomdl_digest_semantics --no-default-features --features isomdl-digest-tests
+
       - name: Run clippy
         if: matrix.task == 'clippy'
         # Python and WASM features target different link environments and must
