@@ -476,5 +476,4 @@ curl http://localhost:8000/health
 
 - **Platform Team**: platform@marty.dev
 - **On-Call**: +1-555-ON-CALL
-- **Documentation**: See [CONFIGURATION.md](CONFIGURATION.md)
-- **Runbooks**: See [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md)
+- **Current deployment and configuration**: See the [Marty UI deployment documentation](https://github.com/ElevenID/marty-ui#readme).

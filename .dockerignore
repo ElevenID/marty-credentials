@@ -29,7 +29,6 @@ logs/
 # Ignore docs (except key ones)
 docs/
 *.md
-!services/issuance/MIGRATION_SUMMARY.md
 
 # Ignore test artifacts
 **/test_results/
