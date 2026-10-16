@@ -8,14 +8,14 @@ The Python issuance service was retired in [#311](https://github.com/ElevenID/ma
 
 - `rust/marty-rs`: local Rust and WASM binding code and tests. Core owns canonical published native wheels.
 - `contracts`: frozen issuance behavior and retirement evidence.
-- `scripts`: migration evidence and source verification tools.
+- `scripts`: CI dependency-graph and resilient test-launch helpers.
 - `tests`: source and contract checks.
 
 ## Development checks
 
 ```bash
 cargo test --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features native
-python -m pytest tests/unit packages/tests
+python -m pytest tests/unit
 ```
 
 For browser or Node.js consumers, build the Rust WASM target directly:
@@ -30,3 +30,15 @@ Product deployment and release instructions live in `marty-ui`. The old Credenti
 ## License
 
 Dual-licensed under MIT OR Apache-2.0.
+
+The historical Python capture, pre-deletion qualification tools and generated
+gRPC stubs are retired. Frozen JSON observations remain available for native
+regression checks. Current issuance wire-field and transport checks live with
+the Rust owner in [marty-ui](https://github.com/ElevenID/marty-ui), including
+`tests/test_proto_descriptor_parity.py` and the issuance gRPC behavior suites.
+Retiring these historical tools grants no deployment or cutover authorization.
+
+Source-file paths retained in frozen contracts, including the old Python gRPC
+stub paths in `issuance-runtime-surface.json`, describe historical provenance.
+They are not executable paths in the current checkout. Current wire/schema
+validation belongs to the native service owners linked above.

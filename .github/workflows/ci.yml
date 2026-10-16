@@ -274,7 +274,7 @@ jobs:
 
       - name: Run bandit
         working-directory: marty-credentials
-        run: bandit -r scripts/ packages/marty_proto/ -ll -ii
+        run: bandit -r scripts/ -ll -ii
 
       - name: Audit resolvable Python dependencies
         working-directory: marty-credentials

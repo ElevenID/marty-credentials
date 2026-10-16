@@ -25,36 +25,12 @@ This does **not** locate the exact maximum representable lease timestamp. It doe
 not prove populated-queue concurrency, fencing, renewal, active-job cancellation,
 recovery, provider processing, readiness, routing, or beta/device acceptance.
 
-## Repeatable verification
+## Current regression ownership
 
-With Docker available, run from this repository:
-
-```sh
-python scripts/run_canvas_worker_consumer_oracle.py --source published
-```
-
-The standard-library runner pulls the exact two image digests and creates a new
-PostgreSQL container to replay the published modules. It does not replace worker
-cycles, SQL repositories, or the loop. Repository wrappers record method
-entry/results; exception logging alone is suppressed to keep SQL details out of
-output. The former `checkout` and `both` modes require a pre-retirement worktree
-with the Python issuance service source.
-
-Each database has network mode `none`, no published ports, tmpfs-only data and
-synthetic credentials. The probe joins only that network namespace, is read-only,
-drops all capabilities, and mounts the checkout read-only. No configurable
-database URL is accepted. Published migrations initialize fresh tables, with a
-synthetic organization dependency table. The verifier never drops/truncates or
-reuses application schemas. Both exact container IDs are retained for cleanup,
-including on failure/timeout, and ownership/topology are checked before removal.
-Only those disposable databases and probe containers are removed; no production
-or beta containers, data or credentials are accessed. Raw SQL exceptions are not
-printed. Successful stdout reports bind source/fixture hashes and case counts.
-
-The pre-retirement CI lane ran all 36 cycles and all 3 loops against both the
-published image and then-current checkout. Current CI retains the frozen fixture
-and its unit checks; this published-image replay remains available as a historical
-oracle. Those unit tests alone are not evidence of downstream SQL behavior.
+The historical Python consumer replay and Docker controller are retired.
+Their implementation remains at Git commit `40158ec`. The frozen JSON corpus
+is unchanged and its consumer-boundary assertions remain with the native Rust
+Canvas worker in `marty-ui`. No historical image is executed by default CI.
 
 ## Rust implementation boundary
 
