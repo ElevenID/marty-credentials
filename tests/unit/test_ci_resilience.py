@@ -153,5 +153,5 @@ def test_published_python_dependency_resolution_uses_bounded_retry() -> None:
     assert f"{retry} python -m pip install --disable-pip-version-check -e '.[dev]'" in PYTHON_CI
     assert f"{retry} pip-audit . --format json --output pip-audit.json" in CI
     assert f"{retry} python -m pip install --disable-pip-version-check local-wheels/*.whl" in CI
-    assert "python -m pytest tests/ packages/tests/ -v" in PYTHON_CI
+    assert "python -m pytest tests/ -v" in PYTHON_CI
     assert "pytest rust/marty-rs/tests/python" in CI

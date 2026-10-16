@@ -13,4 +13,4 @@ test ! -e .github/workflows/release-images.yml
 # Product issuance and verification are Rust owned. This job checks the
 # remaining source, release and protocol contracts; the local-binding job
 # exercises the separately built Rust extension.
-python -m pytest tests/ packages/tests/ -v
+python -m pytest tests/ -v

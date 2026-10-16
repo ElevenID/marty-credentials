@@ -1,1 +1,0 @@
-"""Marty UI proto package."""
