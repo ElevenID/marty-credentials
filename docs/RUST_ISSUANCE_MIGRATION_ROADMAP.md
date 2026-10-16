@@ -1,6 +1,8 @@
 # Native Rust issuance migration roadmap
 
-**Status:** Active; contract freeze in progress
+**Status:** Historical migration inventory; Python issuance is retired. Current
+service behavior and Canvas regression fixtures are owned by Marty UI. See
+[Canvas regression ownership](canvas-regression-ownership.md).
 
 **Started:** 2026-08-28
 
@@ -27,8 +29,9 @@ shared Rust platform completed during wave three.
 
 The checked-in
 [`issuance-runtime-surface.json`](../contracts/issuance-runtime-surface.json)
-is generated from the Python parity oracle and fails closed on unreviewed
-surface drift.
+records the historical Python parity surface. Its removed Python inventory
+tool is not a current drift check; native Rust contracts enforce the current
+service behavior in Marty UI.
 
 | Surface | Frozen baseline |
 |---|---:|

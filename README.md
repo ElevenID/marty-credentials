@@ -42,3 +42,7 @@ Source-file paths retained in frozen contracts, including the old Python gRPC
 stub paths in `issuance-runtime-surface.json`, describe historical provenance.
 They are not executable paths in the current checkout. Current wire/schema
 validation belongs to the native service owners linked above.
+
+Canvas migration captures and duplicate fixtures are retired here; see
+[regression ownership](docs/canvas-regression-ownership.md) for canonical native
+fixtures and the retained behavior requirements.
