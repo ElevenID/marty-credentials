@@ -2,7 +2,7 @@
 set -euo pipefail
 
 python -m pip install --disable-pip-version-check --upgrade pip
-python -m pip install --disable-pip-version-check pytest pytest-asyncio
+python -m pip install --disable-pip-version-check pytest
 python -c "import pathlib, subprocess, sys; wheels = sorted(map(str, pathlib.Path('release-deps').glob('*.whl'))); assert len(wheels) == 2, wheels; subprocess.run([sys.executable, '-m', 'pip', 'install', *wheels], check=True)"
 scripts/retry-command.sh python -m pip install --disable-pip-version-check -e '.[dev]'
 # A regression here would silently turn the test harness back into a Python SDK.
