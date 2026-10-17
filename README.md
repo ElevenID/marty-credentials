@@ -27,6 +27,12 @@ wasm-pack build --locked --target web --no-default-features --features wasm
 
 Product deployment and release instructions live in `marty-ui`. The old Credentials Python source distribution, PyPI publisher, and issuance image release path are retired; do not create a new Python package or image from this repository.
 
+Current deployment acceptance is summarized in the
+[owner checklist](DEPLOYMENT_CHECKLIST.md). Official and owned interoperability
+workflows live in [marty-integration-tests](https://github.com/ElevenID/marty-integration-tests);
+the retired migration receipt and its old local Compose commands are not a
+supported test entrypoint.
+
 ## License
 
 Dual-licensed under MIT OR Apache-2.0.
