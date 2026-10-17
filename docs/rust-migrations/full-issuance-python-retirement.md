@@ -7,3 +7,35 @@ The frozen Credentials surface has 86 current HTTP routes and 12 gRPC methods. T
 The deletion did not deploy an image. Production remains on its previously pinned immutable image until a separately qualified release changes it. The signed aggregate beta candidate, beta-only acceptance deployment, and soak are distinct release gates.
 
 The separate Python convenience SDK had no live in-repository product consumer. Its retirement mapping and consumer inventory are in `contracts/python-sdk-retirement-v1.json`. The only direct cross-repository importer was a mock-only integration test; its deletion in Integration [#428](https://github.com/ElevenID/marty-integration-tests/pull/428) must merge before the SDK deletion merges.
+
+## Schema and test-tool ownership
+
+The unreferenced root `create_application_tables.sql` and `setup_tables.sql`
+manual setup copies are retired. Current schema owners are in
+[marty-ui](https://github.com/ElevenID/marty-ui):
+
+- `rust/services/issuance/migrations/0000_issuance_service_baseline.sql` owns
+  applications, application templates, issuance events and Canvas tables;
+- `rust/services/credential-template/migrations/0001_credential_template_schema.sql`
+  owns credential templates and the wallet registry;
+- `rust/services/trust-profile/migrations/0001_trust_profile_schema.sql` and
+  `rust/services/presentation-policy/migrations/0001_presentation_policy.sql`
+  own their respective schemas;
+- `rust/services/credential-template/src/catalog.rs`, invoked by that service's
+  `main.rs`, owns the LISSI, walt.id, Sphereon and DC4EU catalog entries.
+
+Use the Rust service migration and catalog paths rather than recreating a
+partial cross-service schema with old columns or hardcoded database-role grants.
+Deleting these copies does not qualify a fresh install, upgrade, rollback,
+seed reconciliation or interoperability with any listed wallet. Those checks
+remain with the deployed service owners and their PostgreSQL regression suites.
+The [integration-secret secure-storage requirements](integration-secret-secure-storage-outstanding.md)
+remain open; removing the old plaintext `canvas_credentials` DDL does not close them.
+
+The metadata-only Hatch build no longer installs Maturin. Native binding jobs
+still install and run the pinned Maturin builder explicitly. Current Python
+harness and binding tests are synchronous, so their unused asyncio plugin and
+root bootstrap for the retired `services`, `python` and `packages` trees are
+removed. Unit database fixtures, native binding tests and all existing test
+assertions remain. Removing an uncalled mocked route-import helper does not
+turn the historical mdoc format expectations into a live Rust regression.

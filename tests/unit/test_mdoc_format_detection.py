@@ -1,62 +1,13 @@
-"""Unit tests for mDoc payload format detection (Bug #1).
+"""Historical expectations for the original Python mdoc format aliases.
 
-The DB stores credential_payload_format as "MDOC" (enum value), but the
-OID4VCI offer-creation code historically compared only to "mso_mdoc".
-The fix normalises all three known representations — "mso_mdoc", "MDOC",
-"mdoc" — through the ``_MDOC_PAYLOAD_FORMATS`` set.
-
-These tests assert that the normalisation set exists and correctly covers
-every alias.  Regression: if someone narrows the set back to only
-"mso_mdoc", the parametrised tests for "MDOC" and "mdoc" will fail.
+These self-contained cases describe the old format set. They do not import
+the retired routes or exercise the live Rust service's format detection.
 """
-
-import importlib
-import sys
-from unittest.mock import MagicMock
 
 import pytest
 
 
-# ---------------------------------------------------------------------------
-# Helpers to extract _MDOC_PAYLOAD_FORMATS from each module without
-# starting the full application (FastAPI, gRPC, etc.).
-# ---------------------------------------------------------------------------
-
-
-def _load_routes_mdoc_formats():
-    """Import the set from routes.py, stubbing heavy dependencies."""
-    # routes.py requires FastAPI and many domain imports — mock them.
-    stubs = {}
-    for mod_name in (
-        "fastapi",
-        "fastapi.responses",
-        "fastapi.routing",
-        "fastapi.openapi",
-        "httpx",
-        "issuance.application.rust_integration",
-        "issuance.domain.entities",
-        "issuance.domain.repositories",
-        "issuance.infrastructure.models",
-        "issuance.application.services",
-    ):
-        if mod_name not in sys.modules:
-            stubs[mod_name] = sys.modules.setdefault(mod_name, MagicMock())
-
-    try:
-        # We only need the module-level constant
-        import issuance.infrastructure.api.routes as routes_mod
-
-        return getattr(routes_mod, "_MDOC_PAYLOAD_FORMATS", None)
-    except Exception:
-        return None
-    finally:
-        for mod_name, mod in stubs.items():
-            if sys.modules.get(mod_name) is mod:
-                del sys.modules[mod_name]
-
-
-# Instead of fighting import chains, test the set definition directly.
-# The retained HTTP route recognizes the supported mdoc format aliases.
+# Live route behavior belongs to the Rust owner.
 EXPECTED_MDOC_FORMATS = {"mso_mdoc", "MDOC", "mdoc"}
 
 

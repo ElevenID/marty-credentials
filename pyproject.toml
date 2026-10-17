@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling==1.32.0", "hatch-vcs==0.5.0", "maturin==1.14.1"]
+requires = ["hatchling==1.32.0", "hatch-vcs==0.5.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -35,7 +35,6 @@ dependencies = ["sqlalchemy>=2.0"]
 # The root project is a test harness. Core owns the canonical native wheel.
 dev = [
     "pytest>=8.0",
-    "pytest-asyncio>=0.23",
     "pytest-cov>=4.0",
     "PyYAML>=6.0",
     "mypy>=1.8",
@@ -84,5 +83,4 @@ warn_return_any = true
 warn_unused_configs = true
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]

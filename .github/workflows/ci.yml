@@ -200,7 +200,7 @@ jobs:
         working-directory: marty-credentials
         run: |
           # This isolated binding job does not install the project package.
-          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest pytest-asyncio
+          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest
           python -m pip install --disable-pip-version-check ../compatibility-wheels/marty_verification_py-*.whl
           maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
           scripts/retry-command.sh python -m pip install --disable-pip-version-check local-wheels/*.whl
