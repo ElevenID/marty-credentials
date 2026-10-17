@@ -27,9 +27,9 @@ classifiers = [
 ]
 keywords = ["credentials", "verifiable-credentials", "mdl", "identity", "cryptography"]
 
-# Remaining Python tests use synchronous SQLite fixtures only. Native binding
-# dependencies belong to the released wheels, not this metadata-only harness.
-dependencies = ["sqlalchemy>=2.0"]
+# Native binding dependencies belong to the released wheels, not this
+# metadata-only harness. Tests declare their own tooling dependencies.
+dependencies = []
 
 [project.optional-dependencies]
 # The root project is a test harness. Core owns the canonical native wheel.
