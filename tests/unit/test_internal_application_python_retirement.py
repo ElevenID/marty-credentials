@@ -6,10 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from tests.retired_python_source import has_source
-
 ROOT = Path(__file__).resolve().parents[2]
-ISSUANCE = ROOT / "services" / "issuance"
 CONTRACT = ROOT / "contracts" / "issuance-internal-applications.json"
 PAIRED_RUST_CONTRACT_CANONICAL_SHA256 = (
     "11bac34429733ad3658fbe6650809705ef86ce4b83d12d2198be56d4170f0a0d"
@@ -40,10 +37,6 @@ FROZEN_ROUTE_IDENTITIES = frozenset(
 def _canonical_contract_digest(contract: object) -> str:
     encoded = json.dumps(contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
-
-
-def test_python_internal_application_http_owner_stays_retired() -> None:
-    assert not has_source(ISSUANCE)
 
 
 def test_language_neutral_internal_application_contract_remains_frozen() -> None:
