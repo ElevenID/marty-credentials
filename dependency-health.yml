@@ -10,8 +10,8 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-10-20
-    rationale: Re-reviewed 2026-09-20. The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; spruceid/ssi#706 was closed unmerged, so ssi-jwt stays pinned to the verified exact ElevenID revision that removes the unused vulnerable serde_with dependency. The lock contains only serde_with 3.x through Cedar, not SSI, and the repository security audit remains green.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20 against the locked graph and https://github.com/spruceid/ssi/pull/706. The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; spruceid/ssi#706 was closed unmerged, so ssi-jwt stays pinned to the verified exact ElevenID revision that removes the unused vulnerable serde_with dependency. The lock contains only serde_with 3.x through Cedar, not SSI, and the repository security audit remains green.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID
@@ -52,14 +52,14 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/PyO3/pyo3
-    current: "0.29.0"
-    target: "0.29.x"
+    current: "0.29.2"
+    target: coordinated-Core-PyO3-0.30.x-migration
     status: maintained
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-10-18
-    rationale: The binding migration is complete and the obsolete cargo-deny exception has been removed.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20. Cargo.lock and cargo tree resolve one PyO3 0.29.2 shared by this extension and the pinned Core marty-python-adapters. Upstream https://github.com/PyO3/pyo3/releases/tag/v0.30.1 is available; its 0.30 API migration must be coordinated with that canonical adapter rather than independently changing this thin binding. Retain the compatible 0.29 family while current native wheel and local-binding CI qualify it; no security exception is added.
   - package: rsa
     ecosystem: rust
     owner: ElevenID
@@ -70,5 +70,5 @@ dependencies:
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-10-18
-    rationale: RSA is retained compatibility functionality for passport, certificate, CMS/CRL, RSA-JWT, and legacy badge profiles through Marty crypto adapters; no patched RustCrypto release exists.
+    review-after: 2026-11-03
+    rationale: Re-reviewed 2026-10-20 against https://rustsec.org/advisories/RUSTSEC-2023-0071.html and cargo tree. The advisory still has no patched version; RSA 0.9.10 remains required through the pinned Core crypto, verification, OID4VCI and JWT compatibility graph. Keep the explicit advisory watch and existing bounded cargo-deny exception; this review does not claim the timing issue is fixed or authorize local private-key signing. Current managed-custody source boundaries and native security CI remain required.
