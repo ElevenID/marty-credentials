@@ -1,19 +1,5 @@
 # Full Python issuance service retirement
 
-The remaining Credentials LTI, physical-passport provider and Python-route
-reference JSON copies are retired. The
-[Rust issuance ownership guide](https://github.com/ElevenID/marty-ui/blob/main/docs/issuance-contract-ownership.md)
-maps their requirements to maintained native contracts and behavior tests.
-The Rust LTI owner preserves all 16 forbidden private-key field names, including
-legacy aliases and empty/null members, before signing or publishing JWKS.
-Native passport tests retain the nine routes, validation, safe projections,
-bureau submit/poll/batch mapping, durable restart, quality/activation, artifact
-scrubbing, tenant isolation and signed webhook effects. Legacy local/self-signed
-or external signing modes and missing authorization are explicitly rejected.
-Live provider/custody, deployment/drain, unreadable-artifact recovery and physical
-booklet evidence remain separate qualification work. Existing provenance hashes
-refer to immutable history; these retired files are not current runtime inputs.
-
 The Python issuance source and image build path were deleted in [Credentials #311](https://github.com/ElevenID/marty-credentials/pull/311), merged as `12897ba58803e630fc46f12f6d35a9c0677e49d4`. The Rust owner and the baseline migration were merged in [UI #1178](https://github.com/ElevenID/marty-ui/pull/1178) as `927f765cfce54c06f30a4dacba5421960af9a6ff`. [The historical full-issuance qualification receipt](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/full-issuance-retirement-qualification.json) records the exact source and protected UI evidence used for that deletion. Its one-time qualification script and release publisher were retired after the merge; the current CI gate checks that the deleted source and publication paths stay absent.
 
 At full source retirement, the Python surface snapshot recorded 86 HTTP routes and 12 gRPC methods. The Rust coverage inventory includes 85 of those HTTP routes (the remaining `/ready` route is operational), all 12 gRPC methods, and nine historical passport routes deleted earlier from Python. Rust also owns the Canvas worker and the issuance schema baseline. The retained JSON contracts are historical behavior oracles; Rust PostgreSQL and behavior tests execute in the UI owner.
@@ -78,14 +64,22 @@ headers in its native HTTP regression suite before claiming compatibility.
 Deleting the unconsumed JSON does not resolve this behavior difference or
 change Rust behavior.
 
-Three nonidentical references remain here pending reconciliation. LTI's
-private-key alias prohibition is broader than the UI fixture's list and
-requires security-policy qualification. Do not discard that difference as
-formatting or alter the other worker's KMS implementation to make a deletion
-pass. The two physical-passport references retain unique provider/route
-vectors and tenant, durable-job, live-provider and native-parity obligations
-referenced by UI's passport contracts. This cleanup makes no parity or
-deployment claim for these references or the initiation precedence above.
+The remaining Credentials LTI, physical-passport provider and Python-route
+reference JSON copies are now retired. The
+[Rust issuance ownership guide](https://github.com/ElevenID/marty-ui/blob/main/docs/issuance-contract-ownership.md)
+maps their requirements to maintained native contracts and behavior tests.
+UI's LTI owner now enforces all 16 forbidden private-key field names, including
+legacy aliases and empty/null members, before signing or publishing JWKS;
+this resolves the previously pending policy difference without changing the
+shared KMS implementation. Native passport tests retain the nine routes,
+validation, safe projections, bureau submit/poll/batch mapping, durable restart,
+quality/activation, artifact scrubbing, tenant isolation and signed webhook
+effects. Legacy local/self-signed or external signing modes and missing
+authorization are explicitly rejected. Live provider/custody, deployment/drain,
+unreadable-artifact recovery and physical-booklet evidence remain separate
+qualification work. Existing provenance hashes refer to immutable history;
+these retired files are not current runtime inputs. This cleanup makes no
+deployment claim and does not resolve the initiation precedence requirement above.
 
 ## Retired SDK ownership
 
