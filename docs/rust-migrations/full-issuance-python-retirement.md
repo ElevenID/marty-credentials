@@ -45,16 +45,33 @@ routes; that mirror and its route-only self-assertion are retired too. The
 unused Python source/line snapshot is historical provenance in Git history,
 not a current behavioral gate.
 
-Four nonidentical references remain here pending reconciliation. Initiation
-records key/delivery normalization before direct-signing-header rejection;
-current Rust rejects those headers first, which can change the winning 422
-error for multiply-invalid requests. LTI's private-key alias prohibition is
-broader than the UI fixture's list and requires security-policy qualification.
-Do not discard those differences as formatting or alter the other worker's KMS
-implementation to make a deletion pass. The two physical-passport references
-retain unique provider/route vectors and tenant, durable-job, live-provider and
-native-parity obligations referenced by UI's passport contracts. This cleanup
-makes no parity or deployment claim for those four references.
+The unused local initiation reference is retired too. Its vectors and fields
+match the actively consumed [UI initiation contract](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-initiation.json)
+except for the historical `owner_precheck_order`. Preserve that unresolved
+requirement from the [last containing Credentials revision](https://github.com/ElevenID/marty-credentials/blob/c57a715c402c8017035ce50158a0ed875c259bcd/contracts/issuance-initiation.json):
+
+1. Normalize the idempotency key.
+2. Normalize the delivery mode.
+3. Reject direct-signing headers.
+4. Select the delivery owner.
+
+Current Rust `initiation_http.rs::reserve_authorized` rejects direct-signing
+headers before `initiation.initiate` normalizes the idempotency key. Requests
+with multiple invalid inputs can therefore receive a different winning 422
+error. The Rust issuance owner must explicitly resolve that precedence and
+qualify competing invalid idempotency keys, delivery modes and direct-signing
+headers in its native HTTP regression suite before claiming compatibility.
+Deleting the unconsumed JSON does not resolve this behavior difference or
+change Rust behavior.
+
+Three nonidentical references remain here pending reconciliation. LTI's
+private-key alias prohibition is broader than the UI fixture's list and
+requires security-policy qualification. Do not discard that difference as
+formatting or alter the other worker's KMS implementation to make a deletion
+pass. The two physical-passport references retain unique provider/route
+vectors and tenant, durable-job, live-provider and native-parity obligations
+referenced by UI's passport contracts. This cleanup makes no parity or
+deployment claim for these references or the initiation precedence above.
 
 ## Retired SDK ownership
 
