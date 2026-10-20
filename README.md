@@ -1,13 +1,14 @@
 # Marty Credentials
 
-This repository retains Rust credential bindings, frozen migration contracts, and their tests. The deployed issuance service is Rust owned in [marty-ui](https://github.com/ElevenID/marty-ui); canonical credential and verification libraries are Rust owned in [marty-core](https://github.com/ElevenID/marty-core).
+This repository retains Rust credential bindings, remaining historical migration references, and binding/source-boundary tests. The deployed issuance service is Rust owned in [marty-ui](https://github.com/ElevenID/marty-ui); canonical credential and verification libraries are Rust owned in [marty-core](https://github.com/ElevenID/marty-core).
 
 The Python issuance service was retired in [#311](https://github.com/ElevenID/marty-credentials/pull/311). The former `marty_credentials` Python convenience SDK is also retired; its supported Rust owners and SDK-only dispositions are documented in [the retirement guide](docs/rust-migrations/full-issuance-python-retirement.md#retired-sdk-ownership). The root `pyproject.toml` now builds an internal metadata-only test harness named `marty-credentials-test-harness`; it does not install an SDK or provide a signing path. Existing immutable Python images and releases remain historical records and the currently pinned production image until the governed beta transition; no new Python issuance image or SDK distribution is published.
 
 ## Source layout
 
 - `rust/marty-rs`: local Rust and WASM binding code and tests. Core owns canonical published native wheels.
-- `contracts`: frozen issuance behavior and retirement evidence.
+- `contracts`: historical references not yet reconciled with the Rust owner.
+  Canonical executable issuance fixtures live in [UI contracts](https://github.com/ElevenID/marty-ui/tree/main/contracts), not mirrored here.
 - `scripts`: CI dependency-graph and resilient test-launch helpers.
 - `tests`: source and contract checks.
 

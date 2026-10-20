@@ -16,10 +16,31 @@ remains available in immutable Git history.
 
 The five completed qualification receipts are retired from current source.
 They pinned source/artifact hashes, former route counts and one-time deletion
-authority, not current behavioral or deployment acceptance. No behavior oracle,
-source-absence test, native coverage or release gate is removed. The CI job
+authority, not current behavioral or deployment acceptance. The canonical Rust behavior oracles, source-absence tests, native coverage
+and release gates remain. The CI job
 continues to reject Python source and publication paths; it no longer checks a
 historical SDK receipt's constant schema string.
+
+## Canonical contract ownership
+
+Twelve duplicated Credentials mirrors are also retired after comparing their
+JSON content with the canonical [UI contracts](https://github.com/ElevenID/marty-ui/tree/main/contracts).
+The Rust owner retains application templates, Canvas management/OAuth,
+credential admission/lifecycle/signing, internal applications, offer/transaction
+reads, proof nonces, static/tenant discovery and token-exchange fixtures, with
+its executable [issuance tests](https://github.com/ElevenID/marty-ui/tree/main/rust/services/issuance/tests).
+The native libraries, Rust fixture data and all existing executable behavior
+tests are unchanged. No vectors were regenerated from implementation output.
+
+The two local mirror-only tests checked a frozen internal-application
+schema/routes/digest and static-discovery case count/operation strings. Those
+assertions provided no execution coverage of current service behavior. Keep
+all fourteen internal-application routes and their tenant, evidence, approval,
+concurrency and offer semantics with the native HTTP regression suite. Static
+discovery retains its six cases and distinct organization issuer-metadata,
+credential-manager and Apple Wallet database-backed operations in the UI
+fixture and HTTP tests. Nonidentical historical references remain here pending
+separate reconciliation; this cleanup makes no parity claim for them.
 
 ## Retired SDK ownership
 
