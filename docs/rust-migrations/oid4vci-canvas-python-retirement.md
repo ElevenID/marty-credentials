@@ -1,5 +1,13 @@
 # OID4VCI and Canvas mirror Python retirement
 
+Historical source-deletion checkpoint: the routes, retained Python ownership,
+release state and pending gates below describe that checkpoint, not current
+runtime status. The one-time [qualification receipt](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/issuance-python-retirement-qualification.json)
+is retained in immutable Git history; it is retired from current source.
+The later [full issuance retirement](full-issuance-python-retirement.md) supersedes
+its Python-ownership statements. Behavioral fixtures and remaining deployment,
+data-preservation and security requirements continue with their Rust owners.
+
 Status: merged in `ElevenID/marty-credentials#298` at
 `af041c2c3bd2e9fae189b566499146f97156120f` after qualification against
 protected `marty-ui` main `207c84afc00b2f3b2b3db6b433823a9c7d59ab38`.
