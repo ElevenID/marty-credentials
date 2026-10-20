@@ -27,7 +27,14 @@ purge handlers, their response-only models, and their now-unreferenced memory
 and PostgreSQL repository methods. Their Python-only HTTP and PostgreSQL tests
 are replaced by a retirement guard here and the language-neutral route,
 validation, repository, and real-PostgreSQL contracts in `marty-ui#849`.
-`contracts/issuance-retention-management.json` remains frozen here. The Rust
+The canonical [retention fixture](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-retention-management.json)
+and [observed addendum](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-retention-observed-addendum.json)
+remain in the Rust owner. The Credentials mirror and its schema/two-route
+self-assertion are retired; its only additional field (generic repository failure)
+is retained in that addendum and executed by the
+[native retention tests](https://github.com/ElevenID/marty-ui/blob/main/rust/services/issuance/tests/retention_native_behavior.rs).
+The expected 500 / `Internal Server Error` response must not reveal sensitive
+repository detail. The Rust
 PostgreSQL contract covers tenant scope, expired parent/child purge, and
 preservation of younger event ownership.
 

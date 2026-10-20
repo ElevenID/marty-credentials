@@ -27,11 +27,13 @@ shared Rust platform completed during wave three.
 
 ## Frozen baseline
 
-The checked-in
-[`issuance-runtime-surface.json`](../contracts/issuance-runtime-surface.json)
-records the historical Python parity surface. Its removed Python inventory
-tool is not a current drift check; native Rust contracts enforce the current
-service behavior in Marty UI.
+The historical Python source inventory is retired from current source; its
+[last retained snapshot](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/issuance-runtime-surface.json)
+remains in Git history. That later snapshot records 86 routes after earlier
+retirements, while the original baseline table below records 131. Source lines,
+old hashes and those counts are not a current drift or behavior check. Use the
+[UI native coverage inventory](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-native-coverage.json)
+and executable Rust endpoint contracts for current service qualification.
 
 | Surface | Frozen baseline |
 |---|---:|

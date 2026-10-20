@@ -2,7 +2,7 @@
 
 The Python issuance source and image build path were deleted in [Credentials #311](https://github.com/ElevenID/marty-credentials/pull/311), merged as `12897ba58803e630fc46f12f6d35a9c0677e49d4`. The Rust owner and the baseline migration were merged in [UI #1178](https://github.com/ElevenID/marty-ui/pull/1178) as `927f765cfce54c06f30a4dacba5421960af9a6ff`. [The historical full-issuance qualification receipt](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/full-issuance-retirement-qualification.json) records the exact source and protected UI evidence used for that deletion. Its one-time qualification script and release publisher were retired after the merge; the current CI gate checks that the deleted source and publication paths stay absent.
 
-The frozen Credentials surface has 86 current HTTP routes and 12 gRPC methods. The Rust coverage inventory includes 85 of those HTTP routes (the remaining `/ready` route is operational), all 12 gRPC methods, and nine historical passport routes deleted earlier from Python. Rust also owns the Canvas worker and the issuance schema baseline. The retained JSON contracts are historical behavior oracles; Rust PostgreSQL and behavior tests execute in the UI owner.
+At full source retirement, the Python surface snapshot recorded 86 HTTP routes and 12 gRPC methods. The Rust coverage inventory includes 85 of those HTTP routes (the remaining `/ready` route is operational), all 12 gRPC methods, and nine historical passport routes deleted earlier from Python. Rust also owns the Canvas worker and the issuance schema baseline. The retained JSON contracts are historical behavior oracles; Rust PostgreSQL and behavior tests execute in the UI owner.
 
 The deletion did not deploy an image. Production remains on its previously pinned immutable image until a separately qualified release changes it. The signed aggregate beta candidate, beta-only acceptance deployment, and soak are distinct release gates.
 
@@ -23,8 +23,8 @@ historical SDK receipt's constant schema string.
 
 ## Canonical contract ownership
 
-Twelve duplicated Credentials mirrors are also retired after comparing their
-JSON content with the canonical [UI contracts](https://github.com/ElevenID/marty-ui/tree/main/contracts).
+Twelve byte-identical Credentials mirrors are also retired after comparing
+committed bytes with the canonical [UI contracts](https://github.com/ElevenID/marty-ui/tree/main/contracts).
 The Rust owner retains application templates, Canvas management/OAuth,
 credential admission/lifecycle/signing, internal applications, offer/transaction
 reads, proof nonces, static/tenant discovery and token-exchange fixtures, with
@@ -39,8 +39,22 @@ all fourteen internal-application routes and their tenant, evidence, approval,
 concurrency and offer semantics with the native HTTP regression suite. Static
 discovery retains its six cases and distinct organization issuer-metadata,
 credential-manager and Apple Wallet database-backed operations in the UI
-fixture and HTTP tests. Nonidentical historical references remain here pending
-separate reconciliation; this cleanup makes no parity claim for them.
+fixture and HTTP tests. The retention mirror's unique repository-failure field is retained by UI's
+observed addendum and exercised against a failing Rust repository for both
+routes; that mirror and its route-only self-assertion are retired too. The
+unused Python source/line snapshot is historical provenance in Git history,
+not a current behavioral gate.
+
+Four nonidentical references remain here pending reconciliation. Initiation
+records key/delivery normalization before direct-signing-header rejection;
+current Rust rejects those headers first, which can change the winning 422
+error for multiply-invalid requests. LTI's private-key alias prohibition is
+broader than the UI fixture's list and requires security-policy qualification.
+Do not discard those differences as formatting or alter the other worker's KMS
+implementation to make a deletion pass. The two physical-passport references
+retain unique provider/route vectors and tenant, durable-job, live-provider and
+native-parity obligations referenced by UI's passport contracts. This cleanup
+makes no parity or deployment claim for those four references.
 
 ## Retired SDK ownership
 

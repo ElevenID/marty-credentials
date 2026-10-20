@@ -45,10 +45,11 @@ the Rust owner in [marty-ui](https://github.com/ElevenID/marty-ui), including
 `tests/test_proto_descriptor_parity.py` and the issuance gRPC behavior suites.
 Retiring these historical tools grants no deployment or cutover authorization.
 
-Source-file paths retained in frozen contracts, including the old Python gRPC
-stub paths in `issuance-runtime-surface.json`, describe historical provenance.
-They are not executable paths in the current checkout. Current wire/schema
-validation belongs to the native service owners linked above.
+Historical source inventories, including the old Python gRPC stub paths, are
+retained in Git history rather than current executable source. The
+[migration roadmap](docs/RUST_ISSUANCE_MIGRATION_ROADMAP.md#frozen-baseline)
+links the last snapshot. Current wire/schema validation belongs to the native
+service owners linked above.
 
 Canvas migration captures and duplicate fixtures are retired here; see
 [regression ownership](docs/canvas-regression-ownership.md) for canonical native
