@@ -35,9 +35,12 @@ qualification bytes to #305's immutable protected merge and rejects route
 reintroduction. No release or protected-runtime receipt is fabricated in this
 record; `beta_deployment_authorized` remains false.
 
-The deleted route identities are the frozen set in
-`contracts/physical-passport-python-route-reference.json`. The old provider
-reference stays as a behavior oracle. Source removal does not claim that the
+The deleted route identities and old provider observations remain in
+[the historical route reference](https://github.com/ElevenID/marty-credentials/blob/bd701403e7eae9f495fc3a8c4fea1945785b425a/contracts/physical-passport-python-route-reference.json)
+and Git history. Their current-source copies are retired; maintained regression
+ownership is described in the
+[Rust issuance ownership guide](https://github.com/ElevenID/marty-ui/blob/main/docs/issuance-contract-ownership.md).
+Source removal does not claim that the
 Marty simulator produced a physical booklet; `physical_claim=not_claimed` and
 `booklet_verified=false` remain the software acceptance boundary. No external
 provider or CA is needed for the software flow.
