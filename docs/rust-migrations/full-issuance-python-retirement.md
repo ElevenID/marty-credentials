@@ -23,7 +23,7 @@ historical SDK receipt's constant schema string.
 
 ## Retired SDK ownership
 
-Product behavior remains with these Rust owners:
+Product ownership and available qualification reside with these Rust owners:
 
 | Capability | Rust owner and executable qualification |
 |---|---|
