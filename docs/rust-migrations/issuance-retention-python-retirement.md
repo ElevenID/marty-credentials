@@ -1,5 +1,13 @@
 # Issuance retention Python retirement
 
+Historical source-deletion checkpoint: the routes, retained Python ownership,
+release state and pending gates below describe that checkpoint, not current
+runtime status. The one-time [qualification receipt](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/issuance-retention-python-retirement-qualification.json)
+is retained in immutable Git history; it is retired from current source.
+The later [full issuance retirement](full-issuance-python-retirement.md) supersedes
+its Python-ownership statements. Behavioral fixtures and remaining deployment,
+data-preservation and security requirements continue with their Rust owners.
+
 Status: the two-route Python deletion merged in
 `ElevenID/marty-credentials#299` at
 `48298b943032ea86043d2d4e14c626211bb92d1b`; deployment acceptance remains
@@ -19,7 +27,14 @@ purge handlers, their response-only models, and their now-unreferenced memory
 and PostgreSQL repository methods. Their Python-only HTTP and PostgreSQL tests
 are replaced by a retirement guard here and the language-neutral route,
 validation, repository, and real-PostgreSQL contracts in `marty-ui#849`.
-`contracts/issuance-retention-management.json` remains frozen here. The Rust
+The canonical [retention fixture](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-retention-management.json)
+and [observed addendum](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-retention-observed-addendum.json)
+remain in the Rust owner. The Credentials mirror and its schema/two-route
+self-assertion are retired; its only additional field (generic repository failure)
+is retained in that addendum and executed by the
+[native retention tests](https://github.com/ElevenID/marty-ui/blob/main/rust/services/issuance/tests/retention_native_behavior.rs).
+The expected 500 / `Internal Server Error` response must not reveal sensitive
+repository detail. The Rust
 PostgreSQL contract covers tenant scope, expired parent/child purge, and
 preservation of younger event ownership.
 

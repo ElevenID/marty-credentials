@@ -463,15 +463,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The #311 receipt is immutable provenance; its source SHA predates
-          # the squash merge and cannot be an ancestry gate for later PRs.
+          # Historical migration receipts live in Git history. Keep the actual
+          # retired source and publication boundaries enforced on current code.
           test ! -d services/issuance
           test ! -e services/Dockerfile
           test ! -d python/marty_credentials
           test ! -e .github/workflows/release-images.yml
           test ! -e .github/workflows/release-stable.yml
           test ! -e .github/workflows/publish-pypi.yml
-          python -c 'import json; from pathlib import Path; assert json.loads(Path("contracts/python-sdk-retirement-v1.json").read_text())["schema"] == "marty.python-sdk-retirement/v1"'
 
   ci-gate:
     name: CI Gate

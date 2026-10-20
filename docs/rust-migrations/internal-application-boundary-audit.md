@@ -1,5 +1,15 @@
 # Internal Application Rust migration boundary audit
 
+This is a historical source-deletion audit. The Python issuance owner and its
+oracle tests are now retired. The canonical
+[internal-application fixture](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-internal-applications.json)
+and [HTTP regression suite](https://github.com/ElevenID/marty-ui/blob/main/rust/services/issuance/tests/internal_application_http_behavior.rs)
+remain in the Rust owner; the identical Credentials mirror and its schema/route/
+frozen-digest assertion are retired. All fourteen route, trusted-tenant,
+validation, typed-result, lifecycle/concurrency, external-evidence, reconciliation,
+Canvas approval, failure and offer replay requirements below remain. Source
+cleanup does not qualify deployment or restore a Python route owner.
+
 **Status:** behavior freeze complete; the Rust implementation, PostgreSQL
 contracts, packaged executable, and fail-closed gateway selection are complete
 on the staged `marty-ui` migration. This consumer checkpoint retires the
@@ -121,12 +131,13 @@ behavior. Those tests are valuable but are distributed and do not yet prove a
 single language-neutral 14-route boundary.
 
 The canonical
-[`issuance-internal-applications.json`](../../contracts/issuance-internal-applications.json)
-contract and Python oracle now freeze the route surface, authentication,
+[`issuance-internal-applications.json`](https://github.com/ElevenID/marty-ui/blob/main/contracts/issuance-internal-applications.json)
+contract and original Python oracle froze the route surface, authentication,
 tenant boundary, request validation, typed projections, lifecycle failures,
 ordinary and Canvas approval, dependency failures, offer replay, and manual
-lifecycle concurrency. A single authenticated HTTP replay now exercises every
-one of the fourteen successful route operations against the Python owner. The
+lifecycle concurrency. At that checkpoint, one authenticated HTTP replay exercised every one of
+the fourteen successful route operations against the Python owner. Current
+execution coverage lives in the Rust HTTP suite linked above. The
 forced concurrency cases prove one non-Canvas approval transaction, no orphan
 transaction when rejection wins, and no stale evidence submission when
 rejection wins. External evidence and reconciliation now also use application

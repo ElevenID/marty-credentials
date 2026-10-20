@@ -1,5 +1,13 @@
 # Physical-passport Python source retirement
 
+Historical source-deletion checkpoint: the routes, retained Python ownership,
+release state and pending gates below describe that checkpoint, not current
+runtime status. The one-time [qualification receipt](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/physical-passport-python-retirement-qualification.json)
+is retained in immutable Git history; it is retired from current source.
+The later [full issuance retirement](full-issuance-python-retirement.md) supersedes
+its Python-ownership statements. Behavioral fixtures and remaining deployment,
+data-preservation and security requirements continue with their Rust owners.
+
 The nine passport HTTP operations, managed issuer signing, bureau submission,
 polling, batch, and signed callback behavior have Rust implementations. Two
 independent maintainer audits found no missing P1–P3 passport implementation at
