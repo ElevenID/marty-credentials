@@ -1,3 +1,6 @@
+// Core verification futures exceed rustc's default query depth on WASM.
+#![recursion_limit = "256"]
+
 // Error module (only for python - has tracing dependencies)
 #[cfg(feature = "python")]
 mod error;
