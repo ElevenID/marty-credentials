@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: f0819fa0a7783eaebc2efaa105908809244c75a4
+  MARTY_CORE_REVISION: 44040270000f93b7e7499cbec31b3bb3dd7e3df1
 
 jobs:
   preflight:

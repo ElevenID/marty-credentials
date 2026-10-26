@@ -4,12 +4,9 @@ import argparse
 import json
 import sys
 
-CORE_REVISION = "f0819fa0a7783eaebc2efaa105908809244c75a4"
-CORE_REF = "f0819fa"
-CORE_SOURCE = (
-    "git+https://github.com/ElevenID/marty-core"
-    f"?rev={CORE_REF}#{CORE_REVISION}"
-)
+CORE_REVISION = "44040270000f93b7e7499cbec31b3bb3dd7e3df1"
+CORE_REF = "44040270000f93b7e7499cbec31b3bb3dd7e3df1"
+CORE_SOURCE = f"git+https://github.com/ElevenID/marty-core?rev={CORE_REF}#{CORE_REVISION}"
 CORE_CRATES = {
     "marty-canonical-digest",
     "marty-crypto",
@@ -24,12 +21,12 @@ CORE_CRATES_BY_MODE = {
     "native": CORE_CRATES - {"marty-python-adapters", "marty-status"},
     "wasm": CORE_CRATES - {"marty-python-adapters", "marty-status"},
 }
+CORE_ADAPTERS = {"bls12_381_plus": "0.8.18", "elliptic-curve": "0.13.8"}
 KMS_ONLY_CRATES = {"marty-crypto", "marty-oid4vci", "marty-verification"}
 FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
-ISOMDL_REVISION = "784a52943469622873c7ae3200dbc11e89d6bd8e"
+ISOMDL_REVISION = "1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
 ISOMDL_SOURCE = (
-    "git+https://github.com/ElevenID/isomdl-elevenid"
-    f"?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
+    f"git+https://github.com/ElevenID/isomdl-elevenid?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
 )
 
 
@@ -41,14 +38,17 @@ def check(metadata: dict, mode: str = "python") -> None:
         if "github.com/ElevenID/marty-core" in (package.get("source") or "")
     ]
     names = [package["name"] for package in core]
-    expected = CORE_CRATES_BY_MODE[mode]
+    expected = CORE_CRATES_BY_MODE[mode] | CORE_ADAPTERS.keys()
     if len(names) != len(expected) or set(names) != expected:
         raise ValueError(f"Credentials {mode} Core packages changed: {sorted(names)}")
 
     for package in core:
         name = package["name"]
-        if package["version"] != "0.2.2" or package["source"] != CORE_SOURCE:
+        expected_version = CORE_ADAPTERS.get(name, "0.2.2")
+        if package["version"] != expected_version or package["source"] != CORE_SOURCE:
             raise ValueError(f"{name} is not pinned to reviewed KMS-only Core")
+        if name in CORE_ADAPTERS:
+            continue
         features = set(nodes[package["id"]]["features"])
         forbidden = features & FORBIDDEN_FEATURES
         if forbidden:
@@ -57,11 +57,7 @@ def check(metadata: dict, mode: str = "python") -> None:
             raise ValueError(f"{name} is missing kms-only")
 
     isomdl = [package for package in metadata["packages"] if package["name"] == "isomdl"]
-    if (
-        len(isomdl) != 1
-        or isomdl[0]["version"] != "0.3.0"
-        or isomdl[0]["source"] != ISOMDL_SOURCE
-    ):
+    if len(isomdl) != 1 or isomdl[0]["version"] != "0.3.0" or isomdl[0]["source"] != ISOMDL_SOURCE:
         raise ValueError("Expected one reviewed isomdl 0.3.0 package")
     if set(nodes[isomdl[0]["id"]]["features"]) & {"default", "issuer-local-signing"}:
         raise ValueError("isomdl enables local issuer signing")

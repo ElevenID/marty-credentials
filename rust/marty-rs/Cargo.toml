@@ -31,7 +31,6 @@ native = [
     "dep:marty-oid4vci",
     "sd-jwt-rs",
     "jsonwebtoken",
-    "dep:jsonwebtoken-legacy",
     "sha2",
 ]
 python = [
@@ -54,7 +53,6 @@ python = [
     "ciborium",
     "sd-jwt-rs",
     "jsonwebtoken",
-    "dep:jsonwebtoken-legacy",
     "sha2"
 ]
 wasm = [
@@ -113,9 +111,6 @@ pem-rfc7468 = { workspace = true, optional = false }
 # SD-JWT support
 sd-jwt-rs = { workspace = true, optional = true }
 jsonwebtoken = { workspace = true, optional = true }
-# sd-jwt-rs is still pinned to jsonwebtoken 10. Keep that boundary explicit
-# while the workspace-facing dependency advances independently to 11.
-jsonwebtoken-legacy = { package = "jsonwebtoken", version = "10.4", features = ["rust_crypto"], optional = true }
 
 # Crypto for signatures
 sha2 = { version = "0.11", optional = true }
