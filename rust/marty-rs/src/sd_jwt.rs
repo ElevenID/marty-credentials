@@ -3,9 +3,8 @@
 // This module provides Python bindings for verifying Selective Disclosure
 // JWTs according to the SD-JWT specification.
 
-// sd-jwt-rs owns this type boundary and remains pinned to jsonwebtoken 10.
-// The workspace-facing jsonwebtoken dependency can move independently.
-use jsonwebtoken_legacy::{DecodingKey, Header};
+// Share Core's verification-only JOSE backend and SD-JWT revision.
+use jsonwebtoken::{DecodingKey, Header};
 use pyo3::prelude::*;
 use sd_jwt_rs::{SDJWTSerializationFormat, SDJWTVerifier};
 
@@ -35,15 +34,12 @@ impl SdJwtVerifier {
         expected_nonce: Option<String>,
         expected_audience: Option<String>,
     ) -> PyResult<String> {
-        let public_key_pem = self.public_key_pem.clone();
-        let alg = self.algorithm.clone();
+        let key = create_decoding_key(&self.public_key_pem, &self.algorithm)?;
 
         // Create the key resolver callback
         #[allow(clippy::type_complexity)]
         let cb_get_issuer_key: Box<dyn Fn(&str, &Header) -> DecodingKey> =
-            Box::new(move |_issuer: &str, _header: &Header| {
-                create_decoding_key(&public_key_pem, &alg).expect("Failed to create decoding key")
-            });
+            Box::new(move |_issuer: &str, _header: &Header| key.clone());
 
         let verifier = SDJWTVerifier::new(
             presentation,

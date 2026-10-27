@@ -4,15 +4,6 @@ use marty_python_adapters::json_to_python;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use coset_isomdl::{cbor::value::Value as CoseValue, iana, Label, RegisteredLabelWithPrivate};
-use isomdl::definitions::device_response::{DeviceResponse as IsoDeviceResponse, Status};
-use isomdl::definitions::helpers::Tag24;
-use isomdl::definitions::x509::x5chain::{X5Chain, X5CHAIN_COSE_HEADER_LABEL};
-use isomdl::definitions::{DigestAlgorithm, Mso};
-use sha2::{Digest, Sha256};
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
-
 /// Wrapper for marty_verification::mdoc::DeviceResponse
 #[pyclass(skip_from_py_object)]
 pub struct DeviceResponse {
@@ -292,50 +283,31 @@ pub fn verify_mdoc_presentation(
     trusted_root_certs_pem: Vec<String>,
     pinned_issuer_certs_pem: Vec<String>,
 ) -> PyResult<MdocPresentationVerificationResult> {
-    let issuer = verify_mdoc_signature_with_policy(
-        mdoc_bytes.clone(),
-        trusted_root_certs_pem,
-        pinned_issuer_certs_pem,
-    )?;
-    let mut errors = issuer.error.into_iter().collect::<Vec<_>>();
-    let (device_authentication_valid, device_document_types) =
-        match marty_verification::verify_device_authentication(
-            &mdoc_bytes,
-            &session_transcript_cbor,
-        ) {
-            Ok(result) => (result.verified, result.document_types),
-            Err(error) => {
-                errors.push(format!("Holder device authentication failed: {error}"));
-                (false, Vec::new())
-            }
-        };
-    let document_types = if issuer.document_types.is_empty() {
-        device_document_types
-    } else {
-        issuer.document_types
-    };
-
+    let result = marty_verification::mdoc::verify_mdoc_presentation(
+        &mdoc_bytes,
+        &session_transcript_cbor,
+        &trusted_root_certs_pem,
+        &pinned_issuer_certs_pem,
+    );
     Ok(MdocPresentationVerificationResult {
-        issuer_signature_valid: issuer.signature_valid,
-        issuer_trusted: issuer.issuer_verified,
-        device_authentication_valid,
-        document_types,
-        document_evidence: issuer.document_evidence,
-        revocation_checked: false,
-        not_revoked: None,
-        error: (!errors.is_empty()).then(|| errors.join("; ")),
+        issuer_signature_valid: result.issuer_signature_valid,
+        issuer_trusted: result.issuer_trusted,
+        device_authentication_valid: result.device_authentication_valid,
+        document_types: result.document_types,
+        document_evidence: result
+            .document_evidence
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        revocation_checked: result.revocation_checked,
+        not_revoked: result.not_revoked,
+        error: result.error,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use isomdl::definitions::device_key::cose_key::EC2Y;
-    use isomdl::definitions::{DeviceKeyInfo, ValidityInfo};
-    use p256::{elliptic_curve::sec1::ToSec1Point, ProjectivePoint};
-    use std::collections::BTreeMap;
-    use time::Duration;
-
     #[test]
     fn malformed_presentation_fails_without_panicking() {
         let result = verify_mdoc_presentation(
@@ -355,114 +327,94 @@ mod tests {
         assert!(result.error.is_some());
     }
 
-    fn mso_with_validity(valid_from: OffsetDateTime, valid_until: OffsetDateTime) -> Mso {
-        let point = ProjectivePoint::GENERATOR.to_affine().to_sec1_point(false);
-        let point = point.as_bytes();
-        assert_eq!(point.len(), 65);
-        assert_eq!(point[0], 0x04);
-        Mso {
-            version: "1.0".to_string(),
-            digest_algorithm: DigestAlgorithm::SHA256,
-            value_digests: BTreeMap::new(),
-            device_key_info: DeviceKeyInfo {
-                device_key: isomdl::definitions::device_key::CoseKey::EC2 {
-                    crv: isomdl::definitions::device_key::EC2Curve::P256,
-                    x: point[1..33].to_vec(),
-                    y: EC2Y::Value(point[33..65].to_vec()),
-                },
-                key_authorizations: None,
-                key_info: None,
-            },
-            doc_type: "org.iso.18013.5.1.mDL".to_string(),
-            validity_info: ValidityInfo {
-                signed: valid_from - Duration::minutes(1),
-                valid_from,
-                valid_until,
-                expected_update: None,
-            },
+    #[test]
+    fn compatibility_signature_and_issuer_bindings_preserve_core_failures() {
+        for bytes in [vec![], vec![0xff], vec![0xa0]] {
+            let expected = marty_verification::mdoc::verify_mdoc_issuer(&bytes, &[], &[]);
+            let signature = verify_mdoc_signature(bytes.clone(), vec![]).unwrap();
+            let issuer = verify_mdoc_issuer(bytes, vec![], None);
+            assert_eq!(signature.signature_valid, expected.signature_valid);
+            assert_eq!(signature.issuer_verified, expected.issuer_trusted);
+            assert_eq!(signature.document_types, expected.document_types);
+            assert_eq!(signature.error, expected.error);
+            assert_eq!(issuer.error, expected.error);
+            assert!(!signature.signature_valid);
+            assert!(signature.document_evidence.is_empty());
+            assert!(!issuer.revocation_checked);
+            assert_eq!(issuer.not_revoked, None);
         }
     }
 
+    // Unmodified public-only vector from Core440's mdoc authentication suite.
     #[test]
-    fn authenticated_mso_evidence_is_typed_and_does_not_invent_revocation() {
-        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
-        let mso = mso_with_validity(now - Duration::hours(1), now + Duration::hours(1));
-
-        let evidence = validated_mso_evidence(
-            &mso,
-            "org.iso.18013.5.1.mDL",
-            "ES256",
-            b"issuer-certificate",
-            now,
+    fn signed_presentation_preserves_issuer_trust_and_holder_binding() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let response = STANDARD
+            .decode(fixture["response_b64"].as_str().unwrap())
+            .unwrap();
+        let transcript = STANDARD
+            .decode(fixture["transcript_b64"].as_str().unwrap())
+            .unwrap();
+        let certificate = fixture["certificate_pem"].as_str().unwrap().to_owned();
+        let result = verify_mdoc_presentation(
+            response.clone(),
+            transcript.clone(),
+            vec![],
+            vec![certificate.clone()],
         )
         .unwrap();
-
-        assert_eq!(evidence.document_type, "org.iso.18013.5.1.mDL");
-        assert_eq!(evidence.signature_algorithm, "ES256");
-        assert_eq!(evidence.digest_algorithm, "SHA-256");
-        assert_eq!(evidence.valid_from, "2026-08-09T11:00:00Z");
-        assert_eq!(evidence.valid_until, "2026-08-09T13:00:00Z");
-        assert_eq!(evidence.issuer_certificate_sha256.len(), 64);
-        assert!(evidence
-            .issuer_certificate_sha256
-            .chars()
-            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()));
-        assert!(evidence.validity_checked);
-        assert!(evidence.valid_at_verification_time);
-        assert!(!evidence.revocation_checked);
-        assert_eq!(evidence.not_revoked, None);
+        assert!(result.issuer_signature_valid);
+        assert!(result.issuer_trusted);
+        assert!(result.device_authentication_valid);
+        assert_eq!(result.document_evidence.len(), 1);
+        assert!(result.error.is_none());
+        let untrusted =
+            verify_mdoc_presentation(response.clone(), transcript, vec![], vec![]).unwrap();
+        assert!(!untrusted.issuer_trusted);
+        let changed =
+            verify_mdoc_presentation(response, vec![0x80], vec![], vec![certificate]).unwrap();
+        assert!(!changed.device_authentication_valid);
+        assert!(!changed.revocation_checked);
+        assert_eq!(changed.not_revoked, None);
     }
 
     #[test]
-    fn authenticated_mso_evidence_rejects_type_and_validity_failures() {
-        let now = OffsetDateTime::parse("2026-08-09T12:00:00Z", &Rfc3339).unwrap();
-        let valid = mso_with_validity(now - Duration::hours(1), now + Duration::hours(1));
-        assert!(validated_mso_evidence(&valid, "wrong.type", "ES256", b"cert", now).is_err());
-
-        let future = mso_with_validity(now + Duration::seconds(1), now + Duration::hours(1));
-        assert!(
-            validated_mso_evidence(&future, "org.iso.18013.5.1.mDL", "ES256", b"cert", now,)
-                .unwrap_err()
-                .contains("not yet valid")
-        );
-
-        let expired = mso_with_validity(now - Duration::hours(1), now - Duration::seconds(1));
-        assert!(
-            validated_mso_evidence(&expired, "org.iso.18013.5.1.mDL", "ES256", b"cert", now,)
-                .unwrap_err()
-                .contains("expired")
-        );
-
-        let contradictory = mso_with_validity(now + Duration::hours(1), now - Duration::hours(1));
-        assert!(validated_mso_evidence(
-            &contradictory,
-            "org.iso.18013.5.1.mDL",
-            "ES256",
-            b"cert",
-            now,
-        )
-        .unwrap_err()
-        .contains("contradictory"));
-    }
-
-    #[test]
-    fn direct_issuer_pin_parser_requires_a_certificate_block() {
-        let certificate = pem_rfc7468::encode_string(
-            "CERTIFICATE",
-            pem_rfc7468::LineEnding::LF,
-            b"public-certificate",
-        )
-        .unwrap();
+    fn evidence_projection_preserves_validity_and_revocation_fields() {
+        let expected = marty_verification::mdoc::MdocDocumentVerificationEvidence {
+            document_type: "org.iso.18013.5.1.mDL".into(),
+            signature_algorithm: "ES256".into(),
+            digest_algorithm: "SHA-256".into(),
+            signed_at: "signed".into(),
+            valid_from: "from".into(),
+            valid_until: "until".into(),
+            issuer_certificate_sha256: "digest".into(),
+            validity_checked: true,
+            valid_at_verification_time: false,
+            revocation_checked: true,
+            not_revoked: Some(false),
+        };
+        let actual: MdocDocumentVerificationEvidence = expected.clone().into();
+        assert_eq!(actual.document_type, expected.document_type);
+        assert_eq!(actual.signature_algorithm, expected.signature_algorithm);
+        assert_eq!(actual.digest_algorithm, expected.digest_algorithm);
+        assert_eq!(actual.signed_at, expected.signed_at);
+        assert_eq!(actual.valid_from, expected.valid_from);
+        assert_eq!(actual.valid_until, expected.valid_until);
         assert_eq!(
-            certificate_pem_to_der(&certificate).unwrap(),
-            b"public-certificate"
+            actual.issuer_certificate_sha256,
+            expected.issuer_certificate_sha256
         );
-
-        let public_key =
-            pem_rfc7468::encode_string("PUBLIC KEY", pem_rfc7468::LineEnding::LF, b"public")
-                .unwrap();
-        assert!(certificate_pem_to_der(&public_key).is_err());
-        assert!(certificate_pem_to_der("not pem").is_err());
+        assert_eq!(actual.validity_checked, expected.validity_checked);
+        assert_eq!(
+            actual.valid_at_verification_time,
+            expected.valid_at_verification_time
+        );
+        assert_eq!(actual.revocation_checked, expected.revocation_checked);
+        assert_eq!(actual.not_revoked, expected.not_revoked);
     }
 }
 
@@ -524,355 +476,17 @@ pub fn verify_mdoc_signature(
     mdoc_bytes: Vec<u8>,
     trusted_issuer_certs_pem: Vec<String>,
 ) -> PyResult<MdocVerificationResult> {
-    verify_mdoc_signature_with_policy(mdoc_bytes, trusted_issuer_certs_pem, Vec::new())
-}
-
-fn verify_mdoc_signature_with_policy(
-    mdoc_bytes: Vec<u8>,
-    trusted_root_certs_pem: Vec<String>,
-    pinned_issuer_certs_pem: Vec<String>,
-) -> PyResult<MdocVerificationResult> {
-    // Parse the complete ISO DeviceResponse. The compatibility parser used
-    // here previously extracts disclosed claims but intentionally does not
-    // retain issuerAuth, the MSO, or the x5chain and therefore cannot
-    // authenticate an issuer.
-    let response: IsoDeviceResponse = match isomdl::cbor::from_slice(&mdoc_bytes) {
-        Ok(r) => r,
-        Err(e) => {
-            return Ok(MdocVerificationResult {
-                signature_valid: false,
-                issuer_verified: false,
-                document_types: vec![],
-                document_evidence: vec![],
-                error: Some(format!("Failed to parse mDoc DeviceResponse: {e}")),
-            });
-        }
-    };
-    if response.version != IsoDeviceResponse::VERSION || !matches!(response.status, Status::OK) {
-        return Ok(MdocVerificationResult {
-            signature_valid: false,
-            issuer_verified: false,
-            document_types: vec![],
-            document_evidence: vec![],
-            error: Some("mDoc DeviceResponse version or status is invalid".to_string()),
-        });
-    }
-    let Some(documents) = response.documents.as_ref() else {
-        return Ok(MdocVerificationResult {
-            signature_valid: false,
-            issuer_verified: false,
-            document_types: vec![],
-            document_evidence: vec![],
-            error: Some("mDoc DeviceResponse contains no documents".to_string()),
-        });
-    };
-
-    // Get document types
-    let document_types: Vec<String> = documents
-        .iter()
-        .map(|document| document.doc_type.clone())
-        .collect();
-
-    let mut chain_validator = marty_verification::verification::ChainValidator::new();
-    let mut trust_configuration_valid =
-        !trusted_root_certs_pem.is_empty() || !pinned_issuer_certs_pem.is_empty();
-    let mut errors = Vec::new();
-    if !trust_configuration_valid {
-        errors.push("No trusted issuer certificates were configured".to_string());
-    }
-    for trusted_cert in &trusted_root_certs_pem {
-        if let Err(error) = chain_validator.add_trust_anchor_pem(trusted_cert) {
-            trust_configuration_valid = false;
-            errors.push(format!("Invalid trusted root certificate: {error}"));
-        }
-    }
-    let mut pinned_issuer_certs_der = Vec::with_capacity(pinned_issuer_certs_pem.len());
-    for pinned_cert in &pinned_issuer_certs_pem {
-        match certificate_pem_to_der(pinned_cert) {
-            Ok(certificate) => pinned_issuer_certs_der.push(certificate),
-            Err(error) => {
-                trust_configuration_valid = false;
-                errors.push(format!("Invalid pinned issuer certificate: {error}"));
-            }
-        }
-    }
-
-    // Verify issuerAuth directly from the ISO document. Issuance/signing remains
-    // behind the issuer profile and its DID verification method; verification
-    // consumes only the public COSE signature and certificate chain.
-    let mut all_signatures_valid = true;
-    let mut issuer_verified = trust_configuration_valid;
-    let mut document_evidence = Vec::with_capacity(documents.len());
-    let validation_time = OffsetDateTime::now_utc();
-
-    for document in documents.iter() {
-        let issuer_auth = &document.issuer_signed.issuer_auth;
-        let x5chain_value = issuer_auth
-            .protected
-            .header
-            .rest
-            .iter()
-            .chain(issuer_auth.unprotected.rest.iter())
-            .find_map(|(label, value)| {
-                (label == &Label::Int(X5CHAIN_COSE_HEADER_LABEL)).then_some(value)
-            });
-
-        let Some(x5chain_value) = x5chain_value else {
-            all_signatures_valid = false;
-            issuer_verified = false;
-            errors.push(format!(
-                "No issuer certificate chain in issuerAuth for {}",
-                document.doc_type
-            ));
-            continue;
-        };
-
-        let certificate_chain = match certificate_chain_der(x5chain_value) {
-            Ok(chain) => chain,
-            Err(error) => {
-                all_signatures_valid = false;
-                issuer_verified = false;
-                errors.push(format!(
-                    "Invalid issuer certificate chain for {}: {error}",
-                    document.doc_type
-                ));
-                continue;
-            }
-        };
-
-        let x5chain = match X5Chain::from_cbor(x5chain_value.clone()) {
-            Ok(chain) => chain,
-            Err(error) => {
-                all_signatures_valid = false;
-                issuer_verified = false;
-                errors.push(format!(
-                    "Invalid issuer x5chain for {}: {error}",
-                    document.doc_type
-                ));
-                continue;
-            }
-        };
-
-        if let Err(error) =
-            marty_verification::verification::mdl::validate_document_signer_certificate_der(
-                &certificate_chain[0],
-            )
-        {
-            all_signatures_valid = false;
-            issuer_verified = false;
-            errors.push(format!(
-                "Invalid document-signer certificate profile for {}: {error}",
-                document.doc_type
-            ));
-            continue;
-        }
-
-        if let Err(error) = marty_verification::verification::mdl::verify_issuer_signature(
-            &x5chain,
-            &document.issuer_signed,
-        ) {
-            all_signatures_valid = false;
-            issuer_verified = false;
-            errors.push(format!(
-                "Signature verification failed for {}: {error}",
-                document.doc_type
-            ));
-            continue;
-        }
-
-        if trust_configuration_valid {
-            let directly_pinned = pinned_issuer_certs_der
-                .iter()
-                .any(|pinned| pinned == &certificate_chain[0]);
-            let (chain_trusted, chain_error) = if trusted_root_certs_pem.is_empty() {
-                (false, None)
-            } else {
-                match chain_validator.validate_chain_der(&certificate_chain) {
-                    Ok(validation) if validation.valid => (true, None),
-                    Ok(validation) => (false, Some(validation.errors.join("; "))),
-                    Err(error) => (false, Some(error.to_string())),
-                }
-            };
-            if !directly_pinned && !chain_trusted {
-                issuer_verified = false;
-                errors.push(format!(
-                    "Issuer certificate for {} is neither directly pinned nor rooted in a trusted anchor{}",
-                    document.doc_type,
-                    chain_error
-                        .map(|error| format!(": {error}"))
-                        .unwrap_or_default()
-                ));
-            }
-        } else {
-            // No trusted certs configured — issuer trust CANNOT be established.
-            // Signature may be valid but we cannot confirm the issuer is
-            // in the trust list. Mark explicitly as unverified.
-            issuer_verified = false;
-            tracing::warn!(
-                "mDOC issuer trust check skipped: no valid trusted certificates configured. \
-                 Issuer cert chain present but cannot be validated against a trust anchor."
-            );
-        }
-
-        match authenticated_document_evidence(document, &certificate_chain[0], validation_time) {
-            Ok(evidence) => document_evidence.push(evidence),
-            Err(error) => {
-                all_signatures_valid = false;
-                issuer_verified = false;
-                errors.push(format!(
-                    "Authenticated MSO evidence is invalid for {}: {error}",
-                    document.doc_type
-                ));
-            }
-        }
-    }
-
+    let result =
+        marty_verification::mdoc::verify_mdoc_issuer(&mdoc_bytes, &trusted_issuer_certs_pem, &[]);
     Ok(MdocVerificationResult {
-        signature_valid: all_signatures_valid,
-        issuer_verified,
-        document_types,
-        document_evidence,
-        error: (!errors.is_empty()).then(|| errors.join("; ")),
-    })
-}
-
-fn certificate_chain_der(value: &CoseValue) -> Result<Vec<Vec<u8>>, &'static str> {
-    match value {
-        CoseValue::Bytes(certificate) if !certificate.is_empty() => Ok(vec![certificate.clone()]),
-        CoseValue::Array(certificates) if !certificates.is_empty() => certificates
-            .iter()
-            .map(|certificate| match certificate {
-                CoseValue::Bytes(bytes) if !bytes.is_empty() => Ok(bytes.clone()),
-                _ => Err("x5chain entries must be non-empty byte strings"),
-            })
+        signature_valid: result.signature_valid,
+        issuer_verified: result.issuer_trusted,
+        document_types: result.document_types,
+        document_evidence: result
+            .document_evidence
+            .into_iter()
+            .map(Into::into)
             .collect(),
-        _ => Err("x5chain must be a byte string or non-empty array"),
-    }
-}
-
-fn certificate_pem_to_der(value: &str) -> Result<Vec<u8>, String> {
-    let (label, certificate) = pem_rfc7468::decode_vec(value.as_bytes())
-        .map_err(|error| format!("PEM decode failed: {error}"))?;
-    if label != "CERTIFICATE" || certificate.is_empty() {
-        return Err("PEM must contain one non-empty CERTIFICATE block".to_string());
-    }
-    Ok(certificate)
-}
-
-fn authenticated_document_evidence(
-    document: &isomdl::definitions::device_response::Document,
-    issuer_certificate_der: &[u8],
-    validation_time: OffsetDateTime,
-) -> Result<MdocDocumentVerificationEvidence, String> {
-    let algorithm = match document
-        .issuer_signed
-        .issuer_auth
-        .protected
-        .header
-        .alg
-        .as_ref()
-    {
-        Some(RegisteredLabelWithPrivate::Assigned(iana::Algorithm::ES256)) => "ES256",
-        Some(_) => return Err("unsupported issuer signature algorithm".to_string()),
-        None => return Err("issuer signature algorithm is not protected".to_string()),
-    };
-    let mso_bytes = document
-        .issuer_signed
-        .issuer_auth
-        .payload
-        .as_ref()
-        .ok_or_else(|| "issuerAuth payload is detached".to_string())?;
-    let mso = isomdl::cbor::from_slice::<Tag24<Mso>>(mso_bytes)
-        .map_err(|error| format!("unable to parse MSO: {error}"))?
-        .into_inner();
-    validated_mso_evidence(
-        &mso,
-        &document.doc_type,
-        algorithm,
-        issuer_certificate_der,
-        validation_time,
-    )
-}
-
-fn validated_mso_evidence(
-    mso: &Mso,
-    authenticated_document_type: &str,
-    signature_algorithm: &str,
-    issuer_certificate_der: &[u8],
-    validation_time: OffsetDateTime,
-) -> Result<MdocDocumentVerificationEvidence, String> {
-    if mso.version != "1.0" {
-        return Err(format!("unsupported MSO version {}", mso.version));
-    }
-    if mso.doc_type != authenticated_document_type {
-        return Err("MSO document type does not match the authenticated document".to_string());
-    }
-    if mso.validity_info.valid_from > mso.validity_info.valid_until {
-        return Err("MSO validity window is contradictory".to_string());
-    }
-    if validation_time < mso.validity_info.valid_from {
-        return Err("MSO is not yet valid".to_string());
-    }
-    if validation_time > mso.validity_info.valid_until {
-        return Err("MSO is expired".to_string());
-    }
-
-    let digest_algorithm = match mso.digest_algorithm {
-        DigestAlgorithm::SHA256 => "SHA-256",
-        DigestAlgorithm::SHA384 => "SHA-384",
-        DigestAlgorithm::SHA512 => "SHA-512",
-    };
-    let format_time = |value: OffsetDateTime| {
-        value
-            .format(&Rfc3339)
-            .map_err(|error| format!("unable to format MSO validity timestamp: {error}"))
-    };
-
-    Ok(MdocDocumentVerificationEvidence {
-        document_type: authenticated_document_type.to_string(),
-        signature_algorithm: signature_algorithm.to_string(),
-        digest_algorithm: digest_algorithm.to_string(),
-        signed_at: format_time(mso.validity_info.signed)?,
-        valid_from: format_time(mso.validity_info.valid_from)?,
-        valid_until: format_time(mso.validity_info.valid_until)?,
-        issuer_certificate_sha256: Sha256::digest(issuer_certificate_der)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
-        validity_checked: true,
-        valid_at_verification_time: true,
-        revocation_checked: false,
-        not_revoked: None,
+        error: result.error,
     })
-}
-
-#[cfg(test)]
-mod certificate_chain_tests {
-    use super::*;
-
-    #[test]
-    fn certificate_chain_accepts_single_der_certificate() {
-        assert_eq!(
-            certificate_chain_der(&CoseValue::Bytes(vec![1, 2, 3])),
-            Ok(vec![vec![1, 2, 3]])
-        );
-    }
-
-    #[test]
-    fn certificate_chain_accepts_der_certificate_array() {
-        assert_eq!(
-            certificate_chain_der(&CoseValue::Array(vec![
-                CoseValue::Bytes(vec![1]),
-                CoseValue::Bytes(vec![2]),
-            ])),
-            Ok(vec![vec![1], vec![2]])
-        );
-    }
-
-    #[test]
-    fn certificate_chain_rejects_empty_or_non_binary_values() {
-        assert!(certificate_chain_der(&CoseValue::Bytes(vec![])).is_err());
-        assert!(certificate_chain_der(&CoseValue::Array(vec![])).is_err());
-        assert!(certificate_chain_der(&CoseValue::Array(vec![CoseValue::Null])).is_err());
-    }
 }
