@@ -133,7 +133,7 @@ dependencies = [
  "nom",
  "num-traits",
  "rusticata-macros",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
 ]
 
@@ -551,7 +551,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "smol_str",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -578,7 +578,7 @@ dependencies = [
  "serde_with",
  "smol_str",
  "stacker",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "unicode-security",
 ]
 
@@ -1015,7 +1015,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -1052,7 +1052,7 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
 dependencies = [
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1070,9 +1070,9 @@ dependencies = [
 
 [[package]]
 name = "der"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a878c850e9e421b20262e9b41f9c860e4785fa07541c266b62ff9d1ef998a80a"
+checksum = "6a996a108feb8b427a6e12fcf6af4aa83409b79d72c15337d7741368131ee004"
 dependencies = [
  "const-oid 0.10.2",
  "der_derive 0.8.0",
@@ -1158,7 +1158,7 @@ dependencies = [
  "ssi-dids-core",
  "ssi-jwk",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1178,7 +1178,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-jws",
  "ssi-verification-methods",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1196,7 +1196,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-verification-methods",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1215,7 +1215,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-multicodec",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1235,7 +1235,7 @@ dependencies = [
  "ssi-dids-core",
  "ssi-jwk",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1256,7 +1256,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-jws",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "url",
 ]
 
@@ -1269,7 +1269,7 @@ dependencies = [
  "iref",
  "reqwest",
  "ssi-dids-core",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1334,7 +1334,7 @@ version = "0.17.0"
 source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
 dependencies = [
  "crypto-bigint",
- "der 0.8.2",
+ "der 0.8.3",
  "digest 0.11.3",
  "elliptic-curve 0.14.1",
  "rfc6979",
@@ -1643,6 +1643,12 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "foreign-types"
@@ -2403,7 +2409,7 @@ dependencies = [
  "jni-sys",
  "log",
  "simd_cesu8",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "walkdir",
  "windows-link",
 ]
@@ -2677,7 +2683,7 @@ dependencies = [
  "ecdsa",
  "elliptic-curve 0.14.1",
  "primeorder",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "wnaf",
 ]
 
@@ -2787,7 +2793,7 @@ dependencies = [
  "percent-encoding",
  "rustls",
  "rustls-native-certs",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -3049,7 +3055,7 @@ dependencies = [
  "sha2 0.10.9",
  "shake",
  "spki 0.7.3",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "x509-cert 0.2.5",
  "x509-ocsp",
  "zeroize",
@@ -3080,7 +3086,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "ssi-jwk",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tracing",
  "url",
  "uuid",
@@ -3107,7 +3113,7 @@ dependencies = [
  "coset 0.3.8",
  "coset 0.4.2",
  "der 0.7.10",
- "der 0.8.2",
+ "der 0.8.3",
  "getrandom 0.2.17",
  "getrandom 0.4.3",
  "isomdl",
@@ -3126,9 +3132,9 @@ dependencies = [
  "sd-jwt-rs",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "ssi-status",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -3152,7 +3158,7 @@ dependencies = [
  "flate2",
  "serde",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3207,7 +3213,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-jws",
  "ssi-verification-methods",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
  "tokio",
  "tracing",
@@ -3627,7 +3633,7 @@ dependencies = [
  "primefield",
  "primeorder",
  "serdect",
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -3642,7 +3648,7 @@ dependencies = [
  "primefield",
  "primeorder",
  "serdect",
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -3656,7 +3662,7 @@ dependencies = [
  "elliptic-curve 0.14.1",
  "primefield",
  "primeorder",
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -3825,7 +3831,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "451913da69c775a56034ea8d9003d27ee8948e12443eae7c038ba100a4f21cb7"
 dependencies = [
- "der 0.8.2",
+ "der 0.8.3",
  "spki 0.8.0",
 ]
 
@@ -4051,7 +4057,7 @@ dependencies = [
  "rustc-hash",
  "rustls",
  "socket2",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "web-time",
@@ -4074,7 +4080,7 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "slab",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "tinyvec",
  "tracing",
  "web-time",
@@ -4581,7 +4587,7 @@ checksum = "d56d437c2f19203ce5f7122e507831de96f3d2d4d3be5af44a0b0a09d8a80e4d"
 dependencies = [
  "base16ct 1.0.0",
  "ctutils",
- "der 0.8.2",
+ "der 0.8.3",
  "hybrid-array",
  "serdect",
  "subtle",
@@ -4686,10 +4692,11 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash",
  "indexmap 2.14.0",
  "itoa",
  "memchr",
@@ -4790,9 +4797,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -4908,7 +4915,7 @@ checksum = "0d585997b0ac10be3c5ee635f1bab02d512760d14b7c468801ac8a01d9ae5f1d"
 dependencies = [
  "num-bigint",
  "num-traits",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
 ]
 
@@ -4983,7 +4990,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d9efca8738c78ee9484207732f728b1ef517bbb1833d6fc0879ca898a522f6f"
 dependencies = [
  "base64ct",
- "der 0.8.2",
+ "der 0.8.3",
 ]
 
 [[package]]
@@ -5034,7 +5041,7 @@ dependencies = [
  "ssi-vc",
  "ssi-vc-jose-cose",
  "ssi-verification-methods",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5049,7 +5056,7 @@ dependencies = [
  "ssi-crypto",
  "ssi-eip712",
  "ssi-json-ld",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5065,7 +5072,7 @@ dependencies = [
  "async-trait",
  "pin-project",
  "serde",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5078,7 +5085,7 @@ dependencies = [
  "serde",
  "ssi-claims-core",
  "ssi-crypto",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5101,7 +5108,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5129,7 +5136,7 @@ dependencies = [
  "ssi-rdf",
  "ssi-security",
  "ssi-verification-methods",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5163,7 +5170,7 @@ dependencies = [
  "ssi-security",
  "ssi-verification-methods",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "xsd-types",
 ]
 
@@ -5212,7 +5219,7 @@ dependencies = [
  "ssi-security",
  "ssi-verification-methods",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "xsd-types",
 ]
 
@@ -5234,7 +5241,7 @@ dependencies = [
  "ssi-core",
  "ssi-json-ld",
  "ssi-rdf",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "uuid",
 ]
 
@@ -5252,7 +5259,7 @@ dependencies = [
  "did-web",
  "ssi-dids-core",
  "ssi-jwk",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5276,7 +5283,7 @@ dependencies = [
  "ssi-jws",
  "ssi-verification-methods-core",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5294,7 +5301,7 @@ dependencies = [
  "serde",
  "serde_jcs",
  "serde_json",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5312,7 +5319,7 @@ dependencies = [
  "ssi-contexts",
  "ssi-rdf",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5399,7 +5406,7 @@ dependencies = [
  "k256",
  "p256",
  "p384",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "unsigned-varint",
 ]
 
@@ -5433,7 +5440,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-jws",
  "ssi-jwt",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5474,7 +5481,7 @@ dependencies = [
  "ssi-vc",
  "ssi-vc-jose-cose",
  "ssi-verification-methods",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "xsd-types",
 ]
 
@@ -5504,7 +5511,7 @@ dependencies = [
  "ssi-rdf",
  "ssi-verification-methods",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "xsd-types",
 ]
 
@@ -5524,7 +5531,7 @@ dependencies = [
  "ssi-jwt",
  "ssi-sd-jwt",
  "ssi-vc",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "xsd-types",
 ]
 
@@ -5558,7 +5565,7 @@ dependencies = [
  "ssi-security",
  "ssi-verification-methods-core",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5582,7 +5589,7 @@ dependencies = [
  "ssi-jwk",
  "ssi-jws",
  "static-iref",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5810,11 +5817,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+checksum = "09e52cb86a36cede5cb101bf8908837b3e4c6e5e59fe7fd85c23fb56200d189e"
 dependencies = [
- "thiserror-impl 2.0.20",
+ "thiserror-impl 2.0.21",
 ]
 
 [[package]]
@@ -5830,9 +5837,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.20"
+version = "2.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5935,9 +5942,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.3"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",
@@ -6259,9 +6266,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "4a0e2d11620c50695fe12bbbfde96b3477fe606e7284c22d505c12ce51214514"
 dependencies = [
  "atomic",
  "getrandom 0.4.3",
@@ -6637,7 +6644,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "105ef4642d9cb137ef83d623d0e4bf08b8adf69e9918ca904a174adb6d3d038b"
 dependencies = [
  "const-oid 0.10.2",
- "der 0.8.2",
+ "der 0.8.3",
  "spki 0.8.0",
  "tls_codec",
 ]
@@ -6667,7 +6674,7 @@ dependencies = [
  "nom",
  "oid-registry",
  "rusticata-macros",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
  "time",
 ]
 
@@ -6827,7 +6834,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sha3 0.10.9",
- "thiserror 2.0.20",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
