@@ -27,9 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     defaults:
       run:
         working-directory: marty-credentials/rust/marty-rs
@@ -48,10 +48,12 @@ jobs:
         with:
           components: rustfmt
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
       - name: Cache cargo
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
@@ -107,9 +109,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -133,11 +135,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
 
       - name: Cache cargo
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
@@ -172,9 +176,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     steps:
       - name: Enforce private native build boundary
         if: vars.PRIVATE_FORKS_ENABLED == 'true'
@@ -205,11 +209,13 @@ jobs:
           components: clippy, rustfmt
 
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
 
       - name: Cache cargo
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
@@ -328,9 +334,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -374,13 +380,13 @@ jobs:
           toolchain: 1.97.1
 
       - name: Enable compiler cache
-        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (steps.core-wheel-cache.outputs.cache-hit != 'true')
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
 
       - name: Cache Core build
-        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (steps.core-wheel-cache.outputs.cache-hit != 'true')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
