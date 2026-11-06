@@ -10,8 +10,19 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-11-03
-    rationale: Re-reviewed 2026-10-20 against the locked graph and https://github.com/spruceid/ssi/pull/706. The SSI umbrella was replaced locally. Narrow SSI crates remain required for OID4VCI, SD-JWT, DID, VC, and Open Badges verification; spruceid/ssi#706 was closed unmerged, so ssi-jwt stays pinned to the verified exact ElevenID revision that removes the unused vulnerable serde_with dependency. The lock contains only serde_with 3.x through Cedar, not SSI, and the repository security audit remains green.
+    review-after: 2026-11-20
+    rationale: >-
+      Re-reviewed 2026-11-06 against Cargo.lock and the current upstream manifest at
+      https://github.com/spruceid/ssi/blob/886a6cf694dfdb6b019d5f69a04dd16f01cb58a4/crates/claims/crates/jwt/Cargo.toml.
+      Upstream still declares serde_with 2.3.2 and https://github.com/spruceid/ssi/pull/706
+      remains closed unmerged. Retain exact ElevenID revision 234723638447c30f90cf499bce1d6b092f865e9d,
+      which removes that unused dependency. GHSA-7gcf-g7xr-8hxj is fixed in serde_with 3.21.0;
+      this lock contains only 3.22.0, directly required by Cedar rather than SSI.
+      See https://github.com/advisories/GHSA-7gcf-g7xr-8hxj.
+      The separate https://rustsec.org/advisories/RUSTSEC-2021-0127.html exception
+      remains applicable to serde_cbor 0.11.2 through ssi-data-integrity-suites 0.4.0.
+      Keep replacement tracked in issue 17 and the existing advisory exception;
+      narrow SSI crates remain required by supported credential verification.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID
@@ -70,5 +81,20 @@ dependencies:
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-11-03
-    rationale: Re-reviewed 2026-10-20 against https://rustsec.org/advisories/RUSTSEC-2023-0071.html and cargo tree. The advisory still has no patched version; RSA 0.9.10 remains required through the pinned Core crypto, verification, OID4VCI and JWT compatibility graph. Keep the explicit advisory watch and existing bounded cargo-deny exception; this review does not claim the timing issue is fixed or authorize local private-key signing. Current managed-custody source boundaries and native security CI remain required.
+    review-after: 2026-11-13
+    rationale: >-
+      Re-reviewed 2026-11-06 against Cargo.lock,
+      https://github.com/rust-lang/crates.io-index/blob/master/3/r/rsa and
+      https://rustsec.org/advisories/RUSTSEC-2023-0071.html.
+      The registry still lists 0.9.10 as the latest stable release, alongside
+      0.10.0-rc.21; RustSec still declares no patched version. Upstream added
+      implicit rejection in https://github.com/RustCrypto/RSA/commit/6b7d70fe66f6843ffe728c1f1e25fda7b42caf28
+      and closed https://github.com/RustCrypto/RSA/issues/626 on 2026-11-01.
+      That progress requires a fresh coordinated Core migration assessment;
+      it does not establish a fix in the locked 0.9.10. Its only direct reverse
+      dependencies here are marty-crypto and marty-verification at Core revision
+      44040270000f93b7e7499cbec31b3bb3dd7e3df1. Retain the explicit advisory watch
+      and existing cargo-deny exception for one week, with issue 17 tracking the
+      upstream fix and release assessment. Keep the existing KMS-only graph guard,
+      managed-custody boundaries and native security CI; this review does not
+      authorize local RSA private-key operations or mark the vulnerability resolved.
