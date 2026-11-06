@@ -34,6 +34,13 @@ jobs:
       run:
         working-directory: marty-credentials/rust/marty-rs
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
@@ -112,6 +119,13 @@ jobs:
       run:
         working-directory: marty-credentials/rust/marty-rs
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
@@ -162,6 +176,13 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
@@ -213,6 +234,13 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
@@ -308,6 +336,13 @@ jobs:
       matrix:
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - name: Restore exact pinned Core wheels
         id: core-wheel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -426,6 +461,13 @@ jobs:
       run:
         working-directory: marty-credentials/rust/marty-rs
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials

@@ -37,6 +37,13 @@ jobs:
       SCCACHE_GHA_ENABLED: 'true'
       SCCACHE_GHA_RW_MODE: READ_WRITE
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - name: Restore exact pinned Core wheels
         id: core-wheel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -107,6 +114,13 @@ jobs:
       run:
         working-directory: rust/marty-rs
     steps:
+      - name: Enforce private native build boundary
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -127,7 +141,7 @@ jobs:
       - name: Warm clippy cache
         run: cargo clippy --locked --no-default-features --features native -- -D warnings
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           if command -v sccache >/dev/null 2>&1; then
