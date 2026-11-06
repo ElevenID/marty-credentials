@@ -406,7 +406,7 @@ dependencies = [
 [[package]]
 name = "bls12_381_plus"
 version = "0.8.18"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "arrayref",
  "elliptic-curve 0.13.8",
@@ -1431,7 +1431,7 @@ checksum = "9e5e8f6c15a24b9a3ee5efec809ccd006d3b30e8b3bb63c39af737c7f87daa1d"
 [[package]]
 name = "elliptic-curve"
 version = "0.13.8"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "base16ct 0.2.0",
  "crypto-bigint",
@@ -3011,7 +3011,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -3020,7 +3020,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -3059,7 +3059,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3089,7 +3089,7 @@ dependencies = [
 [[package]]
 name = "marty-python-adapters"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "marty-status",
  "pyo3",
@@ -3146,7 +3146,7 @@ dependencies = [
 [[package]]
 name = "marty-status"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -3158,7 +3158,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3221,7 +3221,7 @@ dependencies = [
 [[package]]
 name = "marty-x509-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=b04128ab576f3171de529153538eb963f6f08dcb#b04128ab576f3171de529153538eb963f6f08dcb"
+source = "git+https://github.com/ElevenID/marty-core?rev=f116ceb9b62d68a5f87f645faa0560ec4cbedd0c#f116ceb9b62d68a5f87f645faa0560ec4cbedd0c"
 dependencies = [
  "chrono",
  "const-oid 0.9.6",
