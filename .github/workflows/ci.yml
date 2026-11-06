@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: 44040270000f93b7e7499cbec31b3bb3dd7e3df1
+  MARTY_CORE_REVISION: 0c8f77eb61a8b36d448c9d7333f71b873c6ecf22
 
 jobs:
   preflight:
@@ -470,7 +470,7 @@ jobs:
       - name: Validate built Core module exports
         run: |
           python -c "import pathlib, subprocess, sys; wheels = sorted(map(str, pathlib.Path('core-wheels').glob('*.whl'))); assert len(wheels) == 2, wheels; subprocess.run([sys.executable, '-m', 'pip', 'install', '--force-reinstall', *wheels], check=True)"
-          python -c "import marty_rs, marty_verification; assert callable(marty_rs.oid4vci_prepare_mdoc); assert callable(marty_rs.oid4vci_prepare_sd_jwt); assert callable(marty_rs.oid4vci_prepare_jwt_vc); assert callable(marty_rs.oid4vci_prepare_open_badge_v3_jwt_vc); assert not hasattr(marty_rs, 'didcomm_decrypt'); assert not hasattr(marty_rs, 'didcomm_encrypt_authcrypt'); assert callable(marty_verification.p256_public_jwk_to_pem); assert callable(marty_verification.open_badge_ob3_verify); assert not any(hasattr(marty_verification, name) for name in ('aes_gcm_encrypt', 'aes_gcm_decrypt', 'generate_random_bytes', 'open_badge_ob2_issue', 'open_badge_ob3_issue'))"
+          python -c "import marty_rs, marty_verification; assert callable(marty_rs.oid4vci_prepare_mdoc); assert callable(marty_rs.oid4vci_prepare_sd_jwt); assert callable(marty_rs.oid4vci_prepare_jwt_vc); assert callable(marty_rs.oid4vci_prepare_open_badge_v3_jwt_vc); assert not hasattr(marty_rs, 'didcomm_decrypt'); assert not hasattr(marty_rs, 'didcomm_encrypt_authcrypt'); assert callable(marty_verification.p256_public_jwk_to_pem); assert callable(marty_verification.open_badge_ob3_verify); assert not any(hasattr(marty_verification, name) for name in ('aes_gcm_encrypt', 'aes_gcm_decrypt', 'generate_random_bytes', 'open_badge_ob2_verify', 'open_badge_ob2_issue', 'open_badge_ob3_issue'))"
 
       - name: Require both native distributions
         shell: bash
@@ -566,6 +566,15 @@ jobs:
 
       - name: Build WASM (nodejs target)
         run: wasm-pack build --locked --target nodejs --no-default-features --features wasm
+
+      - name: Check Open Badges WASM exports
+        run: |
+          node <<'JS'
+          const assert = require('node:assert/strict');
+          const bindings = require('./pkg');
+          assert.equal(typeof bindings.open_badge_ob3_verify, 'function');
+          assert.equal(Object.hasOwn(bindings, 'open_badge_ob2_verify'), false);
+          JS
 
       - name: Build WASM (bundler target)
         run: wasm-pack build --locked --target bundler --no-default-features --features wasm
