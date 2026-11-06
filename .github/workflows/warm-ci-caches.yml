@@ -37,13 +37,6 @@ jobs:
       SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
       SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ('READ_WRITE') || '' }}
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - name: Restore exact pinned Core wheels
         id: core-wheel-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
@@ -65,6 +58,18 @@ jobs:
         with:
           path: marty-credentials
           persist-credentials: false
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
+
       - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
@@ -82,6 +87,14 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ${{ runner.os }}-core-python-inputs-v5-${{ env.MARTY_CORE_REVISION }}
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && steps.core-wheel-cache.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-core/Cargo.toml"
+
       - name: Build exact pinned Core wheels
         if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         shell: bash
@@ -114,16 +127,21 @@ jobs:
       run:
         working-directory: rust/marty-rs
     steps:
-      - name: Enforce private native build boundary
-        if: vars.PRIVATE_FORKS_ENABLED == 'true'
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        run: |
-          echo "::error::Public native work is paused for the private fork cutover. See docs/private-native-builds.md."
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/.github/scripts/private-forks.py" check
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
       - name: Cache Cargo inputs
         if: vars.PRIVATE_FORKS_ENABLED != 'true'
@@ -138,6 +156,14 @@ jobs:
         uses: ./.github/actions/optional-sccache
         with:
           version: v0.16.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"
+
       - name: Compile native test targets
         run: cargo test --locked --no-default-features --features native --no-run
       - name: Warm clippy cache

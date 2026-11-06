@@ -1,53 +1,51 @@
 # Native build access
 
-The whole-fork privacy plan keeps the existing repositories and pinned Git
-dependencies: `ElevenID/isomdl-elevenid`, `ElevenID/ssi-elevenid`, and
-`ElevenID/sd-jwt-rust`. It does not extract replacement crates or change their
-upstream history, license files, or notices.
+Native builds use the complete `ElevenID/isomdl-elevenid`,
+`ElevenID/ssi-elevenid`, and `ElevenID/sd-jwt-rust` repositories at their existing
+pinned commits. Making those forks private does not change their upstream
+history, licenses, notices, package APIs, or the public consumer's source license.
 
-## Prepared, inactive boundary
+## Authenticated existing CI
 
-`PRIVATE_FORKS_ENABLED` is a repository Actions variable. Leave it unset or
-`false` until an authenticated consuming build for this repository works in a
-private environment and the native CI/release pause is ready to take effect.
-This change does not set the variable or change repository visibility.
+`PRIVATE_FORKS_ENABLED` is a repository Actions variable. When it is unset or
+`false`, the existing anonymous build and cache behavior remains available.
+When it is exactly `true`, native jobs fetch their dependency graphs using the
+repository's `PRIVATE_FORKS_READ_TOKEN` Actions secret, then run their existing
+checks without that token. The reader needs only Contents read access to the
+three forks; the credential helper answers only their exact GitHub HTTPS paths.
 
-When the variable is exactly `true`, the public jobs that resolve these
-dependencies fail before checkout, dependency setup, or cache access. The
-existing CI Gate still requires the original native checks to pass; the
-boundary does not turn an unexecuted test into success.
+The reader is restricted to trusted internal work. Same-repository contributors
+must already be authorized to read the forks. External fork PRs and Dependabot
+PRs receive no reader and cannot pass required native checks through a skipped
+job. Maintainers must review and move such changes to an authorized internal
+branch before native validation. Merge-queue admission remains subject to the
+existing required checks and review rules. Do not use `pull_request_target` to
+run untrusted source with this reader.
 
-Metadata-only Python security checks, Python dependency cache warming, the
-Python retirement guard, license metadata checks, and public source scans
-remain available. The switch pauses Rust preflight/tests/dependency audits,
-local Python bindings, Core native wheel production, WASM tests, native cache
-warming, and dependency inventory/SBOM resolution. Python contract tests keep
-their existing dependency on the Core wheel producer and cannot pass without
-that producer. This repository's retired publication workflows remain absent.
+Native bindings, KMS and scalar dependency-graph checks, Python bindings,
+Python contract tests, WASM builds, and the existing CI Gate remain in their
+original workflows. The credentials workspace uses its root `Cargo.lock` even
+when building the nested `rust/marty-rs` manifest. Core wheel production fetches
+the separately checked-out, pinned Core workspace using that workspace's own
+lockfile. The two dependency graphs are not repinned or combined.
 
-## Authorized native work
+## Caches, outputs, and local development
 
-Use the private
-[`ElevenID/marty-commercial-rust` build repository](https://github.com/ElevenID/marty-commercial-rust)
-for the native suites and trusted, exact source commits configured in its
-manual coordinator. It must support this repository and obtain read-only
-access to the three forks in its own private build context before this
-repository's switch is activated. Keep that credential, dependency source,
-build logs, Cargo Git cache, and Docker intermediate layers out of public
-Actions jobs and artifacts. Authorized local builds can use the same Git URLs
-with normal private-repository read credentials; no dependency repinning is
-needed merely because visibility changes.
+Private-mode jobs do not restore or save Cargo Git sources or compiler caches.
+The reader is available only to dependency resolution, never to compilation,
+tests, package signing, or publication. Existing compiled products and metadata
+artifacts remain public; ordinary compiler diagnostics and test logs also remain
+public. This boundary prevents full private fork source from being placed in a
+public cache or source artifact. It is not a guarantee that public diagnostics
+will never show a source excerpt.
 
-The manual coordinator is an initial native validation path. It does **not**
-yet report PR/merge-queue checks or produce accepted release artifacts. A
-successful private run cannot be substituted for a required public check or
-the existing release provenance. Those integrations must be implemented and
-validated before native CI and releases can resume under the new model.
+Keep the reader out of Git configuration files, command arguments, job-level
+environment variables, artifacts, and logs. Enable the variable only after the
+secret has read access to the private fork identities and authenticated native
+checks pass. Removing the variable does not restore anonymous access to a
+private fork.
 
-Enable the switch only at the coordinated cutover, after private authentication
-and the consuming build are working. Removing it later only re-enables the
-old anonymous workflows; it does not restore access to private forks or
-complete a rollback. Keep ordinary upstream fetch/merge workflows in the
-private forks and preserve all required license notices when distributing
-compiled Marty artifacts. Previously published artifacts and license notices
-are unaffected.
+Authorized local builds use the same pinned Git URLs with normal private-repo
+read credentials. Continue merging upstream changes in the private forks, and
+preserve required license notices when distributing Marty binaries or other
+artifacts. Previously published source and its existing licenses are unaffected.
