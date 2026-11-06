@@ -571,7 +571,7 @@ jobs:
         run: |
           node <<'JS'
           const assert = require('node:assert/strict');
-          const bindings = require('./pkg/marty_rs.js');
+          const bindings = require('./pkg');
           assert.equal(typeof bindings.open_badge_ob3_verify, 'function');
           assert.equal(Object.hasOwn(bindings, 'open_badge_ob2_verify'), false);
           JS
