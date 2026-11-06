@@ -86,20 +86,8 @@ pub fn create_credential_offer(
 }
 
 // =============================================================================
-// Open Badges (OB2/OB3)
+// Open Badges 3.0
 // =============================================================================
-
-/// Verify an Open Badges v2 assertion.
-///
-/// # Arguments
-/// * `request_json` - JSON payload with assertion + document_store
-///
-/// # Returns
-/// JSON: { "valid": true|false, "version": "2.0", "errors": [...], "warnings": [...] }
-#[wasm_bindgen]
-pub fn open_badge_ob2_verify(request_json: &str) -> Result<String, JsValue> {
-    marty_verification::open_badges::verify_ob2_json(request_json).map_err(verification_error_to_js)
-}
 
 /// Verify an Open Badges v3 credential with Data Integrity proof.
 ///

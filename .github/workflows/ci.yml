@@ -567,6 +567,15 @@ jobs:
       - name: Build WASM (nodejs target)
         run: wasm-pack build --locked --target nodejs --no-default-features --features wasm
 
+      - name: Check Open Badges WASM exports
+        run: |
+          node <<'JS'
+          const assert = require('node:assert/strict');
+          const bindings = require('./pkg/marty_rs.js');
+          assert.equal(typeof bindings.open_badge_ob3_verify, 'function');
+          assert.equal(Object.hasOwn(bindings, 'open_badge_ob2_verify'), false);
+          JS
+
       - name: Build WASM (bundler target)
         run: wasm-pack build --locked --target bundler --no-default-features --features wasm
 
