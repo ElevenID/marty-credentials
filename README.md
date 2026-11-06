@@ -30,6 +30,11 @@ cd rust/marty-rs
 wasm-pack build --locked --target web --no-default-features --features wasm
 ```
 
+Open Badges verification uses `open_badge_ob3_verify`. The former
+`open_badge_ob2_verify` export is removed. Existing OB2 assertions must be
+reissued by their issuer as OB3 credentials; renaming the function or changing
+the assertion's context does not migrate the signed credential.
+
 Product deployment and release instructions live in `marty-ui`. The old Credentials Python source distribution, PyPI publisher, and issuance image release path are retired; do not create a new Python package or image from this repository.
 
 Current deployment acceptance is summarized in the
