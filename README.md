@@ -14,6 +14,10 @@ The Python issuance service was retired in [#311](https://github.com/ElevenID/ma
 
 ## Development checks
 
+Native builds use the existing CI with a scoped reader when the Rust forks
+are private. See [Native build access](docs/private-native-builds.md) for
+authentication, source-cache controls, and local development.
+
 ```bash
 cargo test --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features native
 python -m pytest tests/unit

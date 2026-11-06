@@ -27,9 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     defaults:
       run:
         working-directory: marty-credentials/rust/marty-rs
@@ -37,20 +37,42 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
           components: rustfmt
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
       - name: Cache cargo
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-credentials/Cargo.toml"
+
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check the native feature set
@@ -100,9 +122,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -116,20 +138,42 @@ jobs:
         with:
           path: marty-credentials
 
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
 
       - name: Cache cargo
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
+
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-credentials/Cargo.toml"
 
       - name: Compile native bindings and run unit tests
         if: matrix.task == 'tests'
@@ -158,13 +202,25 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-credentials
+
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -184,17 +240,27 @@ jobs:
           components: clippy, rustfmt
 
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
 
       - name: Cache cargo
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ${{ runner.os }}-${{ runner.arch }}-rust-stable-inputs-${{ hashFiles('marty-credentials/Cargo.lock') }}
+
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-credentials/Cargo.toml"
 
       - name: Build the local Python extension from the locked workspace
         working-directory: marty-credentials
@@ -217,6 +283,18 @@ jobs:
         with:
           path: marty-credentials
 
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Cache cargo-audit
@@ -230,6 +308,14 @@ jobs:
           if ! command -v cargo-audit &> /dev/null; then
             cargo install cargo-audit --locked
           fi
+
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-credentials/Cargo.toml"
 
       - name: Run cargo-audit
         working-directory: marty-credentials
@@ -300,9 +386,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' }}
+      SCCACHE_GHA_RW_MODE: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && ((github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE') || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -319,6 +405,18 @@ jobs:
         with:
           path: marty-credentials
           persist-credentials: false
+
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
 
       - if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -339,19 +437,27 @@ jobs:
           toolchain: 1.97.1
 
       - name: Enable compiler cache
-        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (steps.core-wheel-cache.outputs.cache-hit != 'true')
         uses: ./marty-credentials/.github/actions/optional-sccache
         with:
           version: v0.16.0
 
       - name: Cache Core build
-        if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (steps.core-wheel-cache.outputs.cache-hit != 'true')
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: |
             ~/.cargo/registry/cache
             ~/.cargo/git/db
           key: ${{ runner.os }}-core-python-inputs-v5-${{ env.MARTY_CORE_REVISION }}
+
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && steps.core-wheel-cache.outputs.cache-hit != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-core/Cargo.toml"
 
       - name: Build exact pinned Core wheels
         if: ${{ steps.core-wheel-cache.outputs.cache-hit != 'true' }}
@@ -430,10 +536,30 @@ jobs:
         with:
           path: marty-credentials
 
+      - name: Set up private fork helper runtime
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+
+      - name: Require trusted private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
+
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
 
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-credentials/Cargo.toml"
 
       - name: Build WASM (web target)
         run: wasm-pack build --locked --target web --no-default-features --features wasm
@@ -471,6 +597,7 @@ jobs:
           test ! -e .github/workflows/release-images.yml
           test ! -e .github/workflows/release-stable.yml
           test ! -e .github/workflows/publish-pypi.yml
+          python scripts/test_private_forks.py
 
   ci-gate:
     name: CI Gate
