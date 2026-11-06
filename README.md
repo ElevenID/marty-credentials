@@ -14,6 +14,10 @@ The Python issuance service was retired in [#311](https://github.com/ElevenID/ma
 
 ## Development checks
 
+Native builds depend on the private-fork access boundary. See
+[Native build access](docs/private-native-builds.md) for the inactive cutover
+switch and its effect on CI.
+
 ```bash
 cargo test --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features native
 python -m pytest tests/unit
