@@ -116,6 +116,7 @@ pub fn create_mobile_security_object(
         device_key_info,
         doc_type: doc_type.to_string(),
         validity_info,
+        status: None,
     })
 }
 

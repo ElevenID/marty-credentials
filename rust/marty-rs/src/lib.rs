@@ -57,10 +57,12 @@ mod python_bindings {
         Ok((a + b).to_string())
     }
 
-    /// Returns the version of the SSI library being used.
+    /// Return the umbrella SSI package version in the reviewed fork source.
+    /// Individual SSI subcrates have independent versions; Cargo.lock and the
+    /// dependency-graph guard identify the exact source used by this binding.
     #[pyfunction]
     pub fn get_ssi_version() -> PyResult<String> {
-        Ok("0.12.0".to_string())
+        Ok("0.16.0".to_string())
     }
 
     /// Checks if isomdl is linked.

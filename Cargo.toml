@@ -10,28 +10,28 @@ rust-version = "1.95"
 repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
-marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22" }
+marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22", default-features = false, features = ["kms-only", "bbs-verification"] }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723", default-features = false, features = ["kms-only", "bbs-verification"] }
 # Browser builds use the verification core; native bindings enable the LDAP-backed ICAO client.
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22", default-features = false, features = ["kms-only", "iaca", "csca"] }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22" }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723", default-features = false, features = ["kms-only", "iaca", "csca"] }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
 
 # SSI ecosystem
 ssi-status = { version = "0.8.1", default-features = false }
-isomdl = { version = "0.3", default-features = false }
+isomdl = { version = "0.4", default-features = false }
 coset = { version = "0.4" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # SD-JWT
-sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d", default-features = false, features = ["verifier"] }
+sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2", default-features = false, features = ["verifier"] }
 
 # JWT
 jsonwebtoken = { version = "10.4", default-features = false, features = ["use_pem"] }
@@ -65,49 +65,49 @@ strip = true
 
 [patch.crates-io]
 # Reuse the reviewed KMS-only Core crypto graph and compatibility adapters.
-bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22" }
-elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "0c8f77eb61a8b36d448c9d7333f71b873c6ecf22" }
-ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-bbs = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-claims-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-crypto = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-eip712 = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-json-ld = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-contexts = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-rdf = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-caips = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-jwk = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-multicodec = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-claims = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-cose = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-data-integrity = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-data-integrity-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-jws = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-security = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-verification-methods = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-tzkey = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-verification-methods-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-data-integrity-suites = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-di-sd-primitives = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-dids-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-jwt = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-sd-jwt = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-vc = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-vc-jose-cose = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-dids = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-ethr = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-ion = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-jwk = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-method-key = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-pkh = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-tz = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-did-web = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-ssh = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-status = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-ucan = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-zcap-ld = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi-did-test = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
-ssi = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "234723638447c30f90cf499bce1d6b092f865e9d" }
+bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
+elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
+ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-bbs = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-claims-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-crypto = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-eip712 = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-json-ld = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-contexts = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-rdf = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-caips = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-jwk = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-multicodec = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-claims = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-cose = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-data-integrity = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-data-integrity-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-jws = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-security = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-verification-methods = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-tzkey = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-verification-methods-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-data-integrity-suites = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-di-sd-primitives = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-dids-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-jwt = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-sd-jwt = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-vc = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-vc-jose-cose = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-dids = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-ethr = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-ion = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-jwk = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-method-key = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-pkh = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-tz = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+did-web = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-ssh = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-status = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-ucan = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-zcap-ld = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi-did-test = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
+ssi = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53" }
 linked-data = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "6f86efc1579033e14ff2ad7d115ca0857e16a67f" }
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f" }
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "fc3aaa2628cd106d4f36f50c957d7f33211f8a5e" }

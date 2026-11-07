@@ -4,9 +4,42 @@
 // JWTs according to the SD-JWT specification.
 
 // Share Core's verification-only JOSE backend and SD-JWT revision.
-use jsonwebtoken::{DecodingKey, Header};
+use jsonwebtoken::DecodingKey;
 use pyo3::prelude::*;
-use sd_jwt_rs::{SDJWTSerializationFormat, SDJWTVerifier};
+use sd_jwt_rs::{
+    SDJWTKeyRequest, SDJWTKeyWithAlg, SDJWTSerializationFormat, SDJWTSignaturePolicy,
+    SDJWTSignatureRole, SDJWTSignatureVerifier, SDJWTSignatureVerifierBuiltin, SDJWTVerifier,
+};
+
+// Preserve the legacy holder algorithm policy independently of the configured
+// issuer algorithm. The holder key must still come from issuer-authenticated cnf.
+const HOLDER_SIGNATURE_ALGORITHMS: &[&str] = &[
+    "ES256", "ES384", "EdDSA", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512",
+];
+
+struct PemSignatureVerifier(SDJWTSignatureVerifierBuiltin);
+
+impl SDJWTSignatureVerifier for PemSignatureVerifier {
+    fn allowed_algs(&self, role: SDJWTSignatureRole) -> sd_jwt_rs::error::Result<Vec<String>> {
+        self.0.allowed_algs(role)
+    }
+
+    fn verify(
+        &self,
+        message: &[u8],
+        signature: &[u8],
+        request: &SDJWTKeyRequest,
+    ) -> sd_jwt_rs::error::Result<()> {
+        // The former resolver API required a string issuer. Keep that credential
+        // boundary when adopting the fork's more general provider API.
+        if request.role == SDJWTSignatureRole::IssuerJwt && request.iss.is_none() {
+            return Err(sd_jwt_rs::error::Error::KeyNotFound(
+                "Issuer JWT must contain a string iss claim".into(),
+            ));
+        }
+        self.0.verify(message, signature, request)
+    }
+}
 
 /// SD-JWT verifier
 #[pyclass]
@@ -26,7 +59,10 @@ impl SdJwtVerifier {
         }
     }
 
-    /// Verify an SD-JWT presentation and return disclosed claims
+    /// Verify an SD-JWT under the configured public key and issuer algorithm.
+    ///
+    /// The caller must establish that the PEM key is authoritative for the
+    /// claimed issuer. This compatibility API does not resolve issuer trust.
     #[pyo3(signature = (presentation, expected_nonce=None, expected_audience=None))]
     pub fn verify(
         &self,
@@ -36,17 +72,25 @@ impl SdJwtVerifier {
     ) -> PyResult<String> {
         let key = create_decoding_key(&self.public_key_pem, &self.algorithm)?;
 
-        // Create the key resolver callback
-        #[allow(clippy::type_complexity)]
-        let cb_get_issuer_key: Box<dyn Fn(&str, &Header) -> DecodingKey> =
-            Box::new(move |_issuer: &str, _header: &Header| key.clone());
+        let signature_verifier = SDJWTSignatureVerifierBuiltin::new(
+            &[self.algorithm.as_str()],
+            Some(HOLDER_SIGNATURE_ALGORITHMS),
+        )
+        .with_issuer_verifying_key(SDJWTKeyWithAlg::new(key, &self.algorithm))
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid issuer signature policy: {}",
+                e
+            ))
+        })?;
 
-        let verifier = SDJWTVerifier::new(
+        let verifier = SDJWTVerifier::new_with_signature_verifier(
+            Box::new(PemSignatureVerifier(signature_verifier)),
             presentation,
-            cb_get_issuer_key,
             expected_audience,
             expected_nonce,
             SDJWTSerializationFormat::Compact,
+            SDJWTSignaturePolicy::All,
         )
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Verification failed: {}", e))

@@ -12,6 +12,34 @@ The Python issuance service was retired in [#311](https://github.com/ElevenID/ma
 - `scripts`: CI dependency-graph and resilient test-launch helpers.
 - `tests`: source and contract checks.
 
+## Reviewed fork integration
+
+The Rust bindings use the same pinned Core, SSI, SD-JWT and isomdl graph as the
+native services. CI checks the selected sources, KMS-only features, and the
+absence of local issuer signing and unqualified acceleration features. The
+`get_ssi_version` compatibility helper reports the umbrella package version in
+that SSI source; individual SSI subcrates have independent package versions.
+
+The Python `SdJwtVerifier` and `verify_sd_jwt` compatibility APIs bind the
+configured PEM algorithm to the issuer signature. A valid ES256 credential is
+rejected when the caller configures ES384, even though both settings can parse
+an EC PEM. The existing holder algorithm policy remains separate and uses the
+issuer-authenticated `cnf` key. Callers must still establish the PEM key's
+authority for the claimed issuer; successful signature verification does not
+establish issuer trust or credential-type authorization.
+
+The shared Core verifier supplies the authenticated MSO to mdoc holder checks
+and reports unchecked revocation as unknown. These dependency updates preserve
+existing credential profiles and key-custody boundaries. They do not activate
+new W3C SD-JWT profiles, holder algorithms, or cryptosuites.
+
+The combined graph passed the native check and Python extension build on Rust
+1.97.1, all 19 public Python boundary tests, all three mdoc digest integration
+tests, and 32 dependency-guard and wheel-pin tests. Native, Python, and WASM
+dependency metadata passed the source and KMS feature checks. This is consumer
+integration evidence; the WASM target and complete release matrix remain CI
+qualification steps.
+
 ## Development checks
 
 Native builds use the existing CI with a scoped reader when the Rust forks
