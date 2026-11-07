@@ -4,8 +4,8 @@ import argparse
 import json
 import sys
 
-CORE_REVISION = "daffc484f3d67c4efebcc5f485200c7edc559f23"
-CORE_REF = "daffc484f3d67c4efebcc5f485200c7edc559f23"
+CORE_REVISION = "7fd9106032ab455ed9eb1708a584014a52af7249"
+CORE_REF = "7fd9106032ab455ed9eb1708a584014a52af7249"
 CORE_SOURCE = f"git+https://github.com/ElevenID/marty-core?rev={CORE_REF}#{CORE_REVISION}"
 CORE_CRATES = {
     "marty-canonical-digest",
