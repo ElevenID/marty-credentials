@@ -34,7 +34,7 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 sd-jwt-rs = { git = "https://github.com/ElevenID/sd-jwt-rust", rev = "26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d", default-features = false, features = ["verifier"] }
 
 # JWT
-jsonwebtoken = { version = "10.4", default-features = false, features = ["use_pem"] }
+jsonwebtoken = { version = "11.1", default-features = false, features = ["use_pem"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
