@@ -42,6 +42,43 @@ qualification steps.
 
 ## Development checks
 
+### Retained mdoc HSM binding
+
+The internal `_marty_rs.prepare_mdoc_for_hsm` binding now retains Core's opaque
+`PreparedMdoc` across signing. `get_tbs_data()` returns the complete COSE Sign1
+`Sig_structure`; an external ES256 signer must sign those exact bytes and return
+a raw 64-byte `r || s` signature. Completion verifies that signature and consumes
+the preparation once. An invalid signature leaves the preparation available for
+a corrected retry. The returned bytes are canonical **IssuerSigned CBOR**;
+holder presentation and device authentication remain separate operations.
+
+This replaces the historical builder API. Pass `issuer_id`,
+`verification_method_id`, public `issuer_public_jwk_json`, `doc_type`,
+`namespace`, and `claims_json`, followed by optional `expiration_seconds`,
+`credential_id`, and public `holder_jwk_json`. Core validates issuer/key binding,
+reserves the credential identifier, and owns validity, salts, digests and COSE.
+The previous namespace dictionary, absolute validity timestamps,
+`device_key_der`, and digest-selection arguments are no longer accepted. One
+Core-supported namespace is prepared per credential. `MdocBuilder` and
+`MdocSignedDocument` are removed; their reconstructed MSO and empty holder
+presentation output are not compatibility formats. The retained function
+`complete_mdoc_with_signature(prepared, signature)` delegates to the same
+one-use preparation as `prepared.complete_with_signature(signature)`.
+
+The external-signing regression checks the signature and every salted item
+digest independently after completion. Run it with the built internal extension
+and `pytest`, `cbor2`, and `cryptography` installed:
+
+```bash
+python scripts/test_mdoc_hsm_roundtrip.py
+```
+
+The runner starts its own disposable TLS OpenBao using the pinned container
+image (or an explicitly supplied local `--bao-binary`), marks it before creating
+non-exportable test keys, and destroys it on exit. The regression itself refuses
+unmarked or non-loopback signing endpoints. Private signing keys never enter the
+Python or Rust process.
+
 Native builds use the existing CI with a scoped reader when the Rust forks
 are private. See [Native build access](docs/private-native-builds.md) for
 authentication, source-cache controls, and local development.
