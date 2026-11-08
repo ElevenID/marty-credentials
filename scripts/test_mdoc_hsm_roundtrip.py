@@ -16,6 +16,7 @@ from pathlib import Path
 
 IMAGE = "quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452"
 ROOT = Path(__file__).resolve().parents[1]
+CONTAINER_CERTS = "/run/marty-credentials-mdoc-certs"
 
 
 def main():
@@ -42,6 +43,7 @@ def main():
                             str(args.bao_binary.resolve()),
                             "server",
                             "-dev-tls",
+                            "-dev-no-store-token",
                             "-dev-tls-cert-dir=" + str(work),
                             "-dev-listen-address=127.0.0.1:" + str(port),
                         ],
@@ -50,6 +52,14 @@ def main():
                         stderr=log,
                     )
                 else:
+                    # The pinned entrypoint drops to the named openbao user.
+                    # Keep TLS material private to that service identity.
+                    container_uid = subprocess.check_output(
+                        ["docker", "run", "--rm", "--entrypoint", "id", IMAGE, "-u", "openbao"],
+                        text=True,
+                    ).strip()
+                    if not container_uid.isdecimal() or int(container_uid) == 0:
+                        raise RuntimeError("The disposable OpenBao service must use a non-root UID")
                     container = subprocess.check_output(
                         [
                             "docker",
@@ -57,7 +67,7 @@ def main():
                             "--rm",
                             "-d",
                             "--tmpfs",
-                            "/tmp/certs:mode=0777",
+                            CONTAINER_CERTS + ":mode=0700,uid=" + container_uid,
                             "-e",
                             "BAO_DEV_ROOT_TOKEN_ID=" + token,
                             "-p",
@@ -65,7 +75,8 @@ def main():
                             IMAGE,
                             "server",
                             "-dev-tls",
-                            "-dev-tls-cert-dir=/tmp/certs",
+                            "-dev-no-store-token",
+                            "-dev-tls-cert-dir=" + CONTAINER_CERTS,
                             "-dev-listen-address=:8200",
                         ],
                         text=True,
@@ -84,7 +95,7 @@ def main():
                         raise RuntimeError("The owned OpenBao process exited before TLS readiness")
                     if container:
                         result = subprocess.run(
-                            ["docker", "exec", container, "cat", "/tmp/certs/vault-ca.pem"],
+                            ["docker", "exec", container, "cat", CONTAINER_CERTS + "/vault-ca.pem"],
                             capture_output=True,
                             check=False,
                         )
