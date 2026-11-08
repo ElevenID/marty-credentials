@@ -266,7 +266,7 @@ jobs:
         working-directory: marty-credentials
         run: |
           # This isolated binding job does not install the project package.
-          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest
+          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest cbor2 cryptography
           python -m pip install --disable-pip-version-check ../compatibility-wheels/marty_verification_py-*.whl
           maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
           scripts/retry-command.sh python -m pip install --disable-pip-version-check local-wheels/*.whl
@@ -274,6 +274,10 @@ jobs:
       - name: Exercise the local Python crypto boundaries
         working-directory: marty-credentials
         run: pytest rust/marty-rs/tests/python -v
+
+      - name: Exercise mdoc preparation with disposable external custody
+        working-directory: marty-credentials
+        run: python scripts/test_mdoc_hsm_roundtrip.py
 
   security:
     name: Security Audit

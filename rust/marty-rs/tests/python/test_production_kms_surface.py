@@ -11,6 +11,8 @@ def test_production_module_excludes_local_private_key_operations():
         "create_presentation",
         "create_verifiable_credential",
         "create_mdoc",
+        "MdocBuilder",
+        "MdocSignedDocument",
         "SdJwtBuilder",
         "SdJwtPresentation",
         "create_sd_jwt",
