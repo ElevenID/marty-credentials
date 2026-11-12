@@ -17,6 +17,18 @@ SPEC.loader.exec_module(private_forks)
 
 
 class PrivateForkAccessTests(unittest.TestCase):
+    def test_generated_helper_matches_reviewed_pin_and_policy(self):
+        import hashlib
+        import re
+        record = json.loads(HELPER.with_name("private-forks.source.json").read_text())
+        self.assertEqual(record["repository"], "ElevenID/marty-core")
+        self.assertEqual(record["path"], ".github/scripts/private-forks.py")
+        self.assertRegex(record["revision"], r"^[0-9a-f]{40}$")
+        self.assertRegex(record["source_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(hashlib.sha256(HELPER.read_bytes().replace(b"\r\n", b"\n")).hexdigest(), record["generated_sha256"])
+        self.assertEqual(private_forks.CONSUMERS, set(record["policy"]["consumers"]))
+        self.assertEqual(private_forks.CONSUMER_DENIAL, record["policy"]["denial"])
+
     def context(self, name="pull_request"):
         env = {
             "GITHUB_ACTIONS": "true", "GITHUB_REPOSITORY": "ElevenID/marty-core",
