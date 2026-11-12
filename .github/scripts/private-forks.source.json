@@ -1,9 +1,9 @@
 {
   "repository": "ElevenID/marty-core",
   "path": ".github/scripts/private-forks.py",
-  "revision": "3e4713b334db3c482205830fd03488ed57435cca",
-  "source_sha256": "4d024419d0aaa4d94135848af1613b1a57cd1b1f05bb59d18c664face2d1e3d0",
-  "generated_sha256": "93cff54d29e0f9dd46ec1a0cd8cd49d8f91d12b925994d0cb4e48260d09dcfeb",
+  "revision": "63190158d93d10fd0af9654a5703b983be3fa0bb",
+  "source_sha256": "dab5eb206c9548f3a1074f604b9e516058ed4094415cb05df0036eda935f8fc4",
+  "generated_sha256": "dab5eb206c9548f3a1074f604b9e516058ed4094415cb05df0036eda935f8fc4",
   "policy": {
     "consumers": [
       "ElevenID/marty-core",

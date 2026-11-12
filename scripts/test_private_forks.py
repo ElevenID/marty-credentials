@@ -27,7 +27,8 @@ class PrivateForkAccessTests(unittest.TestCase):
         self.assertRegex(record["source_sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(hashlib.sha256(HELPER.read_bytes().replace(b"\r\n", b"\n")).hexdigest(), record["generated_sha256"])
         self.assertEqual(private_forks.CONSUMERS, set(record["policy"]["consumers"]))
-        self.assertEqual(private_forks.CONSUMER_DENIAL, record["policy"]["denial"])
+        with self.assertRaisesRegex(ValueError, re.escape(record["policy"]["denial"])):
+            private_forks.validate_context({}, {})
 
     def context(self, name="pull_request"):
         env = {
