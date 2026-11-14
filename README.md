@@ -4,6 +4,17 @@ This repository retains Rust credential bindings, remaining historical migration
 
 The Python issuance service was retired in [#311](https://github.com/ElevenID/marty-credentials/pull/311). The former `marty_credentials` Python convenience SDK is also retired; its supported Rust owners and SDK-only dispositions are documented in [the retirement guide](docs/rust-migrations/full-issuance-python-retirement.md#retired-sdk-ownership). The root `pyproject.toml` now builds an internal metadata-only test harness named `marty-credentials-test-harness`; it does not install an SDK or provide a signing path. Existing immutable Python images and releases remain historical records and the currently pinned production image until the governed beta transition; no new Python issuance image or SDK distribution is published.
 
+## Repository navigation
+
+| Area | Location |
+| --- | --- |
+| Documentation and ownership | [Documentation index](docs/README.md) |
+| Rust and WASM bindings | [rust/](rust/) |
+| Source and binding checks | [tests/](tests/) |
+| Developer and CI helpers | [scripts/](scripts/) |
+| Build access | [Native build access](docs/private-native-builds.md) |
+| Deployment acceptance | [Owner checklist](docs/operations/DEPLOYMENT_CHECKLIST.md) |
+
 ## Source layout
 
 - `rust/marty-rs`: local Rust and WASM binding code and tests. Core owns canonical published native wheels.
@@ -103,7 +114,7 @@ the assertion's context does not migrate the signed credential.
 Product deployment and release instructions live in `marty-ui`. The old Credentials Python source distribution, PyPI publisher, and issuance image release path are retired; do not create a new Python package or image from this repository.
 
 Current deployment acceptance is summarized in the
-[owner checklist](DEPLOYMENT_CHECKLIST.md). Official and owned interoperability
+[owner checklist](docs/operations/DEPLOYMENT_CHECKLIST.md). Official and owned interoperability
 workflows live in [marty-integration-tests](https://github.com/ElevenID/marty-integration-tests);
 the retired migration receipt and its old local Compose commands are not a
 supported test entrypoint.
