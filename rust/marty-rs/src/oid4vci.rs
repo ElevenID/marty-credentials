@@ -71,6 +71,36 @@ pub fn generate_offer_uri(
 
 // ── Issuer Metadata ──────────────────────────────────────────────────
 
+fn credential_formats(raw: &serde_json::Value) -> PyResult<Vec<CredentialFormat>> {
+    let parse = |value: &serde_json::Value| {
+        value
+            .as_str()
+            .and_then(CredentialFormat::from_str_loose)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "Credential formats must be supported format names",
+                )
+            })
+    };
+
+    if let Some(formats) = raw.get("formats") {
+        let formats = formats
+            .as_array()
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(
+                    "Credential formats must be a non-empty array of format names",
+                )
+            })?;
+        formats.iter().map(parse).collect()
+    } else if let Some(format) = raw.get("format") {
+        Ok(vec![parse(format)?])
+    } else {
+        // Preserve the documented default only when no format was supplied.
+        Ok(vec![CredentialFormat::JwtVcJson])
+    }
+}
+
 /// Generate OID4VCI issuer metadata using the engine.
 ///
 /// `credential_types_json` is a JSON array of objects:
@@ -103,6 +133,11 @@ pub fn generate_issuer_metadata(
 
     let mut cred_types = Vec::new();
     for raw in &raw_types {
+        if !raw.is_object() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Each credential type must be a JSON object",
+            ));
+        }
         let id = raw
             .get("id")
             .and_then(|v| v.as_str())
@@ -114,19 +149,7 @@ pub fn generate_issuer_metadata(
             .unwrap_or(&id)
             .to_string();
 
-        // Parse formats: either "format" (single) or "formats" (array)
-        let formats = if let Some(arr) = raw.get("formats").and_then(|v| v.as_array()) {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .filter_map(CredentialFormat::from_str_loose)
-                .collect::<Vec<_>>()
-        } else {
-            let fmt_str = raw
-                .get("format")
-                .and_then(|v| v.as_str())
-                .unwrap_or("jwt_vc_json");
-            vec![CredentialFormat::from_str_loose(fmt_str).unwrap_or(CredentialFormat::JwtVcJson)]
-        };
+        let formats = credential_formats(raw)?;
 
         // Parse claims
         let claims = if let Some(claims_obj) = raw.get("claims").and_then(|v| v.as_object()) {
@@ -176,6 +199,9 @@ pub fn generate_issuer_metadata(
 
 /// Create a presentation definition for verifiable presentation requests.
 ///
+/// This convenience binding supports mDL (`mso_mdoc`) requests. Other formats
+/// are rejected instead of being silently replaced with an mDL request.
+///
 /// Returns JSON string containing the presentation definition.
 #[pyfunction]
 #[pyo3(signature = (
@@ -190,18 +216,21 @@ pub fn create_presentation_definition(
     requested_fields: Vec<String>,
     credential_format: &str,
 ) -> PyResult<String> {
+    if credential_format == "zk_mdoc" {
+        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "ZK presentation requests require a native ZK-enabled verifier build",
+        ));
+    }
+    if credential_format != "mso_mdoc" {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "This presentation-definition binding only supports mso_mdoc",
+        ));
+    }
     let engine = VerificationEngine::new(verifier_id, response_uri);
 
     let field_refs: Vec<&str> = requested_fields.iter().map(|s| s.as_str()).collect();
 
-    // Build descriptor based on the format
-    let descriptor = if credential_format == "zk_mdoc" {
-        // For ZK format, build a ZK predicate descriptor for the first field
-        // (production usage would be more granular)
-        engine.mdl_descriptor("credential_request", &field_refs)
-    } else {
-        engine.mdl_descriptor("credential_request", &field_refs)
-    };
+    let descriptor = engine.mdl_descriptor("credential_request", &field_refs);
 
     let pd = engine
         .create_presentation_definition("presentation_request", vec![descriptor])
@@ -321,5 +350,111 @@ mod issuance_tests {
             assert!(error.is_instance_of::<pyo3::exceptions::PyNotImplementedError>(py));
             assert!(error.to_string().contains("native ZK-enabled verifier"));
         });
+    }
+
+    #[test]
+    fn presentation_definition_preserves_the_requested_mdl_fields() {
+        let definition: serde_json::Value = serde_json::from_str(
+            &create_presentation_definition(
+                "did:example:verifier".into(),
+                "https://verifier.example/response".into(),
+                vec!["age_over_18".into()],
+                "mso_mdoc",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let descriptor = &definition["input_descriptors"][0];
+        assert!(descriptor["format"]["mso_mdoc"].is_object());
+        assert_eq!(
+            descriptor["constraints"]["fields"][0]["path"][0],
+            "$.org\\.iso\\.18013\\.5\\.1.age_over_18"
+        );
+    }
+
+    #[test]
+    fn presentation_definition_rejects_formats_it_cannot_construct() {
+        Python::initialize();
+        Python::attach(|py| {
+            for format in ["zk_mdoc", "jwt_vc_json", "sd_jwt", "unknown", ""] {
+                let error = create_presentation_definition(
+                    "did:example:verifier".into(),
+                    "https://verifier.example/response".into(),
+                    vec!["age_over_18".into()],
+                    format,
+                )
+                .unwrap_err();
+                if format == "zk_mdoc" {
+                    assert!(error.is_instance_of::<pyo3::exceptions::PyNotImplementedError>(py));
+                } else {
+                    assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn issuer_metadata_rejects_explicit_malformed_formats() {
+        Python::initialize();
+        Python::attach(|py| {
+            for fields in [
+                serde_json::json!(null),
+                serde_json::json!(12),
+                serde_json::json!("jwt_vc_json"),
+                serde_json::json!([]),
+                serde_json::json!({"format": "typo"}),
+                serde_json::json!({"format": 12}),
+                serde_json::json!({"format": null}),
+                serde_json::json!({"formats": ["jwt_vc_json", "typo"]}),
+                serde_json::json!({"formats": ["jwt_vc_json", 12]}),
+                serde_json::json!({"formats": []}),
+                serde_json::json!({"formats": "jwt_vc_json"}),
+                serde_json::json!({"formats": null}),
+            ] {
+                let error = generate_issuer_metadata(
+                    "https://issuer.example".into(),
+                    "Example Issuer".into(),
+                    serde_json::json!([fields]).to_string(),
+                )
+                .unwrap_err();
+                assert!(error.is_instance_of::<pyo3::exceptions::PyValueError>(py));
+            }
+        });
+    }
+
+    #[test]
+    fn issuer_metadata_keeps_the_default_and_supported_format_aliases() {
+        let default: serde_json::Value = serde_json::from_str(
+            &generate_issuer_metadata(
+                "https://issuer.example".into(),
+                "Example Issuer".into(),
+                r#"[{"id":"example"}]"#.into(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            default["credential_configurations_supported"]["example"]["format"],
+            "jwt_vc_json"
+        );
+
+        let aliases: serde_json::Value = serde_json::from_str(
+            &generate_issuer_metadata(
+                "https://issuer.example".into(),
+                "Example Issuer".into(),
+                r#"[{"id":"example","formats":["jwt_vc_json","sd_jwt"],"vct":"urn:example:credential"}]"#.into(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let configurations = aliases["credential_configurations_supported"]
+            .as_object()
+            .unwrap();
+        assert!(configurations
+            .values()
+            .any(|entry| entry["format"] == "jwt_vc_json"));
+        assert!(configurations
+            .values()
+            .any(|entry| entry["format"] == "dc+sd-jwt"));
     }
 }
