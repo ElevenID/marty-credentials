@@ -89,7 +89,7 @@ dependencies:
       Stable rsa 0.10.0 was published on 2026-11-08 and is not yanked; RustSec now
       declares versions >=0.10.0 patched. The locked 0.9.10 remains affected.
       Its only direct reverse dependencies are marty-crypto and marty-verification
-      at Core revision 11655e38c2dbf69bfa5bc3c873f80c5fad628723, both requiring ^0.9.
+      at Core revision b30866a81284d97b65a3e4cdd85e917df17e10d4, both requiring ^0.9.
       Reviewed Core RSA, ISO 9796 and DG15 call sites use public verification and
       public-key codecs; all three resolved graphs pass the existing KMS-only guard.
       The upstream 0.10 release uses crypto-bigint and requires
