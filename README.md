@@ -6,11 +6,17 @@ The Python issuance service was retired in [#311](https://github.com/ElevenID/ma
 
 ## Source layout
 
-- `rust/marty-rs`: local Rust and WASM binding code and tests. Core owns canonical published native wheels.
-- `contracts`: historical references not yet reconciled with the Rust owner.
-  Canonical executable issuance fixtures live in [UI contracts](https://github.com/ElevenID/marty-ui/tree/main/contracts), not mirrored here.
-- `scripts`: CI dependency-graph and resilient test-launch helpers.
-- `tests`: source and contract checks.
+| Area | Location |
+| --- | --- |
+| Guides, ownership, and migration references | [Documentation index](docs/README.md) |
+| Local Rust and WASM binding code and tests | [rust/marty-rs/](rust/marty-rs/) |
+| Dependency-graph and test-launch helpers | [scripts/](scripts/) |
+| Source and contract checks | [tests/](tests/) |
+| Deployment acceptance and responsible repositories | [Owner checklist](docs/operations/DEPLOYMENT_CHECKLIST.md) |
+
+Core owns canonical published native wheels. Canonical executable issuance
+fixtures live in [UI contracts](https://github.com/ElevenID/marty-ui/tree/main/contracts),
+not a local `contracts/` directory.
 
 ## Reviewed fork integration
 
@@ -103,7 +109,7 @@ the assertion's context does not migrate the signed credential.
 Product deployment and release instructions live in `marty-ui`. The old Credentials Python source distribution, PyPI publisher, and issuance image release path are retired; do not create a new Python package or image from this repository.
 
 Current deployment acceptance is summarized in the
-[owner checklist](DEPLOYMENT_CHECKLIST.md). Official and owned interoperability
+[owner checklist](docs/operations/DEPLOYMENT_CHECKLIST.md). Official and owned interoperability
 workflows live in [marty-integration-tests](https://github.com/ElevenID/marty-integration-tests);
 the retired migration receipt and its old local Compose commands are not a
 supported test entrypoint.
