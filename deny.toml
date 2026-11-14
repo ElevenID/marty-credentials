@@ -23,7 +23,7 @@ yanked = "warn"
 # A list of advisory IDs to ignore
 ignore = [
     # RSA remains required by supported credentials and is isolated behind Marty adapters.
-    { id = "RUSTSEC-2023-0071", reason = "required behind Marty crypto adapters; no patched RustCrypto release" },
+    { id = "RUSTSEC-2023-0071", reason = "KMS-only Core adapters use public verification; patched rsa 0.10 migration is tracked in marty-core#361 and dependency-health.yml" },
     # serde_cbor unmaintained — transitive via ssi; no replacement in dep tree
     { id = "RUSTSEC-2021-0127", reason = "transitive via ssi crate; tracked for ssi replacement" },
 ]
