@@ -4,8 +4,8 @@ import argparse
 import json
 import sys
 
-CORE_REVISION = "11655e38c2dbf69bfa5bc3c873f80c5fad628723"
-CORE_REF = "11655e38c2dbf69bfa5bc3c873f80c5fad628723"
+CORE_REVISION = "b30866a81284d97b65a3e4cdd85e917df17e10d4"
+CORE_REF = "b30866a81284d97b65a3e4cdd85e917df17e10d4"
 CORE_SOURCE = f"git+https://github.com/ElevenID/marty-core?rev={CORE_REF}#{CORE_REVISION}"
 CORE_CRATES = {
     "marty-canonical-digest",
@@ -28,7 +28,7 @@ ISOMDL_REVISION = "fc3aaa2628cd106d4f36f50c957d7f33211f8a5e"
 ISOMDL_SOURCE = (
     f"git+https://github.com/ElevenID/isomdl-elevenid?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
 )
-SSI_REVISION = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53"
+SSI_REVISION = "8b546ef5dbcd6e806ec1c26a0c05296515798429"
 SSI_SOURCE = f"git+https://github.com/ElevenID/ssi-elevenid?rev={SSI_REVISION}#{SSI_REVISION}"
 LINKED_DATA_REVISION = "6f86efc1579033e14ff2ad7d115ca0857e16a67f"
 LINKED_DATA_SOURCE = (

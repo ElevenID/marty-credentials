@@ -76,25 +76,28 @@ dependencies:
     owner: ElevenID
     upstream: https://github.com/RustCrypto/RSA
     current: "0.9.10"
-    target: patched-upstream-release
+    target: coordinated-Core-RSA-0.10.0-migration
     status: watch
     decision: retain
     advisories: [RUSTSEC-2023-0071]
-    tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-11-13
+    tracking-issue: https://github.com/ElevenID/marty-core/issues/361
+    review-after: 2026-11-21
     rationale: >-
-      Re-reviewed 2026-11-06 against Cargo.lock,
+      Re-reviewed 2026-11-14 against Cargo.lock, resolved native/Python/WASM metadata,
       https://github.com/rust-lang/crates.io-index/blob/master/3/r/rsa and
       https://rustsec.org/advisories/RUSTSEC-2023-0071.html.
-      The registry still lists 0.9.10 as the latest stable release, alongside
-      0.10.0-rc.21; RustSec still declares no patched version. Upstream added
-      implicit rejection in https://github.com/RustCrypto/RSA/commit/6b7d70fe66f6843ffe728c1f1e25fda7b42caf28
-      and closed https://github.com/RustCrypto/RSA/issues/626 on 2026-11-01.
-      That progress requires a fresh coordinated Core migration assessment;
-      it does not establish a fix in the locked 0.9.10. Its only direct reverse
-      dependencies here are marty-crypto and marty-verification at Core revision
-      44040270000f93b7e7499cbec31b3bb3dd7e3df1. Retain the explicit advisory watch
-      and existing cargo-deny exception for one week, with issue 17 tracking the
-      upstream fix and release assessment. Keep the existing KMS-only graph guard,
-      managed-custody boundaries and native security CI; this review does not
-      authorize local RSA private-key operations or mark the vulnerability resolved.
+      Stable rsa 0.10.0 was published on 2026-11-08 and is not yanked; RustSec now
+      declares versions >=0.10.0 patched. The locked 0.9.10 remains affected.
+      Its only direct reverse dependencies are marty-crypto and marty-verification
+      at Core revision b30866a81284d97b65a3e4cdd85e917df17e10d4, both requiring ^0.9.
+      Reviewed Core RSA, ISO 9796 and DG15 call sites use public verification and
+      public-key codecs; all three resolved graphs pass the existing KMS-only guard.
+      The upstream 0.10 release uses crypto-bigint and requires
+      signature 3, digest/sha2 0.11, pkcs8 0.11 and spki 0.8, unlike the pinned
+      Core graph. A Credentials-only lock update cannot satisfy those ^0.9 requirements
+      or remove the affected copy. Upgrade through the coordinated Core migration
+      in issue 361, then qualify RSA, certificate, JOSE, passport, mdoc, Python and
+      WASM behavior before propagating its exact revision. Retain the explicit
+      advisory watch and existing exception for this seven-day migration checkpoint;
+      https://github.com/ElevenID/marty-credentials/issues/17 retains consumer acceptance.
+      The advisory remains unresolved in this graph, and remote key custody remains required.
