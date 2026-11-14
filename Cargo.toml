@@ -10,16 +10,16 @@ rust-version = "1.95"
 repository = "https://github.com/ElevenID/marty-credentials"
 
 [workspace.dependencies]
-marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
+marty-python-adapters = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4" }
 # Core crates from marty-core
-marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723", default-features = false, features = ["kms-only", "bbs-verification"] }
+marty-crypto = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4", default-features = false, features = ["kms-only", "bbs-verification"] }
 # Browser builds use the verification core; native bindings enable the LDAP-backed ICAO client.
-marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723", default-features = false, features = ["kms-only", "iaca", "csca"] }
-marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
+marty-verification = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4", default-features = false, features = ["kms-only", "iaca", "csca"] }
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4" }
 
 # PEM encoding
 pem-rfc7468 = { version = "1.0", features = ["alloc"] }
-marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
+marty-oid4vci = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4", default-features = false, features = ["kms-only", "issuer", "verifier", "jwt_vc_json", "sd_jwt", "mso_mdoc"] }
 
 # PyO3 for Python bindings
 pyo3 = { version = "0.29.0", features = ["extension-module", "abi3-py311"] }
@@ -65,8 +65,8 @@ strip = true
 
 [patch.crates-io]
 # Reuse the reviewed KMS-only Core crypto graph and compatibility adapters.
-bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
-elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "11655e38c2dbf69bfa5bc3c873f80c5fad628723" }
+bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4" }
+elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "b30866a81284d97b65a3e4cdd85e917df17e10d4" }
 ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "8b546ef5dbcd6e806ec1c26a0c05296515798429" }
 ssi-bbs = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "8b546ef5dbcd6e806ec1c26a0c05296515798429" }
 ssi-claims-core = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "8b546ef5dbcd6e806ec1c26a0c05296515798429" }
