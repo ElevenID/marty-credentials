@@ -8,6 +8,9 @@
 use marty_verification::error::VerificationError;
 use wasm_bindgen::prelude::*;
 
+#[path = "wasm_offer.rs"]
+mod offer;
+
 // Set up console error panic hook for better debugging
 #[wasm_bindgen(start)]
 pub fn init_panic_hook() {
@@ -50,39 +53,13 @@ pub fn create_credential_offer(
     pre_authorized_code: Option<String>,
     user_pin_required: bool,
 ) -> Result<String, JsValue> {
-    let credential_types: Vec<String> = serde_json::from_str(credential_types_json)
-        .map_err(|e| JsValue::from_str(&format!("Invalid credential types JSON: {}", e)))?;
-
-    let mut grants = serde_json::Map::new();
-
-    if let Some(code) = pre_authorized_code {
-        let mut pre_auth_grant = serde_json::Map::new();
-        pre_auth_grant.insert("pre-authorized_code".to_string(), serde_json::json!(code));
-        pre_auth_grant.insert(
-            "user_pin_required".to_string(),
-            serde_json::json!(user_pin_required),
-        );
-        grants.insert(
-            "urn:ietf:params:oauth:grant-type:pre-authorized_code".to_string(),
-            serde_json::Value::Object(pre_auth_grant),
-        );
-    } else {
-        grants.insert(
-            "authorization_code".to_string(),
-            serde_json::json!({
-                "issuer_state": uuid::Uuid::new_v4().to_string()
-            }),
-        );
-    }
-
-    let offer = serde_json::json!({
-        "credential_issuer": issuer_url,
-        "credential_configuration_ids": credential_types,
-        "grants": grants
-    });
-
-    serde_json::to_string(&offer)
-        .map_err(|e| JsValue::from_str(&format!("Failed to serialize offer: {}", e)))
+    offer::create_credential_offer(
+        issuer_url,
+        credential_types_json,
+        pre_authorized_code.as_deref(),
+        user_pin_required,
+    )
+    .map_err(|error| JsValue::from_str(&error))
 }
 
 // =============================================================================
