@@ -31,8 +31,8 @@ and operator approval before a deployment or cutover:
   those actually qualified, including external-wallet interoperability.
 - Use approved managed signing-key and secret custody. No production flow may
   acquire a local private signing key from the retired architecture's key
-  generation example. Existing [secure-storage obligations](docs/rust-migrations/integration-secret-secure-storage-outstanding.md)
-  and [DIDComm custody obligations](docs/rust-migrations/didcomm-kms-outstanding.md)
+  generation example. Existing [secure-storage obligations](../rust-migrations/integration-secret-secure-storage-outstanding.md)
+  and [DIDComm custody obligations](../rust-migrations/didcomm-kms-outstanding.md)
   remain open.
 - Prove durable credential/status data, event delivery and recovery, audit
   records, failure propagation and concurrency. Select actual infrastructure
