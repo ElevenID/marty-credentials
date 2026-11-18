@@ -132,5 +132,8 @@ links the last snapshot. Current wire/schema validation belongs to the native
 service owners linked above.
 
 Canvas migration captures and duplicate fixtures are retired here; see
-[regression ownership](docs/canvas-regression-ownership.md) for canonical native
-fixtures and the retained behavior requirements.
+[historical regression ownership](docs/canvas-regression-ownership.md) for provenance
+and retained platform rejection checks. Provider protocols, credentials and
+storage now belong to [canvas-integration](https://github.com/ElevenID/canvas-integration).
+Its sole platform interface is the public Common Gateway; canonical identity,
+ownership, evidence, approval and signing remain platform-owned.

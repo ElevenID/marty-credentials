@@ -1,4 +1,26 @@
-# Canvas regression ownership
+# Historical Canvas regression ownership
+
+## Current boundary
+
+Canvas provider protocols, credentials, callbacks and storage belong to
+[canvas-integration](https://github.com/ElevenID/canvas-integration), which uses
+only the public Common Gateway. Core/platform retains canonical identity,
+ownership, evidence, approval, signing and audit. Marty UI no longer owns a
+Canvas worker, provider API or LTI implementation. Its retained contracts are
+historical provenance or explicit rejection guards, not active provider suites.
+See the [current UI regression ownership](https://github.com/ElevenID/marty-ui/blob/main/docs/issuance-contract-ownership.md)
+and [connector boundary](https://github.com/ElevenID/canvas-integration/blob/main/docs/BOUNDARY.md).
+
+Missing provider adapters and production qualification remain connector-owned
+TODOs with unsupported flows disabled. Source retirement does not migrate
+existing tenant data or qualify an installation.
+
+## Pre-split migration record
+
+The following records the earlier Python-to-Rust transfer. Its UI-owned worker
+and executable-parity requirements are historical and superseded by the boundary
+above. Preserve the observations and independent generic credential safeguards;
+do not restore the old provider implementation to satisfy this inventory.
 
 The Python issuance service and worker are retired. Their capture tools, tests,
 and duplicate fixtures no longer belong in Credentials. The canonical frozen
