@@ -1,8 +1,12 @@
 # Native Rust issuance migration roadmap
 
-**Status:** Historical migration inventory; Python issuance is retired. Current
-service behavior and Canvas regression fixtures are owned by Marty UI. See
-[Canvas regression ownership](canvas-regression-ownership.md).
+**Status:** Historical migration inventory; Python issuance is retired. The
+Canvas runtime has since been extracted from Marty UI into
+[canvas-integration](https://github.com/ElevenID/canvas-integration). Its only
+platform interface is the public Common Gateway. Generic issuance remains
+platform-owned. The original objectives and inventories below describe the
+pre-split migration, not current route, worker or deployment requirements. See
+[historical regression ownership and current boundary](canvas-regression-ownership.md).
 
 **Started:** 2026-08-28
 

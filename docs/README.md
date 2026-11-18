@@ -14,8 +14,8 @@ verification libraries belong to [Marty Core](https://github.com/ElevenID/marty-
 ## Regression ownership
 
 - [Native issuance regression ownership](native-issuance-regression-ownership.md)
-- [Canvas regression ownership](canvas-regression-ownership.md)
-- [Canvas review and recovery migration](canvas-review-recovery-migration.md)
+- [Historical Canvas regression ownership and current split boundary](canvas-regression-ownership.md)
+- [Historical Canvas review and recovery migration](canvas-review-recovery-migration.md)
 
 ## Migration references and open obligations
 

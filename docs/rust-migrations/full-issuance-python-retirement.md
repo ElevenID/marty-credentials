@@ -1,5 +1,12 @@
 # Full Python issuance service retirement
 
+> Historical Python-to-Rust migration record. The subsequent Canvas split removed
+> provider APIs and workers from Marty UI. Provider implementation belongs to
+> [canvas-integration](https://github.com/ElevenID/canvas-integration), through the
+> public Common Gateway only. The route counts and UI-owned provider obligations
+> below describe that earlier snapshot. See [current ownership](../canvas-regression-ownership.md#current-boundary).
+> This record does not authorize deployment or data migration.
+
 The Python issuance source and image build path were deleted in [Credentials #311](https://github.com/ElevenID/marty-credentials/pull/311), merged as `12897ba58803e630fc46f12f6d35a9c0677e49d4`. The Rust owner and the baseline migration were merged in [UI #1178](https://github.com/ElevenID/marty-ui/pull/1178) as `927f765cfce54c06f30a4dacba5421960af9a6ff`. [The historical full-issuance qualification receipt](https://github.com/ElevenID/marty-credentials/blob/a9474b319be12341f1a845ee08879143e38f15a5/contracts/full-issuance-retirement-qualification.json) records the exact source and protected UI evidence used for that deletion. Its one-time qualification script and release publisher were retired after the merge; the current CI gate checks that the deleted source and publication paths stay absent.
 
 At full source retirement, the Python surface snapshot recorded 86 HTTP routes and 12 gRPC methods. The Rust coverage inventory includes 85 of those HTTP routes (the remaining `/ready` route is operational), all 12 gRPC methods, and nine historical passport routes deleted earlier from Python. Rust also owns the Canvas worker and the issuance schema baseline. The retained JSON contracts are historical behavior oracles; Rust PostgreSQL and behavior tests execute in the UI owner.
