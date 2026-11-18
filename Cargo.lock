@@ -3103,7 +3103,6 @@ name = "marty-rs"
 version = "0.1.79"
 dependencies = [
  "base64 0.23.1",
- "chrono",
  "ciborium",
  "console_error_panic_hook",
  "coset 0.3.8",

@@ -88,7 +88,6 @@ getrandom = { version = "0.2", optional = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
