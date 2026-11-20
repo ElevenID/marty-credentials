@@ -22,29 +22,35 @@ not a local `contracts/` directory.
 
 The Rust bindings use the same pinned Core, SSI, SD-JWT and isomdl graph as the
 native services. CI checks the selected sources, KMS-only features, and the
-absence of local issuer signing and unqualified acceleration features. The
+single shared JWT provider, selected SD-JWT roles, and absence of local issuer
+signing and unqualified acceleration features. The
 `get_ssi_version` compatibility helper reports the umbrella package version in
 that SSI source; individual SSI subcrates have independent package versions.
 
 The Python `SdJwtVerifier` and `verify_sd_jwt` compatibility APIs bind the
 configured PEM algorithm to the issuer signature. A valid ES256 credential is
 rejected when the caller configures ES384, even though both settings can parse
-an EC PEM. The existing holder algorithm policy remains separate and uses the
+an EC PEM. The SHA-256 digest profile is checked against the verifier's
+authenticated algorithm after signature verification succeeds. The generic
+fork's additional digest algorithms do not expand this compatibility API. The
+existing holder algorithm policy remains separate and uses the
 issuer-authenticated `cnf` key. Callers must still establish the PEM key's
 authority for the claimed issuer; successful signature verification does not
 establish issuer trust or credential-type authorization.
 
 The shared Core verifier supplies the authenticated MSO to mdoc holder checks
-and reports unchecked revocation as unknown. These dependency updates preserve
+and reports unchecked revocation as unknown. Its signed status references are
+exposed as read-only data with no URI retrieval or status-authority decision.
+These dependency updates preserve
 existing credential profiles and key-custody boundaries. They do not activate
 new W3C SD-JWT profiles, holder algorithms, or cryptosuites.
 
-The combined graph passed the native check and Python extension build on Rust
-1.97.1, all 19 public Python boundary tests, all three mdoc digest integration
-tests, and 32 dependency-guard and wheel-pin tests. Native, Python, and WASM
-dependency metadata passed the source and KMS feature checks. This is consumer
-integration evidence; the WASM target and complete release matrix remain CI
-qualification steps.
+Each graph update must repeat the native, Python-extension and WASM gates.
+The [shared provider migration guide](docs/credential-crypto-adoption.md)
+records the complete JWT 11/PyO3 dependency proposal, profile boundaries,
+public-vector provenance and actual Python qualification procedure, including
+the short-lived signed mdoc status fixtures. Source checks alone do not qualify
+the Python adapters or establish interoperability or release readiness.
 
 ## Development checks
 
@@ -73,11 +79,18 @@ one-use preparation as `prepared.complete_with_signature(signature)`.
 
 The external-signing regression checks the signature and every salted item
 digest independently after completion. Run it with the built internal extension
-and `pytest`, `cbor2`, and `cryptography` installed:
+and `pytest`, `cbor2`, `cryptography`, and `defusedxml` installed:
 
 ```bash
 python scripts/test_mdoc_hsm_roundtrip.py
 ```
+
+The Python binding CI lane additionally passes the prebuilt exact-Core status
+test executable with `--core-status-test-binary`. That requires all eight signed
+status projection cases to pass within the same owned TLS lifecycle; a skipped
+or missing case fails qualification. See the
+[shared provider migration guide](docs/credential-crypto-adoption.md) for local
+execution and fixture provenance.
 
 The runner starts its own disposable TLS OpenBao using the pinned container
 image (or an explicitly supplied local `--bao-binary`), marks it before creating

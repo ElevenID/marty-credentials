@@ -1,11 +1,11 @@
-"""Reject Credentials binding graphs that restore Core issuer-key custody."""
+"""Require the reviewed shared provider, role features and Core custody boundary."""
 
 import argparse
 import json
 import sys
 
-CORE_REVISION = "b30866a81284d97b65a3e4cdd85e917df17e10d4"
-CORE_REF = "b30866a81284d97b65a3e4cdd85e917df17e10d4"
+CORE_REVISION = "9d18f45968e1a1db2f13cfc80c219a197b787598"
+CORE_REF = "9d18f45968e1a1db2f13cfc80c219a197b787598"
 CORE_SOURCE = f"git+https://github.com/ElevenID/marty-core?rev={CORE_REF}#{CORE_REVISION}"
 CORE_CRATES = {
     "marty-canonical-digest",
@@ -24,6 +24,10 @@ CORE_CRATES_BY_MODE = {
 CORE_ADAPTERS = {"bls12_381_plus": "0.8.18", "elliptic-curve": "0.13.8"}
 KMS_ONLY_CRATES = {"marty-crypto", "marty-oid4vci", "marty-verification"}
 FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
+FORBIDDEN_PROFILE_FEATURES = {
+    "marty-oid4vci": {"wallet", "lti", "zk_mdoc"},
+    "marty-verification": {"mdoc-status-verification"},
+}
 ISOMDL_REVISION = "fc3aaa2628cd106d4f36f50c957d7f33211f8a5e"
 ISOMDL_SOURCE = (
     f"git+https://github.com/ElevenID/isomdl-elevenid?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
@@ -34,8 +38,12 @@ LINKED_DATA_REVISION = "6f86efc1579033e14ff2ad7d115ca0857e16a67f"
 LINKED_DATA_SOURCE = (
     f"git+https://github.com/ElevenID/ssi-elevenid?rev={LINKED_DATA_REVISION}#{LINKED_DATA_REVISION}"
 )
-SD_JWT_REVISION = "fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2"
+SD_JWT_REVISION = "9fc75ab0befe6b7f80987acd8b740baead40ee76"
 SD_JWT_SOURCE = f"git+https://github.com/ElevenID/sd-jwt-rust?rev={SD_JWT_REVISION}#{SD_JWT_REVISION}"
+SD_JWT_FEATURES = {"crypto-provider", "issuer-planning", "issuer-completion", "verifier"}
+JWT_VERSION = "11.1.0"
+JWT_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+JWT_FEATURES = {"use_pem"}
 SSI_COMPANION_PACKAGES = {
     "ssi", "ecdsa", "linked-data", "linked-data-derive",
     "did-ethr", "did-ion", "did-jwk", "did-method-key", "did-pkh", "did-tz", "did-web",
@@ -47,7 +55,8 @@ def check(metadata: dict, mode: str = "python") -> None:
     core = [
         package
         for package in metadata["packages"]
-        if "github.com/ElevenID/marty-core" in (package.get("source") or "")
+        if package["name"] in CORE_CRATES
+        or "github.com/ElevenID/marty-core" in (package.get("source") or "")
     ]
     names = [package["name"] for package in core]
     expected = CORE_CRATES_BY_MODE[mode] | CORE_ADAPTERS.keys()
@@ -67,6 +76,9 @@ def check(metadata: dict, mode: str = "python") -> None:
             raise ValueError(f"{name} enables forbidden features: {sorted(forbidden)}")
         if name in KMS_ONLY_CRATES and "kms-only" not in features:
             raise ValueError(f"{name} is missing kms-only")
+        widened_profile = features & FORBIDDEN_PROFILE_FEATURES.get(name, set())
+        if widened_profile:
+            raise ValueError(f"{name} enables unselected profile features: {sorted(widened_profile)}")
 
     isomdl = [package for package in metadata["packages"] if package["name"] == "isomdl"]
     if len(isomdl) != 1 or isomdl[0]["version"] != "0.4.0" or isomdl[0]["source"] != ISOMDL_SOURCE:
@@ -77,6 +89,17 @@ def check(metadata: dict, mode: str = "python") -> None:
     sd_jwt = [package for package in metadata["packages"] if package["name"] == "sd-jwt-rs"]
     if len(sd_jwt) != 1 or sd_jwt[0]["version"] != "0.8.0" or sd_jwt[0]["source"] != SD_JWT_SOURCE:
         raise ValueError("Expected one reviewed sd-jwt-rs 0.8.0 package")
+    if set(nodes[sd_jwt[0]["id"]]["features"]) != SD_JWT_FEATURES:
+        raise ValueError("sd-jwt-rs must retain only the reviewed issuer and verifier roles")
+
+    # A second jsonwebtoken major has separate public key types and a separate
+    # process-wide provider. Keep defaults off and reject built-in backends that
+    # include private-key operations.
+    jwt = [package for package in metadata["packages"] if package["name"] == "jsonwebtoken"]
+    if len(jwt) != 1 or jwt[0]["version"] != JWT_VERSION or jwt[0]["source"] != JWT_SOURCE:
+        raise ValueError(f"Expected one reviewed jsonwebtoken {JWT_VERSION} package")
+    if set(nodes[jwt[0]["id"]]["features"]) != JWT_FEATURES:
+        raise ValueError("jsonwebtoken must enable only use_pem and the shared verification provider")
 
     for package in metadata["packages"]:
         name = package["name"]

@@ -19,7 +19,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  MARTY_CORE_REVISION: b30866a81284d97b65a3e4cdd85e917df17e10d4
+  MARTY_CORE_REVISION: 9d18f45968e1a1db2f13cfc80c219a197b787598
 
 jobs:
   preflight:
@@ -222,6 +222,14 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" check
 
+      - name: Check out exact Core source for signed-status Python parity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-core
+          ref: ${{ env.MARTY_CORE_REVISION }}
+          path: marty-core
+          persist-credentials: false
+
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.11'
@@ -262,11 +270,34 @@ jobs:
           PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
         run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-credentials/Cargo.toml"
 
+      - name: Fetch locked Core dependencies for signed-status parity
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python "$GITHUB_WORKSPACE/marty-credentials/.github/scripts/private-forks.py" fetch --manifest-path "$GITHUB_WORKSPACE/marty-core/Cargo.toml"
+
+      - name: Prebuild exact Core signed-status fixture test
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C marty-core rev-parse HEAD)" = "$MARTY_CORE_REVISION"
+          cargo test --locked --manifest-path marty-core/Cargo.toml \
+            --target-dir "$GITHUB_WORKSPACE/core-status-target" -j2 \
+            -p marty-verification --no-default-features \
+            --features kms-only,mdoc-status-verification --lib --no-run \
+            --message-format=json > core-status-build.json
+          binary="$(python marty-credentials/scripts/ci/locate_core_status_test.py \
+            --messages core-status-build.json --core-checkout marty-core \
+            --target-directory "$GITHUB_WORKSPACE/core-status-target")"
+          echo "CORE_STATUS_TEST_BINARY=$binary" >> "$GITHUB_ENV"
+
       - name: Build the local Python extension from the locked workspace
         working-directory: marty-credentials
         run: |
           # This isolated binding job does not install the project package.
-          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest cbor2 cryptography
+          python -m pip install --disable-pip-version-check maturin==1.14.1 pytest cbor2 cryptography defusedxml
           python -m pip install --disable-pip-version-check ../compatibility-wheels/marty_verification_py-*.whl
           maturin build --locked --manifest-path rust/marty-rs/Cargo.toml --no-default-features --features python --out local-wheels
           scripts/retry-command.sh python -m pip install --disable-pip-version-check local-wheels/*.whl
@@ -275,9 +306,9 @@ jobs:
         working-directory: marty-credentials
         run: pytest rust/marty-rs/tests/python -v
 
-      - name: Exercise mdoc preparation with disposable external custody
+      - name: Exercise mdoc preparation and signed-status Python parity with disposable custody
         working-directory: marty-credentials
-        run: python scripts/test_mdoc_hsm_roundtrip.py
+        run: python scripts/test_mdoc_hsm_roundtrip.py --core-status-test-binary "$CORE_STATUS_TEST_BINARY"
 
   security:
     name: Security Audit
