@@ -46,6 +46,16 @@ def test_invalid_binary_fails_before_kms_allocation(tmp_path, monkeypatch, kind)
         RUNNER.main(["--core-status-test-binary", str(binary)])
 
 
+def test_unlaunchable_binary_fails_before_kms_allocation(tmp_path, monkeypatch):
+    binary = tmp_path / "core-test"
+    binary.write_text("not a native executable\n")
+    binary.chmod(0o700)
+    monkeypatch.setattr(RUNNER.secrets, "token_hex", lambda _: pytest.fail("KMS allocated too early"))
+    with pytest.raises(ValueError, match="existing executable") as rejected:
+        RUNNER.main(["--core-status-test-binary", str(binary)])
+    assert isinstance(rejected.value.__cause__, OSError)
+
+
 @pytest.mark.parametrize("listing", [
     "",
     "some_other_test: test\n",

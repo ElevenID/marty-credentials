@@ -38,13 +38,19 @@ def validate_core_status_test_binary(binary):
     if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
         raise ValueError("The Core status test binary must be an existing executable file")
     binary = binary.resolve()
-    listed = subprocess.run(
-        [str(binary), "--list", "--format", "terse", "--exact", CORE_STATUS_TEST],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        listed = subprocess.run(
+            [str(binary), "--list", "--format", "terse", "--exact", CORE_STATUS_TEST],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except OSError as error:
+        # Access checks alone cannot establish that the OS can launch this file.
+        raise ValueError(
+            "The Core status test binary must be an existing executable file"
+        ) from error
     if listed.stdout.splitlines() != [CORE_STATUS_TEST + ": test"]:
         raise ValueError("The Core binary must discover exactly the managed signed-status test")
     return binary
