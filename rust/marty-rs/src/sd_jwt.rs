@@ -7,8 +7,9 @@
 use jsonwebtoken::DecodingKey;
 use pyo3::prelude::*;
 use sd_jwt_rs::{
-    SDJWTKeyRequest, SDJWTKeyWithAlg, SDJWTSerializationFormat, SDJWTSignaturePolicy,
-    SDJWTSignatureRole, SDJWTSignatureVerifier, SDJWTSignatureVerifierBuiltin, SDJWTVerifier,
+    SDJWTDigestAlgorithm, SDJWTKeyRequest, SDJWTKeyWithAlg, SDJWTSerializationFormat,
+    SDJWTSignaturePolicy, SDJWTSignatureRole, SDJWTSignatureVerifier,
+    SDJWTSignatureVerifierBuiltin, SDJWTVerifier,
 };
 
 // Preserve the legacy holder algorithm policy independently of the configured
@@ -95,6 +96,15 @@ impl SdJwtVerifier {
         .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Verification failed: {}", e))
         })?;
+
+        // The generic fork supports more digest algorithms than this existing
+        // compatibility profile. Inspect its authenticated algorithm only after
+        // verification succeeds; reconstructed claims do not retain `_sd_alg`.
+        if verifier.digest_algorithm() != SDJWTDigestAlgorithm::Sha256 {
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                "Verification failed: SD-JWT digest algorithm is not admitted by this compatibility profile",
+            ));
+        }
 
         // Return claims as JSON string
         serde_json::to_string(&verifier.verified_claims).map_err(|e| {

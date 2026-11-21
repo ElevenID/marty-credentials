@@ -139,6 +139,54 @@ pub struct MdocVerificationResult {
     pub error: Option<String>,
 }
 
+/// A reference carried by an authenticated MSO, without status authority.
+///
+/// URI, identifier and certificate fields are data only. This binding does not
+/// retrieve the URI, trust the referenced certificate or evaluate revocation.
+#[pyclass(skip_from_py_object)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MdocStatusReference {
+    #[pyo3(get)]
+    pub kind: String,
+    #[pyo3(get)]
+    pub uri: String,
+    #[pyo3(get)]
+    pub index: Option<u64>,
+    #[pyo3(get)]
+    pub identifier: Option<Vec<u8>>,
+    #[pyo3(get)]
+    pub certificate_der: Option<Vec<u8>>,
+}
+
+impl From<marty_verification::mdoc::MdocStatusReference> for MdocStatusReference {
+    fn from(value: marty_verification::mdoc::MdocStatusReference) -> Self {
+        match value {
+            marty_verification::mdoc::MdocStatusReference::StatusList {
+                uri,
+                index,
+                certificate_der,
+            } => Self {
+                kind: "STATUS_LIST".into(),
+                uri,
+                index: Some(index),
+                identifier: None,
+                certificate_der,
+            },
+            marty_verification::mdoc::MdocStatusReference::IdentifierList {
+                uri,
+                identifier,
+                certificate_der,
+            } => Self {
+                kind: "IDENTIFIER_LIST".into(),
+                uri,
+                index: None,
+                identifier: Some(identifier),
+                certificate_der,
+            },
+        }
+    }
+}
+
 /// Signature-authenticated evidence for one mdoc document.
 #[pyclass(skip_from_py_object)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -157,6 +205,9 @@ pub struct MdocDocumentVerificationEvidence {
     pub valid_until: String,
     #[pyo3(get)]
     pub issuer_certificate_sha256: String,
+    /// Signed references do not establish that any status authority was checked.
+    #[pyo3(get)]
+    pub status_references: Vec<MdocStatusReference>,
     #[pyo3(get)]
     pub validity_checked: bool,
     #[pyo3(get)]
@@ -181,6 +232,11 @@ impl From<marty_verification::mdoc::MdocDocumentVerificationEvidence>
             valid_from: value.valid_from,
             valid_until: value.valid_until,
             issuer_certificate_sha256: value.issuer_certificate_sha256,
+            status_references: value
+                .status_references
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             validity_checked: value.validity_checked,
             valid_at_verification_time: value.valid_at_verification_time,
             revocation_checked: value.revocation_checked,
@@ -392,6 +448,18 @@ mod tests {
             valid_from: "from".into(),
             valid_until: "until".into(),
             issuer_certificate_sha256: "digest".into(),
+            status_references: vec![
+                marty_verification::mdoc::MdocStatusReference::StatusList {
+                    uri: "https://status.example/list".into(),
+                    index: u64::MAX,
+                    certificate_der: Some(vec![0, 1, 255]),
+                },
+                marty_verification::mdoc::MdocStatusReference::IdentifierList {
+                    uri: "https://status.example/identifiers".into(),
+                    identifier: vec![0, 128, 255],
+                    certificate_der: None,
+                },
+            ],
             validity_checked: true,
             valid_at_verification_time: false,
             revocation_checked: true,
@@ -407,6 +475,25 @@ mod tests {
         assert_eq!(
             actual.issuer_certificate_sha256,
             expected.issuer_certificate_sha256
+        );
+        assert_eq!(
+            actual.status_references,
+            vec![
+                MdocStatusReference {
+                    kind: "STATUS_LIST".into(),
+                    uri: "https://status.example/list".into(),
+                    index: Some(u64::MAX),
+                    identifier: None,
+                    certificate_der: Some(vec![0, 1, 255]),
+                },
+                MdocStatusReference {
+                    kind: "IDENTIFIER_LIST".into(),
+                    uri: "https://status.example/identifiers".into(),
+                    index: None,
+                    identifier: Some(vec![0, 128, 255]),
+                    certificate_der: None,
+                },
+            ]
         );
         assert_eq!(actual.validity_checked, expected.validity_checked);
         assert_eq!(

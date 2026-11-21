@@ -14,17 +14,85 @@ import time
 import urllib.request
 from pathlib import Path
 
+from defusedxml import ElementTree as ET
+
 IMAGE = "quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452"
 ROOT = Path(__file__).resolve().parents[1]
 CONTAINER_CERTS = "/run/marty-credentials-mdoc-certs"
+CORE_STATUS_TEST = (
+    "mdoc::status_token::tests::managed_keys_verify_both_status_mechanisms_and_fail_closed"
+)
+STATUS_PYTHON_CASES = {
+    "test_signed_status_references_remain_data_without_revocation_authority"
+    f"[{api}-{variant}]"
+    for api in ("issuer", "presentation", "signature")
+    for variant in ("bit", "identifier")
+} | {
+    "test_signed_status_reference_does_not_replace_holder_or_issuer_trust" f"[{variant}]"
+    for variant in ("bit", "identifier")
+}
 
 
-def main():
+def validate_core_status_test_binary(binary):
+    """Discover the exact ignored test before creating disposable KMS resources."""
+    if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError("The Core status test binary must be an existing executable file")
+    binary = binary.resolve()
+    try:
+        listed = subprocess.run(
+            [str(binary), "--list", "--format", "terse", "--exact", CORE_STATUS_TEST],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except OSError as error:
+        # Access checks alone cannot establish that the OS can launch this file.
+        raise ValueError(
+            "The Core status test binary must be an existing executable file"
+        ) from error
+    if listed.stdout.splitlines() != [CORE_STATUS_TEST + ": test"]:
+        raise ValueError("The Core binary must discover exactly the managed signed-status test")
+    return binary
+
+
+def require_signed_status_python_cases(report):
+    """A successful pytest invocation with missing/skipped parity is not a pass."""
+    cases = [
+        case
+        for case in ET.parse(report).iter("testcase")
+        if case.attrib.get("name", "").startswith("test_signed_status_reference")
+    ]
+    if len(cases) != len(STATUS_PYTHON_CASES) or {
+        case.attrib["name"] for case in cases
+    } != STATUS_PYTHON_CASES:
+        raise RuntimeError("The signed-status Python parity cases did not all execute")
+    if any(case.find(tag) is not None for case in cases for tag in ("skipped", "failure", "error")):
+        raise RuntimeError("The signed-status Python parity cases must pass without skips")
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--bao-binary", type=Path, help="Use an explicitly supplied local OpenBao binary"
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--core-status-test-binary",
+        type=Path,
+        help="Require signed-status Python parity using the prebuilt pinned Core test executable",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    # Compilation and discovery happen before the owned KMS lifecycle. With the
+    # option omitted, preserve the existing mdoc preparation-only command.
+    core_status_binary = (
+        validate_core_status_test_binary(args.core_status_test_binary)
+        if args.core_status_test_binary is not None
+        else None
+    )
     token = secrets.token_hex(32)
     nonce = secrets.token_hex(24)
     container = None
@@ -135,17 +203,34 @@ def main():
                     "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
                     "MARTY_TEST_OPENBAO_CA_CERT": str(ca),
                 }
-                return subprocess.call(
-                    [
-                        sys.executable,
-                        "-m",
-                        "pytest",
-                        "-q",
-                        "rust/marty-rs/tests/python/test_mdoc_hsm_roundtrip.py",
-                    ],
+                tests = ["rust/marty-rs/tests/python/test_mdoc_hsm_roundtrip.py"]
+                report = work / "python-boundaries.xml"
+                if core_status_binary is not None:
+                    public = work / "status-public"
+                    public.mkdir(mode=0o700)
+                    environment.update(
+                        MARTY_TEST_MDOC_STATUS_PUBLIC_FIXTURE_DIR=str(public),
+                        MARTY_TEST_MDOC_STATUS_HTTPS_ORIGIN="https://localhost:" + str(port),
+                    )
+                    subprocess.run(
+                        [str(core_status_binary), "--exact", CORE_STATUS_TEST, "--include-ignored"],
+                        cwd=ROOT,
+                        env=environment,
+                        check=True,
+                        timeout=180,
+                    )
+                    fixture = public / "native-mdoc-public.json"
+                    if fixture.is_symlink() or not fixture.is_file():
+                        raise RuntimeError("Core did not export the fresh signed-status fixture")
+                    tests.append("rust/marty-rs/tests/python/test_shared_mdoc_verifier.py")
+                result = subprocess.call(
+                    [sys.executable, "-m", "pytest", "-q", *tests, "--junitxml=" + str(report)],
                     cwd=ROOT,
                     env=environment,
                 )
+                if result == 0 and core_status_binary is not None:
+                    require_signed_status_python_cases(report)
+                return result
             finally:
                 if process:
                     process.terminate()

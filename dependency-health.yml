@@ -10,19 +10,26 @@ dependencies:
     decision: replace
     advisories: [GHSA-7gcf-g7xr-8hxj, RUSTSEC-2021-0127]
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
-    review-after: 2026-11-20
+    review-after: 2026-11-28
     rationale: >-
-      Re-reviewed 2026-11-06 against Cargo.lock and the current upstream manifest at
-      https://github.com/spruceid/ssi/blob/886a6cf694dfdb6b019d5f69a04dd16f01cb58a4/crates/claims/crates/jwt/Cargo.toml.
+      Re-reviewed 2026-11-20 against Cargo.lock, resolved native/Python/WASM metadata,
+      and the upstream manifest at
+      https://github.com/spruceid/ssi/blob/726f49e7fefbb726ff41deba331428088bfa782d/crates/claims/crates/jwt/Cargo.toml.
       Upstream still declares serde_with 2.3.2 and https://github.com/spruceid/ssi/pull/706
-      remains closed unmerged. Retain exact ElevenID revision 234723638447c30f90cf499bce1d6b092f865e9d,
-      which removes that unused dependency. GHSA-7gcf-g7xr-8hxj is fixed in serde_with 3.21.0;
-      this lock contains only 3.22.0, directly required by Cedar rather than SSI.
-      See https://github.com/advisories/GHSA-7gcf-g7xr-8hxj.
-      The separate https://rustsec.org/advisories/RUSTSEC-2021-0127.html exception
-      remains applicable to serde_cbor 0.11.2 through ssi-data-integrity-suites 0.4.0.
-      Keep replacement tracked in issue 17 and the existing advisory exception;
+      remains closed unmerged. The exact retained ElevenID revision is
+      8b546ef5dbcd6e806ec1c26a0c05296515798429; its ssi-jwt 0.6.0 manifest at
+      https://github.com/ElevenID/ssi-elevenid/blob/8b546ef5dbcd6e806ec1c26a0c05296515798429/crates/claims/crates/jwt/Cargo.toml
+      has no serde_with dependency. GHSA-7gcf-g7xr-8hxj is fixed in serde_with 3.21.0;
+      all three resolved graphs contain only 3.22.0, directly required by
+      cedar-policy and cedar-policy-core 4.14.0. The reviewed advisory source is
+      https://github.com/github/advisory-database/blob/58921be9ec1f5236551d03761b6568a4014ef464/advisories/github-reviewed/2026/07/GHSA-7gcf-g7xr-8hxj/GHSA-7gcf-g7xr-8hxj.json.
+      The separate https://rustsec.org/advisories/RUSTSEC-2021-0127.html advisory
+      still reports serde_cbor as unmaintained with no patched versions.
+      The locked serde_cbor 0.11.2 has only ssi-data-integrity-suites 0.4.0 at the
+      same ElevenID revision as its direct reverse dependency in all three graphs.
+      Issue 17 retains the existing exception until a compatible SSI replacement;
       narrow SSI crates remain required by supported credential verification.
+      Keep this replacement decision under review at the 2026-11-28 checkpoint.
   - package: linked-data
     ecosystem: rust
     owner: ElevenID
@@ -39,7 +46,7 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/spruceid/isomdl
-    current: "ElevenID/isomdl-elevenid@671044c9495aec101bf0cd381669d5ed6f64dd11"
+    current: "0.4.0@fc3aaa2628cd106d4f36f50c957d7f33211f8a5e"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
@@ -51,26 +58,41 @@ dependencies:
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/openwallet-foundation-labs/sd-jwt-rust
-    current: "0.7.1@2799b5fff011342aefe8ac5e9653d5b084e2a20c"
+    current: "0.8.0@9fc75ab0befe6b7f80987acd8b740baead40ee76"
     target: current-upstream-plus-reviewed-elevenid-patches
     status: maintained
     decision: fork
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
     review-after: 2026-10-30
-    rationale: The immutable ElevenID revision carries the RFC 9901 holder API update plus reviewed serial-first issuance and verifier refactors, consumer-compatible WASM binding resolution, and dependency-supported Rust 1.88 metadata. Marty leaves optional parallel and benchmark surfaces inactive. The source-breaking holder constructor is adopted through its explicit unverified variant to preserve the Python presentation builder's existing caller-preverified contract because that API does not receive a trusted issuer-key resolver; adding issuer authentication is a separate behavior change rather than a hidden dependency-bump side effect.
+    rationale: >-
+      The accepted ElevenID revision provides the reviewed JWT 11 crypto-provider
+      boundary and authenticated digest-algorithm getter. Credentials and accepted
+      Core resolve the same sd-jwt-rs 0.8.0 revision. Python compatibility verification
+      retains SHA-256 admission and rejects SHA-384/SHA-512 only after issuer-signature
+      authentication, as covered by the compiled binding tests. The resolved production
+      graphs select only crypto-provider, issuer-planning, issuer-completion and verifier;
+      holder, parallel, benchmark and local issuer-key features remain inactive.
+      Native, Python and WASM qualification covers this accepted source graph.
   - package: pyo3
     ecosystem: rust
     owner: ElevenID
     upstream: https://github.com/PyO3/pyo3
-    current: "0.29.2"
+    current: "0.29.3"
     target: coordinated-Core-PyO3-0.30.x-migration
     status: maintained
     decision: retain
     advisories: []
     tracking-issue: https://github.com/ElevenID/marty-credentials/issues/17
     review-after: 2026-11-03
-    rationale: Re-reviewed 2026-10-20. Cargo.lock and cargo tree resolve one PyO3 0.29.2 shared by this extension and the pinned Core marty-python-adapters. Upstream https://github.com/PyO3/pyo3/releases/tag/v0.30.1 is available; its 0.30 API migration must be coordinated with that canonical adapter rather than independently changing this thin binding. Retain the compatible 0.29 family while current native wheel and local-binding CI qualify it; no security exception is added.
+    rationale: >-
+      Re-reviewed 2026-11-20. Cargo.lock and the resolved Python graph contain
+      pyo3, pyo3-build-config, pyo3-ffi, pyo3-macros and pyo3-macros-backend 0.29.3.
+      This extension and marty-python-adapters at accepted Core revision
+      11152cfb83ec47174a21ad76fd4c9e811c93602f share one PyO3 version.
+      Compiled wheel and local-binding qualification cover this compatible 0.29
+      family. A future 0.30 API migration remains coordinated with the canonical
+      Core adapter; no security exception is added.
   - package: rsa
     ecosystem: rust
     owner: ElevenID
@@ -81,23 +103,21 @@ dependencies:
     decision: retain
     advisories: [RUSTSEC-2023-0071]
     tracking-issue: https://github.com/ElevenID/marty-core/issues/361
-    review-after: 2026-11-21
+    review-after: 2026-11-28
     rationale: >-
-      Re-reviewed 2026-11-14 against Cargo.lock, resolved native/Python/WASM metadata,
-      https://github.com/rust-lang/crates.io-index/blob/master/3/r/rsa and
+      Re-reviewed 2026-11-20 against Cargo.lock, resolved native/Python/WASM metadata,
+      accepted Core revision 11152cfb83ec47174a21ad76fd4c9e811c93602f and
       https://rustsec.org/advisories/RUSTSEC-2023-0071.html.
-      Stable rsa 0.10.0 was published on 2026-11-08 and is not yanked; RustSec now
-      declares versions >=0.10.0 patched. The locked 0.9.10 remains affected.
+      RustSec declares versions >=0.10.0 patched. The locked 0.9.10 remains affected.
       Its only direct reverse dependencies are marty-crypto and marty-verification
-      at Core revision b30866a81284d97b65a3e4cdd85e917df17e10d4, both requiring ^0.9.
+      0.2.2 at that accepted Core revision, both requiring ^0.9 with default features
+      disabled and std, sha2 and u64_digit selected.
       Reviewed Core RSA, ISO 9796 and DG15 call sites use public verification and
       public-key codecs; all three resolved graphs pass the existing KMS-only guard.
-      The upstream 0.10 release uses crypto-bigint and requires
-      signature 3, digest/sha2 0.11, pkcs8 0.11 and spki 0.8, unlike the pinned
-      Core graph. A Credentials-only lock update cannot satisfy those ^0.9 requirements
+      A Credentials-only lock update cannot satisfy those ^0.9 requirements
       or remove the affected copy. Upgrade through the coordinated Core migration
       in issue 361, then qualify RSA, certificate, JOSE, passport, mdoc, Python and
       WASM behavior before propagating its exact revision. Retain the explicit
-      advisory watch and existing exception for this seven-day migration checkpoint;
+      advisory watch and existing exception for the 2026-11-28 migration checkpoint;
       https://github.com/ElevenID/marty-credentials/issues/17 retains consumer acceptance.
       The advisory remains unresolved in this graph, and remote key custody remains required.

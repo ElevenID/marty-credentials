@@ -23,6 +23,7 @@ def graph(mode):
     )
     packages.extend([
         {"id": "sd-jwt-rs", "name": "sd-jwt-rs", "version": "0.8.0", "source": GUARD["SD_JWT_SOURCE"]},
+        {"id": "jsonwebtoken", "name": "jsonwebtoken", "version": GUARD["JWT_VERSION"], "source": GUARD["JWT_SOURCE"]},
         {"id": "ssi-json-ld", "name": "ssi-json-ld", "version": "0.3.3", "source": GUARD["SSI_SOURCE"]},
         {"id": "ecdsa", "name": "ecdsa", "version": "0.17.0", "source": GUARD["SSI_SOURCE"]},
         {"id": "did-web", "name": "did-web", "version": "0.5.1", "source": GUARD["SSI_SOURCE"]},
@@ -33,6 +34,11 @@ def graph(mode):
         {"id": p["id"], "features": ["kms-only"] if p["name"] in GUARD["KMS_ONLY_CRATES"] else []}
         for p in packages
     ]
+    for node in nodes:
+        if node["id"] == "sd-jwt-rs":
+            node["features"] = sorted(GUARD["SD_JWT_FEATURES"])
+        elif node["id"] == "jsonwebtoken":
+            node["features"] = sorted(GUARD["JWT_FEATURES"])
     return {"packages": packages, "resolve": {"nodes": nodes}}
 
 
@@ -81,6 +87,84 @@ def test_reject_duplicate_sd_jwt_implementations():
     package["id"] = "second-sd-jwt-rs"
     candidate["packages"].append(package)
     with pytest.raises(ValueError, match="one reviewed sd-jwt-rs"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("source", [GUARD["JWT_SOURCE"], None])
+def test_reject_second_core_type_graph(source):
+    candidate = graph("python")
+    package = copy.deepcopy(next(p for p in candidate["packages"] if p["name"] == "marty-oid4vci"))
+    package.update(id="second-marty-oid4vci", source=source)
+    candidate["packages"].append(package)
+    with pytest.raises(ValueError, match="Core packages changed"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("version", ["10.4.0", "11.0.0", "11.1.0"])
+def test_reject_duplicate_or_mixed_jsonwebtoken_providers(version):
+    candidate = graph("python")
+    package = copy.deepcopy(next(p for p in candidate["packages"] if p["name"] == "jsonwebtoken"))
+    package.update(id="second-jsonwebtoken", version=version)
+    candidate["packages"].append(package)
+    with pytest.raises(ValueError, match="one reviewed jsonwebtoken"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("version", ["10.4.0", "11.0.0", "11.2.0"])
+def test_reject_unreviewed_jsonwebtoken_version(version):
+    candidate = graph("python")
+    package = next(p for p in candidate["packages"] if p["name"] == "jsonwebtoken")
+    package["version"] = version
+    with pytest.raises(ValueError, match="one reviewed jsonwebtoken"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("source", [None, "git+https://example.invalid/jsonwebtoken#unreviewed"])
+def test_reject_jsonwebtoken_source_substitution(source):
+    candidate = graph("python")
+    package = next(p for p in candidate["packages"] if p["name"] == "jsonwebtoken")
+    package["source"] = source
+    with pytest.raises(ValueError, match="one reviewed jsonwebtoken"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("feature", ["default", "aws_lc_rs", "rust_crypto", "unreviewed-provider"])
+def test_reject_builtin_or_unreviewed_jsonwebtoken_provider(feature):
+    candidate = graph("python")
+    node = next(n for n in candidate["resolve"]["nodes"] if n["id"] == "jsonwebtoken")
+    node["features"].append(feature)
+    with pytest.raises(ValueError, match="shared verification provider"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("feature", ["default", "holder", "parallel", "issuance_bench", "mock_salts"])
+def test_reject_widened_sd_jwt_roles_or_acceleration(feature):
+    candidate = graph("python")
+    node = next(n for n in candidate["resolve"]["nodes"] if n["id"] == "sd-jwt-rs")
+    node["features"].append(feature)
+    with pytest.raises(ValueError, match="reviewed issuer and verifier roles"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("feature", sorted(GUARD["SD_JWT_FEATURES"]))
+def test_reject_missing_sd_jwt_role_or_provider(feature):
+    candidate = graph("python")
+    node = next(n for n in candidate["resolve"]["nodes"] if n["id"] == "sd-jwt-rs")
+    node["features"].remove(feature)
+    with pytest.raises(ValueError, match="reviewed issuer and verifier roles"):
+        GUARD["check"](candidate)
+
+
+@pytest.mark.parametrize("name,feature", [
+    (name, feature)
+    for name, features in GUARD["FORBIDDEN_PROFILE_FEATURES"].items()
+    for feature in sorted(features)
+])
+def test_reject_implicit_profile_activation(name, feature):
+    candidate = graph("python")
+    node = next(n for n in candidate["resolve"]["nodes"] if n["id"] == name)
+    node["features"].append(feature)
+    with pytest.raises(ValueError, match="unselected profile features"):
         GUARD["check"](candidate)
 
 
